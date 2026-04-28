@@ -1,0 +1,124 @@
+.admin-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 32px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.admin-topbar h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+.admin-topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-search {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  padding: 9px 14px;
+  font-size: 13.5px;
+  width: 280px;
+  outline: none;
+  transition: border-color 0.12s;
+}
+.admin-search:focus {
+  border-color: var(--accent);
+}
+.admin-search::placeholder {
+  color: var(--text-muted);
+}
+
+.admin-content {
+  padding: 24px 32px 60px;
+}
+
+.filter-chips {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+.chip {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-dim);
+  padding: 6px 14px;
+  font-size: 12.5px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.chip:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.chip.is-active {
+  background: var(--accent-dim);
+  border-color: rgba(16, 199, 138, 0.4);
+  color: var(--accent);
+  font-weight: 600;
+}
+.chip__count {
+  color: var(--text-muted);
+  margin-left: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.chip.is-active .chip__count {
+  color: var(--accent);
+  opacity: 0.8;
+}
+
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+}
+
+.empty-card {
+  background: var(--surface-1);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 80px 40px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.empty-card__icon {
+  font-size: 64px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+.empty-card p {
+  margin: 0;
+  font-size: 16px;
+  color: var(--text);
+}
+.empty-card small {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+@media (max-width: 768px) {
+  .admin-topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .admin-search {
+    width: 100%;
+  }
+}
