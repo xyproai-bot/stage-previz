@@ -180,6 +180,113 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
 /* 舊欄位保留向下相容（ID 可能還有引用） */
 #gt-time{display:none}
 
+/* ── 留言系統（Frame.io 風格） ── */
+#comment-overlay{
+  position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;z-index:35
+}
+#comment-overlay.active{pointer-events:auto;cursor:crosshair}
+.comment-pin{
+  position:absolute;width:32px;height:32px;border-radius:50% 50% 50% 0;
+  background:var(--gt-accent);transform:translate(-50%,-100%) rotate(-45deg);
+  display:flex;align-items:center;justify-content:center;
+  cursor:pointer;pointer-events:auto;
+  box-shadow:0 3px 10px rgba(0,0,0,.5),0 0 0 2px rgba(255,255,255,.2);
+  transition:transform .15s
+}
+.comment-pin:hover{transform:translate(-50%,-100%) rotate(-45deg) scale(1.15)}
+.comment-pin.flash{animation:pinFlash .8s ease-out 3}
+@keyframes pinFlash{
+  0%,100%{box-shadow:0 3px 10px rgba(0,0,0,.5),0 0 0 2px rgba(255,255,255,.2)}
+  50%{box-shadow:0 3px 14px rgba(16,199,138,.8),0 0 0 6px rgba(16,199,138,.4)}
+}
+.comment-pin .num{
+  color:#000;font-weight:800;font-size:14px;
+  transform:rotate(45deg);font-family:monospace
+}
+#comment-input-box{
+  position:absolute;display:none;background:var(--gt-bg);backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.12);border-radius:10px;
+  padding:14px;width:280px;z-index:80;
+  box-shadow:0 8px 32px rgba(0,0,0,.7)
+}
+#comment-input-box.show{display:block}
+#comment-input-box textarea{
+  width:100%;min-height:60px;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.1);
+  border-radius:6px;color:#fff;padding:8px 10px;font-family:inherit;font-size:13px;
+  resize:vertical;outline:none
+}
+#comment-input-box textarea:focus{border-color:var(--gt-accent)}
+#comment-input-box .row{display:flex;gap:6px;margin-top:10px;align-items:center}
+#comment-input-box .author{font-size:11px;color:rgba(255,255,255,.5);flex:1}
+#comment-input-box button{
+  border:none;border-radius:5px;padding:6px 14px;font-size:12px;cursor:pointer;
+  font-family:inherit;font-weight:600
+}
+.comment-cancel{background:rgba(255,255,255,.1);color:#fff}
+.comment-submit{background:var(--gt-accent);color:#000}
+.comment-submit:disabled{opacity:.4;cursor:not-allowed}
+
+/* 顯示已建立留言的浮窗（hover/click pin） */
+#comment-popup{
+  position:absolute;display:none;background:var(--gt-bg);backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.12);border-radius:8px;
+  padding:10px 12px;max-width:300px;z-index:78;
+  box-shadow:0 6px 24px rgba(0,0,0,.6);font-size:13px;color:#fff
+}
+#comment-popup.show{display:block}
+#comment-popup .meta{font-size:10px;color:rgba(255,255,255,.5);margin-bottom:5px;display:flex;justify-content:space-between}
+#comment-popup .text{line-height:1.5;white-space:pre-wrap}
+#comment-popup .actions{margin-top:8px;display:flex;gap:6px;justify-content:flex-end}
+#comment-popup .actions button{
+  background:none;border:1px solid rgba(255,255,255,.15);color:rgba(255,255,255,.7);
+  padding:4px 9px;font-size:10px;cursor:pointer;border-radius:4px;font-family:inherit
+}
+#comment-popup .actions button:hover{background:rgba(255,255,255,.08);color:#fff}
+.comment-pin.role-director{background:#ffaa44}
+.comment-pin.role-designer{background:var(--gt-accent)}
+
+/* 時間軸上的留言 ▲ 標記 */
+.gt-comment-mark{position:absolute;bottom:-2px;width:0;height:0;
+  border-left:5px solid transparent;border-right:5px solid transparent;
+  border-bottom:7px solid #ffaa44;cursor:pointer;
+  transform:translateX(-50%);transition:transform .15s
+}
+.gt-comment-mark:hover{transform:translateX(-50%) scale(1.4)}
+.gt-comment-mark.role-designer{border-bottom-color:var(--gt-accent)}
+
+#btn-comment-toggle{
+  position:absolute;left:12px;top:118px;
+  background:var(--gt-bg);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.08);border-radius:50%;
+  width:40px;height:40px;color:#fff;font-size:16px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;z-index:55;
+  transition:background .15s
+}
+#btn-comment-toggle:hover{background:rgba(255,255,255,.15)}
+#btn-comment-toggle.active{background:#ffaa44;color:#000}
+
+/* ── 載入中 Spinner（影片載入時顯示在 viewport） ── */
+#video-loading{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(10,12,16,.92);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.1);border-radius:12px;
+  padding:24px 32px;display:none;z-index:55;
+  flex-direction:column;align-items:center;gap:14px;
+  box-shadow:0 6px 28px rgba(0,0,0,.7)
+}
+#video-loading.show{display:flex}
+.spinner{
+  width:36px;height:36px;border:3px solid rgba(255,255,255,.15);
+  border-top-color:var(--gt-accent);border-radius:50%;
+  animation:spin 1s linear infinite
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+#video-loading-text{font-size:13px;color:#fff;letter-spacing:1px}
+#video-loading-progress{
+  font-size:11px;color:rgba(255,255,255,.5);font-family:monospace;min-height:14px
+}
+
 /* ── 角色選擇畫面（首次訪問） ── */
 #role-picker{
   position:fixed;inset:0;background:rgba(8,10,14,.96);backdrop-filter:blur(10px);
@@ -604,11 +711,45 @@ body.player-mode #main{height:100vh}
     <div id="lock-prompt">Click to capture mouse &nbsp;·&nbsp; Walk Mode active</div>
     <div id="sel-hud"></div>
 
+    <!-- 載入中 spinner -->
+    <div id="video-loading">
+      <div class="spinner"></div>
+      <div id="video-loading-text">載入影片中…</div>
+      <div id="video-loading-progress"></div>
+    </div>
+
     <!-- 標註 Canvas overlay（畫筆/幾何/橡皮擦） -->
     <canvas id="annotation-canvas"></canvas>
 
+    <!-- 留言 overlay（Frame.io 風格 — 點畫面留言） -->
+    <div id="comment-overlay"></div>
+
+    <!-- 留言輸入框（彈出） -->
+    <div id="comment-input-box">
+      <textarea id="comment-text" placeholder="留下你的意見… (Enter 送出，Shift+Enter 換行)"></textarea>
+      <div class="row">
+        <span class="author" id="comment-author-label">導演</span>
+        <button class="comment-cancel" id="comment-cancel-btn">取消</button>
+        <button class="comment-submit" id="comment-submit-btn" disabled>送出</button>
+      </div>
+    </div>
+
+    <!-- 留言詳情浮窗（點 pin 顯示） -->
+    <div id="comment-popup">
+      <div class="meta"><span id="popup-author"></span><span id="popup-time"></span></div>
+      <div class="text" id="popup-text"></div>
+      <div class="actions">
+        <button id="popup-jump">跳到此時間</button>
+        <button id="popup-delete">刪除</button>
+        <button id="popup-close">關閉</button>
+      </div>
+    </div>
+
     <!-- 標註模式切換按鈕（懸浮） -->
     <button id="anno-toggle-btn" title="開啟標註模式 (D)">✏️</button>
+
+    <!-- 留言模式切換按鈕 -->
+    <button id="btn-comment-toggle" title="開啟留言模式 (M) — 點畫面留言">💬</button>
 
     <!-- 標註工具列（懸浮 in viewport） -->
     <div id="anno-toolbar">
@@ -1684,6 +1825,209 @@ initRole();
 window.addEventListener('load', () => setTimeout(applyShareParamsAfterLoad, 200));
 
 // ═══════════════════════════════════════════════
+// COMMENT SYSTEM (Frame.io 風格 — 點畫面留言 + 時間軸綁定)
+// ═══════════════════════════════════════════════
+(function setupComments(){
+  const overlay = document.getElementById('comment-overlay');
+  const toggleBtn = document.getElementById('btn-comment-toggle');
+  const inputBox = document.getElementById('comment-input-box');
+  const textArea = document.getElementById('comment-text');
+  const submitBtn = document.getElementById('comment-submit-btn');
+  const cancelBtn = document.getElementById('comment-cancel-btn');
+  const authorLabel = document.getElementById('comment-author-label');
+  const popup = document.getElementById('comment-popup');
+  if (!overlay || !toggleBtn) return;
+
+  let active = false;
+  let pendingPin = null; // { x, y, time } 暫存點位等使用者輸入
+  let _comments = []; // [{ id, time, x, y, text, author, role, createdAt }]
+
+  function getRole() {
+    return document.body.classList.contains('mode-director') ? 'director' : 'designer';
+  }
+
+  function setActive(on) {
+    active = on;
+    overlay.classList.toggle('active', on);
+    toggleBtn.classList.toggle('active', on);
+    toggleBtn.title = on ? '關閉留言模式 (M)' : '開啟留言模式 (M) — 點畫面留言';
+    if (typeof orbitCtrl !== 'undefined' && orbitCtrl) orbitCtrl.enabled = !on;
+    if (!on) closeInputBox();
+  }
+
+  function closeInputBox() {
+    inputBox.classList.remove('show');
+    pendingPin = null;
+    textArea.value = '';
+    submitBtn.disabled = true;
+  }
+
+  function saveComments() {
+    try { localStorage.setItem('stagepreviz-comments', JSON.stringify(_comments)); } catch(e) {}
+  }
+  function loadComments() {
+    try {
+      const data = localStorage.getItem('stagepreviz-comments');
+      if (data) _comments = JSON.parse(data);
+    } catch(e) {}
+    renderAll();
+  }
+
+  function renderAll() {
+    // 清空
+    overlay.querySelectorAll('.comment-pin').forEach(el => el.remove());
+    document.querySelectorAll('.gt-comment-mark').forEach(el => el.remove());
+    // 重新繪製
+    _comments.forEach((c, idx) => renderPin(c, idx));
+    renderTimelineMarks();
+  }
+
+  function renderPin(c, idx) {
+    const pin = document.createElement('div');
+    pin.className = `comment-pin role-${c.role || 'director'}`;
+    pin.style.left = (c.x * overlay.clientWidth) + 'px';
+    pin.style.top = (c.y * overlay.clientHeight) + 'px';
+    pin.dataset.id = c.id;
+    pin.innerHTML = `<span class="num">${idx + 1}</span>`;
+    pin.addEventListener('click', e => {
+      e.stopPropagation();
+      showPopup(c, pin);
+    });
+    overlay.appendChild(pin);
+  }
+
+  function renderTimelineMarks() {
+    const bar = document.getElementById('gt-cues-bar');
+    if (!bar) return;
+    const dur = gtMaxDur();
+    if (dur <= 0) return;
+    _comments.forEach((c, idx) => {
+      const mark = document.createElement('div');
+      mark.className = `gt-comment-mark role-${c.role || 'director'}`;
+      mark.style.left = `${(c.time / dur) * 100}%`;
+      mark.title = `#${idx+1} ${c.author || '匿名'}: ${c.text.slice(0, 50)}…`;
+      mark.onclick = (e) => {
+        e.stopPropagation();
+        if (_sharedVideo) _sharedVideo.currentTime = c.time;
+        // 閃爍對應 pin
+        const pin = overlay.querySelector(`.comment-pin[data-id="${c.id}"]`);
+        if (pin) {
+          pin.classList.add('flash');
+          setTimeout(() => pin.classList.remove('flash'), 2400);
+        }
+      };
+      bar.appendChild(mark);
+    });
+  }
+
+  function showPopup(c, pin) {
+    document.getElementById('popup-author').textContent = c.author || (c.role === 'director' ? '導演' : '設計師');
+    document.getElementById('popup-time').textContent = `${fmtT(c.time)} · ${c.role === 'director' ? '🎬' : '🎨'}`;
+    document.getElementById('popup-text').textContent = c.text;
+    const rect = pin.getBoundingClientRect();
+    const vp = document.getElementById('vp');
+    const vpRect = vp.getBoundingClientRect();
+    popup.style.left = (rect.left - vpRect.left + 18) + 'px';
+    popup.style.top = (rect.top - vpRect.top - 10) + 'px';
+    popup.classList.add('show');
+    popup.dataset.id = c.id;
+  }
+
+  // Pin 點擊外部關閉 popup
+  document.addEventListener('click', e => {
+    if (!popup.contains(e.target) && !e.target.closest('.comment-pin')) {
+      popup.classList.remove('show');
+    }
+  });
+
+  // Popup 操作
+  document.getElementById('popup-close').addEventListener('click', () => popup.classList.remove('show'));
+  document.getElementById('popup-jump').addEventListener('click', () => {
+    const c = _comments.find(x => x.id === popup.dataset.id);
+    if (c && _sharedVideo) { _sharedVideo.currentTime = c.time; popup.classList.remove('show'); }
+  });
+  document.getElementById('popup-delete').addEventListener('click', () => {
+    if (!confirm('確定刪除這則留言？')) return;
+    _comments = _comments.filter(x => x.id !== popup.dataset.id);
+    saveComments(); renderAll();
+    popup.classList.remove('show');
+  });
+
+  // Toggle 按鈕
+  toggleBtn.addEventListener('click', () => setActive(!active));
+  document.addEventListener('keydown', e => {
+    if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
+    if (e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      setActive(!active);
+    }
+  });
+
+  // 點 overlay 任處 → 開留言框
+  overlay.addEventListener('click', e => {
+    if (!active) return;
+    if (e.target !== overlay) return; // 點到 pin 不開
+    e.stopPropagation();
+    const rect = overlay.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    const time = _sharedVideo ? _sharedVideo.currentTime : 0;
+    pendingPin = { x, y, time };
+
+    // 暫停影片
+    if (_sharedVideo && !_sharedVideo.paused) _sharedVideo.pause();
+
+    // 顯示輸入框（位置貼近點擊處）
+    const vp = document.getElementById('vp');
+    const vpRect = vp.getBoundingClientRect();
+    const px = e.clientX - vpRect.left + 16;
+    const py = e.clientY - vpRect.top + 16;
+    inputBox.style.left = Math.min(px, vpRect.width - 300) + 'px';
+    inputBox.style.top = Math.min(py, vpRect.height - 180) + 'px';
+    authorLabel.textContent = getRole() === 'director' ? '🎬 導演' : '🎨 設計師';
+    inputBox.classList.add('show');
+    setTimeout(() => textArea.focus(), 50);
+  });
+
+  textArea.addEventListener('input', () => {
+    submitBtn.disabled = !textArea.value.trim();
+  });
+  textArea.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      submitBtn.click();
+    } else if (e.key === 'Escape') {
+      cancelBtn.click();
+    }
+  });
+
+  cancelBtn.addEventListener('click', closeInputBox);
+  submitBtn.addEventListener('click', () => {
+    if (!pendingPin || !textArea.value.trim()) return;
+    const role = getRole();
+    const c = {
+      id: 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      time: pendingPin.time,
+      x: pendingPin.x, y: pendingPin.y,
+      text: textArea.value.trim(),
+      author: role === 'director' ? '導演' : '設計師',
+      role,
+      createdAt: new Date().toISOString()
+    };
+    _comments.push(c);
+    saveComments(); renderAll();
+    closeInputBox();
+    toast(`💬 留言已加入 (#${_comments.length}) · ${fmtT(c.time)}`, 'info', 2500);
+  });
+
+  // 視窗 resize 時重新放置 pins
+  new ResizeObserver(() => renderAll()).observe(overlay);
+
+  // 啟動
+  window.addEventListener('load', () => setTimeout(loadComments, 1200));
+})();
+
+// ═══════════════════════════════════════════════
 // ANNOTATION (標註工具)
 // ═══════════════════════════════════════════════
 (function setupAnnotation(){
@@ -2278,12 +2622,33 @@ const PRESETS={
   stage: {p:[0,1.7,-4],  t:[0,5,24]},
 };
 
+// 視角切換改為平滑飛行（500ms ease），更直覺
+let _flyAnim = null;
 function doPreset(name){
   const pr=PRESETS[name]; if(!pr) return;
-  camera.position.set(...pr.p);
-  const tgt=new THREE.Vector3(...pr.t);
-  if(mode==='orbit'){ orbitCtrl.target.copy(tgt); orbitCtrl.update(); }
-  else camera.lookAt(tgt);
+  if (_flyAnim) cancelAnimationFrame(_flyAnim);
+  const startPos = camera.position.clone();
+  const endPos = new THREE.Vector3(...pr.p);
+  const startTgt = orbitCtrl.target.clone();
+  const endTgt = new THREE.Vector3(...pr.t);
+  const dur = 500; // ms
+  const t0 = performance.now();
+  function ease(t) { return t < .5 ? 2*t*t : -1+(4-2*t)*t; } // easeInOut quad
+  function tick() {
+    const t = Math.min(1, (performance.now() - t0) / dur);
+    const e = ease(t);
+    camera.position.lerpVectors(startPos, endPos, e);
+    if (mode === 'orbit') {
+      orbitCtrl.target.lerpVectors(startTgt, endTgt, e);
+      orbitCtrl.update();
+    } else {
+      const tgt = new THREE.Vector3().lerpVectors(startTgt, endTgt, e);
+      camera.lookAt(tgt);
+    }
+    if (t < 1) _flyAnim = requestAnimationFrame(tick);
+    else _flyAnim = null;
+  }
+  tick();
 }
 
 // ═══════════════════════════════════════════════
@@ -2786,7 +3151,18 @@ async function loadVideoFromURL(url, label) {
   v.autoplay = true;
   v.playsInline = true;
 
+  // 顯示載入 spinner
+  const loadingEl = document.getElementById('video-loading');
+  const loadingText = document.getElementById('video-loading-text');
+  const loadingProg = document.getElementById('video-loading-progress');
+  if (loadingEl) {
+    loadingText.textContent = `載入「${label}」中…`;
+    loadingProg.textContent = '';
+    loadingEl.classList.add('show');
+  }
+
   v.addEventListener('error', () => {
+    if (loadingEl) loadingEl.classList.remove('show');
     _setSrcStatus(`✗ 載入失敗: ${label}`, '#ff6b6b');
     const isMov = /\.mov$/i.test(label);
     const msg = isMov
@@ -2794,7 +3170,18 @@ async function loadVideoFromURL(url, label) {
       : `⚠ 無法載入 "${label}"\n請確認是 MP4 H.264 編碼`;
     toast(msg, 'warn', 7000);
   });
-  v.addEventListener('canplay', () => v.play().catch(() => {}));
+  v.addEventListener('canplay', () => {
+    if (loadingEl) loadingEl.classList.remove('show');
+    v.play().catch(() => {});
+  });
+  // 進度回饋（網路 URL 才有意義）
+  v.addEventListener('progress', () => {
+    if (!loadingEl || !loadingEl.classList.contains('show')) return;
+    if (v.buffered.length > 0 && v.duration) {
+      const pct = (v.buffered.end(0) / v.duration * 100).toFixed(0);
+      loadingProg.textContent = `已緩衝 ${pct}%`;
+    }
+  });
   // 偵測畫布佈局：Layout A (10912×2024 含樂手 LED) vs Layout B (8800×2024 純主牆)
   v.addEventListener('loadedmetadata', () => {
     applyLayoutToPanels(v.videoWidth, v.videoHeight);
@@ -3452,6 +3839,20 @@ function setupEvents(){
   document.querySelectorAll('.version-slot').forEach(btn => {
     btn.addEventListener('click', e => handleSlotClick(+btn.dataset.slot, e));
     btn.addEventListener('contextmenu', e => handleSlotClick(+btn.dataset.slot, e));
+    // 雙擊改名
+    btn.addEventListener('dblclick', e => {
+      e.preventDefault();
+      const idx = +btn.dataset.slot;
+      const slot = _versionSlots[idx];
+      if (!slot) { toast('空 slot 不能改名', 'warn', 1500); return; }
+      const newName = prompt(`新版本名稱（V${idx+1}）：`, slot.label);
+      if (newName && newName.trim()) {
+        slot.label = newName.trim();
+        if (_currentSlot === idx) _currentLabel = slot.label;
+        saveVersionSlots(); refreshSlotUI();
+        toast(`✓ V${idx+1} 已改名為「${slot.label}」`, 'info', 2000);
+      }
+    });
   });
 
   // 「存當前」按鈕
