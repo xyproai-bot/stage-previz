@@ -180,6 +180,46 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
 /* 舊欄位保留向下相容（ID 可能還有引用） */
 #gt-time{display:none}
 
+/* ── Director Mode 空狀態：載入內容面板 ── */
+#director-load-panel{
+  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:var(--gt-bg);backdrop-filter:blur(10px);
+  border:1px solid rgba(255,255,255,.1);border-radius:14px;
+  padding:32px 36px;width:440px;z-index:45;display:none;
+  box-shadow:0 12px 40px rgba(0,0,0,.7);text-align:center
+}
+body.mode-director.no-content #director-load-panel{display:block}
+#director-load-panel h2{
+  font-size:18px;color:var(--gt-accent);margin-bottom:8px;letter-spacing:1.5px
+}
+#director-load-panel .hint{
+  font-size:13px;color:rgba(255,255,255,.55);margin-bottom:24px;line-height:1.7
+}
+#director-load-panel .input-row{display:flex;gap:8px;margin-bottom:14px}
+#director-load-panel input{
+  flex:1;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);
+  border-radius:6px;color:#fff;padding:10px 12px;font-size:13px;
+  outline:none;font-family:inherit
+}
+#director-load-panel input:focus{border-color:var(--gt-accent)}
+#director-load-panel button{
+  background:var(--gt-accent);border:none;color:#000;
+  padding:0 18px;border-radius:6px;font-weight:700;cursor:pointer;
+  font-size:13px;font-family:inherit
+}
+#director-load-panel .or{
+  font-size:11px;color:rgba(255,255,255,.4);margin:14px 0;letter-spacing:2px
+}
+#director-load-panel .upload-btn{
+  width:100%;background:rgba(255,255,255,.08);color:#fff;
+  padding:12px;font-size:13px;
+  border:1px dashed rgba(255,255,255,.2);
+  transition:all .15s
+}
+#director-load-panel .upload-btn:hover{
+  background:rgba(255,255,255,.12);border-color:var(--gt-accent)
+}
+
 /* ── 觸控裝置優化（iPad / 手機） ── */
 .touch #global-transport{padding:18px 22px;border-radius:18px}
 .touch #gt-play{width:56px;height:56px;font-size:24px}
@@ -728,6 +768,21 @@ body.player-mode #main{height:100vh}
     <div id="walk-hint">WASD · move &nbsp;|&nbsp; Mouse · look &nbsp;|&nbsp; Shift · run &nbsp;|&nbsp; E/Q · fly &nbsp;|&nbsp; F · exit walk</div>
     <div id="lock-prompt">Click to capture mouse &nbsp;·&nbsp; Walk Mode active</div>
     <div id="sel-hud"></div>
+
+    <!-- Director Mode 空狀態：載入內容面板 -->
+    <div id="director-load-panel">
+      <h2>🎬 載入預覽內容</h2>
+      <div class="hint">
+        請貼上設計師給你的 Google Drive 連結<br>
+        或從本地上傳影片檔案
+      </div>
+      <div class="input-row">
+        <input type="text" id="dir-load-url" placeholder="Google Drive 公開連結 / mp4 URL">
+        <button id="dir-load-btn">載入</button>
+      </div>
+      <div class="or">— 或 —</div>
+      <button class="upload-btn" id="dir-upload-btn">📁 上傳本地影片檔案</button>
+    </div>
 
     <!-- 載入中 spinner -->
     <div id="video-loading">
@@ -1846,6 +1901,39 @@ if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
 // 啟動
 initRole();
 window.addEventListener('load', () => setTimeout(applyShareParamsAfterLoad, 200));
+
+// ── Director Mode：載入內容面板（沒影片時顯示）──
+function updateDirectorLoadPanel() {
+  if (!document.body.classList.contains('mode-director')) {
+    document.body.classList.remove('no-content');
+    return;
+  }
+  const hasVideo = !!_sharedVideo;
+  document.body.classList.toggle('no-content', !hasVideo);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const dirUrlInput = document.getElementById('dir-load-url');
+  const dirLoadBtn = document.getElementById('dir-load-btn');
+  const dirUploadBtn = document.getElementById('dir-upload-btn');
+  if (!dirUrlInput) return;
+
+  dirLoadBtn.addEventListener('click', () => {
+    const url = dirUrlInput.value.trim();
+    if (!url) return;
+    loadFromAnyURL(url);
+  });
+  dirUrlInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') dirLoadBtn.click();
+  });
+  dirUploadBtn.addEventListener('click', () => {
+    document.getElementById('f-video-all').click();
+  });
+
+  // 每秒檢查一次（簡單版；真實情況也可用 hook 在 loadVideoFromURL）
+  setInterval(updateDirectorLoadPanel, 1000);
+  updateDirectorLoadPanel();
+});
 
 // ═══════════════════════════════════════════════
 // COMMENT SYSTEM (Frame.io 風格 — 點畫面留言 + 時間軸綁定)
