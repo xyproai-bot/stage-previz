@@ -388,15 +388,16 @@ body.player-mode #main{height:100vh}
 
       <!-- 多版本 slot 系統 -->
       <div style="margin-top:8px">
-        <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:5px">版本切換 (Alt+1~5)</div>
-        <div id="version-slots" style="display:grid;grid-template-columns:repeat(5,1fr);gap:3px">
-          <button class="btn sm version-slot" data-slot="0">V1</button>
-          <button class="btn sm version-slot" data-slot="1">V2</button>
-          <button class="btn sm version-slot" data-slot="2">V3</button>
-          <button class="btn sm version-slot" data-slot="3">V4</button>
-          <button class="btn sm version-slot" data-slot="4">V5</button>
+        <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:5px">版本切換</div>
+        <div class="brow"><button class="btn full sm" id="btn-save-version">💾 存當前 → 下一個空 slot</button></div>
+        <div id="version-slots" style="display:grid;grid-template-columns:repeat(5,1fr);gap:3px;margin-top:5px">
+          <button class="btn sm version-slot" data-slot="0">＋V1</button>
+          <button class="btn sm version-slot" data-slot="1">＋V2</button>
+          <button class="btn sm version-slot" data-slot="2">＋V3</button>
+          <button class="btn sm version-slot" data-slot="3">＋V4</button>
+          <button class="btn sm version-slot" data-slot="4">＋V5</button>
         </div>
-        <div style="font-size:9px;color:var(--text-muted);margin-top:4px">點空 slot 將當前載入存進去；點已存的切換</div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:4px">Alt+1~5 切換 · 右鍵刪除</div>
       </div>
       <!-- hidden: kept for internal use -->
       <div style="display:none">
@@ -2209,14 +2210,27 @@ function saveVersionSlots() {
 function refreshSlotUI() {
   document.querySelectorAll('.version-slot').forEach((btn, i) => {
     const slot = _versionSlots[i];
-    btn.textContent = slot ? `V${i+1}✓` : `V${i+1}`;
-    btn.title = slot ? `${slot.label}\n（再點切換 / Shift+點刪除）` : `空 slot — 點此存當前內容`;
+    if (slot) {
+      // 已存：顯示版本名（截短）
+      const shortLabel = slot.label.length > 8 ? slot.label.slice(0, 7) + '…' : slot.label;
+      btn.textContent = `V${i+1}: ${shortLabel}`;
+      btn.title = `${slot.label}\n（點擊切換載入 · 右鍵刪除）`;
+      btn.style.opacity = '1';
+    } else {
+      btn.textContent = `＋V${i+1}`;
+      btn.title = `空 slot`;
+      btn.style.opacity = '.45';
+    }
     btn.classList.toggle('active', i === _currentSlot);
   });
 }
-function handleSlotClick(idx) {
-  // Shift+click = 刪除
-  if (event && event.shiftKey) {
+
+function handleSlotClick(idx, ev) {
+  // 右鍵或 Shift+click：刪除
+  if (ev && (ev.shiftKey || ev.button === 2 || ev.type === 'contextmenu')) {
+    if (ev.preventDefault) ev.preventDefault();
+    if (!_versionSlots[idx]) return;
+    if (!confirm(`確定刪除 V${idx+1}: ${_versionSlots[idx].label}？`)) return;
     _versionSlots[idx] = null;
     if (_currentSlot === idx) _currentSlot = -1;
     saveVersionSlots(); refreshSlotUI();
@@ -2225,19 +2239,36 @@ function handleSlotClick(idx) {
   }
   const slot = _versionSlots[idx];
   if (slot) {
-    // 載入這個 slot
+    // 已存 → 載入
     _currentSlot = idx;
     loadVideoFromURL(slot.url, slot.label);
     refreshSlotUI();
-  } else if (_currentLabel && _sharedURL) {
-    // 空 slot → 存當前內容
-    _versionSlots[idx] = { url: _sharedURL, label: _currentLabel };
-    _currentSlot = idx;
-    saveVersionSlots(); refreshSlotUI();
-    toast(`✓ 存到 V${idx+1}: ${_currentLabel}`, 'info', 2500);
   } else {
-    toast('尚未載入任何內容，無法存到 slot', 'warn', 2000);
+    // 空 slot — 不再自動存，引導使用「存當前」按鈕
+    toast(`空 slot。請按上方「💾 存當前」存入內容`, 'info', 3000);
   }
+}
+
+function saveCurrentToNextSlot() {
+  if (!_currentLabel || !_sharedURL) {
+    toast('尚未載入任何內容', 'warn', 2000);
+    return;
+  }
+  // local file (blob:) 提醒
+  if (_sharedURL.startsWith('blob:')) {
+    toast('⚠ 本地檔案存到 slot 後重新整理頁面會失效\n建議用 GDrive / 直接 URL 連結', 'warn', 5000);
+  }
+  // 找下一個空 slot
+  for (let i = 0; i < 5; i++) {
+    if (!_versionSlots[i]) {
+      _versionSlots[i] = { url: _sharedURL, label: _currentLabel };
+      _currentSlot = i;
+      saveVersionSlots(); refreshSlotUI();
+      toast(`✓ 存到 V${i+1}: ${_currentLabel}`, 'info', 2500);
+      return;
+    }
+  }
+  toast('5 個 slot 都滿了，請右鍵刪除其中一個', 'warn', 3000);
 }
 window.addEventListener('load', () => setTimeout(loadVersionSlots, 1100));
 
@@ -2910,15 +2941,19 @@ function setupEvents(){
 
   // 多版本 slot 邏輯
   document.querySelectorAll('.version-slot').forEach(btn => {
-    btn.addEventListener('click', () => handleSlotClick(+btn.dataset.slot));
+    btn.addEventListener('click', e => handleSlotClick(+btn.dataset.slot, e));
+    btn.addEventListener('contextmenu', e => handleSlotClick(+btn.dataset.slot, e));
   });
+
+  // 「存當前」按鈕
+  document.getElementById('btn-save-version').addEventListener('click', saveCurrentToNextSlot);
 
   // Alt+1~5 快速切換
   document.addEventListener('keydown', e => {
     if (document.activeElement.tagName === 'INPUT') return;
     if (e.altKey && e.code.startsWith('Digit')) {
       const n = parseInt(e.code.slice(5));
-      if (n >= 1 && n <= 5) { e.preventDefault(); handleSlotClick(n - 1); }
+      if (n >= 1 && n <= 5) { e.preventDefault(); handleSlotClick(n - 1, null); }
     }
   });
 
