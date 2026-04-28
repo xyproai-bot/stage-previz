@@ -117,34 +117,112 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
   border:1px solid var(--accent);color:var(--accent);padding:5px 11px;border-radius:4px;
   font-size:11px;pointer-events:none;display:none}
 
-/* ── GLOBAL TRANSPORT ── */
+/* ── GLOBAL TRANSPORT (StagePV 風格) ── */
+:root{ --gt-accent:#10c78a; --gt-bg:rgba(10,12,16,.92); --gt-track:rgba(255,255,255,.12); }
 #global-transport{
   position:absolute;bottom:24px;left:50%;transform:translateX(-50%);
-  display:flex;align-items:center;gap:10px;
-  background:rgba(10,10,14,0.82);backdrop-filter:blur(8px);
-  border:1px solid rgba(255,255,255,0.1);border-radius:10px;
-  padding:10px 18px;min-width:0;max-width:90%;width:fit-content;
-  box-shadow:0 4px 24px rgba(0,0,0,0.6);z-index:50;
+  display:flex;flex-direction:column;gap:10px;
+  background:var(--gt-bg);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,0.08);border-radius:14px;
+  padding:14px 22px;min-width:480px;max-width:80%;
+  box-shadow:0 6px 28px rgba(0,0,0,0.7);z-index:50;
   pointer-events:all;
 }
-#gt-play{
-  background:none;border:1.5px solid rgba(255,255,255,0.35);border-radius:50%;
-  color:#fff;width:30px;height:30px;font-size:12px;cursor:pointer;
-  display:flex;align-items:center;justify-content:center;flex-shrink:0;
-  transition:border-color .15s,background .15s;
-}
-#gt-play:hover{background:rgba(255,255,255,0.12);border-color:#fff}
+/* Cues 列（最上） */
+.gt-row.cues{display:flex;align-items:center;gap:10px}
+.gt-row.cues .gt-label{font-size:11px;color:var(--gt-accent);font-family:monospace;flex-shrink:0}
+#gt-cues-bar{flex:1;height:6px;background:var(--gt-track);border-radius:3px;position:relative;cursor:pointer;overflow:visible}
+#gt-cues-fill{position:absolute;left:0;top:0;bottom:0;background:var(--gt-accent);border-radius:3px;width:0%;transition:width .1s linear}
+.gt-cue-mark{position:absolute;top:-2px;width:2px;height:10px;background:#fff;opacity:.4;cursor:pointer}
+.gt-cue-mark:hover{opacity:1}
+.gt-cue-mark.active{opacity:1;background:var(--gt-accent)}
+/* 時間軸列 */
+.gt-row.scrub{display:flex;align-items:center;gap:12px}
+.gt-time-cur,.gt-time-dur{font-size:11px;color:#fff;font-family:monospace;min-width:38px;flex-shrink:0}
+.gt-time-dur{color:rgba(255,255,255,.5);text-align:right}
 #gt-scrub{
   flex:1;-webkit-appearance:none;height:4px;
-  background:linear-gradient(to right,var(--accent) 0%,var(--surface3) 0%);
+  background:linear-gradient(to right,var(--gt-accent) 0%,var(--gt-track) 0%);
   border-radius:2px;outline:none;cursor:pointer;
 }
 #gt-scrub::-webkit-slider-thumb{
   -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
-  background:#fff;cursor:pointer;box-shadow:0 0 4px rgba(0,0,0,0.5);
+  background:var(--gt-accent);cursor:pointer;box-shadow:0 0 4px rgba(0,0,0,0.5);
 }
-#gt-time{font-size:11px;font-family:monospace;color:rgba(255,255,255,0.7);
-  white-space:nowrap;flex-shrink:0;min-width:80px;text-align:right}
+/* 控制列（下） */
+.gt-row.ctrl{display:flex;align-items:center;justify-content:center;gap:14px}
+#gt-play{
+  background:var(--gt-accent);border:none;border-radius:50%;
+  color:#000;width:42px;height:42px;font-size:18px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  transition:filter .15s,transform .15s;box-shadow:0 2px 10px rgba(16,199,138,.4)
+}
+#gt-play:hover{filter:brightness(1.1);transform:scale(1.05)}
+#gt-mute{
+  background:rgba(255,255,255,.08);border:none;border-radius:50%;
+  color:#fff;width:32px;height:32px;font-size:14px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  transition:background .15s
+}
+#gt-mute:hover{background:rgba(255,255,255,.18)}
+#gt-vol{
+  -webkit-appearance:none;width:120px;height:4px;
+  background:linear-gradient(to right,var(--gt-accent) 0%,var(--gt-track) 0%);
+  border-radius:2px;outline:none;cursor:pointer;
+}
+#gt-vol::-webkit-slider-thumb{
+  -webkit-appearance:none;width:12px;height:12px;border-radius:50%;
+  background:var(--gt-accent);cursor:pointer;
+}
+#gt-vol-label{font-size:10px;color:rgba(255,255,255,.5);font-family:monospace;min-width:34px;text-align:right}
+/* 舊欄位保留向下相容（ID 可能還有引用） */
+#gt-time{display:none}
+
+/* ── ANNOTATION (標註工具) ── */
+#annotation-canvas{
+  position:absolute;inset:0;width:100%;height:100%;
+  pointer-events:none;z-index:30;
+}
+#annotation-canvas.active{pointer-events:auto;cursor:crosshair}
+#anno-toolbar{
+  position:absolute;left:12px;top:50%;transform:translateY(-50%);
+  display:none;flex-direction:column;gap:4px;
+  background:var(--gt-bg);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.08);border-radius:10px;
+  padding:8px;z-index:60;
+  box-shadow:0 4px 18px rgba(0,0,0,.5)
+}
+#anno-toolbar.active{display:flex}
+.anno-btn{
+  background:transparent;border:1px solid transparent;border-radius:6px;
+  width:32px;height:32px;padding:0;cursor:pointer;color:#fff;font-size:14px;
+  display:flex;align-items:center;justify-content:center;
+  transition:background .12s,border-color .12s
+}
+.anno-btn:hover{background:rgba(255,255,255,.1)}
+.anno-btn.active{background:rgba(16,199,138,.2);border-color:var(--gt-accent);color:var(--gt-accent)}
+.anno-btn.color-swatch{position:relative;overflow:hidden}
+#anno-color{position:absolute;inset:0;width:100%;height:100%;border:none;cursor:pointer;opacity:0}
+.anno-thickness-row{display:flex;align-items:center;justify-content:center;
+  font-size:9px;color:rgba(255,255,255,.5);margin:4px 0}
+#anno-thickness{
+  -webkit-appearance:none;width:60px;height:3px;
+  background:var(--gt-track);border-radius:2px;outline:none;cursor:pointer;
+}
+#anno-thickness::-webkit-slider-thumb{
+  -webkit-appearance:none;width:10px;height:10px;border-radius:50%;
+  background:var(--gt-accent);cursor:pointer;
+}
+#anno-toggle-btn{
+  position:absolute;left:12px;top:60px;
+  background:var(--gt-bg);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.08);border-radius:50%;
+  width:40px;height:40px;color:#fff;font-size:16px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;z-index:55;
+  transition:background .15s
+}
+#anno-toggle-btn:hover{background:rgba(255,255,255,.15)}
+#anno-toggle-btn.active{background:var(--gt-accent);color:#000}
 
 /* ── BOTTOM BAR ── */
 #bottombar{height:var(--bh);background:var(--surface);border-top:1px solid var(--border);
@@ -363,10 +441,52 @@ body.player-mode #main{height:100vh}
     <div id="walk-hint">WASD · move &nbsp;|&nbsp; Mouse · look &nbsp;|&nbsp; Shift · run &nbsp;|&nbsp; E/Q · fly &nbsp;|&nbsp; F · exit walk</div>
     <div id="lock-prompt">Click to capture mouse &nbsp;·&nbsp; Walk Mode active</div>
     <div id="sel-hud"></div>
+
+    <!-- 標註 Canvas overlay（畫筆/幾何/橡皮擦） -->
+    <canvas id="annotation-canvas"></canvas>
+
+    <!-- 標註模式切換按鈕（懸浮） -->
+    <button id="anno-toggle-btn" title="開啟標註模式 (D)">✏️</button>
+
+    <!-- 標註工具列（懸浮 in viewport） -->
+    <div id="anno-toolbar">
+      <button class="anno-btn active" data-tool="pen" title="自由筆">✏️</button>
+      <button class="anno-btn" data-tool="rect" title="矩形">▢</button>
+      <button class="anno-btn" data-tool="circle" title="圓形">○</button>
+      <button class="anno-btn" data-tool="triangle" title="三角形">△</button>
+      <button class="anno-btn" data-tool="eraser" title="橡皮擦">🧽</button>
+      <label class="anno-btn color-swatch" title="選顏色" id="anno-color-btn" style="background:#ff4444">
+        <input type="color" id="anno-color" value="#ff4444">
+      </label>
+      <div class="anno-thickness-row" id="anno-thick-label">3px</div>
+      <input id="anno-thickness" type="range" min="1" max="20" step="1" value="3">
+      <button class="anno-btn" id="anno-clear" title="清除全部" style="margin-top:4px">🗑</button>
+      <button class="anno-btn" id="anno-screenshot" title="截圖到剪貼簿">📸</button>
+    </div>
     <div id="global-transport" style="display:none">
-      <button id="gt-play">▶</button>
-      <span id="gt-time">0:00 / 0:00</span>
-      <input id="gt-scrub" type="range" min="0" max="100" step="0.1" value="0">
+      <!-- Cues 列：場景跳點，動畫師預設位置 -->
+      <div class="gt-row cues">
+        <span class="gt-label">Cues</span>
+        <div id="gt-cues-bar">
+          <div id="gt-cues-fill"></div>
+          <!-- 動態插入 .gt-cue-mark -->
+        </div>
+      </div>
+      <!-- 時間軸列 -->
+      <div class="gt-row scrub">
+        <span id="gt-time-cur" class="gt-time-cur">0:00</span>
+        <input id="gt-scrub" type="range" min="0" max="100" step="0.01" value="0">
+        <span id="gt-time-dur" class="gt-time-dur">0:00</span>
+      </div>
+      <!-- 控制列 -->
+      <div class="gt-row ctrl">
+        <button id="gt-play" title="播放/暫停 (Space)">▶</button>
+        <button id="gt-mute" title="靜音切換">🔇</button>
+        <input id="gt-vol" type="range" min="0" max="100" step="1" value="0">
+        <span id="gt-vol-label">0%</span>
+      </div>
+      <!-- 隱藏舊元素（保留以免其他 code 引用報錯） -->
+      <span id="gt-time" style="display:none">0:00 / 0:00</span>
     </div>
   </div>
 
@@ -1049,15 +1169,22 @@ function updateGlobalTransport(){
   const ref = gtRefPanel();
   const dur = gtMaxDur();
   const cur = ref ? ref.video.currentTime : 0;
+  const transport = document.getElementById('global-transport');
   const scrub = document.getElementById('gt-scrub');
-  const timeEl = document.getElementById('gt-time');
+  const timeCur = document.getElementById('gt-time-cur');
+  const timeDur = document.getElementById('gt-time-dur');
+  const cuesFill = document.getElementById('gt-cues-fill');
   const playBtn = document.getElementById('gt-play');
   if(!scrub) return;
+  // 有影片就顯示 transport bar
+  if (transport) transport.style.display = ref ? 'flex' : 'none';
   scrub.max = dur > 0 ? dur : 100;
   if(!gtDragging) scrub.value = cur;
   const pct = dur>0 ? (cur/dur*100) : 0;
-  scrub.style.background = `linear-gradient(to right,var(--accent) ${pct}%,var(--surface3) ${pct}%)`;
-  timeEl.textContent = `${fmtT(cur)} / ${fmtT(dur)}`;
+  scrub.style.background = `linear-gradient(to right,var(--gt-accent) ${pct}%,var(--gt-track) ${pct}%)`;
+  if (cuesFill) cuesFill.style.width = pct + '%';
+  if (timeCur) timeCur.textContent = fmtT(cur);
+  if (timeDur) timeDur.textContent = fmtT(dur);
   const nowPlaying = ref ? !ref.video.paused : false;
   if(nowPlaying !== gtPlaying){ gtPlaying=nowPlaying; playBtn.textContent=gtPlaying?'⏸':'▶'; }
 
@@ -1095,8 +1222,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     const dur = gtMaxDur(); if(!dur) return;
     const t = +scrub.value;
     const pct = dur>0?(t/dur*100):0;
-    scrub.style.background=`linear-gradient(to right,var(--accent) ${pct}%,var(--surface3) ${pct}%)`;
-    document.getElementById('gt-time').textContent=`${fmtT(t)} / ${fmtT(dur)}`;
+    scrub.style.background=`linear-gradient(to right,var(--gt-accent) ${pct}%,var(--gt-track) ${pct}%)`;
     syncAllTo(t, gtPlaying);
   });
   playBtn.addEventListener('click',()=>{
@@ -1104,7 +1230,318 @@ document.addEventListener('DOMContentLoaded',()=>{
     playBtn.textContent = gtPlaying?'⏸':'▶';
     panels.forEach(p=>{ if(p.video&&!p.ndi){ gtPlaying?p.video.play().catch(()=>{}) : p.video.pause(); }});
   });
+
+  // 音量控制
+  const vol = document.getElementById('gt-vol');
+  const volLabel = document.getElementById('gt-vol-label');
+  const muteBtn = document.getElementById('gt-mute');
+  let _gtMuted = true; // 預設靜音（避免一載入就吵）
+  function applyVolume() {
+    const v = _gtMuted ? 0 : (+vol.value)/100;
+    panels.forEach(p => { if (p.video) { p.video.volume = v; p.video.muted = _gtMuted; }});
+    const pct = (+vol.value);
+    vol.style.background = `linear-gradient(to right,var(--gt-accent) ${pct}%,var(--gt-track) ${pct}%)`;
+    if (volLabel) volLabel.textContent = `${pct}%`;
+    if (muteBtn) muteBtn.textContent = _gtMuted || pct === 0 ? '🔇' : (pct < 50 ? '🔉' : '🔊');
+  }
+  vol.addEventListener('input', () => { if (_gtMuted && +vol.value > 0) _gtMuted = false; applyVolume(); });
+  muteBtn.addEventListener('click', () => { _gtMuted = !_gtMuted; if (!_gtMuted && +vol.value === 0) vol.value = 50; applyVolume(); });
+  applyVolume(); // 初始化
+
+  // Cues 進度條：點擊跳到該位置（暫時跟主 scrub 同步，未來支援預設 cue 點）
+  const cuesBar = document.getElementById('gt-cues-bar');
+  cuesBar.addEventListener('click', (e) => {
+    const rect = cuesBar.getBoundingClientRect();
+    const ratio = (e.clientX - rect.left) / rect.width;
+    const dur = gtMaxDur();
+    if (dur > 0) syncAllTo(ratio * dur, gtPlaying);
+  });
+
+  // Space 鍵：播放/暫停
+  document.addEventListener('keydown', e => {
+    if (e.code === 'Space' && gtRefPanel() && document.activeElement.tagName !== 'INPUT') {
+      e.preventDefault();
+      playBtn.click();
+    }
+  });
 });
+
+// ── Cue 系統 ──────────────────────────────────
+// 動畫師可在 Cues 進度條上預設場景跳點，導演按 1-9 數字鍵跳
+let _cuePoints = []; // [{ time, label }]
+function addCueAtCurrent(label) {
+  const ref = gtRefPanel();
+  if (!ref) return;
+  _cuePoints.push({ time: ref.video.currentTime, label: label || `Cue ${_cuePoints.length + 1}` });
+  _cuePoints.sort((a, b) => a.time - b.time);
+  renderCueMarks();
+  saveCuePoints();
+}
+function renderCueMarks() {
+  const bar = document.getElementById('gt-cues-bar');
+  if (!bar) return;
+  bar.querySelectorAll('.gt-cue-mark').forEach(el => el.remove());
+  const dur = gtMaxDur();
+  if (dur <= 0) return;
+  _cuePoints.forEach((cue, idx) => {
+    const mark = document.createElement('div');
+    mark.className = 'gt-cue-mark';
+    mark.style.left = `${(cue.time / dur) * 100}%`;
+    mark.title = cue.label + ` (${fmtT(cue.time)})`;
+    mark.onclick = (e) => { e.stopPropagation(); syncAllTo(cue.time, gtPlaying); };
+    bar.appendChild(mark);
+  });
+}
+function saveCuePoints() {
+  try { localStorage.setItem('stagepreviz-cues', JSON.stringify(_cuePoints)); } catch(e) {}
+}
+function loadCuePoints() {
+  try {
+    const data = localStorage.getItem('stagepreviz-cues');
+    if (data) { _cuePoints = JSON.parse(data); renderCueMarks(); }
+  } catch(e) {}
+}
+// Shift+1-9：跳到對應 cue（避免與相機預設 1-5 衝突）
+document.addEventListener('keydown', e => {
+  if (document.activeElement.tagName === 'INPUT') return;
+  if (e.shiftKey && e.code.startsWith('Digit')) {
+    const n = parseInt(e.code.slice(5));
+    if (n >= 1 && n <= 9 && _cuePoints[n - 1]) {
+      e.preventDefault();
+      syncAllTo(_cuePoints[n - 1].time, gtPlaying);
+    }
+  }
+  // Shift+C：在當前位置加 cue（避免和其他 c 衝突）
+  if (e.shiftKey && e.code === 'KeyC') addCueAtCurrent();
+  // Shift+X：刪除最近的 cue
+  if (e.shiftKey && e.code === 'KeyX' && _cuePoints.length > 0) {
+    _cuePoints.pop();
+    renderCueMarks();
+    saveCuePoints();
+  }
+});
+window.addEventListener('load', () => setTimeout(loadCuePoints, 1000));
+
+// ═══════════════════════════════════════════════
+// ANNOTATION (標註工具)
+// ═══════════════════════════════════════════════
+(function setupAnnotation(){
+  const canvas = document.getElementById('annotation-canvas');
+  const toggleBtn = document.getElementById('anno-toggle-btn');
+  const toolbar = document.getElementById('anno-toolbar');
+  const colorInput = document.getElementById('anno-color');
+  const colorBtn = document.getElementById('anno-color-btn');
+  const thicknessInput = document.getElementById('anno-thickness');
+  const thickLabel = document.getElementById('anno-thick-label');
+  const clearBtn = document.getElementById('anno-clear');
+  const screenshotBtn = document.getElementById('anno-screenshot');
+  const toolBtns = toolbar.querySelectorAll('.anno-btn[data-tool]');
+  if (!canvas || !toggleBtn) return;
+
+  const ctx = canvas.getContext('2d');
+  let active = false, drawing = false, currentTool = 'pen';
+  let startX = 0, startY = 0;
+  let snapshot = null; // 用於 shape 預覽（每筆繪製前 backup）
+  let strokes = []; // 已完成筆觸列表，用於 redraw（resize 時）
+
+  function resizeCanvas() {
+    const vp = document.getElementById('vp');
+    canvas.width = vp.clientWidth;
+    canvas.height = vp.clientHeight;
+    redrawAll();
+  }
+  new ResizeObserver(resizeCanvas).observe(document.getElementById('vp'));
+  resizeCanvas();
+
+  function redrawAll() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    strokes.forEach(s => drawStroke(s));
+  }
+
+  function drawStroke(s) {
+    ctx.strokeStyle = s.color;
+    ctx.lineWidth = s.thickness;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (s.tool === 'pen') {
+      ctx.beginPath();
+      s.points.forEach((p, i) => i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y));
+      ctx.stroke();
+    } else if (s.tool === 'rect') {
+      ctx.strokeRect(s.x, s.y, s.w, s.h);
+    } else if (s.tool === 'circle') {
+      ctx.beginPath();
+      ctx.ellipse(s.cx, s.cy, Math.abs(s.rx), Math.abs(s.ry), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (s.tool === 'triangle') {
+      ctx.beginPath();
+      ctx.moveTo(s.x1, s.y1);
+      ctx.lineTo(s.x2, s.y2);
+      ctx.lineTo(s.x3, s.y3);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+
+  function setActive(on) {
+    active = on;
+    canvas.classList.toggle('active', on);
+    toolbar.classList.toggle('active', on);
+    toggleBtn.classList.toggle('active', on);
+    toggleBtn.title = on ? '關閉標註模式 (D)' : '開啟標註模式 (D)';
+  }
+
+  toggleBtn.addEventListener('click', () => setActive(!active));
+  document.addEventListener('keydown', e => {
+    if (document.activeElement.tagName === 'INPUT') return;
+    if (e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+      e.preventDefault();
+      setActive(!active);
+    }
+  });
+
+  toolBtns.forEach(b => {
+    b.addEventListener('click', () => {
+      toolBtns.forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      currentTool = b.dataset.tool;
+      canvas.style.cursor = currentTool === 'eraser' ? 'cell' : 'crosshair';
+    });
+  });
+
+  colorInput.addEventListener('input', () => { colorBtn.style.background = colorInput.value; });
+
+  thicknessInput.addEventListener('input', () => { thickLabel.textContent = thicknessInput.value + 'px'; });
+
+  clearBtn.addEventListener('click', () => {
+    strokes = [];
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  });
+
+  function getXY(e) {
+    const rect = canvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    if (!active) return;
+    const { x, y } = getXY(e);
+    drawing = true;
+    startX = x; startY = y;
+    if (currentTool === 'pen') {
+      strokes.push({
+        tool: 'pen', color: colorInput.value, thickness: +thicknessInput.value,
+        points: [{ x, y }]
+      });
+    } else if (currentTool === 'eraser') {
+      // 橡皮擦：點擊刪除最近的筆觸（簡單版 — 找接近點擊位置的）
+      eraseAt(x, y);
+    } else {
+      // shape 工具：先 snapshot 當前畫布，繪製時不斷重畫
+      snapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    }
+  });
+
+  canvas.addEventListener('pointermove', e => {
+    if (!active || !drawing) return;
+    const { x, y } = getXY(e);
+    if (currentTool === 'pen') {
+      const cur = strokes[strokes.length - 1];
+      cur.points.push({ x, y });
+      drawStroke(cur);
+    } else if (currentTool === 'eraser') {
+      eraseAt(x, y);
+    } else if (snapshot) {
+      ctx.putImageData(snapshot, 0, 0);
+      ctx.strokeStyle = colorInput.value;
+      ctx.lineWidth = +thicknessInput.value;
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      if (currentTool === 'rect') {
+        ctx.strokeRect(startX, startY, x - startX, y - startY);
+      } else if (currentTool === 'circle') {
+        ctx.beginPath();
+        const cx = (startX + x) / 2, cy = (startY + y) / 2;
+        const rx = Math.abs(x - startX) / 2, ry = Math.abs(y - startY) / 2;
+        ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      } else if (currentTool === 'triangle') {
+        ctx.beginPath();
+        ctx.moveTo((startX + x) / 2, startY); // 頂
+        ctx.lineTo(startX, y); // 左下
+        ctx.lineTo(x, y);      // 右下
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+  });
+
+  canvas.addEventListener('pointerup', e => {
+    if (!active || !drawing) return;
+    const { x, y } = getXY(e);
+    drawing = false;
+    if (currentTool === 'rect') {
+      strokes.push({ tool: 'rect', color: colorInput.value, thickness: +thicknessInput.value,
+        x: startX, y: startY, w: x - startX, h: y - startY });
+    } else if (currentTool === 'circle') {
+      strokes.push({ tool: 'circle', color: colorInput.value, thickness: +thicknessInput.value,
+        cx: (startX + x) / 2, cy: (startY + y) / 2,
+        rx: Math.abs(x - startX) / 2, ry: Math.abs(y - startY) / 2 });
+    } else if (currentTool === 'triangle') {
+      strokes.push({ tool: 'triangle', color: colorInput.value, thickness: +thicknessInput.value,
+        x1: (startX + x) / 2, y1: startY, x2: startX, y2: y, x3: x, y3: y });
+    }
+    snapshot = null;
+  });
+
+  function eraseAt(x, y) {
+    // 簡單版：清除點擊範圍 30px 內的筆觸
+    const radius = 30;
+    strokes = strokes.filter(s => {
+      if (s.tool === 'pen') {
+        return !s.points.some(p => Math.hypot(p.x - x, p.y - y) < radius);
+      } else if (s.tool === 'rect') {
+        return !(x >= s.x - radius && x <= s.x + s.w + radius && y >= s.y - radius && y <= s.y + s.h + radius);
+      } else if (s.tool === 'circle') {
+        return Math.hypot(x - s.cx, y - s.cy) > Math.max(s.rx, s.ry) + radius;
+      } else if (s.tool === 'triangle') {
+        return Math.hypot(x - (s.x1+s.x2+s.x3)/3, y - (s.y1+s.y2+s.y3)/3) > radius * 2;
+      }
+      return true;
+    });
+    redrawAll();
+  }
+
+  // ── 截圖到剪貼簿（含 3D 場景 + 標註 overlay）──
+  screenshotBtn.addEventListener('click', async () => {
+    try {
+      const c3 = document.getElementById('c3');
+      // 合成：3D canvas + 標註 canvas
+      const composite = document.createElement('canvas');
+      composite.width = c3.width;
+      composite.height = c3.height;
+      const cctx = composite.getContext('2d');
+      cctx.drawImage(c3, 0, 0);
+      // annotation canvas 是 viewport 大小，要等比縮放到 c3 解析度
+      cctx.drawImage(canvas, 0, 0, composite.width, composite.height);
+      composite.toBlob(async (blob) => {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+          toast('✓ 已截圖到剪貼簿', 'info', 2500);
+        } catch (e) {
+          // Fallback: 下載
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = `舞臺預覽_${Date.now()}.png`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 5000);
+          toast('✓ 已下載截圖（剪貼簿不可用）', 'info', 3000);
+        }
+      }, 'image/png');
+    } catch (e) {
+      toast('截圖失敗：' + e.message, 'warn', 4000);
+    }
+  });
+})();
 
 function clearVid(panel){
   if(panel.ndi && panel.ndiStream){
@@ -1519,18 +1956,7 @@ function onVPClick(e){
 // VIDEO IMPORT
 // ═══════════════════════════════════════════════
 
-function handleVidAll(file){
-  if(!file) return;
-  if(panels.length===0){ toast('尚無 LED 面板，請先匯入模型或點選 Mesh。','warn',3000); return; }
-  // Each panel gets its own independent video element (same source file)
-  panels.forEach(p=>{
-    const url=URL.createObjectURL(file);
-    assignVid(p, file, url, true); // skip per-panel rebuild
-  });
-  rebuildUI(); // single rebuild after all assigned
-  // Single toast after all panels assigned
-  toast(`✓ "${file.name}" 已套用到全部 ${panels.length} 個 LED 面板\n點選面板名稱可看進度條與播放控制`,'info',4000);
-}
+// 舊版 handleVidAll 已移到下方（loadVideoFromURL 區塊），此處保留 handleVid 給單面板用
 
 function handleVid(file){
   if(!file) return;
@@ -1705,21 +2131,79 @@ function gdriveDirectURL(fileId) {
   return `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`;
 }
 
+// 共用 video 系統：所有 LED 面板用同一個 video element + 同一張 VideoTexture
+// 確保所有 panel 永遠同步（差異 = 0），跟 NDI 模式一樣
+let _sharedVideo = null, _sharedTex = null, _sharedURL = null;
+
 async function loadVideoFromURL(url, label) {
   if (panels.length === 0) {
     toast('尚無 LED 面板，請先載入舞臺模型', 'warn', 3000);
     return;
   }
   _setSrcStatus(`⏳ 載入中: ${label}`, 'var(--accent)');
-  // 為每個面板建立獨立 video element（同一 URL，但獨立播放）
+
+  // 清掉舊的 shared video
+  if (_sharedVideo) {
+    _sharedVideo.pause();
+    if (_sharedURL && _sharedURL.startsWith('blob:')) URL.revokeObjectURL(_sharedURL);
+    _sharedVideo = null;
+  }
+  if (_sharedTex) { _sharedTex.dispose(); _sharedTex = null; }
+
+  // 建立單一 video element
+  const v = document.createElement('video');
+  if (/^https?:\/\//i.test(url)) v.crossOrigin = 'anonymous';
+  v.src = url; _sharedURL = url;
+  v.loop = true; // 共用 video 直接 loop（不需要 panel-by-panel 同步）
+  v.muted = true; // 預設靜音（音量在 transport bar 控制）
+  v.autoplay = true;
+  v.playsInline = true;
+
+  v.addEventListener('error', () => {
+    _setSrcStatus(`✗ 載入失敗: ${label}`, '#ff6b6b');
+    toast(`⚠ 無法載入 "${label}"，請確認是 MP4 H.264 格式`, 'warn', 6000);
+  });
+  v.addEventListener('canplay', () => v.play().catch(() => {}));
+
+  const tex = new THREE.VideoTexture(v);
+  tex.minFilter = THREE.LinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.format = THREE.RGBFormat;
+  tex.flipY = false; // 模型 UV 已處理方向
+
+  _sharedVideo = v;
+  _sharedTex = tex;
+
+  // 套用到所有 panel — 共用同一張 texture，model UV 處理 cropping
   panels.forEach(p => {
-    // assignVid 接受 file 物件 + url；我們造一個假 file object 帶 name
-    const fakeFile = { name: label };
-    assignVid(p, fakeFile, url, true);
+    // 先清掉舊的 per-panel video (如果有)
+    if (p.video && p.video !== v) {
+      p.video.pause();
+      if (p.video._ou && p.video._ou.startsWith('blob:')) URL.revokeObjectURL(p.video._ou);
+    }
+    if (p.tex && p.tex !== tex) p.tex.dispose();
+
+    p.video = v;
+    p.tex = tex;
+    p.file = label;
+    if (p.mat?.uniforms.map) p.mat.uniforms.map.value = tex;
+    if (p.mat?.uniforms.hasVideo) p.mat.uniforms.hasVideo.value = 1.0;
+    if (p.mat?.uniforms.limitedRange) p.mat.uniforms.limitedRange.value = 0.0; // 本地/網路影片是 full range
   });
   rebuildUI();
   _setSrcStatus(`✓ 已載入: ${label}`, 'var(--success)');
-  toast(`✓ "${label}" 已套用到全部 ${panels.length} 個 LED 面板`, 'info', 4000);
+  toast(`✓ "${label}" 已同步套用到 ${panels.length} 個 LED 面板`, 'info', 3500);
+}
+
+// 本地檔案：包成 URL 後用 shared video 系統載入
+function handleVidAll(file) {
+  if (!file) return;
+  if (panels.length === 0) {
+    toast('尚無 LED 面板，請先載入舞臺模型', 'warn', 3000);
+    return;
+  }
+  const url = URL.createObjectURL(file);
+  loadVideoFromURL(url, file.name);
 }
 
 // ═══════════════════════════════════════════════
@@ -2202,6 +2686,9 @@ function loop(){
   panels.forEach(p=>{
     if(p.tex && p.video && p.video.readyState>=2) p.tex.needsUpdate=true;
   });
+
+  // 全域 transport bar 狀態（時間/進度/顯示隱藏）
+  updateGlobalTransport();
 
   renderer.render(scene,camera);
 }
