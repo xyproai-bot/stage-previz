@@ -378,13 +378,26 @@ body.player-mode #main{height:100vh}
     <div class="ss">
       <div class="st">內容來源</div>
       <div class="brow"><button class="btn full accent" id="btn-video-all-web">📁 上傳本地影片</button></div>
-      <div style="margin:8px 0 6px;font-size:9px;color:var(--text-muted);text-align:center;letter-spacing:1px">— 或 —</div>
+      <div style="margin:8px 0 6px;font-size:9px;color:var(--text-muted);text-align:center;letter-spacing:1px">— 或貼連結 —</div>
       <div style="display:flex;gap:5px">
-        <input type="text" id="gdrive-url" placeholder="貼上 Google Drive 公開連結"
+        <input type="text" id="gdrive-url" placeholder="GDrive 連結 / .mp4 URL / .m3u8 串流"
                style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:6px 8px;font-size:11px;font-family:inherit;outline:none">
         <button class="btn" id="btn-gdrive-load" style="flex-shrink:0">載入</button>
       </div>
       <div id="src-status" style="font-size:11px;color:var(--text-dim);text-align:center;padding:6px 0 2px;letter-spacing:.3px">尚未載入內容</div>
+
+      <!-- 多版本 slot 系統 -->
+      <div style="margin-top:8px">
+        <div style="font-size:9px;color:var(--text-muted);letter-spacing:1px;margin-bottom:5px">版本切換 (Alt+1~5)</div>
+        <div id="version-slots" style="display:grid;grid-template-columns:repeat(5,1fr);gap:3px">
+          <button class="btn sm version-slot" data-slot="0">V1</button>
+          <button class="btn sm version-slot" data-slot="1">V2</button>
+          <button class="btn sm version-slot" data-slot="2">V3</button>
+          <button class="btn sm version-slot" data-slot="3">V4</button>
+          <button class="btn sm version-slot" data-slot="4">V5</button>
+        </div>
+        <div style="font-size:9px;color:var(--text-muted);margin-top:4px">點空 slot 將當前載入存進去；點已存的切換</div>
+      </div>
       <!-- hidden: kept for internal use -->
       <div style="display:none">
         <button id="btn-stage">x</button><button id="btn-video-all">x</button>
@@ -1389,6 +1402,8 @@ window.addEventListener('load', () => setTimeout(loadCuePoints, 1000));
     toolbar.classList.toggle('active', on);
     toggleBtn.classList.toggle('active', on);
     toggleBtn.title = on ? '關閉標註模式 (D)' : '開啟標註模式 (D)';
+    // 禁用相機控制，否則拖曳會旋轉視角
+    if (typeof orbitCtrl !== 'undefined' && orbitCtrl) orbitCtrl.enabled = !on;
   }
 
   toggleBtn.addEventListener('click', () => setActive(!active));
@@ -1425,6 +1440,8 @@ window.addEventListener('load', () => setTimeout(loadCuePoints, 1000));
 
   canvas.addEventListener('pointerdown', e => {
     if (!active) return;
+    e.preventDefault(); e.stopPropagation();
+    canvas.setPointerCapture(e.pointerId); // 抓住 pointer，避免 OrbitControls 偷走
     const { x, y } = getXY(e);
     drawing = true;
     startX = x; startY = y;
@@ -1444,6 +1461,7 @@ window.addEventListener('load', () => setTimeout(loadCuePoints, 1000));
 
   canvas.addEventListener('pointermove', e => {
     if (!active || !drawing) return;
+    e.preventDefault(); e.stopPropagation();
     const { x, y } = getXY(e);
     if (currentTool === 'pen') {
       const cur = strokes[strokes.length - 1];
@@ -1477,6 +1495,8 @@ window.addEventListener('load', () => setTimeout(loadCuePoints, 1000));
 
   canvas.addEventListener('pointerup', e => {
     if (!active || !drawing) return;
+    e.preventDefault(); e.stopPropagation();
+    try { canvas.releasePointerCapture(e.pointerId); } catch(_) {}
     const { x, y } = getXY(e);
     drawing = false;
     if (currentTool === 'rect') {
@@ -1512,23 +1532,29 @@ window.addEventListener('load', () => setTimeout(loadCuePoints, 1000));
   }
 
   // ── 截圖到剪貼簿（含 3D 場景 + 標註 overlay）──
+  // 關鍵：必須在 render() 後立刻 toDataURL，否則 GPU buffer 已清空
+  // 解法：強制 render 一次 → 同一個 microtask 內合成
   screenshotBtn.addEventListener('click', async () => {
     try {
       const c3 = document.getElementById('c3');
+      // 強制 render 當下幀（renderer 是全域變數）
+      if (typeof renderer !== 'undefined' && renderer) {
+        renderer.render(scene, camera);
+      }
       // 合成：3D canvas + 標註 canvas
       const composite = document.createElement('canvas');
       composite.width = c3.width;
       composite.height = c3.height;
       const cctx = composite.getContext('2d');
       cctx.drawImage(c3, 0, 0);
-      // annotation canvas 是 viewport 大小，要等比縮放到 c3 解析度
-      cctx.drawImage(canvas, 0, 0, composite.width, composite.height);
+      // annotation canvas 是 viewport 大小，等比縮放到 c3 解析度
+      if (canvas.width > 0) cctx.drawImage(canvas, 0, 0, composite.width, composite.height);
+
       composite.toBlob(async (blob) => {
         try {
           await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
           toast('✓ 已截圖到剪貼簿', 'info', 2500);
         } catch (e) {
-          // Fallback: 下載
           const url = URL.createObjectURL(blob);
           const a = document.createElement('a');
           a.href = url; a.download = `舞臺預覽_${Date.now()}.png`;
@@ -2125,15 +2151,95 @@ function parseGDriveURL(input) {
   return null;
 }
 
+// Cloudflare Worker proxy URL（可選；>100MB 大檔案需要）
+// 部署 cf-worker/ 之後把 URL 設到 localStorage 'stagepreviz-proxy'
 function gdriveDirectURL(fileId) {
-  // drive.usercontent.google.com 有完整 CORS 支援（Access-Control-Allow-Origin: *）
-  // 而 drive.google.com/uc?export=download 已被 Google 阻擋直連
+  const proxy = (localStorage.getItem('stagepreviz-proxy') || '').trim();
+  if (proxy) return `${proxy.replace(/\/$/, '')}/?id=${fileId}`;
+  // Direct URL — 適用 <100MB 檔案，CORS 標頭完整
+  // >100MB 會被 Google 強制顯示「無法掃毒」確認頁，需用 proxy 繞過
   return `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`;
 }
 
 // 共用 video 系統：所有 LED 面板用同一個 video element + 同一張 VideoTexture
 // 確保所有 panel 永遠同步（差異 = 0），跟 NDI 模式一樣
 let _sharedVideo = null, _sharedTex = null, _sharedURL = null;
+let _currentLabel = null;
+
+// ── 通用 URL 載入器：自動辨識 GDrive / mp4 / m3u8 / 任何 URL ──
+function loadFromAnyURL(input) {
+  const trimmed = input.trim();
+  if (!trimmed) return;
+
+  // 1. GDrive 連結 → 轉 direct URL
+  const fileId = parseGDriveURL(trimmed);
+  if (fileId) {
+    const directURL = gdriveDirectURL(fileId);
+    return loadVideoFromURL(directURL, `GDrive: ${fileId.substring(0, 8)}…`);
+  }
+
+  // 2. 直接 URL（mp4/webm/m3u8/etc.）
+  if (/^https?:\/\//i.test(trimmed)) {
+    if (trimmed.toLowerCase().includes('.m3u8')) {
+      toast('⚠ HLS (.m3u8) 串流需要安裝 hls.js library，目前未支援', 'warn', 5000);
+      return;
+    }
+    const filename = trimmed.split('/').pop().split('?')[0] || 'video';
+    return loadVideoFromURL(trimmed, filename);
+  }
+
+  toast('無法識別連結格式\n支援：GDrive 連結 / .mp4 URL', 'warn', 4000);
+}
+
+// ── 多版本 slot 系統 ──
+// 每個 slot 存 { url, label }，點空 slot = 存當前；點已存 = 切換載入
+let _versionSlots = []; // index 0~4
+let _currentSlot = -1;
+
+function loadVersionSlots() {
+  try {
+    const data = localStorage.getItem('stagepreviz-slots');
+    if (data) _versionSlots = JSON.parse(data);
+  } catch(e) {}
+  refreshSlotUI();
+}
+function saveVersionSlots() {
+  try { localStorage.setItem('stagepreviz-slots', JSON.stringify(_versionSlots)); } catch(e) {}
+}
+function refreshSlotUI() {
+  document.querySelectorAll('.version-slot').forEach((btn, i) => {
+    const slot = _versionSlots[i];
+    btn.textContent = slot ? `V${i+1}✓` : `V${i+1}`;
+    btn.title = slot ? `${slot.label}\n（再點切換 / Shift+點刪除）` : `空 slot — 點此存當前內容`;
+    btn.classList.toggle('active', i === _currentSlot);
+  });
+}
+function handleSlotClick(idx) {
+  // Shift+click = 刪除
+  if (event && event.shiftKey) {
+    _versionSlots[idx] = null;
+    if (_currentSlot === idx) _currentSlot = -1;
+    saveVersionSlots(); refreshSlotUI();
+    toast(`V${idx+1} 已清除`, 'info', 1500);
+    return;
+  }
+  const slot = _versionSlots[idx];
+  if (slot) {
+    // 載入這個 slot
+    _currentSlot = idx;
+    loadVideoFromURL(slot.url, slot.label);
+    refreshSlotUI();
+  } else if (_currentLabel && _sharedURL) {
+    // 空 slot → 存當前內容
+    _versionSlots[idx] = { url: _sharedURL, label: _currentLabel };
+    _currentSlot = idx;
+    saveVersionSlots(); refreshSlotUI();
+    toast(`✓ 存到 V${idx+1}: ${_currentLabel}`, 'info', 2500);
+  } else {
+    toast('尚未載入任何內容，無法存到 slot', 'warn', 2000);
+  }
+}
+window.addEventListener('load', () => setTimeout(loadVersionSlots, 1100));
 
 async function loadVideoFromURL(url, label) {
   if (panels.length === 0) {
@@ -2190,6 +2296,7 @@ async function loadVideoFromURL(url, label) {
     if (p.mat?.uniforms.hasVideo) p.mat.uniforms.hasVideo.value = 1.0;
     if (p.mat?.uniforms.limitedRange) p.mat.uniforms.limitedRange.value = 0.0; // 本地/網路影片是 full range
   });
+  _currentLabel = label;
   rebuildUI();
   _setSrcStatus(`✓ 已載入: ${label}`, 'var(--success)');
   toast(`✓ "${label}" 已同步套用到 ${panels.length} 個 LED 面板`, 'info', 3500);
@@ -2792,19 +2899,27 @@ function setupEvents(){
   document.getElementById('btn-gdrive-load').addEventListener('click', () => {
     const input = document.getElementById('gdrive-url');
     const url = input.value.trim();
-    if (!url) { toast('請貼上 Google Drive 連結', 'warn', 2000); return; }
-    const fileId = parseGDriveURL(url);
-    if (!fileId) {
-      toast('無法解析連結。確認是 Google Drive 公開連結\n或直接貼 file ID', 'warn', 4000);
-      return;
-    }
-    const directURL = gdriveDirectURL(fileId);
-    loadVideoFromURL(directURL, `GDrive: ${fileId.substring(0, 12)}…`);
+    if (!url) { toast('請貼上連結', 'warn', 2000); return; }
+    loadFromAnyURL(url);
   });
 
   // Enter 鍵直接載入
   document.getElementById('gdrive-url').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('btn-gdrive-load').click();
+  });
+
+  // 多版本 slot 邏輯
+  document.querySelectorAll('.version-slot').forEach(btn => {
+    btn.addEventListener('click', () => handleSlotClick(+btn.dataset.slot));
+  });
+
+  // Alt+1~5 快速切換
+  document.addEventListener('keydown', e => {
+    if (document.activeElement.tagName === 'INPUT') return;
+    if (e.altKey && e.code.startsWith('Digit')) {
+      const n = parseInt(e.code.slice(5));
+      if (n >= 1 && n <= 5) { e.preventDefault(); handleSlotClick(n - 1); }
+    }
   });
 
   // Sidebar collapse/expand

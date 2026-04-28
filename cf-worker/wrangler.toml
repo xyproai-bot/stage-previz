@@ -1,0 +1,9 @@
+name = "stage-previz-proxy"
+main = "worker.js"
+compatibility_date = "2024-12-01"
+
+# 部署到 your-worker.workers.dev
+# 也可以綁自訂網域：
+# routes = [
+#   { pattern = "stage-previz-proxy.haimiaan.com/*", zone_name = "haimiaan.com" }
+# ]
