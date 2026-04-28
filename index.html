@@ -2330,7 +2330,11 @@ async function loadVideoFromURL(url, label) {
 
   v.addEventListener('error', () => {
     _setSrcStatus(`✗ 載入失敗: ${label}`, '#ff6b6b');
-    toast(`⚠ 無法載入 "${label}"，請確認是 MP4 H.264 格式`, 'warn', 6000);
+    const isMov = /\.mov$/i.test(label);
+    const msg = isMov
+      ? `⚠ MOV 檔通常是 ProRes / DNxHD，瀏覽器不支援\n請改用同名的 .mp4 檔（H.264）`
+      : `⚠ 無法載入 "${label}"\n請確認是 MP4 H.264 編碼`;
+    toast(msg, 'warn', 7000);
   });
   v.addEventListener('canplay', () => v.play().catch(() => {}));
 
@@ -2371,6 +2375,12 @@ function handleVidAll(file) {
   if (panels.length === 0) {
     toast('尚無 LED 面板，請先載入舞臺模型', 'warn', 3000);
     return;
+  }
+  // 攔截 MOV — 通常是 ProRes / DNxHD，瀏覽器不支援
+  if (/\.mov$/i.test(file.name)) {
+    if (!confirm(`"${file.name}" 是 .mov 檔。\n\n動畫師的 .mov 通常是 ProRes / DNxHD 編碼，瀏覽器無法播放。\n建議改用同名的 .mp4 檔（H.264）。\n\n仍要嘗試載入？`)) {
+      return;
+    }
   }
   const url = URL.createObjectURL(file);
   _aliveBlobURLs.add(url); // 記錄本 session 有效
