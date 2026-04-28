@@ -1,6 +1,7 @@
 import { Routes, Route } from 'react-router-dom';
 import RolePicker from './pages/RolePicker';
 import Admin from './pages/Admin';
+import ProjectEditor from './pages/ProjectEditor';
 import Studio from './pages/Studio';
 import Preview from './pages/Preview';
 
@@ -9,6 +10,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<RolePicker />} />
       <Route path="/admin" element={<Admin />} />
+      <Route path="/admin/projects/:projectId" element={<ProjectEditor />} />
       <Route path="/admin/:tab" element={<Admin />} />
       <Route path="/studio/:projectId" element={<Studio />} />
       <Route path="/preview/:projectId" element={<Preview />} />

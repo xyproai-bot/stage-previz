@@ -46,3 +46,107 @@ export async function createProject(input: { name: string; description: string }
 export async function archiveProject(id: string): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
+
+// ─── Songs ────────────────────────────────
+
+export interface Song {
+  id: string;
+  name: string;
+  order: number;
+  animatorUserId: string | null;
+  status: 'todo' | 'in_review' | 'approved' | 'needs_changes';
+  createdAt: string;
+  cueCount: number;
+  proposalCount: number;
+}
+
+export async function listSongs(projectId: string): Promise<Song[]> {
+  const data = await http<{ songs: Song[] }>(`/api/projects/${encodeURIComponent(projectId)}/songs`);
+  return data.songs;
+}
+
+export async function createSong(projectId: string, name: string): Promise<{ id: string; order: number }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/songs`, {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function updateSong(
+  projectId: string,
+  songId: string,
+  patch: Partial<{ name: string; order: number; status: Song['status']; animator_user_id: string }>
+): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteSong(projectId: string, songId: string): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function reorderSongs(projectId: string, orderedIds: string[]): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/songs/reorder`, {
+    method: 'POST',
+    body: JSON.stringify({ orderedIds }),
+  });
+}
+
+// ─── Cues ────────────────────────────────
+
+export interface Cue {
+  id: string;
+  name: string;
+  order: number;
+  position: { x: number; y: number; z: number };
+  rotation: { pitch: number; yaw: number; roll: number };
+  fov: number;
+  crossfadeSeconds: number;
+  status: 'master' | 'proposal' | 'alternate';
+  proposedByUserId: string | null;
+  baseCueId: string | null;
+  thumbnailUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listCues(projectId: string, songId: string): Promise<Cue[]> {
+  const data = await http<{ cues: Cue[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues`
+  );
+  return data.cues;
+}
+
+export async function createCue(
+  projectId: string,
+  songId: string,
+  input: { name: string; position?: Cue['position']; rotation?: Cue['rotation']; fov?: number; crossfadeSeconds?: number }
+): Promise<{ id: string }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateCue(
+  projectId: string,
+  songId: string,
+  cueId: string,
+  patch: Partial<Pick<Cue, 'name' | 'order' | 'position' | 'rotation' | 'fov' | 'crossfadeSeconds' | 'status'>>
+): Promise<void> {
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}`,
+    { method: 'PATCH', body: JSON.stringify(patch) }
+  );
+}
+
+export async function deleteCue(projectId: string, songId: string, cueId: string): Promise<void> {
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}`,
+    { method: 'DELETE' }
+  );
+}
