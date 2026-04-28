@@ -180,6 +180,93 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
 /* 舊欄位保留向下相容（ID 可能還有引用） */
 #gt-time{display:none}
 
+/* ── 角色選擇畫面（首次訪問） ── */
+#role-picker{
+  position:fixed;inset:0;background:rgba(8,10,14,.96);backdrop-filter:blur(10px);
+  display:none;align-items:center;justify-content:center;flex-direction:column;z-index:9999;
+  font-family:'Segoe UI',-apple-system,sans-serif
+}
+#role-picker.show{display:flex}
+#role-picker h1{font-size:24px;color:var(--gt-accent);letter-spacing:3px;margin-bottom:6px;font-weight:800}
+#role-picker .sub{font-size:14px;color:rgba(255,255,255,.55);margin-bottom:36px;letter-spacing:2px}
+.role-options{display:flex;gap:24px}
+.role-card{
+  background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);
+  border-radius:14px;padding:32px 36px;cursor:pointer;
+  width:240px;text-align:center;transition:all .2s;
+  display:flex;flex-direction:column;align-items:center;gap:14px
+}
+.role-card:hover{border-color:var(--gt-accent);background:rgba(16,199,138,.08);transform:translateY(-3px)}
+.role-card .icon{font-size:48px}
+.role-card .title{font-size:18px;color:#fff;font-weight:700}
+.role-card .desc{font-size:12px;color:rgba(255,255,255,.55);line-height:1.7}
+#role-picker .remember{margin-top:24px;font-size:12px;color:rgba(255,255,255,.4)}
+#role-picker .remember input{vertical-align:middle;margin-right:4px}
+
+/* ── Director Mode：隱藏設計師專用 UI ── */
+body.mode-director #sidebar,
+body.mode-director #btn-sidebar-toggle,
+body.mode-director #fps-disp,
+body.mode-director #mode-badge,
+body.mode-director #btn-rec,
+body.mode-director #btn-test-pattern,
+body.mode-director #anno-screenshot{display:none !important}
+body.mode-director #vp{margin-left:0 !important}
+body.mode-director #anno-toggle-btn{top:74px}
+body.mode-director #topbar{justify-content:space-between}
+body.mode-director .director-only{display:flex !important}
+.director-only{display:none}
+
+/* Director Mode 頂部攝影機快選 chip 列 */
+#director-cam-chips{display:none;gap:8px}
+body.mode-director #director-cam-chips{display:flex}
+.cam-chip{
+  background:rgba(255,255,255,.08);border:1px solid transparent;border-radius:18px;
+  padding:6px 12px;color:#fff;font-size:12px;cursor:pointer;
+  transition:all .15s;font-family:inherit
+}
+.cam-chip:hover{background:rgba(255,255,255,.18)}
+.cam-chip.active{background:var(--gt-accent);color:#000;border-color:var(--gt-accent)}
+
+/* ── Share Dialog ── */
+#share-dialog{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);
+  display:none;align-items:center;justify-content:center;z-index:1000
+}
+#share-dialog.show{display:flex}
+.share-box{
+  background:#1f2125;border:1px solid rgba(255,255,255,.12);border-radius:12px;
+  padding:24px 28px;width:480px;color:#fff;
+  box-shadow:0 12px 40px rgba(0,0,0,.6)
+}
+.share-box h3{font-size:16px;margin-bottom:18px;color:var(--gt-accent);letter-spacing:1.5px}
+.share-row{display:flex;align-items:center;gap:10px;margin:10px 0;font-size:13px}
+.share-row label{flex:1;cursor:pointer}
+.share-row input[type=checkbox]{accent-color:var(--gt-accent);transform:scale(1.2)}
+.share-url-row{margin:18px 0 8px;display:flex;gap:8px}
+#share-url-output{
+  flex:1;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);
+  color:#fff;padding:10px 12px;border-radius:6px;font-family:monospace;font-size:12px;
+  outline:none
+}
+#share-copy-btn{
+  background:var(--gt-accent);border:none;color:#000;padding:0 18px;
+  border-radius:6px;font-weight:700;cursor:pointer;font-size:13px;font-family:inherit
+}
+#share-copy-btn.copied{background:rgba(16,199,138,.4);color:var(--gt-accent)}
+#share-close{
+  background:none;border:1px solid rgba(255,255,255,.2);color:#fff;
+  padding:8px 16px;border-radius:6px;cursor:pointer;font-size:13px;margin-top:14px;
+  font-family:inherit
+}
+#share-close:hover{background:rgba(255,255,255,.08)}
+#btn-share-top{
+  background:linear-gradient(135deg,var(--gt-accent),#0fa973);border:none;color:#000;
+  padding:7px 16px;border-radius:6px;font-weight:700;cursor:pointer;font-size:12px;
+  font-family:inherit;letter-spacing:.5px
+}
+#btn-share-top:hover{filter:brightness(1.1)}
+
 /* ── ANNOTATION (標註工具) ── */
 #annotation-canvas{
   position:absolute;inset:0;width:100%;height:100%;
@@ -334,6 +421,52 @@ body.player-mode #main{height:100vh}
 </head>
 <body>
 
+<!-- 角色選擇畫面（首次訪問或手動切換時顯示） -->
+<div id="role-picker">
+  <h1>STAGE PREVIZ</h1>
+  <div class="sub">3D LED STAGE PREVIEW</div>
+  <div class="role-options">
+    <div class="role-card" data-role="designer">
+      <div class="icon">🎨</div>
+      <div class="title">設計師 / 動畫師</div>
+      <div class="desc">上傳影片 / 調整燈光<br>管理多版本 / 完整工具</div>
+    </div>
+    <div class="role-card" data-role="director">
+      <div class="icon">🎬</div>
+      <div class="title">導演 / 客戶</div>
+      <div class="desc">查看設計師分享的預覽<br>標註 + 留言（只讀模式）</div>
+    </div>
+  </div>
+  <label class="remember"><input type="checkbox" id="role-remember" checked>記住我的選擇</label>
+</div>
+
+<!-- Share Dialog -->
+<div id="share-dialog">
+  <div class="share-box">
+    <h3>🔗 分享給導演</h3>
+    <div class="share-row">
+      <input type="checkbox" id="share-include-cam" checked>
+      <label for="share-include-cam">包含目前攝影機視角</label>
+    </div>
+    <div class="share-row">
+      <input type="checkbox" id="share-include-time" checked>
+      <label for="share-include-time">包含目前播放時間</label>
+    </div>
+    <div class="share-row">
+      <input type="checkbox" id="share-include-slot" checked>
+      <label for="share-include-slot">指定當前 slot (V1-V5)</label>
+    </div>
+    <div class="share-url-row">
+      <input type="text" id="share-url-output" readonly>
+      <button id="share-copy-btn">複製</button>
+    </div>
+    <div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:4px">⚠ 本地檔案無法分享 — 請用 GDrive 公開連結作為來源</div>
+    <div style="text-align:right;margin-top:14px">
+      <button id="share-close">關閉</button>
+    </div>
+  </div>
+</div>
+
 <input type="file" id="f-stage" accept=".glb,.gltf">
 <input type="file" id="f-video" accept="video/*,.mov,.mp4">
 <input type="file" id="f-video-all" accept="video/*,.mov,.mp4">
@@ -361,7 +494,19 @@ body.player-mode #main{height:100vh}
   <div class="tsep"></div>
   <button class="btn sm" id="btn-rec" title="錄影（含系統音訊）" style="min-width:70px">⏺ 錄影</button>
   <span id="rec-timer" style="font-family:monospace;font-size:11px;color:#ff4444;display:none">00:00</span>
+
+  <!-- Director Mode 才顯示：頂部相機 chip 列 -->
+  <div id="director-cam-chips">
+    <button class="cam-chip active" data-preset="foh">前台</button>
+    <button class="cam-chip" data-preset="sl">舞臺左</button>
+    <button class="cam-chip" data-preset="sr">舞臺右</button>
+    <button class="cam-chip" data-preset="bird">俯瞰</button>
+    <button class="cam-chip" data-preset="stage">表演者</button>
+  </div>
+
   <div class="tgap"></div>
+  <button id="btn-share-top" title="分享給導演（產生連結）">🔗 分享</button>
+  <button class="btn sm director-only" id="btn-back-to-picker" title="切換角色">👤 切換角色</button>
   <span id="fps-disp">FPS: --</span>
   <button class="hbtn-help" id="btn-help" title="使用說明 / Help">?</button>
   <!-- hidden: keep for internal use -->
@@ -1338,6 +1483,205 @@ document.addEventListener('keydown', e => {
   }
 });
 window.addEventListener('load', () => setTimeout(loadCuePoints, 1000));
+
+// ═══════════════════════════════════════════════
+// 角色系統 (Director Mode / Designer Mode) + Share URL
+// ═══════════════════════════════════════════════
+
+// ── 解析 URL params ──
+function parseShareParams() {
+  const u = new URLSearchParams(location.search);
+  return {
+    mode: u.get('mode'),       // 'director' | 'designer' | null
+    src: u.get('src'),          // GDrive URL or any URL
+    cam: u.get('cam'),          // preset 名稱
+    ct: parseFloat(u.get('ct')) || null, // current time
+    slot: parseInt(u.get('slot')) || null, // 1-5
+  };
+}
+
+// ── 設定角色 ──
+function setRole(role, persist = true) {
+  document.body.classList.remove('mode-director', 'mode-designer');
+  document.body.classList.add(`mode-${role}`);
+  if (persist) localStorage.setItem('stagepreviz-role', role);
+  // 設計師模式才顯示分享按鈕（給導演的連結由設計師產生）
+  const shareBtn = document.getElementById('btn-share-top');
+  if (shareBtn) shareBtn.style.display = role === 'designer' ? 'inline-block' : 'none';
+}
+
+// ── 顯示 / 隱藏角色選擇畫面 ──
+function showRolePicker() {
+  document.getElementById('role-picker').classList.add('show');
+}
+function hideRolePicker() {
+  document.getElementById('role-picker').classList.remove('show');
+}
+
+// ── 初始化角色 ──
+function initRole() {
+  const params = parseShareParams();
+  // URL ?mode= 最高優先（從分享連結進來）
+  if (params.mode === 'director' || params.mode === 'designer') {
+    setRole(params.mode, false); // URL 來的不寫 localStorage
+    return;
+  }
+  // 其次：localStorage 記住的角色
+  const saved = localStorage.getItem('stagepreviz-role');
+  if (saved === 'director' || saved === 'designer') {
+    setRole(saved, false);
+    return;
+  }
+  // 都沒有 → 顯示選擇畫面
+  showRolePicker();
+}
+
+// 綁定角色卡片
+document.addEventListener('DOMContentLoaded', () => {
+  document.querySelectorAll('.role-card').forEach(card => {
+    card.addEventListener('click', () => {
+      const role = card.dataset.role;
+      const remember = document.getElementById('role-remember').checked;
+      setRole(role, remember);
+      hideRolePicker();
+    });
+  });
+
+  // 切換角色按鈕
+  const backBtn = document.getElementById('btn-back-to-picker');
+  if (backBtn) backBtn.addEventListener('click', () => {
+    localStorage.removeItem('stagepreviz-role');
+    showRolePicker();
+  });
+
+  // Director Mode 頂部相機 chip
+  document.querySelectorAll('.cam-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      document.querySelectorAll('.cam-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      doPreset(chip.dataset.preset);
+    });
+  });
+});
+
+// ── Share URL Builder ──
+function buildShareURL(opts = {}) {
+  const u = new URL(location.origin + location.pathname);
+  u.searchParams.set('mode', 'director');
+
+  // 影片來源：只能分享 URL 型（本地 blob: 無法跨裝置）
+  const slot = _versionSlots[_currentSlot];
+  if (slot && slot.type === 'url' && opts.includeSlot !== false) {
+    u.searchParams.set('src', slot.url);
+    u.searchParams.set('label', slot.label);
+  }
+
+  if (opts.includeCam !== false) {
+    // 找出當前 active 的 chip preset
+    const activeChip = document.querySelector('.cam-chip.active');
+    if (activeChip) u.searchParams.set('cam', activeChip.dataset.preset);
+  }
+
+  if (opts.includeTime !== false && _sharedVideo) {
+    const t = _sharedVideo.currentTime;
+    if (t > 0) u.searchParams.set('ct', t.toFixed(1));
+  }
+
+  return u.toString();
+}
+
+// ── Share Dialog 邏輯 ──
+function openShareDialog() {
+  const dialog = document.getElementById('share-dialog');
+  const out = document.getElementById('share-url-output');
+
+  function refreshURL() {
+    const url = buildShareURL({
+      includeCam: document.getElementById('share-include-cam').checked,
+      includeTime: document.getElementById('share-include-time').checked,
+      includeSlot: document.getElementById('share-include-slot').checked,
+    });
+    out.value = url;
+  }
+
+  ['share-include-cam', 'share-include-time', 'share-include-slot'].forEach(id => {
+    const el = document.getElementById(id);
+    el.onchange = refreshURL;
+  });
+
+  refreshURL();
+  dialog.classList.add('show');
+
+  // 警告：當前如果是本地檔，URL 不會有 src
+  const slot = _versionSlots[_currentSlot];
+  const isLocal = slot && slot.type === 'local';
+  if (isLocal) {
+    setTimeout(() => toast('⚠ 當前是本地檔，分享連結不會帶 src\n請改用 GDrive 公開連結後再分享', 'warn', 5000), 100);
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const shareBtn = document.getElementById('btn-share-top');
+  if (shareBtn) shareBtn.addEventListener('click', openShareDialog);
+
+  document.getElementById('share-close').addEventListener('click', () => {
+    document.getElementById('share-dialog').classList.remove('show');
+  });
+
+  document.getElementById('share-copy-btn').addEventListener('click', async () => {
+    const url = document.getElementById('share-url-output').value;
+    try {
+      await navigator.clipboard.writeText(url);
+      const btn = document.getElementById('share-copy-btn');
+      btn.textContent = '✓ 已複製';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = '複製'; btn.classList.remove('copied'); }, 2500);
+    } catch(e) {
+      toast('複製失敗，請手動選取連結', 'warn', 3000);
+    }
+  });
+});
+
+// ── 從 URL params 還原狀態（如果是分享連結進來）──
+function applyShareParamsAfterLoad() {
+  const params = parseShareParams();
+  if (!params.src && !params.cam && params.ct === null) return; // 沒有 share params
+
+  // 載入 src
+  if (params.src) {
+    const label = new URL(location.href).searchParams.get('label') || 'Shared content';
+    setTimeout(() => loadVideoFromURL(params.src, label), 500);
+  }
+
+  // 套用相機 preset
+  if (params.cam) {
+    setTimeout(() => {
+      doPreset(params.cam);
+      // 同步 chip 狀態
+      document.querySelectorAll('.cam-chip').forEach(c => {
+        c.classList.toggle('active', c.dataset.preset === params.cam);
+      });
+    }, 800);
+  }
+
+  // 跳到指定時間
+  if (params.ct !== null && params.ct > 0) {
+    const trySeek = () => {
+      if (_sharedVideo && _sharedVideo.duration > 0) {
+        _sharedVideo.currentTime = params.ct;
+      } else {
+        setTimeout(trySeek, 300);
+      }
+    };
+    setTimeout(trySeek, 1500);
+  }
+
+  toast('🔗 從分享連結載入中…', 'info', 3000);
+}
+
+// 啟動
+initRole();
+window.addEventListener('load', () => setTimeout(applyShareParamsAfterLoad, 200));
 
 // ═══════════════════════════════════════════════
 // ANNOTATION (標註工具)
