@@ -2211,11 +2211,13 @@ function refreshSlotUI() {
   document.querySelectorAll('.version-slot').forEach((btn, i) => {
     const slot = _versionSlots[i];
     if (slot) {
-      // 已存：顯示版本名（截短）
+      const isStale = slot.url.startsWith('blob:') && !_aliveBlobURLs.has(slot.url);
       const shortLabel = slot.label.length > 8 ? slot.label.slice(0, 7) + '…' : slot.label;
-      btn.textContent = `V${i+1}: ${shortLabel}`;
-      btn.title = `${slot.label}\n（點擊切換載入 · 右鍵刪除）`;
-      btn.style.opacity = '1';
+      btn.textContent = isStale ? `⚠V${i+1}: ${shortLabel}` : `V${i+1}: ${shortLabel}`;
+      btn.title = isStale
+        ? `${slot.label}\n⚠ 本地檔案重整後失效，請重新上傳並覆蓋此 slot\n（右鍵刪除）`
+        : `${slot.label}\n（點擊切換載入 · 右鍵刪除）`;
+      btn.style.opacity = isStale ? '.55' : '1';
     } else {
       btn.textContent = `＋V${i+1}`;
       btn.title = `空 slot`;
@@ -2224,6 +2226,9 @@ function refreshSlotUI() {
     btn.classList.toggle('active', i === _currentSlot);
   });
 }
+
+// 追蹤本 session 還活著的 blob URL（避免 stale slot 點下去報錯）
+const _aliveBlobURLs = new Set();
 
 function handleSlotClick(idx, ev) {
   // 右鍵或 Shift+click：刪除
@@ -2239,14 +2244,37 @@ function handleSlotClick(idx, ev) {
   }
   const slot = _versionSlots[idx];
   if (slot) {
-    // 已存 → 載入
+    // 檢查是否為失效的 blob URL（不同 session 重整後）
+    const isStale = slot.url.startsWith('blob:') && !_aliveBlobURLs.has(slot.url);
+    if (isStale) {
+      toast(`⚠ V${idx+1} 是上次 session 的本地檔，已失效\n請重新上傳並按「💾 存當前」覆蓋此 slot`, 'warn', 5000);
+      return;
+    }
     _currentSlot = idx;
     loadVideoFromURL(slot.url, slot.label);
     refreshSlotUI();
   } else {
-    // 空 slot — 不再自動存，引導使用「存當前」按鈕
-    toast(`空 slot。請按上方「💾 存當前」存入內容`, 'info', 3000);
+    // 空 slot → 直接打開檔案選擇器，載入後存到此 slot
+    loadVideoToSlot(idx);
   }
+}
+
+function loadVideoToSlot(idx) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'video/*,.mp4,.mov';
+  input.onchange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const url = URL.createObjectURL(file);
+    _aliveBlobURLs.add(url);
+    _versionSlots[idx] = { url, label: file.name };
+    _currentSlot = idx;
+    saveVersionSlots();
+    refreshSlotUI();
+    loadVideoFromURL(url, file.name);
+  };
+  input.click();
 }
 
 function saveCurrentToNextSlot() {
@@ -2282,7 +2310,11 @@ async function loadVideoFromURL(url, label) {
   // 清掉舊的 shared video
   if (_sharedVideo) {
     _sharedVideo.pause();
-    if (_sharedURL && _sharedURL.startsWith('blob:')) URL.revokeObjectURL(_sharedURL);
+    // 只 revoke 沒被任何 slot 引用的 blob URL（避免炸掉已存到 slot 的本地檔案）
+    if (_sharedURL && _sharedURL.startsWith('blob:')
+        && !_versionSlots.some(s => s && s.url === _sharedURL)) {
+      URL.revokeObjectURL(_sharedURL);
+    }
     _sharedVideo = null;
   }
   if (_sharedTex) { _sharedTex.dispose(); _sharedTex = null; }
@@ -2341,6 +2373,7 @@ function handleVidAll(file) {
     return;
   }
   const url = URL.createObjectURL(file);
+  _aliveBlobURLs.add(url); // 記錄本 session 有效
   loadVideoFromURL(url, file.name);
 }
 
