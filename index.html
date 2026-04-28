@@ -60,6 +60,7 @@ body{font-family:'Segoe UI',-apple-system,sans-serif;background:var(--bg);color:
 .btn.danger{border-color:var(--danger);color:var(--danger)}
 .btn.danger:hover{background:var(--danger);color:#fff}
 .btn.sm{padding:6px 9px;font-size:12px}
+.version-slot{padding:6px 4px;min-width:0;overflow:hidden;text-overflow:ellipsis}
 .btn:disabled{opacity:.38;cursor:not-allowed}
 .brow{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}
 .brow:first-child{margin-top:0}
@@ -398,7 +399,8 @@ body.player-mode #main{height:100vh}
           <button class="btn sm version-slot" data-slot="3">＋V4</button>
           <button class="btn sm version-slot" data-slot="4">＋V5</button>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);margin-top:6px">Alt+1~5 切換 · 右鍵刪除</div>
+        <div id="current-slot-label" style="font-size:12px;color:var(--accent);margin-top:7px;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">Alt+1~5 切換 · 右鍵刪除 · hover 看檔名</div>
       </div>
       <!-- hidden: kept for internal use -->
       <div style="display:none">
@@ -2167,11 +2169,85 @@ function gdriveDirectURL(fileId) {
 // 確保所有 panel 永遠同步（差異 = 0），跟 NDI 模式一樣
 let _sharedVideo = null, _sharedTex = null, _sharedURL = null;
 let _currentLabel = null;
+let _currentLocalFile = null; // 若當前是本地檔案，保留 File 物件用於存到 slot
+
+// 自動偵測影片佈局（Layout A 10912×2024 / Layout B 8800×2024），設定 UV crop
+function applyLayoutToPanels(fw, fh) {
+  if (!fw || !fh) return;
+  const layout = detectLayout(fw, fh);
+  const isLayoutB = (layout === LAYOUT_B);
+  // Layout B 比 A 少了左側樂手 LED 區（2112px），UV 需偏移
+  const mainWallX = LAYOUT_A.map['LED_1_UP']?.x ?? 2112;
+  const cropOx = isLayoutB ? -mainWallX / LAYOUT_B.w : 0;
+  const cropSx = isLayoutB ? LAYOUT_A.w / LAYOUT_B.w : 1;
+
+  let hiddenCount = 0, shownCount = 0;
+  panels.forEach(p => {
+    // Layout B 模式下，樂手 LED 面板不在畫布中 → 隱藏
+    if (isLayoutB && !LAYOUT_B.map[p.name]) {
+      if (p.mat?.uniforms.hasVideo) p.mat.uniforms.hasVideo.value = 0;
+      hiddenCount++;
+      return;
+    }
+    if (p.mat?.uniforms.hasVideo) p.mat.uniforms.hasVideo.value = 1.0;
+    if (p.mat?.uniforms.ndiCropOffset) p.mat.uniforms.ndiCropOffset.value.set(cropOx, 0);
+    if (p.mat?.uniforms.ndiCropSize) p.mat.uniforms.ndiCropSize.value.set(cropSx, 1);
+    shownCount++;
+  });
+
+  const ratio = (fw / fh).toFixed(2);
+  console.log(`[Layout] ${fw}×${fh} (ratio ${ratio}) → Layout ${isLayoutB ? 'B (8800×2024)' : 'A (10912×2024)'}; ${shownCount} panels shown, ${hiddenCount} hidden`);
+  toast(`偵測到 ${isLayoutB ? '8800×2024 純主牆' : '10912×2024 含樂手 LED'} 佈局`, 'info', 3000);
+}
+
+// ── IndexedDB：存本地檔案 bytes，refresh 後也能還原 ──
+const IDB_NAME = 'stagepreviz';
+let _idb = null;
+function openIDB() {
+  return new Promise((resolve, reject) => {
+    if (_idb) return resolve(_idb);
+    const req = indexedDB.open(IDB_NAME, 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('slots')) db.createObjectStore('slots');
+    };
+    req.onsuccess = (e) => { _idb = e.target.result; resolve(_idb); };
+    req.onerror = (e) => reject(e);
+  });
+}
+async function idbPut(key, blob) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('slots', 'readwrite');
+    tx.objectStore('slots').put(blob, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e);
+  });
+}
+async function idbGet(key) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('slots', 'readonly');
+    const req = tx.objectStore('slots').get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = (e) => reject(e);
+  });
+}
+async function idbDel(key) {
+  const db = await openIDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('slots', 'readwrite');
+    tx.objectStore('slots').delete(key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = (e) => reject(e);
+  });
+}
 
 // ── 通用 URL 載入器：自動辨識 GDrive / mp4 / m3u8 / 任何 URL ──
 function loadFromAnyURL(input) {
   const trimmed = input.trim();
   if (!trimmed) return;
+  _currentLocalFile = null; // URL 來源 → 不是本地檔
 
   // 1. GDrive 連結 → 轉 direct URL
   const fileId = parseGDriveURL(trimmed);
@@ -2203,25 +2279,39 @@ function loadVersionSlots() {
     const data = localStorage.getItem('stagepreviz-slots');
     if (data) _versionSlots = JSON.parse(data);
   } catch(e) {}
+  // 清掉舊版本格式中已失效的 blob: URL slot（沒辦法跨 session 還原）
+  let cleaned = false;
+  for (let i = 0; i < _versionSlots.length; i++) {
+    const s = _versionSlots[i];
+    if (s && !s.type && s.url && s.url.startsWith('blob:')) {
+      _versionSlots[i] = null;
+      cleaned = true;
+    }
+  }
+  if (cleaned) saveVersionSlots();
   refreshSlotUI();
 }
 function saveVersionSlots() {
   try { localStorage.setItem('stagepreviz-slots', JSON.stringify(_versionSlots)); } catch(e) {}
 }
 function refreshSlotUI() {
+  // 顯示當前 slot 的檔名（在 slot grid 下方）
+  const labelEl = document.getElementById('current-slot-label');
+  if (labelEl) {
+    const cur = _versionSlots[_currentSlot];
+    labelEl.textContent = cur ? `▶ V${_currentSlot+1}: ${cur.label}` : '';
+  }
+
   document.querySelectorAll('.version-slot').forEach((btn, i) => {
     const slot = _versionSlots[i];
     if (slot) {
-      const isStale = slot.url.startsWith('blob:') && !_aliveBlobURLs.has(slot.url);
-      const shortLabel = slot.label.length > 8 ? slot.label.slice(0, 7) + '…' : slot.label;
-      btn.textContent = isStale ? `⚠V${i+1}: ${shortLabel}` : `V${i+1}: ${shortLabel}`;
-      btn.title = isStale
-        ? `${slot.label}\n⚠ 本地檔案重整後失效，請重新上傳並覆蓋此 slot\n（右鍵刪除）`
-        : `${slot.label}\n（點擊切換載入 · 右鍵刪除）`;
-      btn.style.opacity = isStale ? '.55' : '1';
+      const icon = slot.type === 'local' ? '📁' : '🔗';
+      btn.textContent = `${icon}V${i+1}`;
+      btn.title = `${slot.label}\n（點擊載入 · 右鍵刪除）`;
+      btn.style.opacity = '1';
     } else {
       btn.textContent = `＋V${i+1}`;
-      btn.title = `空 slot`;
+      btn.title = `空 slot — 點擊上傳本地檔案`;
       btn.style.opacity = '.45';
     }
     btn.classList.toggle('active', i === _currentSlot);
@@ -2231,12 +2321,13 @@ function refreshSlotUI() {
 // 追蹤本 session 還活著的 blob URL（避免 stale slot 點下去報錯）
 const _aliveBlobURLs = new Set();
 
-function handleSlotClick(idx, ev) {
+async function handleSlotClick(idx, ev) {
   // 右鍵或 Shift+click：刪除
   if (ev && (ev.shiftKey || ev.button === 2 || ev.type === 'contextmenu')) {
     if (ev.preventDefault) ev.preventDefault();
     if (!_versionSlots[idx]) return;
     if (!confirm(`確定刪除 V${idx+1}: ${_versionSlots[idx].label}？`)) return;
+    if (_versionSlots[idx].type === 'local') { try { await idbDel(`slot-${idx}`); } catch(_) {} }
     _versionSlots[idx] = null;
     if (_currentSlot === idx) _currentSlot = -1;
     saveVersionSlots(); refreshSlotUI();
@@ -2245,17 +2336,31 @@ function handleSlotClick(idx, ev) {
   }
   const slot = _versionSlots[idx];
   if (slot) {
-    // 檢查是否為失效的 blob URL（不同 session 重整後）
-    const isStale = slot.url.startsWith('blob:') && !_aliveBlobURLs.has(slot.url);
-    if (isStale) {
-      toast(`⚠ V${idx+1} 是上次 session 的本地檔，已失效\n請重新上傳並按「💾 存當前」覆蓋此 slot`, 'warn', 5000);
+    // 本地檔：從 IndexedDB 撈 Blob 重建 URL
+    if (slot.type === 'local') {
+      try {
+        const blob = await idbGet(`slot-${idx}`);
+        if (!blob) {
+          toast(`⚠ V${idx+1} 在 IndexedDB 找不到（可能被瀏覽器清除），請重新上傳`, 'warn', 5000);
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        _aliveBlobURLs.add(url);
+        _currentLocalFile = blob; // Blob 也算 File-like
+        _currentSlot = idx;
+        loadVideoFromURL(url, slot.label);
+        refreshSlotUI();
+      } catch(err) {
+        toast(`⚠ 無法從本地儲存讀回 V${idx+1}: ${err.message}`, 'warn', 5000);
+      }
       return;
     }
+    // URL 型：直接載入
     _currentSlot = idx;
+    _currentLocalFile = null;
     loadVideoFromURL(slot.url, slot.label);
     refreshSlotUI();
   } else {
-    // 空 slot → 直接打開檔案選擇器，載入後存到此 slot
     loadVideoToSlot(idx);
   }
 }
@@ -2264,12 +2369,18 @@ function loadVideoToSlot(idx) {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'video/*,.mp4,.mov';
-  input.onchange = (e) => {
+  input.onchange = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
+    if (/\.mov$/i.test(file.name)) {
+      if (!confirm(`"${file.name}" 是 .mov 檔，瀏覽器多半無法播放（ProRes/DNxHD）。\n仍要嘗試？`)) return;
+    }
     const url = URL.createObjectURL(file);
     _aliveBlobURLs.add(url);
-    _versionSlots[idx] = { url, label: file.name };
+    _currentLocalFile = file;
+    // 存 File bytes 到 IndexedDB
+    try { await idbPut(`slot-${idx}`, file); } catch(err) {}
+    _versionSlots[idx] = { type: 'local', label: file.name };
     _currentSlot = idx;
     saveVersionSlots();
     refreshSlotUI();
@@ -2278,19 +2389,21 @@ function loadVideoToSlot(idx) {
   input.click();
 }
 
-function saveCurrentToNextSlot() {
+async function saveCurrentToNextSlot() {
   if (!_currentLabel || !_sharedURL) {
     toast('尚未載入任何內容', 'warn', 2000);
     return;
   }
-  // local file (blob:) 提醒
-  if (_sharedURL.startsWith('blob:')) {
-    toast('⚠ 本地檔案存到 slot 後重新整理頁面會失效\n建議用 GDrive / 直接 URL 連結', 'warn', 5000);
-  }
   // 找下一個空 slot
   for (let i = 0; i < 5; i++) {
     if (!_versionSlots[i]) {
-      _versionSlots[i] = { url: _sharedURL, label: _currentLabel };
+      // local file → 存 File bytes 到 IndexedDB（refresh 後可還原）
+      if (_currentLocalFile) {
+        try { await idbPut(`slot-${i}`, _currentLocalFile); } catch(e) {}
+        _versionSlots[i] = { type: 'local', label: _currentLabel };
+      } else {
+        _versionSlots[i] = { type: 'url', url: _sharedURL, label: _currentLabel };
+      }
       _currentSlot = i;
       saveVersionSlots(); refreshSlotUI();
       toast(`✓ 存到 V${i+1}: ${_currentLabel}`, 'info', 2500);
@@ -2338,6 +2451,10 @@ async function loadVideoFromURL(url, label) {
     toast(msg, 'warn', 7000);
   });
   v.addEventListener('canplay', () => v.play().catch(() => {}));
+  // 偵測畫布佈局：Layout A (10912×2024 含樂手 LED) vs Layout B (8800×2024 純主牆)
+  v.addEventListener('loadedmetadata', () => {
+    applyLayoutToPanels(v.videoWidth, v.videoHeight);
+  });
 
   const tex = new THREE.VideoTexture(v);
   tex.minFilter = THREE.LinearFilter;
@@ -2365,6 +2482,7 @@ async function loadVideoFromURL(url, label) {
     if (p.mat?.uniforms.limitedRange) p.mat.uniforms.limitedRange.value = 0.0; // 本地/網路影片是 full range
   });
   _currentLabel = label;
+  // 重設 _currentLocalFile：只有 handleVidAll 知道是 local file 才會設
   rebuildUI();
   _setSrcStatus(`✓ 已載入: ${label}`, 'var(--success)');
   toast(`✓ "${label}" 已同步套用到 ${panels.length} 個 LED 面板`, 'info', 3500);
@@ -2377,14 +2495,14 @@ function handleVidAll(file) {
     toast('尚無 LED 面板，請先載入舞臺模型', 'warn', 3000);
     return;
   }
-  // 攔截 MOV — 通常是 ProRes / DNxHD，瀏覽器不支援
   if (/\.mov$/i.test(file.name)) {
     if (!confirm(`"${file.name}" 是 .mov 檔。\n\n動畫師的 .mov 通常是 ProRes / DNxHD 編碼，瀏覽器無法播放。\n建議改用同名的 .mp4 檔（H.264）。\n\n仍要嘗試載入？`)) {
       return;
     }
   }
   const url = URL.createObjectURL(file);
-  _aliveBlobURLs.add(url); // 記錄本 session 有效
+  _aliveBlobURLs.add(url);
+  _currentLocalFile = file; // 記住 File 物件，存 slot 時可用 IDB 持久化
   loadVideoFromURL(url, file.name);
 }
 
