@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import ProjectCard from '../components/ProjectCard';
 import NewProjectDialog from '../components/NewProjectDialog';
-import { MOCK_PROJECTS, type Project } from '../lib/mockData';
+import * as api from '../lib/api';
+import type { Project } from '../lib/mockData';
 import './Admin.css';
 
 type Filter = 'all' | 'active' | 'in_review' | 'mine';
@@ -25,10 +26,28 @@ export default function Admin() {
 }
 
 function ProjectsTab() {
-  const [projects, setProjects] = useState<Project[]>(MOCK_PROJECTS);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  async function refresh() {
+    try {
+      setLoading(true);
+      setError(null);
+      const list = await api.listProjects();
+      setProjects(list);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { refresh(); }, []);
 
   const filtered = useMemo(() => {
     let list = projects;
@@ -49,20 +68,17 @@ function ProjectsTab() {
     mine: projects.filter(p => p.members.some(m => m.name === ME)).length,
   }), [projects]);
 
-  function handleCreate(data: { name: string; description: string }) {
-    const p: Project = {
-      id: 'p_' + Date.now().toString(36),
-      name: data.name,
-      description: data.description || '尚未填寫描述',
-      status: 'active',
-      songCount: 0,
-      cueCount: 0,
-      proposalCount: 0,
-      updatedAt: new Date().toISOString(),
-      members: [{ id: 'me', name: ME, avatarColor: '#10c78a' }],
-    };
-    setProjects([p, ...projects]);
-    setDialogOpen(false);
+  async function handleCreate(data: { name: string; description: string }) {
+    try {
+      setCreating(true);
+      await api.createProject(data);
+      setDialogOpen(false);
+      await refresh();
+    } catch (e) {
+      alert('建立失敗：' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setCreating(false);
+    }
   }
 
   return (
@@ -101,8 +117,16 @@ function ProjectsTab() {
           ))}
         </div>
 
-        {filtered.length === 0 ? (
-          <EmptyState onCreate={() => setDialogOpen(true)} hasFilter={search.length > 0 || filter !== 'all'} />
+        {loading ? (
+          <LoadingState />
+        ) : error ? (
+          <ErrorState message={error} onRetry={refresh} />
+        ) : filtered.length === 0 ? (
+          <EmptyState
+            onCreate={() => setDialogOpen(true)}
+            hasFilter={search.length > 0 || filter !== 'all'}
+            hasAnyProjects={projects.length > 0}
+          />
         ) : (
           <div className="project-grid">
             {filtered.map((p) => (
@@ -114,15 +138,20 @@ function ProjectsTab() {
 
       <NewProjectDialog
         open={dialogOpen}
-        onClose={() => setDialogOpen(false)}
+        onClose={() => !creating && setDialogOpen(false)}
         onCreate={handleCreate}
+        submitting={creating}
       />
     </>
   );
 }
 
-function EmptyState({ onCreate, hasFilter }: { onCreate: () => void; hasFilter: boolean }) {
-  if (hasFilter) {
+function EmptyState({ onCreate, hasFilter, hasAnyProjects }: {
+  onCreate: () => void;
+  hasFilter: boolean;
+  hasAnyProjects: boolean;
+}) {
+  if (hasFilter && hasAnyProjects) {
     return (
       <div className="empty-card">
         <div className="empty-card__icon">🔍</div>
@@ -137,6 +166,28 @@ function EmptyState({ onCreate, hasFilter }: { onCreate: () => void; hasFilter: 
       <small>開始建立您的第一個專案</small>
       <button className="btn btn--primary" onClick={onCreate} style={{ marginTop: 12 }}>
         ＋ 建立第一個專案
+      </button>
+    </div>
+  );
+}
+
+function LoadingState() {
+  return (
+    <div className="empty-card">
+      <div className="empty-card__icon">⏳</div>
+      <p>載入專案中…</p>
+    </div>
+  );
+}
+
+function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
+  return (
+    <div className="empty-card">
+      <div className="empty-card__icon">⚠️</div>
+      <p>載入失敗</p>
+      <small style={{ color: 'var(--warn)', maxWidth: 400 }}>{message}</small>
+      <button className="btn btn--ghost" onClick={onRetry} style={{ marginTop: 12 }}>
+        重試
       </button>
     </div>
   );
