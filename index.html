@@ -958,12 +958,16 @@ function assignVid(panel, file, url, skipRebuild=false){
   if(panel.tex) panel.tex.dispose();
 
   const v = document.createElement('video');
+  // 網頁版：對遠端 URL（http/https）設 crossOrigin，否則 WebGL texture 上傳會被 CORS 阻擋
+  // 本地 blob: URL 不設（已是 same-origin）
+  if (/^https?:\/\//i.test(url)) {
+    v.crossOrigin = 'anonymous';
+  }
   v.src=url; v._ou=url;
   v.loop=false;  // always disable native loop — we control it manually via 'ended'
   v.muted=!panel.params.audio;  // respect per-panel audio toggle (default muted)
   v.autoplay=true;
   v.playsInline=true;
-  // NOTE: crossOrigin intentionally omitted — setting it breaks ObjectURL (local file) playback
 
   v.addEventListener('error',()=>{
     const isMov = /\.mov$/i.test(file.name);
@@ -1696,8 +1700,9 @@ function parseGDriveURL(input) {
 }
 
 function gdriveDirectURL(fileId) {
-  // 直接下載 URL（瀏覽器會處理大檔案的 confirm token）
-  return `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
+  // drive.usercontent.google.com 有完整 CORS 支援（Access-Control-Allow-Origin: *）
+  // 而 drive.google.com/uc?export=download 已被 Google 阻擋直連
+  return `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`;
 }
 
 async function loadVideoFromURL(url, label) {
