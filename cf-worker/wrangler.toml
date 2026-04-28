@@ -13,3 +13,10 @@ routes = [
 [[kv_namespaces]]
 binding = "COMMENTS"
 id = "515cd9eeae9c4930848266f0ef8301cd"
+
+# D1 — projects/songs/cues/users/comments 主資料庫
+[[d1_databases]]
+binding = "DB"
+database_name = "stage-previz-db"
+database_id = "a6f04aab-39a8-4846-9640-f181a6b35302"
+migrations_dir = "migrations"

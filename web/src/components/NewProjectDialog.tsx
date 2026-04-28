@@ -4,10 +4,11 @@ import './NewProjectDialog.css';
 interface Props {
   open: boolean;
   onClose: () => void;
-  onCreate: (data: { name: string; description: string }) => void;
+  onCreate: (data: { name: string; description: string }) => void | Promise<void>;
+  submitting?: boolean;
 }
 
-export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
+export default function NewProjectDialog({ open, onClose, onCreate, submitting = false }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const nameRef = useRef<HTMLInputElement>(null);
@@ -82,9 +83,11 @@ export default function NewProjectDialog({ open, onClose, onCreate }: Props) {
           </div>
 
           <footer className="dialog__footer">
-            <button type="button" className="btn btn--ghost" onClick={onClose}>取消</button>
-            <button type="submit" className="btn btn--primary" disabled={!name.trim()}>
-              建立專案
+            <button type="button" className="btn btn--ghost" onClick={onClose} disabled={submitting}>
+              取消
+            </button>
+            <button type="submit" className="btn btn--primary" disabled={!name.trim() || submitting}>
+              {submitting ? '建立中…' : '建立專案'}
             </button>
           </footer>
         </form>
