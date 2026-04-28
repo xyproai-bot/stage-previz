@@ -1,0 +1,14 @@
+{
+  "name": "stage-previz",
+  "version": "1.0.0",
+  "description": "LED Stage Preview — web version for directors",
+  "scripts": {
+    "dev": "npx serve . -l 5173",
+    "compress-model": "npx gltf-pipeline -i stage.gltf -o stage.glb -d --draco.compressionLevel 10"
+  },
+  "keywords": ["led", "stage", "preview", "three.js"],
+  "license": "ISC",
+  "devDependencies": {
+    "gltf-pipeline": "^4.3.1"
+  }
+}

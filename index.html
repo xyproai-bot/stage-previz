@@ -1,0 +1,2729 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LED Stage Preview — 導演視覺預覽</title>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#1a1a1a;--surface:#222;--surface2:#2a2a2a;--surface3:#333;
+  --border:#3a3a3a;--text:#ddd;--text-dim:#777;--text-muted:#4a4a4a;
+  --accent:#4a9eff;--accent-dark:rgba(74,158,255,0.18);
+  --danger:#ff5555;--success:#44cc77;--warn:#ffaa44;
+  --sw:292px;--th:44px;--bh:32px
+}
+body{font-family:'Segoe UI',-apple-system,sans-serif;background:var(--bg);color:var(--text);
+  height:100vh;display:flex;flex-direction:column;overflow:hidden;user-select:none}
+
+/* ── TOP BAR ── */
+#topbar{height:var(--th);background:var(--surface);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;padding:0 12px;gap:10px;flex-shrink:0;z-index:20}
+.logo{font-size:12px;font-weight:800;letter-spacing:2.5px;color:var(--accent);white-space:nowrap}
+.tsep{width:1px;height:22px;background:var(--border);flex-shrink:0}
+.tgap{flex:1}
+#mode-badge{font-size:10px;color:var(--text-dim);display:flex;align-items:center;gap:6px}
+#mode-val{background:var(--accent-dark);color:var(--accent);padding:2px 8px;border-radius:3px;
+  font-weight:700;font-size:11px;letter-spacing:1px;transition:all .2s}
+#fps-disp{font-family:monospace;font-size:11px;color:var(--text-dim);min-width:56px;text-align:right}
+
+/* ── MAIN ── */
+#main{flex:1;display:flex;overflow:hidden}
+
+/* ── SIDEBAR ── */
+#sidebar{width:var(--sw);min-width:var(--sw);background:var(--surface);
+  border-right:1px solid var(--border);display:flex;flex-direction:column;
+  overflow-y:auto;overflow-x:hidden;transition:margin-left .25s ease,opacity .25s ease}
+#sidebar.collapsed{margin-left:calc(-1 * var(--sw));opacity:0;pointer-events:none}
+#btn-sidebar-toggle{position:absolute;top:50%;left:0;z-index:25;transform:translateY(-50%);
+  background:var(--surface);border:1px solid var(--border);border-left:none;border-radius:0 6px 6px 0;
+  color:var(--text-dim);font-size:14px;padding:12px 4px;cursor:pointer;transition:background .15s}
+#btn-sidebar-toggle:hover{background:var(--surface3);color:var(--text)}
+#sidebar::-webkit-scrollbar{width:4px}
+#sidebar::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+.ss{padding:10px;border-bottom:1px solid var(--border)}
+.ss:last-child{border-bottom:none}
+.st{font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:2px;
+  color:var(--text-muted);margin-bottom:9px;display:flex;justify-content:space-between;align-items:center}
+
+/* ── BUTTONS ── */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:6px 10px;
+  border:1px solid var(--border);border-radius:4px;background:var(--surface2);color:var(--text);
+  font-size:11px;font-family:inherit;cursor:pointer;transition:background .12s,border-color .12s;
+  white-space:nowrap;line-height:1.3}
+.btn:hover{background:var(--surface3);border-color:var(--text-muted)}
+.btn.full{width:100%}
+.btn.accent{background:var(--accent-dark);border-color:var(--accent);color:var(--accent)}
+.btn.accent:hover{background:var(--accent);color:#000}
+.btn.active{background:var(--accent);border-color:var(--accent);color:#000;font-weight:700}
+.btn.danger{border-color:var(--danger);color:var(--danger)}
+.btn.danger:hover{background:var(--danger);color:#fff}
+.btn.sm{padding:4px 7px;font-size:10px}
+.btn:disabled{opacity:.38;cursor:not-allowed}
+.brow{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}
+.brow:first-child{margin-top:0}
+
+/* ── PRESET GRID ── */
+.pgrid{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.pgrid .btn{font-size:10px;padding:5px 4px;text-align:center}
+
+/* ── PANEL LIST ── */
+#panels-wrap{flex:1;overflow-y:auto;min-height:0}
+#panels-wrap::-webkit-scrollbar{width:4px}
+#panels-wrap::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+#no-panels{text-align:center;color:var(--text-muted);font-size:11px;padding:18px 10px;line-height:1.7}
+.pi{border:1px solid var(--border);border-radius:5px;margin:6px 8px;overflow:hidden;transition:border-color .15s}
+.pi.sel{border-color:var(--accent)}
+.ph{display:flex;align-items:center;padding:7px 9px;background:var(--surface2);cursor:pointer;gap:7px}
+.ph:hover{background:var(--surface3)}
+.pdot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--text-muted);transition:background .2s}
+.pi.hv .pdot{background:var(--success)}
+.pi.sel .pdot{background:var(--accent)}
+.pname{font-size:11px;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pvtag{font-size:9px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:84px}
+.pchev{font-size:9px;color:var(--text-muted);transition:transform .18s}
+.pi.exp .pchev{transform:rotate(180deg)}
+.pb{padding:8px 9px;background:var(--bg);display:none;flex-direction:column;gap:7px}
+.pi.exp .pb{display:flex}
+
+/* ── PARAM SLIDERS ── */
+.prow{display:flex;align-items:center;gap:6px}
+.plbl{font-size:9px;color:var(--text-dim);width:60px;flex-shrink:0;text-transform:uppercase;letter-spacing:.4px}
+input[type=range]{flex:1;-webkit-appearance:none;height:2px;background:var(--surface3);border-radius:1px;outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--accent);cursor:pointer;transition:transform .1s}
+input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
+.pval{font-size:9px;font-family:monospace;color:var(--text);width:30px;text-align:right;flex-shrink:0}
+.scrub-row{display:flex;align-items:center;gap:6px}
+.scrub-row input[type=range]{background:rgba(74,158,255,.22)}
+.stime{font-size:9px;font-family:monospace;color:var(--text-dim);white-space:nowrap}
+
+/* ── VIEWPORT ── */
+#vp{flex:1;position:relative;background:#000;overflow:hidden}
+#c3{display:block;width:100%;height:100%}
+
+/* ── OVERLAYS ── */
+#crosshair{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  pointer-events:none;display:none;width:0;height:0}
+#crosshair::before{content:'';position:absolute;top:-8px;left:-.5px;width:1px;height:16px;background:rgba(255,255,255,.8)}
+#crosshair::after{content:'';position:absolute;top:-.5px;left:-8px;height:1px;width:16px;background:rgba(255,255,255,.8)}
+#walk-hint{position:absolute;bottom:48px;left:50%;transform:translateX(-50%);
+  background:rgba(0,0,0,.75);border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.88);
+  padding:8px 18px;border-radius:20px;font-size:11px;pointer-events:none;display:none;
+  white-space:nowrap;transition:opacity .6s}
+#lock-prompt{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(0,0,0,.68);border:1px solid rgba(255,255,255,.1);border-radius:8px;
+  padding:11px 20px;font-size:12px;color:rgba(255,255,255,.7);pointer-events:none;display:none}
+#sel-hud{display:none;position:absolute;top:10px;right:10px;background:rgba(0,0,0,.72);
+  border:1px solid var(--accent);color:var(--accent);padding:5px 11px;border-radius:4px;
+  font-size:11px;pointer-events:none;display:none}
+
+/* ── GLOBAL TRANSPORT ── */
+#global-transport{
+  position:absolute;bottom:24px;left:50%;transform:translateX(-50%);
+  display:flex;align-items:center;gap:10px;
+  background:rgba(10,10,14,0.82);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,0.1);border-radius:10px;
+  padding:10px 18px;min-width:0;max-width:90%;width:fit-content;
+  box-shadow:0 4px 24px rgba(0,0,0,0.6);z-index:50;
+  pointer-events:all;
+}
+#gt-play{
+  background:none;border:1.5px solid rgba(255,255,255,0.35);border-radius:50%;
+  color:#fff;width:30px;height:30px;font-size:12px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  transition:border-color .15s,background .15s;
+}
+#gt-play:hover{background:rgba(255,255,255,0.12);border-color:#fff}
+#gt-scrub{
+  flex:1;-webkit-appearance:none;height:4px;
+  background:linear-gradient(to right,var(--accent) 0%,var(--surface3) 0%);
+  border-radius:2px;outline:none;cursor:pointer;
+}
+#gt-scrub::-webkit-slider-thumb{
+  -webkit-appearance:none;width:14px;height:14px;border-radius:50%;
+  background:#fff;cursor:pointer;box-shadow:0 0 4px rgba(0,0,0,0.5);
+}
+#gt-time{font-size:11px;font-family:monospace;color:rgba(255,255,255,0.7);
+  white-space:nowrap;flex-shrink:0;min-width:80px;text-align:right}
+
+/* ── BOTTOM BAR ── */
+#bottombar{height:var(--bh);background:var(--surface);border-top:1px solid var(--border);
+  display:flex;align-items:center;padding:0 12px;gap:12px;flex-shrink:0;
+  font-size:10px;color:var(--text-muted)}
+
+/* ── DROP OVERLAY ── */
+#drop-ov{position:fixed;inset:0;background:rgba(74,158,255,.1);border:3px dashed var(--accent);
+  display:none;align-items:center;justify-content:center;font-size:20px;font-weight:700;
+  color:var(--accent);z-index:9999;pointer-events:none;letter-spacing:3px}
+
+/* ── TOAST ── */
+#toast{position:fixed;bottom:46px;right:12px;max-width:300px;background:var(--surface3);
+  border-left:3px solid var(--accent);color:var(--text);padding:9px 13px;border-radius:4px;
+  font-size:11px;line-height:1.55;display:none;z-index:500;box-shadow:0 4px 18px rgba(0,0,0,.55);
+  white-space:pre-wrap}
+#toast.warn{border-left-color:var(--warn)}
+#toast.err{border-left-color:var(--danger)}
+
+input[type=file]{display:none}
+body.walk-mode #vp{cursor:none}
+
+/* NDI device picker modal */
+#ndi-modal{position:fixed;inset:0;background:rgba(0,0,0,.72);display:flex;align-items:center;
+  justify-content:center;z-index:9000}
+#ndi-modal.hidden{display:none}
+#ndi-box{background:var(--surface2);border:1px solid var(--border);border-radius:8px;
+  padding:18px 20px;min-width:280px;max-width:380px;display:flex;flex-direction:column;gap:10px}
+#ndi-box h3{margin:0;font-size:13px;font-weight:600;color:var(--text)}
+#ndi-box p{margin:0;font-size:10px;color:var(--text-dim);line-height:1.5}
+#ndi-devlist{display:flex;flex-direction:column;gap:6px;max-height:240px;overflow-y:auto}
+.ndi-dev-btn{background:var(--surface3);border:1px solid var(--border);border-radius:4px;
+  color:var(--text);font-size:11px;padding:8px 12px;cursor:pointer;text-align:left;
+  transition:background .15s,border-color .15s}
+.ndi-dev-btn:hover{background:#2a3a5a;border-color:#4a7dff}
+#ndi-cancel{background:none;border:1px solid var(--border);border-radius:4px;
+  color:var(--text-dim);font-size:10px;padding:5px;cursor:pointer;margin-top:2px}
+#ndi-cancel:hover{border-color:var(--text-dim);color:var(--text)}
+
+/* ── HELP MODAL ── */
+#help-overlay{position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:9999;display:flex;align-items:center;justify-content:center;backdrop-filter:blur(5px)}
+#help-modal{background:var(--surface);border:1px solid var(--border);border-radius:10px;width:760px;max-width:95vw;max-height:86vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 28px 70px rgba(0,0,0,.7)}
+/* Step cards for AE setup guide */
+.step-carousel{position:relative;overflow:hidden;min-height:380px}
+.step-track{display:flex;transition:transform .35s ease}
+.step-card{min-width:100%;padding:20px 10px;display:flex;flex-direction:column;align-items:center;gap:14px}
+.step-num{font-size:48px;font-weight:900;color:var(--accent);opacity:.3;line-height:1}
+.step-title{font-size:18px;font-weight:700;color:var(--text);text-align:center;line-height:1.4}
+.step-illust{width:100%;max-width:500px;border-radius:8px;overflow:hidden;display:flex;justify-content:center;align-items:center;background:#1a1a1a;padding:16px}
+.step-illust svg{width:100%;height:auto}
+.step-desc{font-size:13px;color:var(--text);line-height:1.7;text-align:center;max-width:480px}
+.step-desc b{color:var(--accent)}
+.step-desc .os-tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:700;letter-spacing:.5px;margin-right:4px}
+.os-win{background:#0078d4;color:#fff}
+.os-mac{background:#555;color:#fff}
+.step-nav{display:flex;justify-content:center;align-items:center;gap:14px;padding:12px 0;border-top:1px solid var(--border)}
+.step-nav button{background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:8px 20px;font-size:12px;font-weight:600;cursor:pointer;transition:all .15s}
+.step-nav button:hover{background:var(--accent);color:#000;border-color:var(--accent)}
+.step-nav button:disabled{opacity:.3;cursor:not-allowed}
+.step-dots{display:flex;gap:6px}
+.step-dot{width:8px;height:8px;border-radius:50%;background:var(--surface3);transition:background .2s}
+.step-dot.active{background:var(--accent)}
+.step-tip{background:rgba(74,158,255,.1);border:1px solid rgba(74,158,255,.25);border-radius:6px;padding:10px 14px;font-size:12px;color:var(--text);line-height:1.6;text-align:left;max-width:480px}
+.step-tip b{color:#ffaa44}
+#help-hdr{display:flex;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border)}
+#help-hdr span{font-size:13px;font-weight:700;color:var(--text);letter-spacing:.5px;flex:1}
+#help-close{background:none;border:none;color:var(--text-dim);font-size:17px;cursor:pointer;padding:2px 8px;border-radius:4px;line-height:1;transition:background .15s}
+#help-close:hover{background:var(--surface3);color:var(--text)}
+#help-tabs{display:flex;gap:0;padding:0 16px;border-bottom:1px solid var(--border);flex-shrink:0}
+.htab{background:none;border:none;border-bottom:2px solid transparent;color:var(--text-dim);font-size:11px;font-weight:600;padding:9px 16px;cursor:pointer;letter-spacing:.5px;margin-bottom:-1px;transition:color .15s,border-color .15s}
+.htab:hover{color:var(--text)}
+.htab.active{color:var(--accent);border-bottom-color:var(--accent)}
+#help-body{overflow-y:auto;padding:20px 24px;flex:1;scrollbar-width:thin}
+.htab-content{display:none}
+.htab-content.active{display:block}
+.hgroup{margin-bottom:22px}
+.hgroup-title{font-size:9.5px;font-weight:700;letter-spacing:1.8px;color:var(--accent);text-transform:uppercase;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--surface3)}
+.hrow{display:flex;align-items:center;gap:14px;padding:6px 0;border-bottom:1px solid var(--surface3)}
+.hrow:last-child{border-bottom:none}
+.hkeys{display:flex;gap:4px;flex-wrap:wrap;flex-shrink:0;width:140px;justify-content:flex-end}
+kbd{display:inline-flex;align-items:center;justify-content:center;min-width:24px;height:22px;padding:0 6px;background:var(--surface2);border:1px solid #555;border-bottom:3px solid #333;border-radius:4px;font-family:monospace;font-size:10px;color:var(--accent);white-space:nowrap}
+.hdesc{font-size:11px;color:var(--text);line-height:1.5;flex:1}
+.hdesc small{color:var(--text-dim);font-size:10px}
+.hmouse{display:flex;gap:24px;justify-content:center;padding:12px 0 18px}
+.mdiag{display:flex;flex-direction:column;align-items:center;gap:8px}
+.mdiag span{font-size:10px;color:var(--text-dim);text-align:center;line-height:1.4;max-width:72px}
+.hbtn-help{background:none;border:1px solid var(--border);border-radius:50%;width:24px;height:24px;color:var(--text-dim);font-size:13px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;flex-shrink:0}
+.hbtn-help:hover{background:var(--accent);border-color:var(--accent);color:#000}
+.wasd-grid{display:grid;grid-template-columns:repeat(3,30px);grid-template-rows:repeat(2,30px);gap:4px;justify-content:center;margin:10px auto 16px}
+.wasd-grid kbd{width:30px;height:28px;font-size:11px}
+.wasd-grid .empty{background:none;border:none}
+
+/* ── PLAYER MODE ── */
+body.player-mode #sidebar{display:none}
+body.player-mode #topbar{display:none}
+#player-bar{display:none;position:fixed;top:0;left:0;right:0;height:42px;background:rgba(20,20,20,.92);
+  border-bottom:1px solid var(--border);z-index:50;align-items:center;padding:0 14px;gap:10px;
+  backdrop-filter:blur(6px)}
+body.player-mode #player-bar{display:flex}
+body.player-mode #main{height:100vh}
+#player-title{font-size:11px;font-weight:700;color:var(--text-dim);letter-spacing:1px;flex:1}
+#player-project-name{color:var(--text);margin-left:6px}
+.btn-fs{background:none;border:1px solid var(--border);border-radius:4px;color:var(--text-dim);
+  font-size:11px;padding:4px 10px;cursor:pointer;transition:all .15s}
+.btn-fs:hover{background:var(--surface3);color:var(--text)}
+</style>
+</head>
+<body>
+
+<input type="file" id="f-stage" accept=".glb,.gltf">
+<input type="file" id="f-video" accept="video/*,.mov,.mp4">
+<input type="file" id="f-video-all" accept="video/*,.mov,.mp4">
+<input type="file" id="f-sess"  accept=".json">
+<input type="file" id="f-project" accept=".json">
+
+<div id="drop-ov">DROP FILE HERE</div>
+<div id="toast"></div>
+
+<!-- PLAYER MODE BAR -->
+<div id="player-bar">
+  <span id="player-title">🎬 播放器模式 <span id="player-project-name">— 未載入專案</span></span>
+  <button class="btn-fs" id="btn-load-project">📂 載入專案</button>
+  <button class="btn-fs" id="btn-fullscreen">⛶ 全螢幕</button>
+</div>
+
+<!-- TOP BAR -->
+<div id="topbar">
+  <span class="logo">LED STAGE PREVIEW</span>
+  <div class="tsep"></div>
+  <div id="mode-badge">MODE <span id="mode-val">ORBIT</span></div>
+  <button class="btn sm" id="btn-mode">步行模式 [F]</button>
+  <div class="tsep"></div>
+  <button class="btn sm" id="btn-pin" title="視窗置頂" style="display:none">📌</button>
+  <div class="tsep"></div>
+  <button class="btn sm" id="btn-rec" title="錄影（含系統音訊）" style="min-width:70px">⏺ 錄影</button>
+  <span id="rec-timer" style="font-family:monospace;font-size:11px;color:#ff4444;display:none">00:00</span>
+  <div class="tgap"></div>
+  <span id="fps-disp">FPS: --</span>
+  <button class="hbtn-help" id="btn-help" title="使用說明 / Help">?</button>
+  <!-- hidden: keep for internal use -->
+  <div style="display:none">
+    <button id="btn-gplay">x</button><button id="btn-gpause">x</button><button id="btn-gstop">x</button>
+    <button id="btn-save">x</button><button id="btn-load">x</button>
+  </div>
+</div>
+
+<!-- MAIN -->
+<div id="main">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+
+    <div class="ss">
+      <div class="st">內容來源</div>
+      <div class="brow"><button class="btn full accent" id="btn-video-all-web">📁 上傳本地影片</button></div>
+      <div style="margin:8px 0 6px;font-size:9px;color:var(--text-muted);text-align:center;letter-spacing:1px">— 或 —</div>
+      <div style="display:flex;gap:5px">
+        <input type="text" id="gdrive-url" placeholder="貼上 Google Drive 公開連結"
+               style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:4px;color:var(--text);padding:6px 8px;font-size:11px;font-family:inherit;outline:none">
+        <button class="btn" id="btn-gdrive-load" style="flex-shrink:0">載入</button>
+      </div>
+      <div id="src-status" style="font-size:11px;color:var(--text-dim);text-align:center;padding:6px 0 2px;letter-spacing:.3px">尚未載入內容</div>
+      <!-- hidden: kept for internal use -->
+      <div style="display:none">
+        <button id="btn-stage">x</button><button id="btn-video-all">x</button>
+        <button id="btn-video">x</button><button id="btn-reset">x</button>
+        <button id="btn-test-pattern">x</button>
+        <button id="btn-save2">x</button><button id="btn-load2">x</button>
+        <button id="btn-export-project">x</button>
+      </div>
+    </div>
+
+    <div class="ss">
+      <div class="st">Camera</div>
+      <div class="pgrid">
+        <button class="btn" onclick="doPreset('foh')">前台觀眾席</button>
+        <button class="btn" onclick="doPreset('sl')">舞臺左側</button>
+        <button class="btn" onclick="doPreset('sr')">舞臺右側</button>
+        <button class="btn" onclick="doPreset('bird')">俯瞰視角</button>
+      </div>
+      <div class="brow"><button class="btn full" onclick="doPreset('stage')">🎤 表演者視角</button></div>
+    </div>
+
+    <div class="ss" id="mechanism-section" style="display:none">
+      <div class="st">舞臺機關</div>
+      <div id="led1up-control" style="display:none;margin-bottom:8px">
+        <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">LED-1 上 升降</div>
+        <div class="prow">
+          <span class="plbl">高度</span>
+          <input type="range" id="led1up-slider" min="0" max="3" step="0.1" value="0">
+          <span class="pval" id="led1up-val">0m</span>
+        </div>
+        <div class="brow" style="margin-top:4px">
+          <button class="btn sm" data-led1up="0">預設</button>
+          <button class="btn sm" data-led1up="1">+1m</button>
+          <button class="btn sm" data-led1up="2">+2m</button>
+          <button class="btn sm" data-led1up="3">+3m</button>
+        </div>
+      </div>
+      <div id="turntable-controls"></div>
+    </div>
+
+    <!-- hidden sections for internal use -->
+    <div style="display:none">
+      <div class="ss"><div id="group-list"></div></div>
+      <div class="ss"><span id="pcnt">0</span><div id="panels-wrap"><div id="no-panels"></div><div id="plist"></div></div></div>
+    </div>
+
+  </div>
+
+  <!-- VIEWPORT -->
+  <div id="vp">
+    <button id="btn-sidebar-toggle" title="收合/展開面板">◀</button>
+    <canvas id="c3"></canvas>
+    <div id="crosshair"></div>
+    <div id="walk-hint">WASD · move &nbsp;|&nbsp; Mouse · look &nbsp;|&nbsp; Shift · run &nbsp;|&nbsp; E/Q · fly &nbsp;|&nbsp; F · exit walk</div>
+    <div id="lock-prompt">Click to capture mouse &nbsp;·&nbsp; Walk Mode active</div>
+    <div id="sel-hud"></div>
+    <div id="global-transport" style="display:none">
+      <button id="gt-play">▶</button>
+      <span id="gt-time">0:00 / 0:00</span>
+      <input id="gt-scrub" type="range" min="0" max="100" step="0.1" value="0">
+    </div>
+  </div>
+
+</div>
+
+<!-- BOTTOM BAR -->
+<div id="bottombar">
+  <span id="bhint">左鍵拖拉旋轉 · 滾輪縮放 · 右鍵拖拉平移</span>
+</div>
+
+<!-- THREE.JS (local — no internet required) -->
+<script src="lib/three.min.js"></script>
+<script src="lib/OrbitControls.js"></script>
+<script src="lib/PointerLockControls.js"></script>
+<script src="lib/GLTFLoader.js"></script>
+<script src="lib/DRACOLoader.js"></script>
+
+<script>
+'use strict';
+
+// ═══════════════════════════════════════════════
+// SHADERS
+// ═══════════════════════════════════════════════
+
+const VERT = `
+varying vec2 vUv;
+void main(){
+  vUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0);
+}`;
+
+const FRAG = `
+uniform sampler2D map;
+uniform float brightness;
+uniform float contrast;
+uniform float hueShift;
+uniform float saturation;
+uniform float hasVideo;
+uniform float enabled;
+uniform float opacity;
+uniform vec3  selGlow;
+uniform float limitedRange;
+uniform vec2  ndiCropOffset;
+uniform vec2  ndiCropSize;
+varying vec2 vUv;
+
+vec3 rgb2hsl(vec3 c){
+  float mx=max(c.r,max(c.g,c.b)), mn=min(c.r,min(c.g,c.b));
+  float h=0.,s=0.,l=(mx+mn)*.5,d=mx-mn;
+  if(d>0.001){
+    s = l<.5 ? d/(mx+mn) : d/(2.-mx-mn);
+    if(mx==c.r)      h=(c.g-c.b)/d+(c.g<c.b?6.:0.);
+    else if(mx==c.g) h=(c.b-c.r)/d+2.;
+    else             h=(c.r-c.g)/d+4.;
+    h/=6.;
+  }
+  return vec3(h,s,l);
+}
+float h2r(float p,float q,float t){
+  if(t<0.)t+=1.; if(t>1.)t-=1.;
+  if(t<.1667)return p+(q-p)*6.*t;
+  if(t<.5)   return q;
+  if(t<.6667)return p+(q-p)*(.6667-t)*6.;
+  return p;
+}
+vec3 hsl2rgb(vec3 h){
+  if(h.y<0.001)return vec3(h.z);
+  float q=h.z<.5?h.z*(1.+h.y):h.z+h.y-h.z*h.y, p=2.*h.z-q;
+  return vec3(h2r(p,q,h.x+.3333),h2r(p,q,h.x),h2r(p,q,h.x-.3333));
+}
+
+void main(){
+  vec3 col;
+  if(hasVideo>0.5){
+    // UV crop: supports NDI full-canvas mapping (ndiCropOffset/ndiCropSize)
+    vec2 uv = vUv * ndiCropSize + ndiCropOffset;
+    // Sample directly in sRGB space — ShaderMaterial bypasses renderer outputEncoding,
+    // so we work and output in sRGB to match what the animator sees.
+    col = texture2D(map, uv).rgb;
+    // NDI limited range (16-235) → full range (0-255)；本地影片已是 full range 不轉換
+    if(limitedRange > 0.5)
+      col = clamp((col - 16.0/255.0) * (255.0/219.0), 0.0, 1.0);
+    col *= brightness;
+    col = (col - 0.5)*contrast + 0.5;
+    col = clamp(col,0.,1.);
+    vec3 hsl = rgb2hsl(col);
+    hsl.x = fract(hsl.x + hueShift);
+    hsl.y = clamp(hsl.y * saturation, 0., 1.);
+    col = clamp(hsl2rgb(hsl),0.,1.);
+  } else {
+    col = vec3(0.0);
+  }
+  // If panel is disabled, output black (ignore video/glow)
+  if(enabled < 0.5) { gl_FragColor = vec4(0.,0.,0.,1.); return; }
+  col += selGlow;
+  gl_FragColor = vec4(clamp(col,0.,1.), opacity);
+}`;
+
+// ═══════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════
+
+let renderer, scene, camera;
+let orbitCtrl, walkCtrl;
+const ray = new THREE.Raycaster();
+const m2d = new THREE.Vector2();
+
+// ── AE Canvas Layout Map (10912 × 2024) ─────────────────────────────────────
+// Layout A: 10912×2024 — with musician LED panels (left side small panels + main wall)
+const LAYOUT_A = {
+  w: 10912, h: 2024,
+  map: {
+    'LED_Sky':     { x:2376, y:0,    w:8272, h:264  },
+    'LED2_1':      { x:528,  y:704,  w:528,  h:440  },
+    'LED2_2':      { x:0,    y:704,  w:528,  h:440  },
+    'LED3_1':      { x:1584, y:704,  w:528,  h:440  },
+    'LED3_2':      { x:1056, y:704,  w:528,  h:440  },
+    'LED2_3':      { x:528,  y:1144, w:528,  h:440  },
+    'LED2_4':      { x:0,    y:1144, w:528,  h:440  },
+    'LED3_3':      { x:1584, y:1144, w:528,  h:440  },
+    'LED3_4':      { x:1056, y:1144, w:528,  h:440  },
+    'LED2_5':      { x:528,  y:1584, w:528,  h:440  },
+    'LED2_6':      { x:0,    y:1584, w:528,  h:440  },
+    'LED3_5':      { x:1584, y:1584, w:528,  h:440  },
+    'LED3_6':      { x:1056, y:1584, w:528,  h:440  },
+    'LED_1_UP':    { x:2112, y:264,  w:2992, h:968  },
+    'LED_1_DOWN':  { x:2112, y:1232, w:2992, h:792  },
+    'LED_2':       { x:5104, y:264,  w:1408, h:1760 },
+    'LED_3':       { x:6512, y:264,  w:1408, h:1760 },
+    'LED_4':       { x:7920, y:264,  w:2992, h:1760 },
+  }
+};
+
+// Layout B: 8800×2024 — main wall only (no musician LED panels)
+const LAYOUT_B = {
+  w: 8800, h: 2024,
+  map: {
+    'LED_Sky':     { x:264,  y:0,    w:8272, h:264  },
+    'LED_1_UP':    { x:0,    y:268,  w:2992, h:968  },
+    'LED_1_DOWN':  { x:0,    y:1232, w:2992, h:792  },
+    'LED_2':       { x:2992, y:264,  w:1408, h:1760 },
+    'LED_3':       { x:4400, y:264,  w:1408, h:1760 },
+    'LED_4':       { x:5808, y:264,  w:2992, h:1760 },
+  }
+};
+
+// Auto-detect layout from NDI frame aspect ratio
+function detectLayout(frameW, frameH) {
+  const ratio = frameW / frameH;
+  const ratioA = LAYOUT_A.w / LAYOUT_A.h; // 10912/2024 = 5.39
+  const ratioB = LAYOUT_B.w / LAYOUT_B.h; // 8800/2024 = 4.35
+  const diffA = Math.abs(ratio - ratioA);
+  const diffB = Math.abs(ratio - ratioB);
+  return diffA < diffB ? LAYOUT_A : LAYOUT_B;
+}
+
+// Active layout (updated per frame)
+let CANVAS_W = LAYOUT_A.w, CANVAS_H = LAYOUT_A.h;
+let CANVAS_MAP = LAYOUT_A.map;
+
+// ── Stage mechanism references ───────────────────────────────────────────────
+let turntableA = null; // LED2-Stage mesh
+let turntableB = null; // LED3-Stage mesh
+let led1UpMesh = null; // LED-1 UP mesh (can elevate)
+let led1UpInitY = 0;   // initial Y position
+
+const panels = [];
+let selPanel = null;
+let pidx = 0;
+const groups = {}; // { groupName: true/false }
+let pendingVid = null; // {file,url} waiting for panel assignment
+
+let mode = 'orbit'; // 'orbit'|'walk'
+let walkLocked = false;
+
+const keys = {};
+let isMouseDown = false;
+let mdX = 0, mdY = 0, mouseMoved = false;
+
+let fCount = 0, fLast = 0;
+
+let defGroup = null;
+let importGroup = null;
+
+let hintTO = null;
+
+// ── Camera Presets（數字鍵 1-5 快速切換）───────────────────────────────────
+const CAMERA_PRESETS = [
+  { name:'導演位（正面）',  pos:[0, 8, 30],    target:[0, 5, 0]  },
+  { name:'觀眾席後方',      pos:[0, 12, 55],   target:[0, 5, 0]  },
+  { name:'左側台',          pos:[-35, 6, 5],   target:[0, 5, 0]  },
+  { name:'右側台',          pos:[35, 6, 5],    target:[0, 5, 0]  },
+  { name:'俯瞰',            pos:[0, 45, 5],    target:[0, 0, 0]  },
+];
+
+function applyCameraPreset(idx) {
+  if (idx < 0 || idx >= CAMERA_PRESETS.length) return;
+  if (mode !== 'orbit') setMode('orbit');
+  const p = CAMERA_PRESETS[idx];
+  camera.position.set(...p.pos);
+  orbitCtrl.target.set(...p.target);
+  orbitCtrl.update();
+  toast(`📷 ${p.name}`, 'info', 1500);
+}
+
+// ── Production Mode（F11 全螢幕 + 隱藏 UI）─────────────────────────────────
+let _productionMode = false;
+function toggleProductionMode() {
+  _productionMode = !_productionMode;
+  if (_productionMode) {
+    document.getElementById('sidebar')?.classList.add('collapsed');
+    document.getElementById('topbar')?.style.setProperty('display','none');
+    document.documentElement.requestFullscreen?.();
+    toast('Production Mode — 按 F11 或 Esc 退出', 'info', 3000);
+  } else {
+    document.getElementById('topbar')?.style.removeProperty('display');
+    if (document.fullscreenElement) document.exitFullscreen?.();
+  }
+}
+// Esc 退出全螢幕時同步恢復 UI
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && _productionMode) {
+    _productionMode = false;
+    document.getElementById('topbar')?.style.removeProperty('display');
+  }
+});
+
+// ═══════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════
+
+function init(){
+  const vp = document.getElementById('vp');
+  const canvas = document.getElementById('c3');
+
+  // Renderer
+  renderer = new THREE.WebGLRenderer({canvas, antialias:true, preserveDrawingBuffer:true, premultipliedAlpha:false, powerPreference:'high-performance'});
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setSize(vp.clientWidth, vp.clientHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  // 統一所有 GPU 的色彩空間，確保錄影顏色正確
+  try { renderer.getContext().drawingBufferColorSpace = 'srgb'; } catch(e) {}
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.autoUpdate = false;
+  renderer.shadowMap.needsUpdate = true; // 首次渲染一次 shadow
+
+  // Scene
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x09090e);
+  scene.fog = new THREE.Fog(0x09090e, 70, 140);
+
+  // Camera
+  camera = new THREE.PerspectiveCamera(60, vp.clientWidth/vp.clientHeight, 0.1, 500);
+  camera.position.set(0, 8, 30);
+
+  setupLights();
+  setupControls();
+  buildEmptyScene();
+  setupEvents();
+  loop();
+
+  // Player mode: activated by ?mode=player URL param
+  const isPlayerMode = new URLSearchParams(location.search).get('mode') === 'player';
+  if(isPlayerMode){
+    document.body.classList.add('player-mode');
+    document.title = '舞臺預覽 — 播放器';
+  }
+
+  // Auto-load the stage model
+  autoLoadStage('stage.glb');
+}
+
+// ═══════════════════════════════════════════════
+// LIGHTS
+// ═══════════════════════════════════════════════
+
+function setupLights(){
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+
+  const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+  sun.position.set(10,35,20);
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048,2048);
+  sun.shadow.camera.near=1; sun.shadow.camera.far=160;
+  const s=45; sun.shadow.camera.left=-s; sun.shadow.camera.right=s;
+  sun.shadow.camera.top=s; sun.shadow.camera.bottom=-s;
+  scene.add(sun);
+
+  const fill = new THREE.DirectionalLight(0x8899cc, 0.18);
+  fill.position.set(-8,12,-20);
+  scene.add(fill);
+
+  const wash = new THREE.PointLight(0xffeedd, 0.3, 35);
+  wash.position.set(0,1.5,6);
+  scene.add(wash);
+}
+
+// ═══════════════════════════════════════════════
+// CONTROLS
+// ═══════════════════════════════════════════════
+
+function setupControls(){
+  const vp = document.getElementById('vp');
+
+  orbitCtrl = new THREE.OrbitControls(camera, vp);
+  orbitCtrl.enableDamping = true;
+  orbitCtrl.dampingFactor = 0.08;
+  orbitCtrl.maxDistance = 200;
+  orbitCtrl.minDistance = 0.5;
+  orbitCtrl.mouseButtons = {
+    LEFT: THREE.MOUSE.ROTATE,
+    MIDDLE: THREE.MOUSE.DOLLY,
+    RIGHT: THREE.MOUSE.PAN
+  };
+
+  walkCtrl = new THREE.PointerLockControls(camera, document.body);
+  walkCtrl.addEventListener('lock',   ()=>{ walkLocked=true;  updateLockPrompt(); });
+  walkCtrl.addEventListener('unlock', ()=>{ walkLocked=false; updateLockPrompt(); });
+}
+
+// ═══════════════════════════════════════════════
+// DEFAULT STAGE
+// ═══════════════════════════════════════════════
+
+function makePanelMat(){
+  return new THREE.ShaderMaterial({
+    vertexShader: VERT,
+    fragmentShader: FRAG,
+    uniforms:{
+      map:        {value:null},
+      brightness: {value:1.0},
+      contrast:   {value:1.0},
+      hueShift:   {value:0.0},
+      saturation: {value:1.0},
+      hasVideo:   {value:0.0},
+      enabled:    {value:1.0},
+      opacity:    {value:1.0},
+      selGlow:       {value:new THREE.Color(0,0,0)},
+      limitedRange:  {value:0.0},
+      ndiCropOffset: {value:new THREE.Vector2(0,0)},
+      ndiCropSize:   {value:new THREE.Vector2(1,1)}
+    },
+    transparent: true,
+    side: THREE.FrontSide,
+    depthTest: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1
+  });
+}
+
+function buildEmptyScene(){
+  if(defGroup){ scene.remove(defGroup); defGroup=null; }
+  if(importGroup){ scene.remove(importGroup); importGroup=null; }
+  panels.length=0; selPanel=null;
+
+  // Just a floor grid for spatial reference
+  const g = new THREE.Group(); g.name='emptyScene';
+  const grid = new THREE.GridHelper(80,50,0x252525,0x1a1a1a);
+  grid.position.y=0.01; g.add(grid);
+  const fl = new THREE.Mesh(
+    new THREE.PlaneGeometry(80,80),
+    new THREE.MeshStandardMaterial({color:0x0c0c0c,roughness:.95,metalness:.05})
+  );
+  fl.rotation.x=-Math.PI/2; fl.receiveShadow=true; fl.name='_floor'; g.add(fl);
+  defGroup=g; scene.add(g);
+
+  camera.position.set(0,8,30);
+  orbitCtrl.target.set(0,0,0); orbitCtrl.update();
+
+  rebuildUI(); gatherMeshes();
+}
+
+function buildDefault(){
+  if(defGroup){ scene.remove(defGroup); }
+  defGroup = new THREE.Group(); defGroup.name='defStage';
+
+  const defs = [
+    {name:'Center Panel', w:16, h:9, p:[0,4.5,0],    ry:0},
+    {name:'Left Panel',   w:8,  h:9, p:[-12,4.5,-3], ry: Math.PI/6},
+    {name:'Right Panel',  w:8,  h:9, p:[12, 4.5,-3], ry:-Math.PI/6},
+  ];
+  defs.forEach(d=>{
+    const m = new THREE.Mesh(new THREE.BoxGeometry(d.w,d.h,0.18), makePanelMat());
+    m.position.set(...d.p); m.rotation.y=d.ry; m.name=d.name;
+    m.castShadow=true;
+    defGroup.add(m);
+    addPanel(m, d.name, false);
+  });
+
+  // Floor
+  const fl = new THREE.Mesh(
+    new THREE.PlaneGeometry(80,80),
+    new THREE.MeshStandardMaterial({color:0x0c0c0c,roughness:.95,metalness:.05})
+  );
+  fl.rotation.x=-Math.PI/2; fl.receiveShadow=true; fl.name='_floor';
+  defGroup.add(fl);
+
+  // Grid
+  const grid = new THREE.GridHelper(80,50,0x252525,0x1a1a1a);
+  grid.position.y=0.01; defGroup.add(grid);
+
+  // Stage platform
+  const plat = new THREE.Mesh(
+    new THREE.BoxGeometry(22,0.5,16),
+    new THREE.MeshStandardMaterial({color:0x180f04,roughness:.9})
+  );
+  plat.position.set(0,-0.25,0); plat.name='_stage'; plat.receiveShadow=true;
+  defGroup.add(plat);
+
+  // Trusses
+  addTruss(defGroup, 0,     9.3,  0,    18, 0);
+  addTruss(defGroup, -12,   9.3, -3,    10,  Math.PI/6);
+  addTruss(defGroup,  12,   9.3, -3,    10, -Math.PI/6);
+
+  scene.add(defGroup);
+  rebuildUI();
+  gatherMeshes();
+}
+
+function addTruss(grp, cx,cy,cz, w, ry){
+  const mat = new THREE.MeshStandardMaterial({color:0x3c3c3c,metalness:.85,roughness:.25});
+  const bW = w+2;
+
+  // Top beam
+  const b1 = new THREE.Mesh(new THREE.BoxGeometry(bW,.38,.38), mat);
+  b1.position.set(cx,cy,cz); b1.rotation.y=ry; grp.add(b1);
+
+  // Bottom chord
+  const b2 = new THREE.Mesh(new THREE.BoxGeometry(bW,.22,.22), mat);
+  b2.position.set(cx,cy-.6,cz); b2.rotation.y=ry; grp.add(b2);
+
+  // Diagonals (5 evenly spaced)
+  const half = bW/2;
+  for(let i=-2;i<=2;i++){
+    const t = i/2.5;
+    const ox = Math.cos(ry)*half*t;
+    const oz =-Math.sin(ry)*half*t;
+    const diag = new THREE.Mesh(new THREE.BoxGeometry(.1,.72,.1), mat);
+    diag.position.set(cx+ox, cy-.3, cz+oz);
+    grp.add(diag);
+  }
+
+  // Legs (two vertical supports)
+  const legH = cy;
+  const legGeo = new THREE.BoxGeometry(.28,legH,.28);
+  const sides = [-1,1];
+  sides.forEach(s=>{
+    const lx = cx + Math.cos(ry)*half*.88*s;
+    const lz = cz - Math.sin(ry)*half*.88*s;
+    const leg = new THREE.Mesh(legGeo, mat);
+    leg.position.set(lx, legH/2, lz);
+    grp.add(leg);
+  });
+}
+
+// ═══════════════════════════════════════════════
+// PANEL MANAGEMENT
+// ═══════════════════════════════════════════════
+
+function addPanel(mesh, name, rebuild=true){
+  const existing = panels.find(p=>p.mesh===mesh);
+  if(existing){ selectPanel(existing); return existing; }
+
+  // Upgrade mesh to our ShaderMaterial if it isn't already
+  if(!(mesh.material instanceof THREE.ShaderMaterial) || !mesh.material.uniforms.hasVideo){
+    mesh.material = makePanelMat();
+  }
+
+  const panel = {
+    id: pidx++,
+    name: name || mesh.name || `Panel ${pidx}`,
+    mesh,
+    mat: mesh.material,
+    video: null,
+    tex: null,
+    file: null,
+    params:{ brightness:1, contrast:1, hueShift:0, saturation:1, opacity:1, loop:true, audio:false },
+    enabled: true,  // on/off toggle
+    group: '',      // group name for batch control
+    exp: false,
+    ndi: false, ndiStream: null,
+    _scrub: null, _scrubTime: null, _isDragging: ()=>false
+  };
+  panels.push(panel);
+  if(rebuild){ rebuildUI(); }
+  return panel;
+}
+
+function removePanel(panel){
+  const i = panels.indexOf(panel);
+  if(i===-1) return;
+  setGlow(panel,false);
+  if(panel.ndi && panel.ndiStream){
+    const others = panels.filter(p=>p!==panel && p.ndiStream===panel.ndiStream);
+    if(others.length===0) panel.ndiStream.getTracks().forEach(t=>t.stop());
+  }
+  if(panel.video){ panel.video.pause(); if(panel.video._ou) URL.revokeObjectURL(panel.video._ou); }
+  if(panel.tex) panel.tex.dispose();
+  panel.mesh.material = new THREE.MeshStandardMaterial({color:0x111111,roughness:.9});
+  panels.splice(i,1);
+  if(selPanel===panel){ selPanel=null; updateHUD(); }
+  rebuildUI();
+}
+
+function selectPanel(panel){
+  if(selPanel && selPanel!==panel){
+    setGlow(selPanel,false);
+    selPanel.exp=false;
+    updatePDOM(selPanel);
+  }
+  selPanel = panel;
+  if(panel){
+    setGlow(panel,true);
+    panel.exp=true;
+    updatePDOM(panel);
+    const el=document.getElementById('pi-'+panel.id);
+    if(el) el.scrollIntoView({behavior:'smooth',block:'nearest'});
+    // Assign pending video?
+    if(pendingVid){
+      assignVid(panel, pendingVid.file, pendingVid.url);
+      pendingVid=null;
+    }
+    // Assign pending NDI?
+    if(_ndiPendingCb){
+      _ndiPendingCb(panel);
+      _ndiPendingCb=null;
+    }
+  }
+  updateHUD();
+}
+
+function deselect(){
+  if(selPanel){ setGlow(selPanel,false); selPanel.exp=false; updatePDOM(selPanel); selPanel=null; }
+  updateHUD();
+}
+
+function setPanelEnabled(panel, on){
+  panel.enabled = on;
+  if(panel.mat && panel.mat.uniforms.enabled)
+    panel.mat.uniforms.enabled.value = on ? 1.0 : 0.0;
+  if(panel.mesh) panel.mesh.visible = on;
+  updatePDOM(panel);
+  autoSave();
+}
+
+function setGroupEnabled(groupName, on){
+  groups[groupName] = on;
+  panels.filter(p=>p.group===groupName).forEach(p=>setPanelEnabled(p, on));
+  rebuildGroupUI();
+}
+
+function rebuildGroupUI(){
+  const container = document.getElementById('group-list');
+  if(!container) return;
+  container.innerHTML='';
+  const names = [...new Set(panels.map(p=>p.group).filter(Boolean))];
+  if(names.length===0){ container.innerHTML='<div style="color:var(--text-muted);font-size:10px;padding:4px 0">尚無群組</div>'; return; }
+  names.forEach(name=>{
+    const allOn = panels.filter(p=>p.group===name).every(p=>p.enabled);
+    const row = document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:7px;margin-bottom:5px';
+    row.innerHTML=`
+      <span style="flex:1;font-size:11px;font-weight:600">${name}</span>
+      <button class="btn sm ${allOn?'active':''}" data-group="${name}" data-on="1">ON</button>
+      <button class="btn sm ${!allOn?'active danger':''}" data-group="${name}" data-on="0">OFF</button>`;
+    row.querySelectorAll('[data-group]').forEach(btn=>{
+      btn.addEventListener('click',()=>setGroupEnabled(name, btn.dataset.on==='1'));
+    });
+    container.appendChild(row);
+  });
+}
+
+function setGlow(panel, on){
+  // No visual glow on selection — keeps video colours accurate
+}
+
+function assignVid(panel, file, url, skipRebuild=false){
+  // If replacing a video that was the audio master, hand off to another panel with same file
+  if(panel.video && !panel.video.muted && panel.file){
+    const heir = panels.find(p=>p!==panel && p.video && p.file===panel.file && p.video.muted);
+    if(heir) heir.video.muted=false;
+  }
+  if(panel.video){
+    panel.video.pause();
+    if(panel.video._ou) URL.revokeObjectURL(panel.video._ou);
+  }
+  if(panel.tex) panel.tex.dispose();
+
+  const v = document.createElement('video');
+  v.src=url; v._ou=url;
+  v.loop=false;  // always disable native loop — we control it manually via 'ended'
+  v.muted=!panel.params.audio;  // respect per-panel audio toggle (default muted)
+  v.autoplay=true;
+  v.playsInline=true;
+  // NOTE: crossOrigin intentionally omitted — setting it breaks ObjectURL (local file) playback
+
+  v.addEventListener('error',()=>{
+    const isMov = /\.mov$/i.test(file.name);
+    const msg = isMov
+      ? `⚠️ 無法播放 "${file.name}"\nMOV/ProRes 422 瀏覽器不支援\n請轉成 MP4 H.264`
+      : `⚠️ 無法載入 "${file.name}"，請嘗試 MP4 H.264 格式`;
+    toast(msg,'warn',7000);
+  });
+  v.addEventListener('canplay',()=>{ v.play().catch(()=>{}); });
+  v.addEventListener('ended',()=>{
+    const myDur = v.duration || 0;
+    const maxDur = gtMaxDur();
+    // Global sync playing + this video is shorter → stay on last frame
+    if(gtPlaying && myDur < maxDur - 0.1){
+      v.currentTime = myDur;
+      return;
+    }
+    // Otherwise respect panel's loop setting
+    if(panel.params.loop){ v.currentTime=0; v.play().catch(()=>{}); }
+  });
+
+  const t = new THREE.VideoTexture(v);
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.format    = THREE.RGBFormat;
+
+  panel.video=v; panel.tex=t; panel.file=file.name;
+  panel.mat.uniforms.map.value=t;
+  panel.mat.uniforms.hasVideo.value=1.0;
+
+  // Auto-expand so scrubber is immediately visible
+  panel.exp=true;
+  if(!skipRebuild){
+    rebuildUI(); // rebuilds so scrubber/buttons re-enable
+    if(selPanel===panel) setGlow(panel,true);
+  }
+}
+
+// ═══════════════════════════════════════════════
+// PANEL UI
+// ── Global Transport ──
+let gtPlaying = false;
+let gtDragging = false;
+let gtPrevTime = 0;
+
+function gtMaxDur(){
+  return panels.reduce((mx,p)=> p.video && !p.ndi ? Math.max(mx, p.video.duration||0) : mx, 0);
+}
+function gtRefPanel(){
+  // Reference = panel with the longest video
+  let best=null, bestDur=0;
+  panels.forEach(p=>{ if(p.video&&!p.ndi){ const d=p.video.duration||0; if(d>bestDur){bestDur=d;best=p;} }});
+  return best;
+}
+function gtCurTime(){
+  const ref = gtRefPanel();
+  return ref ? ref.video.currentTime : 0;
+}
+function fmtT(s){
+  if(!isFinite(s)||s<0) s=0;
+  return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+}
+function syncAllTo(t, play){
+  panels.forEach(p=>{
+    if(!p.video || p.ndi) return;
+    const dur = p.video.duration || 0;
+    if(dur>0 && t>=dur){
+      // Shorter video — clamp to last frame and pause
+      p.video.currentTime = dur;
+      p.video.pause();
+    } else {
+      p.video.currentTime = t;
+      if(play) p.video.play().catch(()=>{});
+      else p.video.pause();
+    }
+  });
+}
+function updateGlobalTransport(){
+  const ref = gtRefPanel();
+  const dur = gtMaxDur();
+  const cur = ref ? ref.video.currentTime : 0;
+  const scrub = document.getElementById('gt-scrub');
+  const timeEl = document.getElementById('gt-time');
+  const playBtn = document.getElementById('gt-play');
+  if(!scrub) return;
+  scrub.max = dur > 0 ? dur : 100;
+  if(!gtDragging) scrub.value = cur;
+  const pct = dur>0 ? (cur/dur*100) : 0;
+  scrub.style.background = `linear-gradient(to right,var(--accent) ${pct}%,var(--surface3) ${pct}%)`;
+  timeEl.textContent = `${fmtT(cur)} / ${fmtT(dur)}`;
+  const nowPlaying = ref ? !ref.video.paused : false;
+  if(nowPlaying !== gtPlaying){ gtPlaying=nowPlaying; playBtn.textContent=gtPlaying?'⏸':'▶'; }
+
+  // Detect loop: longest video jumped back to near 0 from near end (not from user scrub)
+  if(!gtDragging && ref && dur>0 && gtPrevTime > dur*0.9 && cur < 0.5){
+    // Longest video looped — restart all shorter videos from beginning
+    panels.forEach(p=>{
+      if(!p.video || p.ndi || p===ref) return;
+      const pd = p.video.duration || 0;
+      if(pd < dur){
+        p.video.currentTime = 0;
+        if(gtPlaying) p.video.play().catch(()=>{});
+      }
+    });
+  }
+  gtPrevTime = cur;
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+  const transport = document.getElementById('global-transport');
+  const scrub = document.getElementById('gt-scrub');
+  const playBtn = document.getElementById('gt-play');
+
+  // Block OrbitControls from intercepting events inside the transport bar
+  // NOTE: mouseup/pointerup intentionally excluded — must bubble to document so gtDragging resets
+  ['mousedown','mousemove','pointerdown','pointermove','wheel'].forEach(evt=>{
+    transport.addEventListener(evt, e=>e.stopPropagation());
+  });
+
+  scrub.addEventListener('mousedown',()=>{ gtDragging=true; });
+  // Reset on both scrub and document to cover all release scenarios
+  scrub.addEventListener('mouseup',()=>{ gtDragging=false; });
+  document.addEventListener('mouseup',()=>{ if(gtDragging) gtDragging=false; });
+  scrub.addEventListener('input',()=>{
+    const dur = gtMaxDur(); if(!dur) return;
+    const t = +scrub.value;
+    const pct = dur>0?(t/dur*100):0;
+    scrub.style.background=`linear-gradient(to right,var(--accent) ${pct}%,var(--surface3) ${pct}%)`;
+    document.getElementById('gt-time').textContent=`${fmtT(t)} / ${fmtT(dur)}`;
+    syncAllTo(t, gtPlaying);
+  });
+  playBtn.addEventListener('click',()=>{
+    gtPlaying = !gtPlaying;
+    playBtn.textContent = gtPlaying?'⏸':'▶';
+    panels.forEach(p=>{ if(p.video&&!p.ndi){ gtPlaying?p.video.play().catch(()=>{}) : p.video.pause(); }});
+  });
+});
+
+function clearVid(panel){
+  if(panel.ndi && panel.ndiStream){
+    const others = panels.filter(p=>p!==panel && p.ndiStream===panel.ndiStream);
+    if(others.length===0) panel.ndiStream.getTracks().forEach(t=>t.stop());
+    panel.ndi=false; panel.ndiStream=null;
+  }
+  if(panel.video){ panel.video.pause(); if(panel.video._ou) URL.revokeObjectURL(panel.video._ou); panel.video=null; }
+  if(panel.tex){ panel.tex.dispose(); panel.tex=null; }
+  panel.file=null;
+  panel.mat.uniforms.map.value=null;
+  panel.mat.uniforms.hasVideo.value=0.0;
+  panel.mat.uniforms.limitedRange.value=0.0;
+  panel.exp=false;
+  rebuildUI();
+  autoSave();
+}
+
+// ── Turntable rotation UI ─────────────────────────────────────────────────────
+
+// Store initial quaternions so we can compose user rotation on top
+const turntableInitQuat = { A: null, B: null };
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
+function setTurntableAngle(obj, initQuat, deg) {
+  if (!obj || !initQuat) return;
+  const userQuat = new THREE.Quaternion().setFromAxisAngle(_yAxis, deg * Math.PI / 180);
+  obj.quaternion.copy(userQuat).multiply(initQuat);
+  // 轉台旋轉時需要更新 shadow map
+  if (renderer) renderer.shadowMap.needsUpdate = true;
+}
+
+let _turntableUIBuilt = false;
+function buildTurntableUI() {
+  if (_turntableUIBuilt) return; // 防止重複綁定 listener
+  const section = document.getElementById('mechanism-section');
+  const container = document.getElementById('turntable-controls');
+  if (!section || !container) return;
+
+  const hasMechanisms = turntableA || turntableB || led1UpMesh;
+  if (!hasMechanisms) { section.style.display = 'none'; return; }
+  section.style.display = '';
+  _turntableUIBuilt = true;
+
+  // LED-1 UP elevation control
+  const led1ctrl = document.getElementById('led1up-control');
+  if (led1UpMesh && led1ctrl) {
+    led1ctrl.style.display = '';
+    const slider = document.getElementById('led1up-slider');
+    const valEl = document.getElementById('led1up-val');
+    slider.addEventListener('input', () => {
+      const h = parseFloat(slider.value);
+      valEl.textContent = h.toFixed(1) + 'm';
+      led1UpMesh.position.y = led1UpInitY + h;
+      if (renderer) renderer.shadowMap.needsUpdate = true;
+    });
+    led1ctrl.querySelectorAll('[data-led1up]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const h = parseFloat(btn.dataset.led1up);
+        slider.value = h;
+        valEl.textContent = h.toFixed(1) + 'm';
+        led1UpMesh.position.y = led1UpInitY + h;
+        if (renderer) renderer.shadowMap.needsUpdate = true;
+      });
+    });
+  }
+
+  // Capture initial quaternions (only once, from the GLTF)
+  if (turntableA && !turntableInitQuat.A) turntableInitQuat.A = turntableA.quaternion.clone();
+  if (turntableB && !turntableInitQuat.B) turntableInitQuat.B = turntableB.quaternion.clone();
+
+  container.innerHTML = '';
+  const items = [];
+  if (turntableA) items.push({ label: '轉台 A (LED-2)', obj: turntableA, initQuat: turntableInitQuat.A, id: 'ttA' });
+  if (turntableB) items.push({ label: '轉台 B (LED-3)', obj: turntableB, initQuat: turntableInitQuat.B, id: 'ttB' });
+
+  items.forEach(({ label, obj, initQuat, id }) => {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:8px';
+    wrap.innerHTML = `
+      <div style="font-size:10px;color:var(--text-dim);margin-bottom:4px">${label}</div>
+      <div class="prow">
+        <span class="plbl">角度</span>
+        <input type="range" id="${id}-slider" min="0" max="360" step="1" value="0">
+        <span class="pval" id="${id}-val">0°</span>
+      </div>
+      <div class="brow" style="margin-top:4px">
+        <button class="btn sm" data-tt="${id}" data-angle="0">A面 0°</button>
+        <button class="btn sm" data-tt="${id}" data-angle="180">B面 180°</button>
+        <button class="btn sm" data-tt="${id}" data-angle="90">90°</button>
+        <button class="btn sm" data-tt="${id}" data-angle="270">270°</button>
+      </div>`;
+    container.appendChild(wrap);
+
+    const slider = wrap.querySelector(`#${id}-slider`);
+    const valEl = wrap.querySelector(`#${id}-val`);
+    slider.addEventListener('input', () => {
+      const deg = parseFloat(slider.value);
+      valEl.textContent = deg + '°';
+      setTurntableAngle(obj, initQuat, deg);
+    });
+
+    wrap.querySelectorAll('[data-angle]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const deg = parseFloat(btn.dataset.angle);
+        slider.value = deg;
+        valEl.textContent = deg + '°';
+        setTurntableAngle(obj, initQuat, deg);
+      });
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════
+
+function rebuildUI(){
+  const list = document.getElementById('plist');
+  const empty= document.getElementById('no-panels');
+  document.getElementById('pcnt').textContent = panels.length;
+  empty.style.display = panels.length===0?'block':'none';
+  list.innerHTML='';
+  panels.forEach(p=>{ list.appendChild(makePEl(p)); updatePDOM(p); });
+}
+
+function makePEl(panel){
+  const el = document.createElement('div');
+  el.className='pi'; el.id='pi-'+panel.id;
+
+  const hdr = document.createElement('div');
+  hdr.className='ph';
+  hdr.innerHTML=`<div class="pdot"></div><div class="pname">${panel.name}</div>
+    <div class="pvtag">${panel.file||'No video'}</div><div class="pchev">▼</div>`;
+  hdr.addEventListener('click',()=>{
+    if(selPanel===panel){ panel.exp=!panel.exp; updatePDOM(panel); }
+    else selectPanel(panel);
+  });
+
+  const body = document.createElement('div');
+  body.className='pb';
+  body.innerHTML = buildPBody(panel);
+
+  el.appendChild(hdr);
+  el.appendChild(body);
+  wirePBody(panel, el); // must come after body is in DOM
+  return el;
+}
+
+function buildPBody(p){
+  const pr=p.params;
+  return `
+  <div class="brow" style="margin-top:0;justify-content:space-between">
+    <button class="btn sm ${p.enabled?'active':''}" data-a="toggle" title="開啟/關閉此面板">${p.enabled?'● ON':'○ OFF'}</button>
+    <input data-a="group" type="text" placeholder="群組名稱 (如: A)" value="${p.group||''}"
+      style="flex:1;margin:0 5px;padding:4px 6px;font-size:10px;background:var(--surface3);border:1px solid var(--border);border-radius:3px;color:var(--text);outline:none">
+    <button class="btn danger sm" data-a="rm" title="Remove panel">✕</button>
+  </div>
+  <div class="brow" style="gap:4px">
+    <button class="btn accent" style="flex:1" data-a="assign">🎬 影片</button>
+    <button class="btn danger sm" data-a="clear-vid" title="清除影片" ${!p.video&&!p.ndi?'disabled':''}>✕</button>
+  </div>
+  <div class="brow">
+    <button class="btn sm" data-a="play"  ${!p.video||p.ndi?'disabled':''}>▶</button>
+    <button class="btn sm" data-a="pause" ${!p.video||p.ndi?'disabled':''}>⏸</button>
+    <button class="btn sm" data-a="stop"  ${!p.video||p.ndi?'disabled':''}>⏹</button>
+    <button class="btn sm ${pr.loop?'active':''}" data-a="loop" title="Loop" ${!p.video||p.ndi?'disabled':''}>⟳ Loop</button>
+    <button class="btn sm ${pr.audio?'active':''}" data-a="audio" title="音軌開關" ${!p.video&&!p.ndi?'disabled':''}>${pr.audio?'🔊':'🔇'}</button>
+  </div>
+  ${p.ndi ? `<div style="font-size:9px;color:var(--text-dim);padding:3px 0 2px">🔴 NDI 直播輸入中</div>` :
+  `<div class="scrub-row" style="${!p.video?'opacity:.35;pointer-events:none':''}">
+    <input type="range" data-a="scrub" min="0" max="100" step="0.05" value="0">
+    <span class="stime" data-a="stime">0:00</span>
+  </div>`}
+  <div class="prow">
+    <span class="plbl">Brightness</span>
+    <input type="range" data-p="brightness" min="0" max="2" step="0.01" value="${pr.brightness}">
+    <span class="pval" data-pv="brightness">${Math.round(pr.brightness*100)}%</span>
+  </div>
+  <div class="prow">
+    <span class="plbl">Contrast</span>
+    <input type="range" data-p="contrast" min="0" max="3" step="0.01" value="${pr.contrast}">
+    <span class="pval" data-pv="contrast">${pr.contrast.toFixed(2)}</span>
+  </div>
+  <div class="prow">
+    <span class="plbl">Hue Shift</span>
+    <input type="range" data-p="hueShift" min="-0.5" max="0.5" step="0.005" value="${pr.hueShift}">
+    <span class="pval" data-pv="hueShift">${Math.round(pr.hueShift*360)}°</span>
+  </div>
+  <div class="prow">
+    <span class="plbl">Saturation</span>
+    <input type="range" data-p="saturation" min="0" max="2" step="0.01" value="${pr.saturation}">
+    <span class="pval" data-pv="saturation">${Math.round(pr.saturation*100)}%</span>
+  </div>
+  <div class="prow">
+    <span class="plbl">Opacity</span>
+    <input type="range" data-p="opacity" min="0" max="1" step="0.01" value="${pr.opacity??1}">
+    <span class="pval" data-pv="opacity">${Math.round((pr.opacity??1)*100)}%</span>
+  </div>`;
+}
+
+function wirePBody(panel, el){
+  const body = el.querySelector('.pb');
+
+  // Action buttons
+  body.querySelectorAll('[data-a]').forEach(btn=>{
+    const a = btn.dataset.a;
+    if(a==='scrub'||a==='stime'||a==='group') return; // handled separately
+    btn.addEventListener('click', e=>{
+      e.stopPropagation();
+      if(a==='assign'){ selPanel=panel; document.getElementById('f-video').click(); }
+      else if(a==='assign-ndi'){ selPanel=panel; openNDIPicker(false); }
+      else if(a==='play')  { if(panel.video) panel.video.play(); }
+      else if(a==='pause') { if(panel.video) panel.video.pause(); }
+      else if(a==='stop')  { if(panel.video){ panel.video.pause(); panel.video.currentTime=0; } }
+      else if(a==='clear-vid'){ clearVid(panel); }
+      else if(a==='loop')  {
+        panel.params.loop=!panel.params.loop;
+        if(panel.video) panel.video.loop=panel.params.loop;
+        btn.classList.toggle('active',panel.params.loop);
+      }
+      else if(a==='audio') {
+        panel.params.audio=!panel.params.audio;
+        if(panel.video) panel.video.muted=!panel.params.audio;
+        btn.classList.toggle('active',panel.params.audio);
+        btn.textContent=panel.params.audio?'🔊':'🔇';
+        autoSave();
+      }
+      else if(a==='toggle'){
+        setPanelEnabled(panel, !panel.enabled);
+        btn.textContent = panel.enabled ? '● ON' : '○ OFF';
+        btn.classList.toggle('active', panel.enabled);
+        rebuildGroupUI();
+      }
+      else if(a==='rm') removePanel(panel);
+    });
+  });
+
+  // Group name input
+  const groupInput = body.querySelector('[data-a="group"]');
+  if(groupInput){
+    groupInput.addEventListener('change', e=>{
+      e.stopPropagation();
+      panel.group = e.target.value.trim();
+      rebuildGroupUI();
+      autoSave();
+    });
+    groupInput.addEventListener('click', e=>e.stopPropagation());
+  }
+
+  // Scrubber
+  const scrub = body.querySelector('[data-a="scrub"]');
+  const stim  = body.querySelector('[data-a="stime"]');
+  panel._scrub = scrub; panel._scrubTime = stim;
+  let drag=false;
+  scrub.addEventListener('mousedown', ()=>drag=true);
+  document.addEventListener('mouseup', ()=>drag=false);
+  scrub.addEventListener('input', ()=>{ if(panel.video) panel.video.currentTime=+scrub.value; });
+  panel._isDragging = ()=>drag;
+
+  // Param sliders
+  body.querySelectorAll('[data-p]').forEach(sl=>{
+    const k=sl.dataset.p, vEl=body.querySelector('[data-pv="'+k+'"]');
+    sl.addEventListener('input',()=>{
+      const v=+sl.value;
+      panel.params[k]=v;
+      panel.mat.uniforms[k].value=v;
+      if(vEl){
+        if(k==='brightness'||k==='saturation'||k==='opacity') vEl.textContent=Math.round(v*100)+'%';
+        else if(k==='hueShift') vEl.textContent=Math.round(v*360)+'°';
+        else vEl.textContent=v.toFixed(2);
+      }
+      autoSave();
+    });
+  });
+}
+
+function updatePDOM(panel){
+  const el=document.getElementById('pi-'+panel.id);
+  if(!el) return;
+  el.classList.toggle('sel',  selPanel===panel);
+  el.classList.toggle('hv',   !!panel.video);
+  el.classList.toggle('exp',  panel.exp);
+  // Dim header when disabled
+  const hdr=el.querySelector('.ph');
+  if(hdr) hdr.style.opacity = panel.enabled ? '1' : '0.45';
+  const tag=el.querySelector('.pvtag');
+  if(tag) tag.textContent=panel.file||'No video';
+}
+
+function updateHUD(){
+  const hud=document.getElementById('sel-hud');
+  if(selPanel){
+    hud.textContent=`● ${selPanel.name}${selPanel.file?' — '+selPanel.file:''}`;
+    hud.style.display='block';
+  } else {
+    hud.style.display='none';
+  }
+}
+
+// ═══════════════════════════════════════════════
+// CAMERA MODE
+// ═══════════════════════════════════════════════
+
+function setMode(m){
+  if(m===mode) return;
+  mode=m;
+  const mv   = document.getElementById('mode-val');
+  const btn  = document.getElementById('btn-mode');
+  const ch   = document.getElementById('crosshair');
+  const wh   = document.getElementById('walk-hint');
+  const lp   = document.getElementById('lock-prompt');
+  const bh   = document.getElementById('bhint');
+
+  if(m==='walk'){
+    orbitCtrl.enabled=false;
+    if(camera.position.y<1.7) camera.position.y=1.7;
+    mv.textContent='WALK';
+    mv.style.cssText='background:rgba(68,204,119,.18);color:var(--success)';
+    btn.textContent='Orbit Mode [F]';
+    document.body.classList.add('walk-mode');
+    ch.style.display='block';
+    lp.style.display='block';
+    wh.style.display='block'; wh.style.opacity='1';
+    bh.textContent='Click viewport · lock mouse | WASD move | Shift run | E/Q fly | Space up | F exit walk | ESC unlock';
+    clearTimeout(hintTO);
+    hintTO=setTimeout(()=>{ wh.style.opacity='0'; }, 3000);
+  } else {
+    if(walkLocked) walkCtrl.unlock();
+    orbitCtrl.enabled=true;
+    // Re-sync orbit controls from current camera position
+    // Point target ahead of camera at a reasonable distance
+    const fwd=new THREE.Vector3(); camera.getWorldDirection(fwd);
+    orbitCtrl.target.copy(camera.position).addScaledVector(fwd, 15);
+    orbitCtrl.target.y=Math.max(0, orbitCtrl.target.y);
+    mv.textContent='ORBIT';
+    mv.style.cssText='';
+    btn.textContent='Walk Mode [F]';
+    document.body.classList.remove('walk-mode');
+    ch.style.display='none';
+    lp.style.display='none';
+    wh.style.display='none';
+    bh.textContent='Orbit: Left drag rotate · Scroll zoom · Right drag pan · Click any mesh → add LED panel';
+  }
+}
+
+function updateLockPrompt(){
+  const lp=document.getElementById('lock-prompt');
+  if(mode!=='walk') return;
+  lp.style.display=walkLocked?'none':'block';
+}
+
+// ═══════════════════════════════════════════════
+// PRESETS
+// ═══════════════════════════════════════════════
+
+const PRESETS={
+  foh:   {p:[0,5.5,32],  t:[0,4,0]},
+  sl:    {p:[-28,6,12],  t:[0,4,0]},
+  sr:    {p:[28, 6,12],  t:[0,4,0]},
+  bird:  {p:[0, 44, 4],  t:[0,0,0]},
+  stage: {p:[0,1.7,-4],  t:[0,5,24]},
+};
+
+function doPreset(name){
+  const pr=PRESETS[name]; if(!pr) return;
+  camera.position.set(...pr.p);
+  const tgt=new THREE.Vector3(...pr.t);
+  if(mode==='orbit'){ orbitCtrl.target.copy(tgt); orbitCtrl.update(); }
+  else camera.lookAt(tgt);
+}
+
+// ═══════════════════════════════════════════════
+// RAYCASTING
+// ═══════════════════════════════════════════════
+
+let clickableMeshes=[];
+
+function gatherMeshes(){
+  clickableMeshes=[];
+  scene.traverse(obj=>{
+    if(obj.isMesh && !obj.name.startsWith('_') && !obj.userData.locked){
+      clickableMeshes.push(obj);
+    }
+  });
+}
+
+function onVPClick(e){
+  if(mode==='walk'){
+    if(!walkLocked) walkCtrl.lock();
+    return;
+  }
+  if(mouseMoved) return;
+
+  const vp=document.getElementById('vp');
+  const r=vp.getBoundingClientRect();
+  m2d.x=((e.clientX-r.left)/r.width)*2-1;
+  m2d.y=-((e.clientY-r.top)/r.height)*2+1;
+  ray.setFromCamera(m2d,camera);
+  const hits=ray.intersectObjects(clickableMeshes,false);
+
+  if(hits.length){
+    const mesh=hits[0].object;
+    if(mesh.name.startsWith('_') || mesh.userData.locked) return;
+    const ex=panels.find(p=>p.mesh===mesh);
+    if(ex) selectPanel(ex);
+    else { const np=addPanel(mesh,mesh.name||`Panel ${panels.length+1}`); selectPanel(np); }
+  } else {
+    deselect();
+  }
+}
+
+// ═══════════════════════════════════════════════
+// VIDEO IMPORT
+// ═══════════════════════════════════════════════
+
+function handleVidAll(file){
+  if(!file) return;
+  if(panels.length===0){ toast('尚無 LED 面板，請先匯入模型或點選 Mesh。','warn',3000); return; }
+  // Each panel gets its own independent video element (same source file)
+  panels.forEach(p=>{
+    const url=URL.createObjectURL(file);
+    assignVid(p, file, url, true); // skip per-panel rebuild
+  });
+  rebuildUI(); // single rebuild after all assigned
+  // Single toast after all panels assigned
+  toast(`✓ "${file.name}" 已套用到全部 ${panels.length} 個 LED 面板\n點選面板名稱可看進度條與播放控制`,'info',4000);
+}
+
+function handleVid(file){
+  if(!file) return;
+  const url=URL.createObjectURL(file);
+  if(selPanel) assignVid(selPanel,file,url);
+  else {
+    pendingVid={file,url};
+    toast(`"${file.name}" ready — click a panel in 3D view to assign it.`,'info',5000);
+  }
+}
+
+// ═══════════════════════════════════════════════
+// NDI / CAMERA INPUT
+// ═══════════════════════════════════════════════
+
+let _ndiPendingCb = null; // callback(stream, label) after device pick
+
+// ── Phase 3: NDI SDK full-resolution via Electron IPC ───────────────────────
+// SharedArrayBuffer holds raw BGRA frame data from main process.
+// Each panel with ndiSdk=true uses a DataTexture that reads from this SAB.
+// UV crop: each panel defines its region in the NDI canvas (0..1 normalized).
+
+// 網頁版：移除 NDI；保留 receivers 物件作為相容性 stub
+const ndiSdkSources = [];
+const ndiSdkReceivers = {};
+
+// 來源狀態顯示（取代原 _ndiSetStatus）
+function _setSrcStatus(text, color) {
+  const el = document.getElementById('src-status');
+  if (el) { el.textContent = text; el.style.color = color; }
+}
+const _ndiSetStatus = _setSrcStatus; // 相容舊呼叫
+
+// NDI 狀態變數（全域，供 ResizeObserver / UI handler 共用）
+let _ndiProcessing = false;
+let _ndiPaused = false;
+let _ndiTex = null, _ndiTexBuf = null, _ndiTexW = 0, _ndiTexH = 0;
+let _ndiLastLayout = null;
+
+// 網頁版：移除整個 NDI/Electron IPC 區塊（原 ~190 行）
+// 保留下方 panel/render loop 對 _ndiPaused/_ndiTex 的引用為 no-op（變數一直為 false/null）
+if (false) {
+  window.electronAPI.on('ndi:sources', (list) => {
+    ndiSdkSources.length = 0;
+    list.forEach(s => ndiSdkSources.push(s));
+    if (list.length === 0) {
+      _ndiSetStatus('NDI SDK ✓ 找不到來源（AE 有開嗎？）', '#888');
+    } else {
+      _ndiSetStatus(`NDI SDK ✓ 找到 ${list.length} 個來源`, '#4dff91');
+    }
+    // If picker is open, refresh it
+    const modal = document.getElementById('ndi-modal');
+    if (modal && !modal.classList.contains('hidden') && document.getElementById('ndi-devlist')?.dataset.mode === 'sdk') {
+      _refreshNdiSdkList();
+    }
+  });
+  window.electronAPI.on('ndi:receiver-ready', ({ name }) => {
+    if (!ndiSdkReceivers[name]) ndiSdkReceivers[name] = {};
+    ndiSdkReceivers[name].ready = true;
+  });
+
+  window.electronAPI.on('ndi:frame', ({ name, fw, fh, crops }) => {
+    if (_ndiPaused || _ndiProcessing) return;
+    _ndiProcessing = true;
+    requestAnimationFrame(() => { _ndiProcessing = false; });
+
+    const r = ndiSdkReceivers[name];
+    if (!r || !crops?.frame?.buf) return;
+    r.w = fw; r.h = fh;
+
+    const frame = crops.frame;
+    const w = frame.w, h = frame.h;
+
+    // 共用貼圖（兩種佈局都用同一張，模型 UV 自動對應）
+    if (!_ndiTex || _ndiTexW !== w || _ndiTexH !== h) {
+      if (_ndiTex) _ndiTex.dispose();
+      _ndiTexBuf = new Uint8Array(w * h * 4);
+      _ndiTex = new THREE.DataTexture(_ndiTexBuf, w, h, THREE.RGBAFormat);
+      _ndiTex.minFilter = THREE.LinearFilter;
+      _ndiTex.magFilter = THREE.LinearFilter;
+      _ndiTex.flipY = false;
+      // ShaderMaterial 繞過 Three.js encoding pipeline — texture2D 讀原始 sRGB 值，
+      // shader 手動做 limited→full range 後直接輸出 sRGB，不經 outputEncoding 轉換。
+      // 設 LinearEncoding 避免誤導（ShaderMaterial 忽略此值，但語意更正確）。
+      _ndiTex.encoding = THREE.LinearEncoding;
+      _ndiTexW = w; _ndiTexH = h;
+    }
+
+    // 偵測佈局並計算 UV 偏移
+    const layout = detectLayout(fw, fh);
+    const isLayoutB = (layout === LAYOUT_B);
+    // Layout B 無樂手面板 → UV 需偏移到 Layout A 對應位置
+    // offset = Layout A 主牆起始 x / Layout B 寬度
+    const mainWallX = LAYOUT_A.map['LED_1_UP']?.x ?? 2112;
+    const cropOx = isLayoutB ? -mainWallX / LAYOUT_B.w : 0;
+    const cropSx = isLayoutB ? LAYOUT_A.w / LAYOUT_B.w : 1;
+
+    // 只在 layout 切換或首次連接時更新 panel uniforms（避免每幀遍歷）
+    const layoutChanged = (_ndiLastLayout !== layout);
+    if (layoutChanged) _ndiLastLayout = layout;
+
+    panels.forEach(p => {
+      if (p.ndiSdkSource !== name) return;
+      // 8800 模式下，小面板不在畫布中 → 隱藏（只設一次）
+      if (isLayoutB && !LAYOUT_B.map[p.name]) {
+        if (p.mat?.uniforms.hasVideo?.value > 0) p.mat.uniforms.hasVideo.value = 0;
+        return;
+      }
+      // 10912 模式恢復被隱藏的小面板
+      if (!isLayoutB && p.mat?.uniforms.hasVideo?.value === 0 && p.ndiSdk) {
+        p.mat.uniforms.hasVideo.value = 1.0;
+      }
+      // 跳過已設定且 layout 沒變的面板
+      if (!layoutChanged && p.mat?.uniforms.map?.value === _ndiTex) return;
+      p.mat.uniforms.map.value = _ndiTex;
+      p.mat.uniforms.hasVideo.value = 1.0;
+      p.mat.uniforms.ndiCropOffset.value.set(cropOx, 0);
+      p.mat.uniforms.ndiCropSize.value.set(cropSx, 1);
+      p.ndi = true; p.ndiSdk = true;
+    });
+
+    _ndiTexBuf.set(frame.buf.length <= _ndiTexBuf.length ? frame.buf : new Uint8Array(frame.buf).subarray(0, _ndiTexBuf.length));
+    _ndiTex.needsUpdate = true;
+
+    r._frameCount = (r._frameCount || 0) + 1;
+    if (!r._liveShown || r._frameCount % 300 === 0) {
+      r._liveShown = true;
+      _ndiSetStatus(`🔴 NDI ${fw}×${fh}  幀:${r._frameCount}`, '#ff4444');
+      if (r._frameCount === 1) toast(`🔴 NDI 訊號接收中 ${fw}×${fh}`, 'info', 4000);
+    }
+  });
+
+  // NDI 斷線偵測
+  window.electronAPI.on('ndi:timeout', ({ name, seconds }) => {
+    if (seconds <= 5) _ndiSetStatus('⚠️ NDI 訊號中斷…', '#ffaa44');
+    else { _ndiSetStatus('❌ NDI 已斷線', '#ff6b6b'); toast('NDI 已中斷超過 30 秒', 'warn', 5000); }
+  });
+
+  // NDI 診斷
+  window.electronAPI.on('ndi:log', (msg) => {
+    console.log('%c' + msg, msg.includes('✗') ? 'color:red' : msg.includes('✓') ? 'color:lime' : 'color:cyan');
+  });
+}  // end of disabled NDI block
+
+// 網頁版來源處理：本地上傳已由原 handleVidAll() 處理，這裡加 GDrive URL 載入
+
+/**
+ * 從 Google Drive 公開連結載入影片到所有 LED 面板
+ * 支援格式：
+ *   https://drive.google.com/file/d/{ID}/view?usp=sharing
+ *   https://drive.google.com/open?id={ID}
+ *   https://drive.google.com/uc?id={ID}
+ *   {ID} 直接貼
+ */
+function parseGDriveURL(input) {
+  if (!input) return null;
+  const trimmed = input.trim();
+  // 直接貼 file ID
+  if (/^[a-zA-Z0-9_-]{20,}$/.test(trimmed)) return trimmed;
+  // /file/d/{ID}/...
+  let m = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  // ?id={ID} or &id={ID}
+  m = trimmed.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (m) return m[1];
+  return null;
+}
+
+function gdriveDirectURL(fileId) {
+  // 直接下載 URL（瀏覽器會處理大檔案的 confirm token）
+  return `https://drive.google.com/uc?export=download&id=${fileId}&confirm=t`;
+}
+
+async function loadVideoFromURL(url, label) {
+  if (panels.length === 0) {
+    toast('尚無 LED 面板，請先載入舞臺模型', 'warn', 3000);
+    return;
+  }
+  _setSrcStatus(`⏳ 載入中: ${label}`, 'var(--accent)');
+  // 為每個面板建立獨立 video element（同一 URL，但獨立播放）
+  panels.forEach(p => {
+    // assignVid 接受 file 物件 + url；我們造一個假 file object 帶 name
+    const fakeFile = { name: label };
+    assignVid(p, fakeFile, url, true);
+  });
+  rebuildUI();
+  _setSrcStatus(`✓ 已載入: ${label}`, 'var(--success)');
+  toast(`✓ "${label}" 已套用到全部 ${panels.length} 個 LED 面板`, 'info', 4000);
+}
+
+// ═══════════════════════════════════════════════
+// GLB IMPORT
+// ═══════════════════════════════════════════════
+
+function autoLoadStage(url){
+  // If opened via file:// in a normal browser, fetch is blocked by security.
+  // Electron also uses file:// but allows it — detect via userAgent.
+  const isElectron = navigator.userAgent.includes('Electron');
+  if(location.protocol === 'file:' && !isElectron){
+    toast('⚠️ 請用 舞臺預覽.bat 開啟工具\n或點擊左側「Stage Model」手動選擇 stage.gltf', 'warn', 0);
+    setTimeout(()=>{ document.getElementById('f-stage').click(); }, 800);
+    return;
+  }
+
+  // Clear panels & old groups
+  panels.forEach(p=>{ if(p.video){p.video.pause();if(p.video._ou)URL.revokeObjectURL(p.video._ou);} if(p.tex)p.tex.dispose(); });
+  panels.length=0; selPanel=null;
+  if(defGroup){scene.remove(defGroup);defGroup=null;}
+  if(importGroup){scene.remove(importGroup);importGroup=null;}
+
+  // Show loading overlay
+  const loadOv = document.createElement('div');
+  loadOv.id = '_load-ov';
+  loadOv.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.82);z-index:8888;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;pointer-events:none';
+  loadOv.innerHTML = '<div style="font-size:13px;color:#fff;letter-spacing:1px">載入舞台模型中…</div>'
+    + '<div style="width:260px;height:4px;background:#333;border-radius:2px;overflow:hidden">'
+    + '<div id="_load-bar" style="height:100%;width:0%;background:#4a9eff;transition:width .3s;border-radius:2px"></div></div>'
+    + '<div id="_load-pct" style="font-size:11px;color:#888">0%</div>';
+  document.body.appendChild(loadOv);
+
+  const loader = new THREE.GLTFLoader();
+  // Draco 解壓縮（網頁版用壓縮模型）
+  if (typeof THREE.DRACOLoader !== 'undefined') {
+    const dracoLoader = new THREE.DRACOLoader();
+    dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    loader.setDRACOLoader(dracoLoader);
+  }
+  loader.load(url, gltf=>{
+    document.getElementById('_load-ov')?.remove();
+    importGroup=gltf.scene; importGroup.name='imported';
+
+    const box=new THREE.Box3().setFromObject(importGroup);
+    const cen=box.getCenter(new THREE.Vector3());
+    const sz=box.getSize(new THREE.Vector3());
+    const md=Math.max(sz.x,sz.y,sz.z);
+    const dist=Math.abs(md/(2*Math.tan(camera.fov*(Math.PI/180)/2)))*1.8;
+
+    camera.position.set(cen.x, cen.y+sz.y*.4, cen.z+dist);
+    orbitCtrl.target.copy(cen); orbitCtrl.update();
+
+    const grid=new THREE.GridHelper(Math.max(80,md*2),50,0x252525,0x1a1a1a);
+    grid.position.y=box.min.y+0.01; importGroup.add(grid);
+
+    scene.add(importGroup);
+
+    // Make all stage meshes double-sided (prevents holes from back-face culling)
+    importGroup.traverse(obj=>{
+      if(!obj.isMesh) return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach(m=>{ if(m) m.side = THREE.DoubleSide; });
+    });
+
+    // Lock Stage + turntable meshes: keep original material, tint grey, non-selectable
+    turntableA = null; turntableB = null; led1UpMesh = null;
+    _turntableUIBuilt = false; // 重載模型時重置，讓 buildTurntableUI 重新綁定
+    importGroup.traverse(obj=>{
+      // Save LED-1 UP reference for elevation control
+      if(obj.isMesh && /^LED[-_]1[\s_]UP$/i.test(obj.name)) {
+        led1UpMesh = obj;
+        led1UpInitY = obj.position.y;
+      }
+      // Stage + turntable platforms
+      if(obj.isMesh && (obj.name==='Stage' || /^LED[23][-_]Stage$/i.test(obj.name))){
+        // Keep original material but ensure it's grey and visible
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(m => {
+          if (m) {
+            if (m.color) m.color.set(0x999999);
+            m.side = THREE.DoubleSide;
+            m.polygonOffset = true;
+            m.polygonOffsetFactor = 1;
+            m.polygonOffsetUnits = 1;
+          }
+        });
+        obj.renderOrder = -1;
+        obj.userData.locked = true;
+        if(/^LED2[-_]Stage$/i.test(obj.name)) turntableA = obj;
+        if(/^LED3[-_]Stage$/i.test(obj.name)) turntableB = obj;
+      }
+    });
+
+    // Auto-detect LED panels (name starts with "led", exclude "-none" cabinet meshes and turntable platforms)
+    let autoCount=0;
+    importGroup.traverse(obj=>{
+      if(obj.isMesh && /(?:^|[-_ ])led/i.test(obj.name) && !/-none$/i.test(obj.name) && !/[-_]Stage$/i.test(obj.name)){
+        addPanel(obj, obj.name, false); autoCount++;
+      }
+    });
+
+    // Rebuild turntable UI after model loads
+    buildTurntableUI();
+
+    // Auto-assign groups + defaults
+    panels.forEach(p=>{
+      if(/led-pro/i.test(p.name)){
+        p.group = 'projector';
+        // mapping surface default opacity 50%
+        if(/-mapping$/i.test(p.name)){
+          p.params.opacity = 0.5;
+          p.mat.uniforms.opacity.value = 0.5;
+        }
+      }
+    });
+
+    // Sort panels: Ring → pro-mapping → loor → PGM → plane (A/B/C/D)
+    const order = n => {
+      if(/ring/i.test(n))    return 0;
+      if(/mapping/i.test(n)) return 1;
+      if(/loor/i.test(n))    return 2;
+      if(/pgm/i.test(n))     return 3;
+      return 4;
+    };
+    panels.sort((a,b)=> order(a.name)-order(b.name));
+
+    rebuildUI(); rebuildGroupUI(); gatherMeshes();
+    autoRestore(); // restore saved settings after model loads
+    toast(`✓ 載入模型，偵測到 ${autoCount} 個 LED 面板`, 'info', 4000);
+  }, xhr=>{
+    if(xhr.total > 0){
+      const pct = Math.round(xhr.loaded/xhr.total*100);
+      const bar = document.getElementById('_load-bar');
+      const lbl = document.getElementById('_load-pct');
+      if(bar) bar.style.width = pct+'%';
+      if(lbl) lbl.textContent = pct+'%';
+    }
+  }, err=>{
+    document.getElementById('_load-ov')?.remove();
+    console.error('autoLoadStage failed:', err);
+    toast('⚠️ 無法載入 stage.gltf\n請確認檔案與 index.html 在同一資料夾\n或使用左側「Stage Model」按鈕手動選取', 'warn', 10000);
+  });
+}
+
+function handleStage(file){
+  if(!file) return;
+
+  // Clear existing panels
+  panels.forEach(p=>{
+    if(p.video){ p.video.pause(); if(p.video._ou) URL.revokeObjectURL(p.video._ou); }
+    if(p.tex) p.tex.dispose();
+  });
+  panels.length=0; selPanel=null;
+
+  if(defGroup){ scene.remove(defGroup); defGroup=null; }
+  if(importGroup){ scene.remove(importGroup); importGroup=null; }
+
+  const url=URL.createObjectURL(file);
+  const loader=new THREE.GLTFLoader();
+  loader.load(url, gltf=>{
+    URL.revokeObjectURL(url);
+    importGroup=gltf.scene; importGroup.name='imported';
+
+    const box=new THREE.Box3().setFromObject(importGroup);
+    const cen=box.getCenter(new THREE.Vector3());
+    const sz=box.getSize(new THREE.Vector3());
+    const md=Math.max(sz.x,sz.y,sz.z);
+    const fov=camera.fov*(Math.PI/180);
+    const dist=Math.abs(md/(2*Math.tan(fov/2)))*1.8;
+
+    camera.position.set(cen.x, cen.y+sz.y*.5, cen.z+dist);
+    orbitCtrl.target.copy(cen); orbitCtrl.update();
+
+    const gridSz=Math.max(80,md*2.2);
+    const g=new THREE.GridHelper(gridSz,50,0x252525,0x1a1a1a);
+    g.position.y=box.min.y+0.01;
+    importGroup.add(g);
+
+    scene.add(importGroup);
+
+    // Double-sided: prevent holes from back-face culling
+    importGroup.traverse(obj=>{
+      if(!obj.isMesh) return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach(m=>{ if(m) m.side = THREE.DoubleSide; });
+    });
+
+    gatherMeshes();
+
+    // Auto-detect LED panels: any mesh whose name contains "led" (case-insensitive)
+    let autoCount = 0;
+    importGroup.traverse(obj => {
+      if(obj.isMesh && /(?:^|[-_ ])led/i.test(obj.name)){
+        addPanel(obj, obj.name, false);
+        autoCount++;
+      }
+    });
+
+    rebuildUI();
+    if(autoCount > 0){
+      toast(`✓ Loaded "${file.name}"\n自動偵測到 ${autoCount} 個 LED 面板 (名稱含 "led")`, 'info', 5000);
+    } else {
+      toast(`✓ Loaded "${file.name}"\n未偵測到含 "led" 的 Mesh，請手動點選面板。`, 'warn', 5000);
+    }
+  }, undefined, err=>{
+    URL.revokeObjectURL(url);
+    toast(`Failed to load "${file.name}": ${err.message}`,'err',5000);
+  });
+}
+
+// ═══════════════════════════════════════════════
+// SESSION
+// ═══════════════════════════════════════════════
+
+const LS_KEY = 'led-stage-session';
+
+// Auto-save to localStorage (called after any setting change)
+function autoSave(){
+  try{
+    const data={ version:1, panels: panels.map(p=>({
+      name:p.name, group:p.group, enabled:p.enabled, params:{...p.params}
+    }))};
+    localStorage.setItem(LS_KEY, JSON.stringify(data));
+  }catch(e){}
+}
+
+// Restore settings from localStorage after model loads
+function autoRestore(){
+  try{
+    const raw = localStorage.getItem(LS_KEY);
+    if(!raw) return;
+    const data = JSON.parse(raw);
+    if(!data.panels) return;
+    let restored=0;
+    data.panels.forEach(s=>{
+      const p = panels.find(x=>x.name===s.name);
+      if(!p) return;
+      if(s.group!==undefined) p.group=s.group;
+      if(s.enabled!==undefined) setPanelEnabled(p, s.enabled);
+      if(s.params){
+        Object.assign(p.params, s.params);
+        Object.keys(s.params).forEach(k=>{
+          if(p.mat.uniforms[k]) p.mat.uniforms[k].value=s.params[k];
+        });
+      }
+      restored++;
+    });
+    rebuildUI(); rebuildGroupUI();
+    if(restored>0) toast(`✓ 上次設定已自動還原 (${restored} 個面板)`,'info',3000);
+  }catch(e){}
+}
+
+function saveSession(){
+  const data={
+    version:1,
+    panels: panels.map(p=>({name:p.name,file:p.file,group:p.group,enabled:p.enabled,params:{...p.params}}))
+  };
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download=`led-stage-${Date.now()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Session exported.','info',2000);
+}
+
+function loadSession(file){
+  const r=new FileReader();
+  r.onload=e=>{
+    try{
+      const d=JSON.parse(e.target.result);
+      if(!d.panels) throw new Error('Invalid session file.');
+      const needFiles=[];
+      d.panels.forEach(s=>{
+        const p=panels.find(x=>x.name===s.name);
+        if(p){
+          Object.assign(p.params,s.params);
+          Object.keys(s.params).forEach(k=>{
+            if(p.mat.uniforms[k]) p.mat.uniforms[k].value=s.params[k];
+          });
+          if(p.video) p.video.loop=s.params.loop;
+          if(s.group!==undefined){ p.group=s.group; }
+          if(s.enabled!==undefined){ setPanelEnabled(p, s.enabled); }
+        }
+        if(s.file) needFiles.push(s.file);
+      });
+      rebuildUI();
+      if(needFiles.length) toast(`Session loaded.\nPlease re-import videos:\n${needFiles.join('\n')}`,'warn',8000);
+      else toast('Session loaded.','info',2000);
+    }catch(err){ toast(`Session error: ${err.message}`,'err',4000); }
+  };
+  r.readAsText(file);
+}
+
+// ═══════════════════════════════════════════════
+// PROJECT EXPORT / IMPORT (Player mode)
+// ═══════════════════════════════════════════════
+
+function exportProject(){
+  const data={
+    version:1,
+    exportedAt: new Date().toISOString(),
+    panels: panels.map(p=>({
+      name: p.name,
+      group: p.group,
+      enabled: p.enabled,
+      videoFile: p.file || null,   // filename only — put videos in same folder as project.json
+      audio: p.audio !== undefined ? p.audio : false,
+      params: {...p.params}
+    }))
+  };
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(blob);
+  a.download='project.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('✓ 播放器專案已匯出：project.json\n請將影片檔放在同一資料夾','info',5000);
+}
+
+async function loadProject(file){
+  try{
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if(!data.panels) throw new Error('無效的專案檔案');
+
+    // In Electron, File objects have a .path property (absolute path)
+    const isElectron = navigator.userAgent.includes('Electron');
+    let projectDir = '';
+    if(isElectron && file.path){
+      projectDir = file.path.replace(/[\\/][^\\/]+$/, ''); // dirname
+    }
+
+    // Update project name in player bar
+    document.getElementById('player-project-name').textContent = '— ' + file.name.replace('.json','');
+
+    // Restore panel settings
+    data.panels.forEach(s=>{
+      const p = panels.find(x=>x.name===s.name);
+      if(!p) return;
+      if(s.group!==undefined) p.group=s.group;
+      if(s.enabled!==undefined) setPanelEnabled(p, s.enabled);
+      if(s.params){
+        Object.assign(p.params, s.params);
+        Object.keys(s.params).forEach(k=>{
+          if(p.mat?.uniforms[k]) p.mat.uniforms[k].value=s.params[k];
+        });
+      }
+    });
+
+    // Load videos
+    let loaded=0, missing=[];
+    for(const s of data.panels){
+      if(!s.videoFile) continue;
+      const p = panels.find(x=>x.name===s.name);
+      if(!p) continue;
+
+      if(isElectron && projectDir){
+        // Electron: load via file:// absolute path
+        const absPath = projectDir + '/' + s.videoFile;
+        const url = 'file:///' + absPath.replace(/\\/g,'/').replace(/^\/+/,'');
+        try{
+          await assignVidFromUrl(p, url, s.videoFile);
+          loaded++;
+        }catch(e){ missing.push(s.videoFile); }
+      } else {
+        missing.push(s.videoFile);
+      }
+    }
+
+    rebuildUI(); rebuildGroupUI();
+    if(missing.length){
+      toast(`⚠️ 找不到影片：${missing.join(', ')}\n請確認影片與 project.json 在同一資料夾`,'warn',8000);
+    } else {
+      toast(`✓ 專案載入完成，${loaded} 個影片已就緒`,'info',3000);
+    }
+  }catch(err){
+    toast(`專案載入失敗：${err.message}`,'err',5000);
+  }
+}
+
+// Load video into panel from a URL (used by loadProject in Electron)
+function assignVidFromUrl(panel, url, filename){
+  return new Promise((resolve, reject)=>{
+    const v = document.createElement('video');
+    v.loop = panel.params.loop !== false;
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = 'auto';
+    v.src = url;
+    v.addEventListener('canplay', ()=>{
+      if(panel.video){ panel.video.pause(); if(panel.video._ou) URL.revokeObjectURL(panel.video._ou); }
+      if(panel.tex) panel.tex.dispose();
+      panel.video = v;
+      panel.file = filename;
+      panel.tex = new THREE.VideoTexture(v);
+      panel.tex.minFilter = THREE.LinearFilter;
+      panel.tex.magFilter = THREE.LinearFilter;
+      panel.tex.format = THREE.RGBFormat;
+      if(panel.mat?.uniforms.map) panel.mat.uniforms.map.value = panel.tex;
+      if(panel.mat?.uniforms.hasVideo) panel.mat.uniforms.hasVideo.value = 1.0;
+      v.play().catch(()=>{});
+      resolve();
+    }, {once:true});
+    v.addEventListener('error', ()=>reject(new Error('video load failed')), {once:true});
+    setTimeout(()=>reject(new Error('timeout')), 10000);
+  });
+}
+
+// ═══════════════════════════════════════════════
+// GLOBAL PLAYBACK
+// ═══════════════════════════════════════════════
+
+function gPlay()  { panels.forEach(p=>{ if(p.video) p.video.play(); }); }
+function gPause() { panels.forEach(p=>{ if(p.video) p.video.pause(); }); }
+function gStop()  { panels.forEach(p=>{ if(p.video){ p.video.pause(); p.video.currentTime=0; } }); }
+
+// ═══════════════════════════════════════════════
+// TOAST
+// ═══════════════════════════════════════════════
+
+let toastTO=null;
+function toast(msg, type='info', dur=3000){
+  const el=document.getElementById('toast');
+  el.textContent=msg;
+  el.className=type==='warn'?'warn':type==='err'?'err':'';
+  el.style.display='block';
+  clearTimeout(toastTO);
+  if(dur > 0) toastTO=setTimeout(()=>el.style.display='none',dur);
+}
+
+// ═══════════════════════════════════════════════
+// WALK MOVEMENT
+// ═══════════════════════════════════════════════
+
+const clock=new THREE.Clock();
+
+function walkTick(dt){
+  if(!walkLocked) return;
+  const fast=keys['ShiftLeft']||keys['ShiftRight'];
+  const sp=(fast?14:6)*dt;
+  if(keys['KeyW']||keys['ArrowUp'])    walkCtrl.moveForward(sp);
+  if(keys['KeyS']||keys['ArrowDown'])  walkCtrl.moveForward(-sp);
+  if(keys['KeyA']||keys['ArrowLeft'])  walkCtrl.moveRight(-sp);
+  if(keys['KeyD']||keys['ArrowRight']) walkCtrl.moveRight(sp);
+  if(keys['KeyE']||keys['Space'])      camera.position.y+=sp;
+  if(keys['KeyQ'])                     camera.position.y-=sp;
+  camera.position.y=Math.max(0.5, camera.position.y);
+}
+
+// ═══════════════════════════════════════════════
+// RENDER LOOP
+// ═══════════════════════════════════════════════
+
+let _lastMemLog = 0;
+function loop(){
+  requestAnimationFrame(loop);
+  const dt=Math.min(clock.getDelta(),.1);
+
+  // FPS
+  fCount++;
+  const now=performance.now();
+  if(now-fLast>=500){
+    document.getElementById('fps-disp').textContent=`FPS: ${Math.round(fCount/((now-fLast)/1000))}`;
+    fCount=0; fLast=now;
+  }
+
+  // 記憶體監控（每 60 秒記錄一次）
+  if(now-_lastMemLog>60000){
+    _lastMemLog=now;
+    const mem=renderer.info.memory;
+    const heapMB = performance.memory ? Math.round(performance.memory.usedJSHeapSize/1048576) + 'MB' : 'N/A';
+    console.log(`[MEM] GPU: ${mem.textures} tex, ${mem.geometries} geo | JS Heap: ${heapMB}`);
+  }
+
+  if(mode==='orbit') orbitCtrl.update();
+  else walkTick(dt);
+
+  // Update video textures every frame
+  panels.forEach(p=>{
+    if(p.tex && p.video && p.video.readyState>=2) p.tex.needsUpdate=true;
+  });
+
+  renderer.render(scene,camera);
+}
+
+// ═══════════════════════════════════════════════
+// EVENTS
+// ═══════════════════════════════════════════════
+
+function setupEvents(){
+  const vp=document.getElementById('vp');
+
+  // Resize: CSS-Scale-First 策略
+  // 拖動中只用 CSS 縮放（流暢但模糊），停止後才重建 GPU backbuffer
+  let _resizeCommitTimer = null;
+  let _lastRendererW = vp.clientWidth, _lastRendererH = vp.clientHeight;
+  const canvas = document.getElementById('c3');
+
+  function isNdiConnected() { return panels.some(p => p.ndiSdkSource); }
+  let _resizePauseTimer = null;
+  let _wasPausedBeforeResize = false;
+  let _resizeActive = false;
+
+  new ResizeObserver(()=>{
+    const w = vp.clientWidth, h = vp.clientHeight;
+    if (w <= 0 || h <= 0) return;
+
+    // 即時 CSS 縮放（不觸發 GPU backbuffer 重建）
+    if (_lastRendererW > 0 && _lastRendererH > 0) {
+      canvas.style.transformOrigin = '0 0';
+      canvas.style.transform = `scale(${w/_lastRendererW}, ${h/_lastRendererH})`;
+    }
+
+    // NDI：resize 開始時暫停 IPC 送幀（減少 ~150MB/s 開銷），停止後恢復
+    if (isNdiConnected()) {
+      if (!_resizeActive) {
+        _resizeActive = true;
+        _wasPausedBeforeResize = _ndiPaused;
+        _ndiPaused = true;
+        window.electronAPI?.ndiPauseFrames?.('throttle');  // resize 期間降頻到 ~10fps
+      }
+      clearTimeout(_resizePauseTimer);
+      _resizePauseTimer = setTimeout(() => {
+        _resizeActive = false;
+        if (!_wasPausedBeforeResize) _ndiPaused = false;
+        window.electronAPI?.ndiPauseFrames?.(false);
+      }, 150);
+    }
+
+    // 停止縮放 100ms 後才真正 setSize + 更新 camera
+    clearTimeout(_resizeCommitTimer);
+    _resizeCommitTimer = setTimeout(() => {
+      canvas.style.transform = '';
+      canvas.style.transformOrigin = '';
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
+      _lastRendererW = w; _lastRendererH = h;
+    }, 250);
+  }).observe(vp);
+
+  // Viewport mouse
+  vp.addEventListener('mousedown',e=>{ isMouseDown=true; mdX=e.clientX; mdY=e.clientY; mouseMoved=false; });
+  document.addEventListener('mousemove',e=>{
+    if(isMouseDown){ const dx=e.clientX-mdX, dy=e.clientY-mdY; if(dx*dx+dy*dy>16) mouseMoved=true; }
+  });
+  document.addEventListener('mouseup',()=>isMouseDown=false);
+  vp.addEventListener('click',onVPClick);
+
+  // Keys
+  document.addEventListener('keydown',e=>{
+    keys[e.code]=true;
+    if(e.code==='KeyF') setMode(mode==='orbit'?'walk':'orbit');
+    if(e.code==='Space'&&mode==='walk') e.preventDefault();
+    // Camera Presets: 數字鍵 1-5
+    if(e.code>='Digit1'&&e.code<='Digit5'&&!e.ctrlKey&&!e.altKey&&!e.metaKey){
+      applyCameraPreset(parseInt(e.code.slice(5))-1);
+    }
+    // 全螢幕 F11（隱藏側欄 + 頂部列）
+    if(e.code==='F11'){
+      e.preventDefault();
+      toggleProductionMode();
+    }
+  });
+  document.addEventListener('keyup',e=>{ keys[e.code]=false; });
+
+  // Pointer lock error
+  document.addEventListener('pointerlockerror',()=>{
+    toast('Could not lock pointer. Click the viewport and try again.','warn',3000);
+  });
+
+  // UI Buttons
+  document.getElementById('btn-mode').addEventListener('click',()=>setMode(mode==='orbit'?'walk':'orbit'));
+  document.getElementById('btn-stage').addEventListener('click',()=>document.getElementById('f-stage').click());
+  document.getElementById('btn-video').addEventListener('click',()=>document.getElementById('f-video').click());
+  document.getElementById('btn-video-all').addEventListener('click',()=>document.getElementById('f-video-all').click());
+  // 網頁版來源輸入：本地上傳 + GDrive URL
+  document.getElementById('btn-video-all-web').addEventListener('click', () => {
+    document.getElementById('f-video-all').click();
+  });
+
+  document.getElementById('btn-gdrive-load').addEventListener('click', () => {
+    const input = document.getElementById('gdrive-url');
+    const url = input.value.trim();
+    if (!url) { toast('請貼上 Google Drive 連結', 'warn', 2000); return; }
+    const fileId = parseGDriveURL(url);
+    if (!fileId) {
+      toast('無法解析連結。確認是 Google Drive 公開連結\n或直接貼 file ID', 'warn', 4000);
+      return;
+    }
+    const directURL = gdriveDirectURL(fileId);
+    loadVideoFromURL(directURL, `GDrive: ${fileId.substring(0, 12)}…`);
+  });
+
+  // Enter 鍵直接載入
+  document.getElementById('gdrive-url').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('btn-gdrive-load').click();
+  });
+
+  // Sidebar collapse/expand
+  document.getElementById('btn-sidebar-toggle').addEventListener('click', () => {
+    const sidebar = document.getElementById('sidebar');
+    const btn = document.getElementById('btn-sidebar-toggle');
+    sidebar.classList.toggle('collapsed');
+    btn.textContent = sidebar.classList.contains('collapsed') ? '▶' : '◀';
+    // Trigger resize so renderer adjusts
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 300);
+  });
+
+  // 網頁版：移除 Pin on top（瀏覽器不支援）
+
+  // ── 錄影（串流寫入，不佔 RAM）──
+  let _recorder = null, _recStart = 0, _recTimerID = null, _recAudioStream = null;
+
+  document.getElementById('btn-rec').addEventListener('click', async () => {
+    const btn = document.getElementById('btn-rec');
+    const timerEl = document.getElementById('rec-timer');
+
+    if (_recorder && _recorder.state === 'recording') {
+      _recorder.stop();
+      return;
+    }
+
+    // 影像：只錄 3D 畫布
+    const canvas = document.getElementById('c3');
+    const videoStream = canvas.captureStream(30);
+
+    // 音訊：系統喇叭聲音（getDisplayMedia 只取音軌）
+    _recAudioStream = null;
+    try {
+      const ds = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+      ds.getVideoTracks().forEach(t => t.stop()); // 丟掉螢幕影像
+      if (ds.getAudioTracks().length > 0) _recAudioStream = ds;
+    } catch(e) {}
+
+    const tracks = [...videoStream.getTracks()];
+    const hasAudio = !!_recAudioStream;
+    if (hasAudio) {
+      tracks.push(..._recAudioStream.getAudioTracks());
+      toast('🔊 錄影含系統音訊', 'info', 2000);
+    } else {
+      toast('⚠ 錄影將無聲（無法取得系統音訊）', 'warn', 4000);
+    }
+
+    // MP4 錄影（記憶體累積，錄完一次寫入）
+    let _recChunks = [];
+    const mimeTypes = [
+      'video/mp4;codecs=avc1,mp4a.40.2',
+      'video/mp4;codecs=avc1',
+      'video/mp4',
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+    ];
+    const mimeType = mimeTypes.find(m => MediaRecorder.isTypeSupported(m));
+    if (!mimeType) { toast('瀏覽器不支援錄影格式', 'warn', 4000); return; }
+    _recorder = new MediaRecorder(new MediaStream(tracks), { mimeType, videoBitsPerSecond: 12000000, audioBitsPerSecond: 320000 });
+
+    _recorder.ondataavailable = (e) => { if (e.data.size > 0) _recChunks.push(e.data); };
+
+    _recorder.onstop = async () => {
+      clearInterval(_recTimerID);
+      btn.textContent = '⏺ 錄影';
+      btn.style.color = '';
+      btn.style.borderColor = '';
+      timerEl.style.display = 'none';
+      if (_recAudioStream) { _recAudioStream.getTracks().forEach(t => t.stop()); _recAudioStream = null; }
+
+      const blob = new Blob(_recChunks, { type: mimeType });
+      _recChunks = [];
+      const ext = mimeType.includes('webm') ? 'webm' : 'mp4';
+      const ts = new Date().toISOString().slice(0,19).replace(/[:.]/g,'-');
+      const filename = `舞臺預覽_${ts}.${ext}`;
+      // 網頁版：用瀏覽器 download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
+      toast(`✓ 錄影已下載：${filename}`, 'info', 5000);
+    };
+
+    _recorder.start(1000);
+    _recStart = Date.now();
+    btn.textContent = hasAudio ? '⏹ 停止' : '⏹🔇 停止（無聲）';
+    btn.style.color = '#ff4444';
+    btn.style.borderColor = '#ff4444';
+    timerEl.style.display = '';
+
+    _recTimerID = setInterval(() => {
+      const sec = Math.floor((Date.now() - _recStart) / 1000);
+      timerEl.textContent = `${String(Math.floor(sec/60)).padStart(2,'0')}:${String(sec%60).padStart(2,'0')}`;
+    }, 500);
+  });
+
+  // ── Test Pattern: bypass NDI, directly test rendering pipeline ──
+  document.getElementById('btn-test-pattern').addEventListener('click',()=>{
+    console.log('[TEST] Generating test pattern for all panels...');
+    const colors = {
+      'LED_Sky':    [255,200,0],   'LED_1_UP':   [0,150,255],  'LED_1_DOWN': [0,200,100],
+      'LED_2':      [255,80,80],   'LED_3':      [80,255,80],  'LED_4':      [80,80,255],
+      'LED2_1':     [255,128,0],   'LED2_2':     [255,160,0],  'LED2_3':     [255,128,50],
+      'LED2_4':     [255,160,50],  'LED2_5':     [255,128,100],'LED2_6':     [255,160,100],
+      'LED3_1':     [0,255,128],   'LED3_2':     [0,255,160],  'LED3_3':     [0,255,200],
+      'LED3_4':     [50,255,128],  'LED3_5':     [50,255,160], 'LED3_6':     [50,255,200],
+    };
+    let count = 0;
+    panels.forEach(p => {
+      const region = CANVAS_MAP[p.name];
+      if (!region) { console.log(`[TEST] No CANVAS_MAP for "${p.name}"`); return; }
+      const cw = region.w, ch = region.h;
+      const buf = new Uint8Array(cw * ch * 4);
+      const c = colors[p.name] || [128,128,128];
+      // Fill with solid color + checkerboard pattern for visibility
+      for (let y = 0; y < ch; y++) {
+        for (let x = 0; x < cw; x++) {
+          const i = (y * cw + x) * 4;
+          const checker = ((Math.floor(x/40) + Math.floor(y/40)) % 2 === 0) ? 1.0 : 0.7;
+          buf[i]   = Math.floor(c[0] * checker);
+          buf[i+1] = Math.floor(c[1] * checker);
+          buf[i+2] = Math.floor(c[2] * checker);
+          buf[i+3] = 255;
+        }
+      }
+      const tex = new THREE.DataTexture(buf, cw, ch, THREE.RGBAFormat);
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.flipY = false;
+      tex.needsUpdate = true;
+      if (p.mat?.uniforms.map) p.mat.uniforms.map.value = tex;
+      if (p.mat?.uniforms.hasVideo) p.mat.uniforms.hasVideo.value = 1.0;
+      p.mat.uniforms.ndiCropOffset.value.set(0, 0);
+      p.mat.uniforms.ndiCropSize.value.set(1, 1);
+      p.ndi = true;
+      count++;
+      console.log(`[TEST] ✓ ${p.name} → ${cw}×${ch} color=(${c.join(',')})`);
+    });
+    toast(`🧪 測試圖案已套用到 ${count} 個面板`, 'info', 4000);
+  });
+
+  document.getElementById('btn-reset').addEventListener('click',()=>{
+    panels.forEach(p=>{
+      if(p.video){p.video.pause();if(p.video._ou)URL.revokeObjectURL(p.video._ou);}
+      if(p.tex)p.tex.dispose();
+    });
+    panels.length=0; selPanel=null;
+    if(importGroup){scene.remove(importGroup);importGroup=null;}
+    buildDefault(); doPreset('foh');
+    toast('Reset to default stage.','info',2000);
+  });
+
+  document.getElementById('btn-gplay').addEventListener('click', gPlay);
+  document.getElementById('btn-gpause').addEventListener('click',gPause);
+  document.getElementById('btn-gstop').addEventListener('click', gStop);
+
+  const saveFn=()=>saveSession();
+  const loadFn=()=>document.getElementById('f-sess').click();
+  document.getElementById('btn-save').addEventListener('click', saveFn);
+  document.getElementById('btn-load').addEventListener('click', loadFn);
+  document.getElementById('btn-save2').addEventListener('click',saveFn);
+  document.getElementById('btn-load2').addEventListener('click',loadFn);
+
+  document.getElementById('btn-export-project')?.addEventListener('click', exportProject);
+  document.getElementById('btn-load-project')?.addEventListener('click', ()=>document.getElementById('f-project').click());
+  document.getElementById('f-project').addEventListener('change', e=>{ if(e.target.files[0]) loadProject(e.target.files[0]); e.target.value=''; });
+  document.getElementById('btn-fullscreen')?.addEventListener('click', ()=>{
+    if(!document.fullscreenElement) document.documentElement.requestFullscreen?.();
+    else document.exitFullscreen?.();
+  });
+
+  document.getElementById('f-stage').addEventListener('change',e=>{ if(e.target.files[0]) handleStage(e.target.files[0]); e.target.value=''; });
+  document.getElementById('f-video').addEventListener('change',e=>{ if(e.target.files[0]) handleVid(e.target.files[0]); e.target.value=''; });
+  document.getElementById('f-video-all').addEventListener('change',e=>{ if(e.target.files[0]) handleVidAll(e.target.files[0]); e.target.value=''; });
+  document.getElementById('f-sess').addEventListener('change', e=>{ if(e.target.files[0]) loadSession(e.target.files[0]); e.target.value=''; });
+
+  // Drag & Drop
+  document.addEventListener('dragover', e=>{
+    e.preventDefault();
+    document.getElementById('drop-ov').style.display='flex';
+  });
+  document.addEventListener('dragleave',e=>{
+    if(!e.relatedTarget) document.getElementById('drop-ov').style.display='none';
+  });
+  document.addEventListener('drop',e=>{
+    e.preventDefault();
+    document.getElementById('drop-ov').style.display='none';
+    [...e.dataTransfer.files].forEach(f=>{
+      const n=f.name.toLowerCase();
+      if(n.endsWith('.glb')||n.endsWith('.gltf')) handleStage(f);
+      else if(f.type.startsWith('video/')||n.endsWith('.mov')||n.endsWith('.mp4')) handleVid(f);
+      else if(n.endsWith('.json')) loadSession(f);
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════
+// UTILS
+// ═══════════════════════════════════════════════
+
+function fmtTime(s){
+  if(!isFinite(s)) return '0:00';
+  return `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+}
+
+// ═══════════════════════════════════════════════
+// START
+// ═══════════════════════════════════════════════
+
+init();
+</script>
+
+<!-- HELP MODAL -->
+<div id="help-overlay" style="display:none">
+  <div id="help-modal">
+    <div id="help-hdr">
+      <span>使用說明 &nbsp;·&nbsp; User Guide</span>
+      <button id="help-close">✕</button>
+    </div>
+    <div id="help-tabs">
+      <button class="htab active" data-tab="ae-setup">AE NDI 設定</button>
+      <button class="htab" data-tab="orbit">ORBIT 模式</button>
+      <button class="htab" data-tab="walk">WALK 模式</button>
+      <button class="htab" data-tab="ui">介面操作</button>
+    </div>
+    <div id="help-body">
+
+      <!-- ── AE NDI SETUP TAB ── -->
+      <div class="htab-content active" data-tab="ae-setup">
+        <div class="hgroup">
+          <div class="hgroup-title">第一步：安裝 NDI Tools</div>
+          <div style="font-size:11px;color:var(--text);line-height:1.8;padding:4px 0">
+            <b>Windows 和 Mac 都需要安裝。</b><br>
+            1. 前往 <b>ndi.video/tools</b> 下載 NDI Tools<br>
+            2. 安裝時勾選所有元件（特別是 <b>Adobe Creative Cloud Plugin</b>）<br>
+            3. 安裝完成後<b>重新啟動電腦</b>
+          </div>
+        </div>
+        <div class="hgroup">
+          <div class="hgroup-title">第二步：在 After Effects 開啟 NDI 輸出</div>
+          <div style="font-size:11px;color:var(--text);line-height:1.8;padding:4px 0">
+            <b style="color:#4a9eff">Windows：</b><br>
+            1. 開啟 After Effects 專案<br>
+            2. 上方選單 → <b>Edit → Preferences → Video Preview</b><br>
+            3. 勾選 <b>☑ Enable Mercury Transmit</b>（啟用 Mercury 傳輸）<br>
+            4. 在下方列表中勾選 <b>☑ NDI output</b><br>
+            5. 按 <b>OK</b> 確認<br>
+            <br>
+            <b style="color:#4a9eff">Mac：</b><br>
+            1. 開啟 After Effects 專案<br>
+            2. 上方選單 → <b>After Effects → Settings → Video Preview</b><br>
+            3. 勾選 <b>☑ Enable Mercury Transmit</b><br>
+            4. 在下方列表中勾選 <b>☑ NDI output</b><br>
+            5. 按 <b>OK</b> 確認
+          </div>
+        </div>
+        <div class="hgroup">
+          <div class="hgroup-title">第三步：開始串流</div>
+          <div style="font-size:11px;color:var(--text);line-height:1.8;padding:4px 0">
+            1. 在 AE 中<b>按下播放 ▶</b>（或拖動時間軸）<br>
+            2. AE 會自動透過網路發送 NDI 訊號<br>
+            3. 打開<b>舞臺預覽</b>工具，點擊「🔴 連接 NDI → 所有面板」<br>
+            4. 在彈出的列表中選擇你的電腦名稱（例如 <b>ULTRA9-285K (Adobe After Effects)</b>）<br>
+            5. 面板會自動顯示 AE 畫面，自動對應每個 LED 區域
+          </div>
+        </div>
+        <div class="hgroup">
+          <div class="hgroup-title">常見問題</div>
+          <div style="font-size:11px;color:var(--text);line-height:1.8;padding:4px 0">
+            <b style="color:#ffaa44">Q：找不到 NDI 來源？</b><br>
+            → 確認 AE 的 Video Preview 設定中 Mercury Transmit 和 NDI output 都有勾選<br>
+            → 確認 AE 有在<b>播放狀態</b>（靜止時不會持續送訊號）<br>
+            → 確認兩台電腦在<b>同一個網路</b>（同一個 Wi-Fi 或有線網路）<br>
+            <br>
+            <b style="color:#ffaa44">Q：切換到其他視窗後畫面就斷了？</b><br>
+            → AE 失去焦點時會暫停渲染。建議把 AE 和預覽工具放在<b>不同螢幕</b>上<br>
+            → 或到 AE 設定：<b>Edit → Preferences → Display</b> 確認背景渲染選項<br>
+            <br>
+            <b style="color:#ffaa44">Q：畫面解析度很低？</b><br>
+            → 檢查 AE 預覽視窗右下角的 Resolution 設定<br>
+            → <b>Full</b> = 最高畫質，<b>Half</b> = 1/2，<b>Third</b> = 1/3<br>
+            → 本工具會自動縮放對應，但越高解析度越吃效能<br>
+            <br>
+            <b style="color:#ffaa44">Q：支援哪些畫布尺寸？</b><br>
+            → <b>10912 × 2024</b>：含樂手 LED（轉台背面小面板）<br>
+            → <b>8800 × 2024</b>：純主牆（SKY + LED-1~4）<br>
+            → 工具會根據收到的畫面比例<b>自動偵測並切換</b>佈局
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ORBIT TAB ── -->
+      <div class="htab-content" data-tab="orbit">
+        <div class="hgroup">
+          <div class="hgroup-title">鼠標操作（預設模式）</div>
+          <div class="hmouse">
+            <div class="mdiag">
+              <svg width="58" height="82" viewBox="0 0 58 82">
+                <rect x="4" y="24" width="50" height="54" rx="10" fill="#1e1e1e" stroke="#444"/>
+                <rect x="4" y="24" width="24" height="28" rx="8" fill="#4a9eff" opacity=".85" stroke="#4a9eff"/>
+                <rect x="4" y="24" width="50" height="28" rx="8" fill="none" stroke="#555"/>
+                <line x1="28" y1="24" x2="28" y2="52" stroke="#555" stroke-width="1.5"/>
+                <rect x="21" y="6" width="16" height="19" rx="4" fill="#2a2a2a" stroke="#555"/>
+                <line x1="29" y1="6" x2="29" y2="24" stroke="#555" stroke-width="1.5"/>
+              </svg>
+              <span>左鍵拖拉<br>旋轉視角</span>
+            </div>
+            <div class="mdiag">
+              <svg width="58" height="82" viewBox="0 0 58 82">
+                <rect x="4" y="24" width="50" height="54" rx="10" fill="#1e1e1e" stroke="#444"/>
+                <rect x="4" y="24" width="50" height="28" rx="8" fill="#1e1e1e" stroke="#555"/>
+                <line x1="28" y1="24" x2="28" y2="52" stroke="#555" stroke-width="1.5"/>
+                <rect x="21" y="6" width="16" height="19" rx="4" fill="#4a9eff" opacity=".85" stroke="#4a9eff"/>
+                <line x1="29" y1="6" x2="29" y2="24" stroke="#4a9eff" stroke-width="1.5"/>
+              </svg>
+              <span>滾輪滾動<br>縮放</span>
+            </div>
+            <div class="mdiag">
+              <svg width="58" height="82" viewBox="0 0 58 82">
+                <rect x="4" y="24" width="50" height="54" rx="10" fill="#1e1e1e" stroke="#444"/>
+                <rect x="30" y="24" width="24" height="28" rx="8" fill="#4a9eff" opacity=".85" stroke="#4a9eff"/>
+                <rect x="4" y="24" width="50" height="28" rx="8" fill="none" stroke="#555"/>
+                <line x1="28" y1="24" x2="28" y2="52" stroke="#555" stroke-width="1.5"/>
+                <rect x="21" y="6" width="16" height="19" rx="4" fill="#2a2a2a" stroke="#555"/>
+                <line x1="29" y1="6" x2="29" y2="24" stroke="#555" stroke-width="1.5"/>
+              </svg>
+              <span>右鍵拖拉<br>平移視角</span>
+            </div>
+          </div>
+          <div class="hrow"><div class="hkeys"><kbd>左鍵拖拉</kbd></div><div class="hdesc">旋轉視角</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>右鍵拖拉</kbd></div><div class="hdesc">平移視角</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>滾輪</kbd></div><div class="hdesc">縮放</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>F</kbd></div><div class="hdesc">切換 Walk（步行）模式</div></div>
+        </div>
+        <div class="hgroup">
+          <div class="hgroup-title">相機快捷視角</div>
+          <div class="hrow"><div class="hkeys"><kbd>Front of House</kbd></div><div class="hdesc">觀眾席視角</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>Stage Left</kbd><kbd>Right</kbd></div><div class="hdesc">舞台左側 / 右側視角</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>Bird's Eye</kbd></div><div class="hdesc">俯瞰視角</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>On Stage</kbd></div><div class="hdesc">表演者 POV</div></div>
+        </div>
+      </div>
+
+      <!-- ── WALK TAB ── -->
+      <div class="htab-content" data-tab="walk">
+        <div class="hgroup">
+          <div class="hgroup-title">進入 / 退出 Walk 模式</div>
+          <div class="hrow"><div class="hkeys"><kbd>F</kbd></div><div class="hdesc">切換 Walk / Orbit 模式</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>Click</kbd></div><div class="hdesc">點擊畫面鎖定游標，開始自由環顧</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>Esc</kbd></div><div class="hdesc">解除游標鎖定（仍在 Walk 模式）</div></div>
+        </div>
+        <div class="hgroup">
+          <div class="hgroup-title">移動控制</div>
+          <div class="wasd-grid">
+            <div class="empty"></div><kbd>W</kbd><div class="empty"></div>
+            <kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+          </div>
+          <div class="hrow"><div class="hkeys"><kbd>W</kbd><kbd>S</kbd></div><div class="hdesc">前進 / 後退</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>A</kbd><kbd>D</kbd></div><div class="hdesc">左移 / 右移</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>E</kbd><kbd>Q</kbd></div><div class="hdesc">上升 / 下降</div></div>
+          <div class="hrow">
+            <div class="hkeys"><kbd>Shift</kbd></div>
+            <div class="hdesc">加速衝刺 <small>（移動速度 ×3，配合 WASD / E / Q 使用）</small></div>
+          </div>
+          <div class="hrow"><div class="hkeys" style="min-width:140px;justify-content:flex-end;font-size:10px;color:var(--text-dim)">鼠標移動</div><div class="hdesc">環顧四周 <small>（游標鎖定後）</small></div></div>
+        </div>
+      </div>
+
+      <!-- ── UI TAB ── -->
+      <div class="htab-content" data-tab="ui">
+        <div class="hgroup">
+          <div class="hgroup-title">NDI 連接</div>
+          <div class="hrow"><div class="hkeys" style="min-width:140px;justify-content:flex-end;font-size:10px;color:var(--text-dim)">連接 NDI</div><div class="hdesc">點擊「🔴 連接 NDI → 所有面板」，選擇 AE NDI 來源</div></div>
+          <div class="hrow"><div class="hkeys" style="min-width:140px;justify-content:flex-end;font-size:10px;color:var(--text-dim)">自動偵測佈局</div><div class="hdesc">根據 AE 畫布尺寸自動切換：10912×2024（含樂手 LED）或 8800×2024（純主牆）</div></div>
+          <div class="hrow"><div class="hkeys" style="min-width:140px;justify-content:flex-end;font-size:10px;color:var(--text-dim)">AE 預覽解析度</div><div class="hdesc">支援 Full / Half / Third / Quarter，自動縮放對應</div></div>
+        </div>
+        <div class="hgroup">
+          <div class="hgroup-title">轉台控制</div>
+          <div class="hrow"><div class="hkeys" style="min-width:140px;justify-content:flex-end;font-size:10px;color:var(--text-dim)">轉台 A / B</div><div class="hdesc">拖動角度滑桿旋轉 LED-2（轉台A）和 LED-3（轉台B）</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>A面 0°</kbd><kbd>B面 180°</kbd></div><div class="hdesc">快速切換正面 / 背面</div></div>
+        </div>
+        <div class="hgroup">
+          <div class="hgroup-title">其他功能</div>
+          <div class="hrow"><div class="hkeys"><kbd>📌</kbd></div><div class="hdesc">視窗置頂（Pin on Top）</div></div>
+          <div class="hrow"><div class="hkeys"><kbd>?</kbd></div><div class="hdesc">開啟此說明</div></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded',()=>{
+  const ov=document.getElementById('help-overlay');
+  document.getElementById('btn-help').addEventListener('click',()=>ov.style.display='flex');
+  document.getElementById('help-close').addEventListener('click',()=>ov.style.display='none');
+  ov.addEventListener('click',e=>{ if(e.target===ov) ov.style.display='none'; });
+  document.querySelectorAll('.htab').forEach(tab=>{
+    tab.addEventListener('click',()=>{
+      const t=tab.dataset.tab;
+      document.querySelectorAll('.htab').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('.htab-content').forEach(x=>x.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelector(`.htab-content[data-tab="${t}"]`).classList.add('active');
+    });
+  });
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape') ov.style.display='none'; });
+});
+</script>
+</body>
+</html>
