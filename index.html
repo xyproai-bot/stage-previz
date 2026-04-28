@@ -2887,13 +2887,13 @@ function parseGDriveURL(input) {
   return null;
 }
 
-// Cloudflare Worker proxy URL（可選；>100MB 大檔案需要）
-// 部署 cf-worker/ 之後把 URL 設到 localStorage 'stagepreviz-proxy'
+// Cloudflare Worker proxy — 預設啟用（解決 >100MB 大檔案 + CORS）
+// localStorage 'stagepreviz-proxy' = '' 可停用；設其他 URL 可改用其他 proxy
+const DEFAULT_PROXY = 'https://proxy.haimiaan.com';
 function gdriveDirectURL(fileId) {
-  const proxy = (localStorage.getItem('stagepreviz-proxy') || '').trim();
+  const override = localStorage.getItem('stagepreviz-proxy');
+  const proxy = (override !== null ? override : DEFAULT_PROXY).trim();
   if (proxy) return `${proxy.replace(/\/$/, '')}/?id=${fileId}`;
-  // Direct URL — 適用 <100MB 檔案，CORS 標頭完整
-  // >100MB 會被 Google 強制顯示「無法掃毒」確認頁，需用 proxy 繞過
   return `https://drive.usercontent.google.com/download?id=${fileId}&export=download&confirm=t`;
 }
 
