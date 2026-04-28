@@ -451,6 +451,29 @@ body.mode-director #director-cam-chips{display:flex}
 }
 #btn-share-top:hover{filter:brightness(1.1)}
 
+/* ── Author Info Dialog（首次留言時填名稱／email） ── */
+#author-dialog{
+  position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(6px);
+  display:none;align-items:center;justify-content:center;z-index:1100
+}
+#author-dialog.show{display:flex}
+#author-dialog .share-box{width:420px}
+#author-dialog .field{margin:12px 0}
+#author-dialog .field label{display:block;font-size:11px;color:rgba(255,255,255,.65);margin-bottom:5px;letter-spacing:.5px}
+#author-dialog .field input{
+  width:100%;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.18);
+  color:#fff;padding:9px 11px;border-radius:6px;font-size:13px;font-family:inherit;outline:none;box-sizing:border-box
+}
+#author-dialog .field input:focus{border-color:var(--gt-accent)}
+#author-dialog .actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+#author-dialog button{
+  border:none;border-radius:6px;padding:9px 18px;cursor:pointer;font-size:13px;font-family:inherit;font-weight:600
+}
+#author-dialog .submit{background:var(--gt-accent);color:#000}
+#author-dialog .submit:disabled{opacity:.4;cursor:not-allowed}
+#author-dialog .cancel{background:rgba(255,255,255,.1);color:#fff}
+#author-dialog .hint{font-size:11px;color:rgba(255,255,255,.5);margin-top:6px;line-height:1.5}
+
 /* ── ANNOTATION (標註工具) ── */
 #annotation-canvas{
   position:absolute;inset:0;width:100%;height:100%;
@@ -647,6 +670,26 @@ body.player-mode #main{height:100vh}
     <div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:4px">⚠ 本地檔案無法分享 — 請用 GDrive 公開連結作為來源</div>
     <div style="text-align:right;margin-top:14px">
       <button id="share-close">關閉</button>
+    </div>
+  </div>
+</div>
+
+<!-- Author Info Dialog（首次進入留言模式時詢問） -->
+<div id="author-dialog">
+  <div class="share-box">
+    <h3 id="author-title">👋 留言前先告訴我你是誰</h3>
+    <div class="field">
+      <label for="author-name">你的名字</label>
+      <input type="text" id="author-name" maxlength="40" placeholder="例：Phang">
+    </div>
+    <div class="field" id="author-email-field">
+      <label for="author-email">你的 Email（選填，幫對方知道是誰）</label>
+      <input type="email" id="author-email" maxlength="120" placeholder="phang@example.com">
+    </div>
+    <div class="hint" id="author-hint">這些資訊只存在你的瀏覽器，作為留言作者顯示給看連結的人。</div>
+    <div class="actions">
+      <button class="cancel" id="author-cancel">取消</button>
+      <button class="submit" id="author-submit" disabled>確定</button>
     </div>
   </div>
 </div>
@@ -1655,9 +1698,19 @@ document.addEventListener('DOMContentLoaded',()=>{
     if (dur > 0) syncAllTo(ratio * dur, gtPlaying);
   });
 
+  // 共用：判斷使用者是否正在打字（避免快捷鍵在輸入框觸發）
+  if (typeof window.isTypingInInput !== 'function') {
+    window.isTypingInInput = function() {
+      const el = document.activeElement;
+      if (!el) return false;
+      return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable;
+    };
+  }
+
   // Space 鍵：播放/暫停
   document.addEventListener('keydown', e => {
-    if (e.code === 'Space' && gtRefPanel() && document.activeElement.tagName !== 'INPUT') {
+    if (window.isTypingInInput()) return;
+    if (e.code === 'Space' && gtRefPanel()) {
       e.preventDefault();
       playBtn.click();
     }
@@ -1701,7 +1754,7 @@ function loadCuePoints() {
 }
 // Shift+1-9：跳到對應 cue（避免與相機預設 1-5 衝突）
 document.addEventListener('keydown', e => {
-  if (document.activeElement.tagName === 'INPUT') return;
+  if (window.isTypingInInput && window.isTypingInInput()) return;
   if (e.shiftKey && e.code.startsWith('Digit')) {
     const n = parseInt(e.code.slice(5));
     if (n >= 1 && n <= 9 && _cuePoints[n - 1]) {
@@ -1986,7 +2039,98 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ═══════════════════════════════════════════════
 // COMMENT SYSTEM (Frame.io 風格 — 點畫面留言 + 時間軸綁定)
+// 後端：CF Worker /api/comments + KV
+// session id = hash(src URL).slice(0,16)（deterministic，同支影片即同討論串）
 // ═══════════════════════════════════════════════
+// 注意：DEFAULT_PROXY 是後面才宣告的 const，這裡不能直接 typeof（會 TDZ throw）
+// 用一個 getter 在實際呼叫時才解析
+function getCommentsApi() {
+  const base = (typeof window !== 'undefined' && window.DEFAULT_PROXY)
+    || (typeof DEFAULT_PROXY !== 'undefined' ? DEFAULT_PROXY : 'https://proxy.haimiaan.com');
+  return base + '/api/comments';
+}
+const COMMENTS_POLL_MS = 12000;
+
+// session id：對 src URL 算 SHA-256，取前 16 hex 字元
+async function computeSessionId(src) {
+  if (!src || typeof src !== 'string') return null;
+  if (src.startsWith('blob:') || src.startsWith('file:')) return null; // 本地檔不同步
+  try {
+    const buf = new TextEncoder().encode(src);
+    const hash = await crypto.subtle.digest('SHA-256', buf);
+    const hex = Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
+    return hex.slice(0, 16);
+  } catch (e) { return null; }
+}
+
+// 作者資訊（localStorage stagepreviz-author = { name, email }）
+function getAuthorInfo() {
+  try {
+    const data = localStorage.getItem('stagepreviz-author');
+    if (data) return JSON.parse(data);
+  } catch (e) {}
+  return null;
+}
+function saveAuthorInfo(info) {
+  try { localStorage.setItem('stagepreviz-author', JSON.stringify(info)); } catch (e) {}
+}
+
+// 顯示作者資訊 modal — 回傳 Promise<{name, email} | null>
+function promptAuthorInfo(role) {
+  return new Promise(resolve => {
+    const dialog = document.getElementById('author-dialog');
+    const nameInput = document.getElementById('author-name');
+    const emailInput = document.getElementById('author-email');
+    const emailField = document.getElementById('author-email-field');
+    const submitBtn = document.getElementById('author-submit');
+    const cancelBtn = document.getElementById('author-cancel');
+    const title = document.getElementById('author-title');
+    const hint = document.getElementById('author-hint');
+    if (!dialog) { resolve(null); return; }
+
+    const isDesigner = role === 'designer';
+    title.textContent = isDesigner ? '🎨 設計師：請告訴我你是誰' : '🎬 導演：請告訴我你是誰';
+    emailField.style.display = isDesigner ? '' : 'none';
+    hint.textContent = isDesigner
+      ? '名字會顯示給導演看；email 讓導演知道留言給誰回。資料只存你的瀏覽器。'
+      : '名字會顯示給設計師看，資料只存你的瀏覽器。';
+
+    const existing = getAuthorInfo();
+    nameInput.value = existing?.name || '';
+    emailInput.value = existing?.email || '';
+    submitBtn.disabled = !nameInput.value.trim();
+
+    function cleanup() {
+      submitBtn.onclick = null;
+      cancelBtn.onclick = null;
+      nameInput.oninput = null;
+      nameInput.onkeydown = null;
+      dialog.classList.remove('show');
+    }
+
+    nameInput.oninput = () => { submitBtn.disabled = !nameInput.value.trim(); };
+    nameInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && !submitBtn.disabled) submitBtn.click();
+      else if (e.key === 'Escape') cancelBtn.click();
+    };
+    submitBtn.onclick = () => {
+      const info = {
+        name: nameInput.value.trim().slice(0, 40),
+        email: isDesigner ? (emailInput.value.trim().slice(0, 120) || null) : null,
+        role
+      };
+      if (!info.name) return;
+      saveAuthorInfo(info);
+      cleanup();
+      resolve(info);
+    };
+    cancelBtn.onclick = () => { cleanup(); resolve(null); };
+
+    dialog.classList.add('show');
+    setTimeout(() => nameInput.focus(), 50);
+  });
+}
+
 (function setupComments(){
   const overlay = document.getElementById('comment-overlay');
   const toggleBtn = document.getElementById('btn-comment-toggle');
@@ -2000,7 +2144,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
   let active = false;
   let pendingPin = null; // { x, y, time } 暫存點位等使用者輸入
-  let _comments = []; // [{ id, time, x, y, text, author, role, createdAt }]
+  let _comments = []; // [{ id, time, x, y, text, author, email, role, createdAt }]
+  let _sessionId = null; // 由 _sharedURL 算出
+  let _pollTimer = null;
+  let _lastFetchAt = 0;
 
   function getRole() {
     return document.body.classList.contains('mode-director') ? 'director' : 'designer';
@@ -2013,6 +2160,8 @@ document.addEventListener('DOMContentLoaded', () => {
     toggleBtn.title = on ? '關閉留言模式 (M)' : '開啟留言模式 (M) — 點畫面留言';
     if (typeof orbitCtrl !== 'undefined' && orbitCtrl) orbitCtrl.enabled = !on;
     if (!on) closeInputBox();
+    // active 時開 polling，inactive 時停（節省呼叫）
+    if (on) startPolling(); else stopPolling();
   }
 
   function closeInputBox() {
@@ -2022,15 +2171,94 @@ document.addEventListener('DOMContentLoaded', () => {
     submitBtn.disabled = true;
   }
 
-  function saveComments() {
-    try { localStorage.setItem('stagepreviz-comments', JSON.stringify(_comments)); } catch(e) {}
+  // —— 後端同步 ——
+  async function refreshSessionId() {
+    // _sharedURL 是 let 宣告（line 3273），不能用 window._sharedURL（會 undefined）
+    const newId = await computeSessionId(typeof _sharedURL !== 'undefined' ? _sharedURL : null);
+    if (newId !== _sessionId) {
+      _sessionId = newId;
+      _comments = [];
+      renderAll();
+      if (_sessionId) await fetchComments();
+    }
+    return _sessionId;
   }
-  function loadComments() {
+
+  async function fetchComments() {
+    if (!_sessionId) return;
     try {
-      const data = localStorage.getItem('stagepreviz-comments');
-      if (data) _comments = JSON.parse(data);
-    } catch(e) {}
-    renderAll();
+      const resp = await fetch(`${getCommentsApi()}?session=${encodeURIComponent(_sessionId)}`);
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (Array.isArray(data.comments)) {
+        _comments = data.comments;
+        _lastFetchAt = Date.now();
+        renderAll();
+      }
+    } catch (e) {
+      console.warn('[comments] fetch failed:', e.message);
+    }
+  }
+
+  async function pushComment(c) {
+    if (!_sessionId) {
+      toast('⚠ 沒有來源影片，留言無法同步給其他人', 'warn', 4000);
+      _comments.push(c); renderAll();
+      return false;
+    }
+    try {
+      const resp = await fetch(`${getCommentsApi()}?session=${encodeURIComponent(_sessionId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment: c })
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (Array.isArray(data.comments)) {
+        _comments = data.comments;
+        renderAll();
+      }
+      return true;
+    } catch (e) {
+      console.warn('[comments] push failed:', e.message);
+      toast('⚠ 留言送出失敗，已暫存本地：' + e.message, 'warn', 5000);
+      _comments.push(c); renderAll();
+      return false;
+    }
+  }
+
+  async function deleteComment(id) {
+    if (!_sessionId) {
+      _comments = _comments.filter(x => x.id !== id);
+      renderAll();
+      return;
+    }
+    try {
+      const resp = await fetch(`${getCommentsApi()}?session=${encodeURIComponent(_sessionId)}&id=${encodeURIComponent(id)}`, {
+        method: 'DELETE'
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      if (Array.isArray(data.comments)) {
+        _comments = data.comments;
+        renderAll();
+      }
+    } catch (e) {
+      console.warn('[comments] delete failed:', e.message);
+      toast('⚠ 刪除失敗：' + e.message, 'warn', 4000);
+    }
+  }
+
+  function startPolling() {
+    stopPolling();
+    if (!_sessionId) return;
+    _pollTimer = setInterval(() => {
+      // 太久沒 fetch 才打（避免使用者快速 toggle 浪費）
+      if (Date.now() - _lastFetchAt > COMMENTS_POLL_MS - 500) fetchComments();
+    }, COMMENTS_POLL_MS);
+  }
+  function stopPolling() {
+    if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null; }
   }
 
   function renderAll() {
@@ -2068,7 +2296,10 @@ document.addEventListener('DOMContentLoaded', () => {
       mark.title = `#${idx+1} ${c.author || '匿名'}: ${c.text.slice(0, 50)}…`;
       mark.onclick = (e) => {
         e.stopPropagation();
-        if (_sharedVideo) _sharedVideo.currentTime = c.time;
+        if (_sharedVideo) {
+          _sharedVideo.currentTime = c.time;
+          _sharedVideo.pause();
+        }
         // 閃爍對應 pin
         const pin = overlay.querySelector(`.comment-pin[data-id="${c.id}"]`);
         if (pin) {
@@ -2104,22 +2335,36 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('popup-close').addEventListener('click', () => popup.classList.remove('show'));
   document.getElementById('popup-jump').addEventListener('click', () => {
     const c = _comments.find(x => x.id === popup.dataset.id);
-    if (c && _sharedVideo) { _sharedVideo.currentTime = c.time; popup.classList.remove('show'); }
+    if (c && _sharedVideo) {
+      _sharedVideo.currentTime = c.time;
+      _sharedVideo.pause();
+      popup.classList.remove('show');
+    }
   });
   document.getElementById('popup-delete').addEventListener('click', () => {
     if (!confirm('確定刪除這則留言？')) return;
-    _comments = _comments.filter(x => x.id !== popup.dataset.id);
-    saveComments(); renderAll();
+    const id = popup.dataset.id;
+    deleteComment(id);
     popup.classList.remove('show');
   });
 
-  // Toggle 按鈕
-  toggleBtn.addEventListener('click', () => setActive(!active));
+  // Toggle 按鈕 — 首次進入留言模式時跳作者資訊 modal
+  async function tryToggle() {
+    if (!active) {
+      const info = getAuthorInfo();
+      if (!info || !info.name) {
+        const newInfo = await promptAuthorInfo(getRole());
+        if (!newInfo) return; // 使用者取消
+      }
+    }
+    setActive(!active);
+  }
+  toggleBtn.addEventListener('click', tryToggle);
   document.addEventListener('keydown', e => {
     if (document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA') return;
     if (e.code === 'KeyM' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
       e.preventDefault();
-      setActive(!active);
+      tryToggle();
     }
   });
 
@@ -2144,7 +2389,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const py = e.clientY - vpRect.top + 16;
     inputBox.style.left = Math.min(px, vpRect.width - 300) + 'px';
     inputBox.style.top = Math.min(py, vpRect.height - 180) + 'px';
-    authorLabel.textContent = getRole() === 'director' ? '🎬 導演' : '🎨 設計師';
+    const info = getAuthorInfo();
+    const roleIcon = getRole() === 'director' ? '🎬' : '🎨';
+    authorLabel.textContent = info?.name ? `${roleIcon} ${info.name}` : (getRole() === 'director' ? '🎬 導演' : '🎨 設計師');
     inputBox.classList.add('show');
     setTimeout(() => textArea.focus(), 50);
   });
@@ -2162,29 +2409,40 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   cancelBtn.addEventListener('click', closeInputBox);
-  submitBtn.addEventListener('click', () => {
+  submitBtn.addEventListener('click', async () => {
     if (!pendingPin || !textArea.value.trim()) return;
     const role = getRole();
+    const info = getAuthorInfo() || {};
     const c = {
       id: 'c_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       time: pendingPin.time,
       x: pendingPin.x, y: pendingPin.y,
       text: textArea.value.trim(),
-      author: role === 'director' ? '導演' : '設計師',
+      author: info.name || (role === 'director' ? '導演' : '設計師'),
+      email: info.email || null,
       role,
       createdAt: new Date().toISOString()
     };
-    _comments.push(c);
-    saveComments(); renderAll();
     closeInputBox();
-    toast(`💬 留言已加入 (#${_comments.length}) · ${fmtT(c.time)}`, 'info', 2500);
+    const ok = await pushComment(c);
+    if (ok) {
+      toast(`💬 留言已送出 (#${_comments.length}) · ${fmtT(c.time)}`, 'info', 2500);
+    }
   });
 
   // 視窗 resize 時重新放置 pins
   new ResizeObserver(() => renderAll()).observe(overlay);
 
-  // 啟動
-  window.addEventListener('load', () => setTimeout(loadComments, 1200));
+  // 暴露 hook 給 loadVideoFromURL 呼叫（src 變了 → 重算 session）
+  window._commentsOnSrcChange = () => { refreshSessionId(); };
+
+  // 頁籤回到前景時補拉一次（避免 polling 跨睡眠/切分頁）
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && active && _sessionId) fetchComments();
+  });
+
+  // 啟動：等 _sharedURL 載入後算 session 並抓留言
+  window.addEventListener('load', () => setTimeout(() => refreshSessionId(), 1200));
 })();
 
 // ═══════════════════════════════════════════════
@@ -2260,7 +2518,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   toggleBtn.addEventListener('click', () => setActive(!active));
   document.addEventListener('keydown', e => {
-    if (document.activeElement.tagName === 'INPUT') return;
+    if (window.isTypingInInput && window.isTypingInInput()) return;
     if (e.code === 'KeyD' && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
       e.preventDefault();
       setActive(!active);
@@ -3306,6 +3564,8 @@ async function loadVideoFromURL(url, label) {
   const v = document.createElement('video');
   if (/^https?:\/\//i.test(url)) v.crossOrigin = 'anonymous';
   v.src = url; _sharedURL = url;
+  // 通知留言系統 src 變了 → 重算 session 重抓留言
+  if (typeof window._commentsOnSrcChange === 'function') window._commentsOnSrcChange();
   v.loop = true; // 共用 video 直接 loop（不需要 panel-by-panel 同步）
   v.muted = true; // 預設靜音（音量在 transport bar 控制）
   v.autoplay = true;
@@ -3953,7 +4213,10 @@ function setupEvents(){
 
   // Keys
   document.addEventListener('keydown',e=>{
-    keys[e.code]=true;
+    // 在輸入框打字時，所有快捷鍵都不該觸發（但仍記錄 keys[] 讓 walk 模式正常）
+    const typing = window.isTypingInInput && window.isTypingInInput();
+    if (!typing) keys[e.code]=true;
+    if (typing) return;
     if(e.code==='KeyF') setMode(mode==='orbit'?'walk':'orbit');
     if(e.code==='Space'&&mode==='walk') e.preventDefault();
     // Camera Presets: 數字鍵 1-5

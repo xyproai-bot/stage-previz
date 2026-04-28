@@ -6,3 +6,10 @@ workers_dev = false
 routes = [
   { pattern = "proxy.haimiaan.com", custom_domain = true }
 ]
+
+# Comments KV — 一個 session 一個 key（key = session id, value = JSON array）
+# 建立方式：npx wrangler kv:namespace create COMMENTS
+# 把回傳的 id 填到下方
+[[kv_namespaces]]
+binding = "COMMENTS"
+id = "515cd9eeae9c4930848266f0ef8301cd"
