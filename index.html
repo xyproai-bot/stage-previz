@@ -180,45 +180,64 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.25)}
 /* 舊欄位保留向下相容（ID 可能還有引用） */
 #gt-time{display:none}
 
-/* ── Director Mode 空狀態：載入內容面板 ── */
+/* ── Director Mode 載入內容面板（右上角 popover） ── */
 #director-load-panel{
-  position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  position:absolute;top:70px;right:14px;
   background:var(--gt-bg);backdrop-filter:blur(10px);
-  border:1px solid rgba(255,255,255,.1);border-radius:14px;
-  padding:32px 36px;width:440px;z-index:45;display:none;
-  box-shadow:0 12px 40px rgba(0,0,0,.7);text-align:center
+  border:1px solid rgba(255,255,255,.1);border-radius:12px;
+  padding:18px 20px;width:320px;z-index:55;display:none;
+  box-shadow:0 8px 28px rgba(0,0,0,.6)
 }
-body.mode-director.no-content #director-load-panel{display:block}
+#director-load-panel.show{display:block}
+#director-load-panel .panel-header{
+  display:flex;align-items:center;justify-content:space-between;margin-bottom:10px
+}
 #director-load-panel h2{
-  font-size:18px;color:var(--gt-accent);margin-bottom:8px;letter-spacing:1.5px
+  font-size:14px;color:var(--gt-accent);letter-spacing:1px;margin:0
 }
+#director-load-panel .panel-close{
+  background:none;border:none;color:rgba(255,255,255,.5);cursor:pointer;
+  font-size:18px;padding:0 4px;line-height:1
+}
+#director-load-panel .panel-close:hover{color:#fff}
 #director-load-panel .hint{
-  font-size:13px;color:rgba(255,255,255,.55);margin-bottom:24px;line-height:1.7
+  font-size:11px;color:rgba(255,255,255,.5);margin-bottom:12px;line-height:1.6
 }
-#director-load-panel .input-row{display:flex;gap:8px;margin-bottom:14px}
-#director-load-panel input{
+#director-load-panel .input-row{display:flex;gap:6px;margin-bottom:8px}
+#director-load-panel input[type=text]{
   flex:1;background:rgba(0,0,0,.4);border:1px solid rgba(255,255,255,.15);
-  border-radius:6px;color:#fff;padding:10px 12px;font-size:13px;
-  outline:none;font-family:inherit
+  border-radius:5px;color:#fff;padding:8px 10px;font-size:12px;
+  outline:none;font-family:inherit;min-width:0
 }
-#director-load-panel input:focus{border-color:var(--gt-accent)}
-#director-load-panel button{
+#director-load-panel input[type=text]:focus{border-color:var(--gt-accent)}
+#director-load-panel button#dir-load-btn{
   background:var(--gt-accent);border:none;color:#000;
-  padding:0 18px;border-radius:6px;font-weight:700;cursor:pointer;
-  font-size:13px;font-family:inherit
+  padding:0 14px;border-radius:5px;font-weight:700;cursor:pointer;
+  font-size:12px;font-family:inherit;flex-shrink:0
 }
 #director-load-panel .or{
-  font-size:11px;color:rgba(255,255,255,.4);margin:14px 0;letter-spacing:2px
+  font-size:10px;color:rgba(255,255,255,.35);margin:8px 0;letter-spacing:2px;text-align:center
 }
 #director-load-panel .upload-btn{
-  width:100%;background:rgba(255,255,255,.08);color:#fff;
-  padding:12px;font-size:13px;
-  border:1px dashed rgba(255,255,255,.2);
-  transition:all .15s
+  width:100%;background:rgba(255,255,255,.06);color:#fff;
+  padding:9px;font-size:12px;cursor:pointer;
+  border:1px dashed rgba(255,255,255,.18);border-radius:5px;
+  transition:all .15s;font-family:inherit
 }
 #director-load-panel .upload-btn:hover{
-  background:rgba(255,255,255,.12);border-color:var(--gt-accent)
+  background:rgba(255,255,255,.1);border-color:var(--gt-accent)
 }
+
+/* 重新開啟載入面板的小按鈕（右上角，沒影片時顯示） */
+#dir-reopen-btn{
+  position:absolute;top:70px;right:14px;
+  background:var(--gt-bg);backdrop-filter:blur(8px);
+  border:1px solid rgba(255,255,255,.1);border-radius:6px;
+  padding:8px 14px;color:#fff;font-size:12px;cursor:pointer;
+  display:none;z-index:54;font-family:inherit;letter-spacing:.5px
+}
+#dir-reopen-btn:hover{background:rgba(255,255,255,.12)}
+body.mode-director.no-content.panel-dismissed #dir-reopen-btn{display:block}
 
 /* ── 觸控裝置優化（iPad / 手機） ── */
 .touch #global-transport{padding:18px 22px;border-radius:18px}
@@ -769,20 +788,23 @@ body.player-mode #main{height:100vh}
     <div id="lock-prompt">Click to capture mouse &nbsp;·&nbsp; Walk Mode active</div>
     <div id="sel-hud"></div>
 
-    <!-- Director Mode 空狀態：載入內容面板 -->
+    <!-- Director Mode 載入內容面板（右上角 popover，可關） -->
     <div id="director-load-panel">
-      <h2>🎬 載入預覽內容</h2>
-      <div class="hint">
-        請貼上設計師給你的 Google Drive 連結<br>
-        或從本地上傳影片檔案
+      <div class="panel-header">
+        <h2>🎬 載入預覽內容</h2>
+        <button class="panel-close" id="dir-panel-close" title="關閉">×</button>
       </div>
+      <div class="hint">貼上設計師給你的 Drive 連結，或上傳本地檔案</div>
       <div class="input-row">
-        <input type="text" id="dir-load-url" placeholder="Google Drive 公開連結 / mp4 URL">
+        <input type="text" id="dir-load-url" placeholder="GDrive 連結 / mp4 URL">
         <button id="dir-load-btn">載入</button>
       </div>
       <div class="or">— 或 —</div>
-      <button class="upload-btn" id="dir-upload-btn">📁 上傳本地影片檔案</button>
+      <button class="upload-btn" id="dir-upload-btn">📁 上傳本地影片</button>
     </div>
+
+    <!-- 重新開啟載入面板（沒影片但關了面板時顯示） -->
+    <button id="dir-reopen-btn" title="開啟載入面板">＋ 載入內容</button>
 
     <!-- 載入中 spinner -->
     <div id="video-loading">
@@ -1783,11 +1805,19 @@ function buildShareURL(opts = {}) {
   const u = new URL(location.origin + location.pathname);
   u.searchParams.set('mode', 'director');
 
-  // 影片來源：只能分享 URL 型（本地 blob: 無法跨裝置）
-  const slot = _versionSlots[_currentSlot];
-  if (slot && slot.type === 'url' && opts.includeSlot !== false) {
-    u.searchParams.set('src', slot.url);
-    u.searchParams.set('label', slot.label);
+  // 影片來源邏輯：
+  // 1. 有 slot 且為 URL 型 → 用 slot
+  // 2. 沒有 slot 但 _sharedURL 是 https URL（含 proxy 過的 GDrive） → 直接用
+  // 3. blob: 本地檔 → 沒辦法跨裝置分享
+  if (opts.includeSlot !== false) {
+    const slot = _versionSlots[_currentSlot];
+    if (slot && slot.type === 'url') {
+      u.searchParams.set('src', slot.url);
+      u.searchParams.set('label', slot.label);
+    } else if (_sharedURL && /^https?:\/\//i.test(_sharedURL)) {
+      u.searchParams.set('src', _sharedURL);
+      u.searchParams.set('label', _currentLabel || 'Shared');
+    }
   }
 
   if (opts.includeCam !== false) {
@@ -1826,9 +1856,10 @@ function openShareDialog() {
   refreshURL();
   dialog.classList.add('show');
 
-  // 警告：當前如果是本地檔，URL 不會有 src
+  // 警告：本地檔（blob:）無法跨裝置分享
   const slot = _versionSlots[_currentSlot];
-  const isLocal = slot && slot.type === 'local';
+  const isLocal = (slot && slot.type === 'local') ||
+                  (_sharedURL && _sharedURL.startsWith('blob:'));
   if (isLocal) {
     setTimeout(() => toast('⚠ 當前是本地檔，分享連結不會帶 src\n請改用 GDrive 公開連結後再分享', 'warn', 5000), 100);
   }
@@ -1902,20 +1933,31 @@ if ('ontouchstart' in window || navigator.maxTouchPoints > 0) {
 initRole();
 window.addEventListener('load', () => setTimeout(applyShareParamsAfterLoad, 200));
 
-// ── Director Mode：載入內容面板（沒影片時顯示）──
+// ── Director Mode：載入內容面板（沒影片時顯示，可關閉）──
+let _dirPanelDismissed = false;
+
 function updateDirectorLoadPanel() {
-  if (!document.body.classList.contains('mode-director')) {
-    document.body.classList.remove('no-content');
-    return;
-  }
+  const isDir = document.body.classList.contains('mode-director');
   const hasVideo = !!_sharedVideo;
-  document.body.classList.toggle('no-content', !hasVideo);
+  const panel = document.getElementById('director-load-panel');
+  if (!panel) return;
+
+  document.body.classList.toggle('no-content', isDir && !hasVideo);
+  document.body.classList.toggle('panel-dismissed', _dirPanelDismissed);
+
+  // 顯示條件：是 director、沒影片、沒被關掉
+  panel.classList.toggle('show', isDir && !hasVideo && !_dirPanelDismissed);
+
+  // 影片載入後自動重置 dismissed 狀態（下次無內容時又顯示）
+  if (hasVideo) _dirPanelDismissed = false;
 }
 
 document.addEventListener('DOMContentLoaded', () => {
   const dirUrlInput = document.getElementById('dir-load-url');
   const dirLoadBtn = document.getElementById('dir-load-btn');
   const dirUploadBtn = document.getElementById('dir-upload-btn');
+  const dirCloseBtn = document.getElementById('dir-panel-close');
+  const dirReopenBtn = document.getElementById('dir-reopen-btn');
   if (!dirUrlInput) return;
 
   dirLoadBtn.addEventListener('click', () => {
@@ -1929,8 +1971,15 @@ document.addEventListener('DOMContentLoaded', () => {
   dirUploadBtn.addEventListener('click', () => {
     document.getElementById('f-video-all').click();
   });
+  dirCloseBtn.addEventListener('click', () => {
+    _dirPanelDismissed = true;
+    updateDirectorLoadPanel();
+  });
+  dirReopenBtn.addEventListener('click', () => {
+    _dirPanelDismissed = false;
+    updateDirectorLoadPanel();
+  });
 
-  // 每秒檢查一次（簡單版；真實情況也可用 hook 在 loadVideoFromURL）
   setInterval(updateDirectorLoadPanel, 1000);
   updateDirectorLoadPanel();
 });
