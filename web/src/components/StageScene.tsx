@@ -101,11 +101,17 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setSize(0.9);
 
-    // 用 dragging-changed 同時：暫停 orbit + drag 結束時自動存
+    // hover 在 gizmo 軸上時就先 disable orbit（不然 orbit 先抓走滑鼠 → camera 跟著轉）
+    transform.addEventListener('axis-changed', (event: any) => {
+      orbit.enabled = (event.value === null);
+    });
+
+    // dragging-changed：drag 結束時自動存
     transform.addEventListener('dragging-changed', (event: any) => {
-      orbit.enabled = !event.value;
-      // 從 dragging=true → false 表示鬆開
+      // dragging=false 時鬆開 → 把 orbit 還回去 + 存
       if (event.value === false) {
+        // 沒在 hover 軸上才把 orbit 開回（hover 時 axis 不是 null）
+        if (transform.axis === null) orbit.enabled = true;
         const obj = transform.object;
         const id = selectedIdRef.current;
         if (!obj || !id) return;
@@ -116,6 +122,9 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
           roll:  round(THREE.MathUtils.radToDeg(obj.rotation.z)),
         };
         onTransformRef.current(id, pos, rot);
+      } else {
+        // dragging=true → 確保 orbit disable
+        orbit.enabled = false;
       }
     });
 
