@@ -77,6 +77,13 @@ async function routeRequest(request, env) {
   if (url.pathname === '/api/projects/import' && request.method === 'POST') {
     return importProject(request, env);
   }
+  if (url.pathname === '/api/search' && request.method === 'GET') {
+    return handleSearch(request, env, url);
+  }
+  if (url.pathname.startsWith('/api/cue-templates/') && request.method === 'DELETE') {
+    const tid = url.pathname.replace('/api/cue-templates/', '');
+    return deleteCueTemplate(request, env, tid);
+  }
   if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
     return handleProjectsRouter(request, env, url);
   }
@@ -159,6 +166,12 @@ async function handleProjectsRouter(request, env, url) {
     return exportProject(request, env, projectId);
   }
 
+  if (sub === 'cue-templates') {
+    if (request.method === 'GET') return listCueTemplates(env, projectId);
+    if (request.method === 'POST') return createCueTemplate(request, env, projectId);
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  }
+
   if (sub === 'songs' && sub2 === 'cues' && sub3 === 'states') {
     return handleCueStates(request, env, projectId, songId, cueId, objId);
   }
@@ -228,7 +241,7 @@ async function listProjects(env, me) {
 
   const projects = await env.DB.prepare(`
     SELECT
-      p.id, p.name, p.description, p.thumbnail_r2_key, p.status, p.show_id,
+      p.id, p.name, p.description, p.thumbnail_r2_key, p.status, p.show_id, p.tags,
       p.created_at, p.updated_at,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id) AS song_count,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'todo') AS songs_todo,
@@ -260,6 +273,7 @@ async function listProjects(env, me) {
     });
   }
 
+  const safeJsonArr = (s) => { try { const v = JSON.parse(s || '[]'); return Array.isArray(v) ? v : []; } catch { return []; } };
   const list = (projects.results || []).map(p => ({
     id: p.id,
     name: p.name,
@@ -267,6 +281,7 @@ async function listProjects(env, me) {
     thumbnailUrl: p.thumbnail_r2_key ? `/r2/${p.thumbnail_r2_key}` : null,
     status: p.status,
     showId: p.show_id || null,
+    tags: safeJsonArr(p.tags),
     songCount: p.song_count,
     songStatusCounts: {
       todo: p.songs_todo,
@@ -326,9 +341,13 @@ async function updateProject(request, env, projectId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'show_id'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'show_id', 'tags'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
+  // tags 是 array → 存成 JSON string
+  if ('tags' in body && Array.isArray(body.tags)) {
+    body.tags = JSON.stringify(body.tags.filter(t => typeof t === 'string').slice(0, 20));
+  }
   const sets = [], values = [];
   for (const k of allowed) {
     if (k in body) { sets.push(`${k} = ?`); values.push(body[k]); }
@@ -476,6 +495,138 @@ async function duplicateProject(request, env, projectId) {
       cueStates: oldStates.results?.length || 0,
     },
   }, 201);
+}
+
+// Cue templates / palette（admin Tier 1 #5）
+async function listCueTemplates(env, projectId) {
+  const r = await env.DB.prepare(`
+    SELECT t.id, t.project_id, t.name, t.description, t.payload, t.created_at,
+           u.name AS author_name
+      FROM cue_templates t
+      LEFT JOIN users u ON t.created_by_user_id = u.id
+     WHERE t.project_id = ? OR t.project_id IS NULL
+     ORDER BY t.created_at DESC
+  `).bind(projectId).all();
+  return jsonResp({
+    templates: (r.results || []).map(t => {
+      let payload = {};
+      try { payload = JSON.parse(t.payload); } catch {}
+      return {
+        id: t.id, projectId: t.project_id, name: t.name, description: t.description,
+        global: t.project_id == null, authorName: t.author_name,
+        createdAt: t.created_at, payload,
+      };
+    }),
+  });
+}
+
+async function createCueTemplate(request, env, projectId) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const name = (body?.name || '').toString().trim().slice(0, 80);
+  const description = (body?.description || '').toString().trim().slice(0, 300);
+  const fromCueId = (body?.fromCueId || '').toString();
+  const isGlobal = !!body?.global;
+  if (!name) return jsonResp({ error: 'name 必填' }, 400);
+  if (!fromCueId) return jsonResp({ error: '需要來源 cue id' }, 400);
+
+  // 抓 cue 跟所有 cue_object_states + 對應 stage_objects 的 mesh_name
+  const cue = await env.DB.prepare(
+    `SELECT * FROM cues WHERE id = ? LIMIT 1`
+  ).bind(fromCueId).first();
+  if (!cue) return jsonResp({ error: 'Source cue not found' }, 404);
+  const states = await env.DB.prepare(`
+    SELECT cos.position, cos.rotation, cos.scale, o.mesh_name
+      FROM cue_object_states cos
+      JOIN stage_objects o ON cos.stage_object_id = o.id
+     WHERE cos.cue_id = ?
+  `).bind(fromCueId).all();
+
+  const safe = (s) => s == null ? null : (() => { try { return JSON.parse(s); } catch { return null; } })();
+  const payload = {
+    position: safe(cue.position_xyz) || { x: 0, y: 0, z: 0 },
+    rotation: safe(cue.rotation_xyz) || { pitch: 0, yaw: 0, roll: 0 },
+    fov: cue.fov,
+    crossfadeSeconds: cue.crossfade_seconds,
+    snapshotStates: (states.results || []).map(r => ({
+      meshName: r.mesh_name,
+      position: safe(r.position),
+      rotation: safe(r.rotation),
+      scale: safe(r.scale),
+    })),
+  };
+
+  const id = 'tpl_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  await env.DB.prepare(
+    `INSERT INTO cue_templates (id, project_id, name, description, payload, created_by_user_id)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(id, isGlobal ? null : projectId, name, description, JSON.stringify(payload), me.id).run();
+  return jsonResp({ ok: true, id }, 201);
+}
+
+async function deleteCueTemplate(request, env, templateId) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(templateId)) return jsonResp({ error: 'Invalid id' }, 400);
+  const r = await env.DB.prepare(`DELETE FROM cue_templates WHERE id = ?`).bind(templateId).run();
+  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true });
+}
+
+// 全域搜尋（admin Tier 1 #4）— 跨 projects/songs/cues/stage_objects 找名稱
+async function handleSearch(request, env, url) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
+  const q = (url.searchParams.get('q') || '').trim().slice(0, 100);
+  if (!q) return jsonResp({ projects: [], songs: [], cues: [], stageObjects: [] });
+
+  const like = `%${q.replace(/[%_\\]/g, m => '\\' + m)}%`;
+  const isAdmin = me.role === 'admin';
+
+  // admin 看全部；非 admin 只能看 project_members 內的 project
+  const memberFilter = isAdmin ? '' : ` AND p.id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = ?)`;
+  const memberArgs = isAdmin ? [] : [me.id];
+
+  const projects = await env.DB.prepare(
+    `SELECT p.id, p.name FROM projects p
+     WHERE p.status != 'archived' AND p.name LIKE ? ESCAPE '\\'${memberFilter}
+     ORDER BY p.updated_at DESC LIMIT 10`
+  ).bind(like, ...memberArgs).all();
+
+  const songs = await env.DB.prepare(
+    `SELECT s.id, s.name, s.project_id, p.name AS project_name FROM songs s
+     JOIN projects p ON s.project_id = p.id
+     WHERE p.status != 'archived' AND s.name LIKE ? ESCAPE '\\'${memberFilter}
+     ORDER BY s.created_at DESC LIMIT 10`
+  ).bind(like, ...memberArgs).all();
+
+  const cues = await env.DB.prepare(
+    `SELECT c.id, c.name, c.song_id, s.name AS song_name, s.project_id, p.name AS project_name
+     FROM cues c
+     JOIN songs s ON c.song_id = s.id
+     JOIN projects p ON s.project_id = p.id
+     WHERE p.status != 'archived' AND c.name LIKE ? ESCAPE '\\'${memberFilter}
+     ORDER BY c.updated_at DESC LIMIT 10`
+  ).bind(like, ...memberArgs).all();
+
+  const stageObjects = await env.DB.prepare(
+    `SELECT o.id, o.display_name, o.mesh_name, o.project_id, p.name AS project_name FROM stage_objects o
+     JOIN projects p ON o.project_id = p.id
+     WHERE p.status != 'archived' AND (o.display_name LIKE ? ESCAPE '\\' OR o.mesh_name LIKE ? ESCAPE '\\')${memberFilter}
+     ORDER BY o.created_at DESC LIMIT 10`
+  ).bind(like, like, ...memberArgs).all();
+
+  return jsonResp({
+    projects: (projects.results || []).map(p => ({ id: p.id, name: p.name })),
+    songs: (songs.results || []).map(s => ({ id: s.id, name: s.name, projectId: s.project_id, projectName: s.project_name })),
+    cues: (cues.results || []).map(c => ({ id: c.id, name: c.name, songId: c.song_id, songName: c.song_name, projectId: c.project_id, projectName: c.project_name })),
+    stageObjects: (stageObjects.results || []).map(o => ({ id: o.id, name: o.display_name || o.mesh_name, projectId: o.project_id, projectName: o.project_name })),
+  });
 }
 
 // 匯出整個 project 為 JSON（user 下載備份）
@@ -1033,10 +1184,49 @@ async function createCue(request, env, projectId, songId) {
       `).bind(cosId, id, s.objectId, sPos, sRot, sScl));
     }
     if (stmts.length > 0) await env.DB.batch(stmts);
+  } else if (body?.fromTemplateId) {
+    // 從 cue template 套用：用 mesh_name 對應到當前 project 的 stage_object_id
+    const tpl = await env.DB.prepare(`SELECT payload FROM cue_templates WHERE id = ? LIMIT 1`).bind(body.fromTemplateId).first();
+    if (tpl) {
+      let payload = {};
+      try { payload = JSON.parse(tpl.payload); } catch {}
+      // 拿當前 project 的 stage_objects（mesh_name → id map）
+      const objs = await env.DB.prepare(`SELECT id, mesh_name FROM stage_objects WHERE project_id = ?`).bind(projectId).all();
+      const meshToId = new Map();
+      for (const o of (objs.results || [])) meshToId.set(o.mesh_name, o.id);
+      // 更新 cue 的 position/rotation/fov/crossfade（如果 template 有）
+      if (payload.position || payload.rotation || payload.fov != null || payload.crossfadeSeconds != null) {
+        const sets = [], vals = [];
+        if (payload.position) { sets.push('position_xyz = ?'); vals.push(JSON.stringify(payload.position)); }
+        if (payload.rotation) { sets.push('rotation_xyz = ?'); vals.push(JSON.stringify(payload.rotation)); }
+        if (payload.fov != null) { sets.push('fov = ?'); vals.push(payload.fov); }
+        if (payload.crossfadeSeconds != null) { sets.push('crossfade_seconds = ?'); vals.push(payload.crossfadeSeconds); }
+        if (sets.length > 0) {
+          vals.push(id);
+          await env.DB.prepare(`UPDATE cues SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+        }
+      }
+      // 套 snapshotStates（用 mesh_name 對 stage_object_id）
+      const stmts = [];
+      for (const s of (payload.snapshotStates || [])) {
+        const oid = meshToId.get(s.meshName);
+        if (!oid) continue;
+        const cosId = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + stmts.length;
+        const sPos = s.position ? JSON.stringify(s.position) : null;
+        const sRot = s.rotation ? JSON.stringify(s.rotation) : null;
+        const sScl = s.scale ? JSON.stringify(s.scale) : null;
+        stmts.push(env.DB.prepare(`
+          INSERT INTO cue_object_states (id, cue_id, stage_object_id, position, rotation, scale)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(cosId, id, oid, sPos, sRot, sScl));
+      }
+      if (stmts.length > 0) await env.DB.batch(stmts);
+    }
   }
   // 都沒給 → 空白 cue（無 override）
 
   const cueOrigin = body?.cloneFrom ? 'clone'
+                  : body?.fromTemplateId ? 'template'
                   : (Array.isArray(body?.snapshotStates) && body.snapshotStates.length > 0) ? 'snapshot'
                   : 'blank';
   await logActivity(request, env, projectId, 'create', 'cue', id, { name, songId, origin: cueOrigin });
@@ -1605,7 +1795,32 @@ async function handleCueStates(request, env, projectId, songId, cueId, objId) {
 }
 
 async function listCueStates(env, projectId, cueId) {
-  // LEFT JOIN：每個 stage_object 都列出，有覆蓋的話 state 有值，沒覆蓋 state 為 NULL
+  // 找當前 cue 的 song + order，用來算 tracking
+  const cueRow = await env.DB.prepare(
+    `SELECT song_id, "order" AS cue_order FROM cues WHERE id = ? LIMIT 1`
+  ).bind(cueId).first();
+
+  // 拿同 song 內 order < 當前 cue 的所有 cue 的 override（給 tracking 用）
+  // tracking 規則：對每個 stage_object，若當前 cue 沒 override，找前面 cue 中最近一個有 override 的
+  let trackingOverrides = new Map(); // stage_object_id -> { position, rotation, scale, visible, fromCueOrder }
+  if (cueRow) {
+    const earlier = await env.DB.prepare(`
+      SELECT cos.stage_object_id, cos.position, cos.rotation, cos.scale, cos.visible, c."order" AS cue_order
+        FROM cue_object_states cos
+        JOIN cues c ON cos.cue_id = c.id
+       WHERE c.song_id = ? AND c."order" < ?
+       ORDER BY c."order" ASC
+    `).bind(cueRow.song_id, cueRow.cue_order).all();
+    for (const row of (earlier.results || [])) {
+      // 取最近的（cue_order 最大）— 因為 ORDER BY ASC 後面 overwrite 前面
+      trackingOverrides.set(row.stage_object_id, {
+        position: row.position, rotation: row.rotation, scale: row.scale, visible: row.visible,
+        fromCueOrder: row.cue_order,
+      });
+    }
+  }
+
+  // 主 query：每個 stage_object + 當前 cue 的 own override
   const r = await env.DB.prepare(`
     SELECT
       o.id            AS object_id,
@@ -1640,6 +1855,22 @@ async function listCueStates(env, projectId, cueId) {
       scale: safe(row.default_scale, { x: 1, y: 1, z: 1 }),
     };
     const hasOverride = row.state_updated_at != null;
+    const tracking = trackingOverrides.get(row.object_id);
+
+    // effective 計算優先序：own override > tracking（前 cue 繼承）> default
+    const effPosition = hasOverride && row.state_position ? safe(row.state_position, def.position)
+                      : tracking?.position ? safe(tracking.position, def.position)
+                      : def.position;
+    const effRotation = hasOverride && row.state_rotation ? safe(row.state_rotation, def.rotation)
+                      : tracking?.rotation ? safe(tracking.rotation, def.rotation)
+                      : def.rotation;
+    const effScale    = hasOverride && row.state_scale    ? safe(row.state_scale, def.scale)
+                      : tracking?.scale ? safe(tracking.scale, def.scale)
+                      : def.scale;
+    const effVisible  = hasOverride && row.state_visible != null ? !!row.state_visible
+                      : tracking?.visible != null ? !!tracking.visible
+                      : true;
+
     return {
       objectId: row.object_id,
       meshName: row.mesh_name,
@@ -1656,12 +1887,13 @@ async function listCueStates(env, projectId, cueId) {
         customProps: safe(row.state_custom, null),
         updatedAt: row.state_updated_at,
       } : null,
-      // 「effective」= override 蓋過 default
+      // 標記是否來自 tracking（前 cue 繼承）— 給 UI 區分用
+      tracked: !hasOverride && !!tracking,
       effective: {
-        position: hasOverride && row.state_position ? safe(row.state_position, def.position) : def.position,
-        rotation: hasOverride && row.state_rotation ? safe(row.state_rotation, def.rotation) : def.rotation,
-        scale: hasOverride && row.state_scale ? safe(row.state_scale, def.scale) : def.scale,
-        visible: hasOverride && row.state_visible != null ? !!row.state_visible : true,
+        position: effPosition,
+        rotation: effRotation,
+        scale: effScale,
+        visible: effVisible,
       },
     };
   });

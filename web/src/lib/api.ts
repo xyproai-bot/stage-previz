@@ -217,7 +217,7 @@ export async function createProject(input: { name: string; description: string; 
   });
 }
 
-export async function updateProject(id: string, patch: Partial<{ name: string; description: string; status: string; showId: string | null }>): Promise<void> {
+export async function updateProject(id: string, patch: Partial<{ name: string; description: string; status: string; showId: string | null; tags: string[] }>): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
@@ -351,6 +351,7 @@ export async function createCue(
     fov?: number;
     crossfadeSeconds?: number;
     cloneFrom?: string;       // cue id — 複製其 overrides
+    fromTemplateId?: string;  // 從 cue template 套用（mesh_name 對應）
     snapshotStates?: Array<{  // 顯式 snapshot
       objectId: string;
       position?: { x: number; y: number; z: number };
@@ -557,6 +558,20 @@ export async function deleteModelVersion(projectId: string, key: string): Promis
   );
 }
 
+// ─── Global search ───
+
+export interface SearchResults {
+  projects: { id: string; name: string }[];
+  songs: { id: string; name: string; projectId: string; projectName: string }[];
+  cues: { id: string; name: string; songId: string; songName: string; projectId: string; projectName: string }[];
+  stageObjects: { id: string; name: string; projectId: string; projectName: string }[];
+}
+
+export async function searchAll(q: string): Promise<SearchResults> {
+  if (!q.trim()) return { projects: [], songs: [], cues: [], stageObjects: [] };
+  return http(`/api/search?q=${encodeURIComponent(q)}`);
+}
+
 // ─── Shared Assets（model 庫） ───
 
 export interface SharedAsset {
@@ -613,6 +628,37 @@ export async function useAssetForProject(projectId: string, assetId: string): Pr
     body: JSON.stringify({ assetId }),
   });
 }
+
+// ─── Cue templates / palette ───
+
+export interface CueTemplate {
+  id: string;
+  projectId: string | null;
+  name: string;
+  description: string;
+  global: boolean;
+  authorName: string | null;
+  createdAt: string;
+}
+
+export async function listCueTemplates(projectId: string): Promise<CueTemplate[]> {
+  const data = await http<{ templates: CueTemplate[] }>(`/api/projects/${encodeURIComponent(projectId)}/cue-templates`);
+  return data.templates;
+}
+
+export async function createCueTemplate(projectId: string, input: { name: string; description: string; fromCueId: string; global?: boolean }): Promise<{ id: string }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/cue-templates`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteCueTemplate(id: string): Promise<void> {
+  await http(`/api/cue-templates/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+// 改 createCue 的 input type 加 fromTemplateId
+// （已有 createCue function，只要 input type 多 optional 一欄）
 
 // ─── Activity feed ───
 

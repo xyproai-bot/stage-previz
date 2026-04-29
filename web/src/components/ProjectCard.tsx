@@ -29,7 +29,7 @@ function timeAgo(iso: string) {
 }
 
 export default function ProjectCard({
-  project, showName, onDuplicate, onArchive, onExport,
+  project, showName, onDuplicate, onArchive, onExport, onEditTags,
   selected, onToggleSelect,
 }: {
   project: Project;
@@ -37,6 +37,7 @@ export default function ProjectCard({
   onDuplicate?: (project: Project) => void;
   onArchive?: (project: Project) => void;
   onExport?: (project: Project) => void;
+  onEditTags?: (project: Project) => void;
   selected?: boolean;
   onToggleSelect?: (project: Project) => void;
 }) {
@@ -114,6 +115,12 @@ export default function ProjectCard({
                     onClick={() => { setMenuOpen(false); onExport(project); }}
                   >💾 匯出 JSON</button>
                 )}
+                {onEditTags && (
+                  <button
+                    className="project-card__menu-item"
+                    onClick={() => { setMenuOpen(false); onEditTags(project); }}
+                  >🏷 編輯標籤</button>
+                )}
                 {onArchive && (
                   <button
                     className="project-card__menu-item project-card__menu-item--danger"
@@ -138,6 +145,13 @@ export default function ProjectCard({
           </button>
         )}
         <h3 className="project-card__title">{project.name}</h3>
+        {project.tags && project.tags.length > 0 && (
+          <div className="project-card__tags">
+            {project.tags.map(t => (
+              <span key={t} className="project-card__tag">#{t}</span>
+            ))}
+          </div>
+        )}
         <p className="project-card__desc">{project.description}</p>
 
         <SongProgress

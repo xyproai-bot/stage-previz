@@ -189,6 +189,21 @@
   font-size: 15px;
   font-weight: 700;
 }
+.project-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+.project-card__tag {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+}
 .project-card__desc {
   margin: 0;
   font-size: 12.5px;

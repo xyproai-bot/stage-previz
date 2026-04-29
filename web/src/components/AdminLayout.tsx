@@ -1,6 +1,7 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import HelpModal from './HelpModal';
 import './AdminLayout.css';
 
 interface AdminLayoutProps {
@@ -19,6 +20,20 @@ const NAV = [
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === '?' && !helpOpen) {
+        const t = e.target as HTMLElement;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        e.preventDefault();
+        setHelpOpen(true);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [helpOpen]);
 
   async function handleLogout() {
     if (!confirm('登出？')) return;
@@ -72,7 +87,16 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         </div>
       </aside>
 
-      <main className="admin-main">{children}</main>
+      <main className="admin-main">
+        {children}
+        <button
+          className="admin-help-fab"
+          onClick={() => setHelpOpen(true)}
+          title="使用說明（按 ? 也可叫出）"
+          aria-label="使用說明"
+        >?</button>
+      </main>
+      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   );
 }

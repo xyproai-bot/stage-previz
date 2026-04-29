@@ -155,6 +155,22 @@ function ProjectsTab() {
     }
   }
 
+  async function handleEditTags(p: Project) {
+    const current = (p.tags || []).join(', ');
+    const input = prompt(
+      `編輯「${p.name}」的標籤\n\n用逗號分隔，例：演唱會, 巡迴, 試片\n（最多 20 個）`,
+      current,
+    );
+    if (input == null) return;
+    const tags = input.split(',').map(t => t.trim()).filter(Boolean).slice(0, 20);
+    try {
+      await api.updateProject(p.id, { tags });
+      await refresh();
+    } catch (e) {
+      alert('更新標籤失敗：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   async function handleImport(file: File) {
     try {
       const text = await file.text();
@@ -253,6 +269,7 @@ function ProjectsTab() {
                   onDuplicate={handleDuplicate}
                   onArchive={handleArchive}
                   onExport={handleExport}
+                  onEditTags={handleEditTags}
                   selected={selectedIds.has(p.id)}
                   onToggleSelect={toggleSelect}
                 />

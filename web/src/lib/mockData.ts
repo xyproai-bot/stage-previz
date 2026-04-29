@@ -17,6 +17,7 @@ export interface Project {
   thumbnailUrl?: string;
   status: ProjectStatus;
   showId?: string | null;               // 屬於哪個 Show（巡迴），可為 null
+  tags?: string[];                       // 標籤（admin Tier 1 #20）
   songCount: number;
   songStatusCounts?: SongStatusCounts;  // worker 已支援；mock 可省略，前端 fallback 全 todo
   cueCount: number;

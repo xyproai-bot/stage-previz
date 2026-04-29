@@ -45,6 +45,8 @@ export default function CommandPalette() {
   const [projects, setProjects] = useState<api.Show[] | { id: string; name: string }[]>([]);
   const [shows, setShows] = useState<api.Show[]>([]);
   const [recent, setRecent] = useState<{ id: string; name: string }[]>([]);
+  const [searchResults, setSearchResults] = useState<api.SearchResults | null>(null);
+  const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cmd+K / Ctrl+K listener
   useEffect(() => {
@@ -65,9 +67,9 @@ export default function CommandPalette() {
     if (!open) return;
     setQuery('');
     setActiveIdx(0);
+    setSearchResults(null);
     setRecent(getRecentProjects());
     setTimeout(() => inputRef.current?.focus(), 30);
-    // 拉 projects + shows
     Promise.all([
       api.listProjects().catch(() => []),
       api.listShows().catch(() => []),
@@ -76,6 +78,24 @@ export default function CommandPalette() {
       setShows(ss);
     });
   }, [open]);
+
+  // query 變化 → debounce 200ms 後呼叫全域搜尋
+  useEffect(() => {
+    if (!open) return;
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (!query.trim() || query.trim().length < 2) {
+      setSearchResults(null);
+      return;
+    }
+    searchTimerRef.current = setTimeout(() => {
+      api.searchAll(query.trim())
+        .then(setSearchResults)
+        .catch(() => setSearchResults(null));
+    }, 200);
+    return () => {
+      if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    };
+  }, [query, open]);
 
   const close = useCallback(() => setOpen(false), []);
 
@@ -124,8 +144,33 @@ export default function CommandPalette() {
       });
     }
 
+    // 全域搜尋結果（從 worker /api/search 拿）
+    if (searchResults) {
+      for (const sg of searchResults.songs) {
+        cmds.push({
+          id: `srch-song:${sg.id}`, group: '搜尋：歌曲', icon: '🎵',
+          label: sg.name, hint: sg.projectName,
+          run: () => { navigate(`/admin/projects/${sg.projectId}`); close(); },
+        });
+      }
+      for (const c of searchResults.cues) {
+        cmds.push({
+          id: `srch-cue:${c.id}`, group: '搜尋：Cue', icon: '🎬',
+          label: c.name, hint: `${c.projectName} · ${c.songName}`,
+          run: () => { navigate(`/admin/projects/${c.projectId}`); close(); },
+        });
+      }
+      for (const o of searchResults.stageObjects) {
+        cmds.push({
+          id: `srch-obj:${o.id}`, group: '搜尋：物件', icon: '🧩',
+          label: o.name, hint: o.projectName,
+          run: () => { navigate(`/admin/projects/${o.projectId}`); close(); },
+        });
+      }
+    }
+
     return cmds;
-  }, [recent, projects, shows, user, navigate, close, logout]);
+  }, [recent, projects, shows, searchResults, user, navigate, close, logout]);
 
   // 模糊匹配 + 分組
   const filtered = useMemo(() => {

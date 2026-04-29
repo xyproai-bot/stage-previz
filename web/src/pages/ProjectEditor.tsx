@@ -296,6 +296,35 @@ export default function ProjectEditor() {
     catch (e) { alert('排序失敗：' + msg(e)); await refreshSongs(); }
   }
 
+  // ── Cue templates / palette ──
+  const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+
+  async function handleSaveCueAsTemplate(cueId: string, cueName: string) {
+    if (!projectId) return;
+    const name = prompt(`為這個 cue 建立模板\n\n模板名稱：`, cueName)?.trim();
+    if (!name) return;
+    const scope = confirm('這個模板要做成「全域」（所有專案都能用）嗎？\n\n按確定 = 全域；取消 = 只給這個專案用');
+    try {
+      await api.createCueTemplate(projectId, { name, description: '', fromCueId: cueId, global: scope });
+      alert(`✅ 已存為${scope ? '全域' : '本專案'}模板「${name}」`);
+    } catch (e) {
+      alert('存模板失敗：' + msg(e));
+    }
+  }
+
+  async function handleApplyTemplate(templateId: string) {
+    if (!projectId || !selectedSongId) return;
+    const defaultName = `Cue ${cues.length + 1}`;
+    const name = prompt('新 cue 名稱：', defaultName)?.trim();
+    if (!name) return;
+    try {
+      await api.createCue(projectId, selectedSongId, { name, fromTemplateId: templateId });
+      await refreshCues();
+      setRightTab('cues');
+      setTemplatePickerOpen(false);
+    } catch (e) { alert('套模板失敗：' + msg(e)); }
+  }
+
   // ── Cue actions ──
   async function handleAddBlankCue() {
     if (!projectId || !selectedSongId) return;
@@ -703,11 +732,13 @@ export default function ProjectEditor() {
                 onAddBlank={handleAddBlankCue}
                 onClone={handleCloneCue}
                 onSnapshot={handleSnapshotCue}
+                onFromTemplate={() => setTemplatePickerOpen(true)}
                 onDuplicateQuick={handleDuplicateCueQuick}
                 onReset={handleResetCue}
                 onRename={handleRenameCue}
                 onDelete={handleDeleteCue}
                 onMove={moveCue}
+                onSaveTemplate={handleSaveCueAsTemplate}
               />
             ) : rightTab === 'state' ? (
               <ObjectStateEditor
@@ -790,6 +821,82 @@ export default function ProjectEditor() {
         projectId={projectId || ''}
         onClose={() => setActivityOpen(false)}
       />
+
+      <CueTemplatePickerDialog
+        open={templatePickerOpen}
+        projectId={projectId || ''}
+        onClose={() => setTemplatePickerOpen(false)}
+        onPick={handleApplyTemplate}
+      />
+    </div>
+  );
+}
+
+function CueTemplatePickerDialog({
+  open, projectId, onClose, onPick,
+}: {
+  open: boolean;
+  projectId: string;
+  onClose: () => void;
+  onPick: (templateId: string) => Promise<void>;
+}) {
+  const [templates, setTemplates] = useState<api.CueTemplate[]>([]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    setLoading(true);
+    api.listCueTemplates(projectId)
+      .then(setTemplates)
+      .catch(() => setTemplates([]))
+      .finally(() => setLoading(false));
+  }, [open, projectId]);
+  if (!open) return null;
+
+  async function handleDelete(t: api.CueTemplate) {
+    if (!confirm(`刪除模板「${t.name}」？`)) return;
+    try { await api.deleteCueTemplate(t.id); setTemplates(prev => prev.filter(x => x.id !== t.id)); }
+    catch (e) { alert('失敗：' + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+        <header className="dialog__header">
+          <h2>從模板建立 cue</h2>
+          <button className="dialog__close" onClick={onClose}>×</button>
+        </header>
+        <div className="dialog__body">
+          {loading ? (
+            <div className="editor-empty muted">載入中…</div>
+          ) : templates.length === 0 ? (
+            <div className="editor-empty muted">
+              <div style={{ fontSize: 28 }}>💎</div>
+              <div>還沒有任何模板</div>
+              <small>在 cue 旁邊點 💎 把該 cue 存成模板</small>
+            </div>
+          ) : (
+            <ul className="versions-list">
+              {templates.map(t => (
+                <li key={t.id} className="version-row">
+                  <div className="version-row__num">💎</div>
+                  <div className="version-row__main">
+                    <div className="version-row__title">
+                      {t.name}
+                      {t.global && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent)' }}>全域</span>}
+                    </div>
+                    {t.description && <div className="muted small">{t.description}</div>}
+                    {t.authorName && <div className="muted small">by {t.authorName}</div>}
+                  </div>
+                  <div className="version-row__actions">
+                    <button className="btn btn--primary btn--sm" onClick={() => onPick(t.id)}>套用</button>
+                    <button className="btn btn--ghost btn--sm" onClick={() => handleDelete(t)} title="刪除模板">🗑</button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -799,8 +906,8 @@ export default function ProjectEditor() {
 // ──────────────────────────────────────────────────
 
 function CueList({
-  cues, loading, selectedId, onSelect, onAddBlank, onClone, onSnapshot, onDuplicateQuick,
-  onReset, onRename, onDelete, onMove, emptyText,
+  cues, loading, selectedId, onSelect, onAddBlank, onClone, onSnapshot, onFromTemplate, onDuplicateQuick,
+  onReset, onRename, onDelete, onMove, onSaveTemplate, emptyText,
 }: {
   cues: Cue[];
   loading: boolean;
@@ -809,11 +916,13 @@ function CueList({
   onAddBlank?: () => void;
   onClone?: (sourceCueId?: string) => void;
   onSnapshot?: () => void;
+  onFromTemplate?: () => void;
   onDuplicateQuick?: (cueId: string) => void;
   onReset?: (cueId: string, name: string) => void;
   onRename?: (cueId: string, name: string) => void;
   onDelete: (id: string, name: string) => void;
   onMove?: (cueId: string, direction: -1 | 1) => void;
+  onSaveTemplate?: (cueId: string, name: string) => void;
   emptyText?: string;
 }) {
   if (loading) return <div className="editor-empty muted">載入中…</div>;
@@ -846,6 +955,7 @@ function CueList({
                   <button title="下移" onClick={() => onMove(c.id, 1)} disabled={i === cues.length - 1}>↓</button>
                 </>}
                 {onDuplicateQuick && <button title="一鍵複製" onClick={() => onDuplicateQuick(c.id)}>📋</button>}
+                {onSaveTemplate && <button title="存為模板（之後可從模板建類似的 cue）" onClick={() => onSaveTemplate(c.id, c.name)}>💎</button>}
                 {onReset && <button title="重置（清掉所有 override）" onClick={() => onReset(c.id, c.name)}>↺</button>}
                 {onRename && <button title="改名" onClick={() => onRename(c.id, c.name)}>✎</button>}
                 <button title="刪除" onClick={() => onDelete(c.id, c.name)}>🗑</button>
@@ -859,6 +969,7 @@ function CueList({
           onAddBlank={onAddBlank}
           onClone={onClone}
           onSnapshot={onSnapshot}
+          onFromTemplate={onFromTemplate}
           hasSelectedCue={!!selectedId}
         />
       )}
@@ -867,11 +978,12 @@ function CueList({
 }
 
 function CueAddSplitButton({
-  onAddBlank, onClone, onSnapshot, hasSelectedCue,
+  onAddBlank, onClone, onSnapshot, onFromTemplate, hasSelectedCue,
 }: {
   onAddBlank: () => void;
   onClone?: (id?: string) => void;
   onSnapshot?: () => void;
+  onFromTemplate?: () => void;
   hasSelectedCue: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -911,6 +1023,10 @@ function CueAddSplitButton({
           <button onClick={() => { setOpen(false); onSnapshot && onSnapshot(); }} disabled={!onSnapshot}>
             <span>📸 從目前 3D 狀態建立</span>
             <small>capture 現在 viewport 看到的位置</small>
+          </button>
+          <button onClick={() => { setOpen(false); onFromTemplate && onFromTemplate(); }} disabled={!onFromTemplate}>
+            <span>💎 從模板建立</span>
+            <small>從 cue palette 選一個常用模板套用</small>
           </button>
         </div>
       )}
