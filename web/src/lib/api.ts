@@ -195,6 +195,7 @@ export interface StageObject {
   defaultScale: Vec3;
   metadata: Record<string, unknown> | null;
   createdAt: string;
+  locked: boolean;
 }
 
 export async function listStageObjects(projectId: string): Promise<StageObject[]> {
@@ -225,6 +226,7 @@ export async function updateStageObject(projectId: string, objId: string, patch:
   defaultRotation: Euler;
   defaultScale: Vec3;
   metadata: Record<string, unknown> | null;
+  locked: boolean;
 }>): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects/${encodeURIComponent(objId)}`, {
     method: 'PATCH',
@@ -308,6 +310,7 @@ export interface CueState {
   displayName: string;
   category: StageObjectCategory;
   order: number;
+  locked: boolean;
   default: { position: Vec3; rotation: Euler; scale: Vec3 };
   override: {
     position: Vec3 | null;

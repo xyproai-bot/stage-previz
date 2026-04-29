@@ -159,11 +159,11 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
 
-      const objs = Array.from(meshesRef.current.values());
+      // 鎖定的物件不參與 raycast
+      const objs = Array.from(meshesRef.current.values()).filter(o => !o.userData.locked);
       // recursive: GLB 物件可能有子 mesh
       const hit = raycaster.intersectObjects(objs, true);
       if (hit.length > 0) {
-        // userData.objectId 在 traverse 時設過給每個 child
         const id = (hit[0].object.userData.objectId
           || hit[0].object.parent?.userData.objectId) as string | undefined;
         if (id) onSelectRef.current(id);
@@ -376,14 +376,19 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
 
         const lbl = document.createElement('div');
         lbl.className = 'stage-scene__label';
-        lbl.textContent = s.displayName;
+        lbl.textContent = (s.locked ? '🔒 ' : '') + s.displayName;
         lbl.dataset.objectId = s.objectId;
         layer.appendChild(lbl);
         labels.set(s.objectId, lbl);
       } else {
         const lbl = labels.get(s.objectId);
-        if (lbl && lbl.textContent !== s.displayName) lbl.textContent = s.displayName;
+        if (lbl) {
+          const lblText = (s.locked ? '🔒 ' : '') + s.displayName;
+          if (lbl.textContent !== lblText) lbl.textContent = lblText;
+        }
       }
+      obj.userData.locked = !!s.locked;
+      obj.userData.objectId = s.objectId;
 
       const p = s.effective.position;
       obj.position.set(p.x, p.y, p.z);

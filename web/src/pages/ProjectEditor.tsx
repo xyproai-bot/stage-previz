@@ -127,6 +127,7 @@ export default function ProjectEditor() {
       displayName: o.displayName,
       category: o.category,
       order: o.order,
+      locked: o.locked,
       default: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale },
       override: null,
       effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: true },
@@ -329,6 +330,16 @@ export default function ProjectEditor() {
       await refreshCueStates();
     } catch (e) { alert('失敗：' + msg(e)); }
   }
+  async function handleToggleLock(obj: StageObject) {
+    if (!projectId) return;
+    try {
+      await api.updateStageObject(projectId, obj.id, { locked: !obj.locked });
+      // 鎖時取消當前 selection（如果鎖的剛好是 selected）
+      if (!obj.locked && selectedObjectId === obj.id) setSelectedObjectId(null);
+      await refreshStageObjects();
+      await refreshCueStates();
+    } catch (e) { alert('失敗：' + msg(e)); }
+  }
   async function handleDeleteObject(obj: StageObject) {
     if (!projectId) return;
     if (!confirm(`刪除物件「${obj.displayName}」？這會連同所有 cue 對它的 override 一起刪掉。`)) return;
@@ -500,6 +511,7 @@ export default function ProjectEditor() {
                 onUpload={() => setUploadOpen(true)}
                 onRename={handleRenameObject}
                 onChangeCategory={handleChangeCategory}
+                onToggleLock={handleToggleLock}
                 onDelete={handleDeleteObject}
               />
             )}
@@ -805,11 +817,17 @@ function ObjectStateRow({
   return (
     <li
       ref={rowRef}
-      className={'object-row' + (hasOverride ? ' has-override' : '') + (forceOpen ? ' is-selected' : '')}
+      className={'object-row'
+        + (hasOverride ? ' has-override' : '')
+        + (forceOpen ? ' is-selected' : '')
+        + (state.locked ? ' is-locked' : '')}
     >
-      <header className="object-row__head" onClick={onClickHeader}>
+      <header className="object-row__head" onClick={state.locked ? undefined : onClickHeader}>
         <span className="object-row__cat" title={cat.label}>{cat.icon}</span>
-        <span className="object-row__name">{state.displayName}</span>
+        <span className="object-row__name">
+          {state.displayName}
+          {state.locked && <span className="lock-tag" title="已鎖定">🔒</span>}
+        </span>
         {hasOverride && <span className="override-dot" title="此 cue 有覆蓋" />}
         <span className="object-row__chev">{isOpen ? '▾' : '▸'}</span>
       </header>
@@ -867,7 +885,7 @@ function ObjectStateRow({
 }
 
 function ObjectsManager({
-  objects, onSeed, onAdd, onUpload, onRename, onChangeCategory, onDelete,
+  objects, onSeed, onAdd, onUpload, onRename, onChangeCategory, onToggleLock, onDelete,
 }: {
   objects: StageObject[];
   onSeed: () => void;
@@ -875,6 +893,7 @@ function ObjectsManager({
   onUpload: () => void;
   onRename: (obj: StageObject) => void;
   onChangeCategory: (obj: StageObject, cat: StageObjectCategory) => void;
+  onToggleLock: (obj: StageObject) => void;
   onDelete: (obj: StageObject) => void;
 }) {
   return (
@@ -894,10 +913,13 @@ function ObjectsManager({
       ) : (
         <ul className="object-mgr-list">
           {objects.map(o => (
-            <li key={o.id} className="object-mgr-row">
+            <li key={o.id} className={'object-mgr-row' + (o.locked ? ' is-locked' : '')}>
               <span className="object-row__cat">{CATEGORY_INFO[o.category].icon}</span>
               <div className="object-mgr-main">
-                <div className="object-mgr-name">{o.displayName}</div>
+                <div className="object-mgr-name">
+                  {o.displayName}
+                  {o.locked && <span className="lock-tag" title="已鎖定">🔒</span>}
+                </div>
                 <div className="muted small object-mgr-mesh">{o.meshName}</div>
               </div>
               <select
@@ -905,13 +927,21 @@ function ObjectsManager({
                 value={o.category}
                 onChange={(e) => onChangeCategory(o, e.target.value as StageObjectCategory)}
                 title="分類"
+                disabled={o.locked}
               >
                 {(Object.keys(CATEGORY_INFO) as StageObjectCategory[]).map(c => (
                   <option key={c} value={c}>{CATEGORY_INFO[c].icon} {CATEGORY_INFO[c].label}</option>
                 ))}
               </select>
               <div className="object-mgr-actions">
-                <button onClick={() => onRename(o)} title="改名">✎</button>
+                <button
+                  onClick={() => onToggleLock(o)}
+                  title={o.locked ? '解鎖（可編輯）' : '鎖定（3D 不可選、屬性不可改）'}
+                  className={o.locked ? 'is-locked-btn' : ''}
+                >
+                  {o.locked ? '🔒' : '🔓'}
+                </button>
+                <button onClick={() => onRename(o)} title="改名" disabled={o.locked}>✎</button>
                 <button onClick={() => onDelete(o)} title="刪除">🗑</button>
               </div>
             </li>
