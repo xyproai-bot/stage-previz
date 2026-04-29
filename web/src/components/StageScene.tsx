@@ -147,12 +147,13 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
 
-      // 1. 先看 click 是不是打到 gizmo（旋轉環、移動軸、縮放方塊）
-      //    如果是，let TransformControls 自己處理，我們別 detach
-      const gizmoHits = raycaster.intersectObject(transformHelper, true);
-      if (gizmoHits.length > 0) return;
-
-      // 2. 沒打到 gizmo，那就嘗試選物件
+      // 1. 只在 gizmo 真的 attached（有物件可拖）時才檢查 gizmo hit
+      //    沒 attach 時 gizmo 雖 visible=false 但內部 plane mesh 仍會 raycast 中 → 不能 short-circuit
+      if (transform.object) {
+        const gizmoHits = raycaster.intersectObject(transformHelper, true);
+        if (gizmoHits.length > 0) return;
+      }
+      // 2. 嘗試選物件
       const meshes = Array.from(meshesRef.current.values());
       const hit = raycaster.intersectObjects(meshes, false);
       if (hit.length > 0) {
