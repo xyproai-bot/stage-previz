@@ -672,6 +672,45 @@
   border-radius: var(--radius-sm);
 }
 
+.material-section {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.material-section--led {
+  border-top-color: rgba(255, 170, 68, 0.3);
+}
+.material-section .section-title {
+  font-size: 11px;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+.material-section .form-row {
+  margin-bottom: 8px;
+}
+.material-section input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.material-section--led input[type="range"] {
+  accent-color: var(--warn);
+}
+.color-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.color-row input[type="color"] {
+  width: 40px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  cursor: pointer;
+}
+
 /* ── Objects manager tab ── */
 .objects-manager {
   padding: 12px;

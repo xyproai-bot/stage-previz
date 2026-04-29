@@ -3,9 +3,14 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import type { CueState, Vec3, Euler } from '../lib/api';
+import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
+import { RectAreaLightHelper } from 'three/examples/jsm/helpers/RectAreaLightHelper.js';
+import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import './StageScene.css';
+
+// RectAreaLight 必須先 init uniforms（Three.js 內建）
+RectAreaLightUniformsLib.init();
 
 const CATEGORY_COLORS: Record<string, number> = {
   led_panel:  0x10c78a,
@@ -27,16 +32,19 @@ const CATEGORY_GEOM: Record<string, () => THREE.BufferGeometry> = {
 
 interface Props {
   states: CueState[];
+  stageObjects?: StageObject[];   // 含 materialProps / ledProps（不在 cue 層級因為材質是物件層級的）
   selectedObjectId: string | null;
   onSelect: (id: string | null) => void;
   onTransform: (objectId: string, position: Vec3, rotation: Euler) => Promise<void> | void;
   cueName?: string;
-  modelUrl?: string | null;  // GLB 真檔 URL — 有就 load，沒就用 primitive
+  modelUrl?: string | null;
 }
+
+type RenderMode = 'quick' | 'realistic';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, selectedObjectId, onSelect, onTransform, cueName, modelUrl }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectId, onSelect, onTransform, cueName, modelUrl }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -54,7 +62,14 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
   const [mode, setMode] = useState<Mode>('translate');
   const [space, setSpace] = useState<'world' | 'local'>('world');
   const [showLabels, setShowLabels] = useState(true);
+  const [renderMode, setRenderMode] = useState<RenderMode>('quick');
   const [, setModelLoading] = useState(false);
+
+  // 把 stageObjects 用 id 索引，給 mesh sync 拿 materialProps/ledProps
+  const stageObjMap = new Map<string, StageObject>();
+  (stageObjects || []).forEach(o => stageObjMap.set(o.id, o));
+  const ledLightsRef = useRef<Map<string, THREE.RectAreaLight>>(new Map());
+  const envLightsRef = useRef<{ ambient: THREE.AmbientLight; hemi: THREE.HemisphereLight; key: THREE.DirectionalLight | null } | null>(null);
 
   onSelectRef.current = onSelect;
   onTransformRef.current = onTransform;
@@ -79,14 +94,15 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Lights
-    scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+    // Lights — quick mode 用 ambient 為主、realistic 會把 ambient 降低讓 LED 主導
+    const ambient = new THREE.AmbientLight(0xffffff, 0.55);
+    scene.add(ambient);
+    const hemi = new THREE.HemisphereLight(0x88aaff, 0x222222, 0.3);
+    scene.add(hemi);
     const key = new THREE.DirectionalLight(0xffffff, 0.7);
     key.position.set(6, 10, 4);
     scene.add(key);
-    const fill = new THREE.DirectionalLight(0x88aaff, 0.25);
-    fill.position.set(-5, 4, -3);
-    scene.add(fill);
+    envLightsRef.current = { ambient, hemi, key };
 
     // Helpers (grid + axes)
     const grid = new THREE.GridHelper(20, 20, 0x3a3d43, 0x222428);
@@ -401,25 +417,17 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       );
       obj.visible = s.effective.visible;
 
-      // 高亮：3D 場景裡只標「被選中」的物件，override 提示留在右側 panel
-      // 避免整個場景被染橘
-      const isSelected = s.objectId === selectedObjectId;
-      obj.traverse((child) => {
-        if (!(child as THREE.Mesh).isMesh) return;
-        const m = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        if (!m || !('emissive' in m)) return;
-        if (isSelected) {
-          m.emissive = new THREE.Color(0x10c78a);  // accent green，柔和點
-          m.emissiveIntensity = 0.4;
-        } else {
-          m.emissive = new THREE.Color(0x000000);
-          m.emissiveIntensity = 0;
-        }
-      });
+      // emissive 決策統一處理（避免兩個 useEffect 覆蓋）：
+      //   1. selected → 綠色 highlight
+      //   2. LED panel 在 realistic 模式 → tint 發光（自身 + RectAreaLight 投射）
+      //   3. 其他 → 不發光
+      // 注意：別在這裡套，把這個 effect 留給「位置/visibility」，emissive 留給專門的 effect
+      // 統一在一個 effect 處理 emissive
+      // ↓ 已 moved 到下方 useEffect
 
       const lbl = labels.get(s.objectId);
       if (lbl) {
-        lbl.classList.toggle('is-selected', isSelected);
+        lbl.classList.toggle('is-selected', s.objectId === selectedObjectId);
         lbl.classList.toggle('has-override', !!s.override);
       }
     }
@@ -447,6 +455,107 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     const layer = labelLayerRef.current;
     if (layer) layer.style.display = showLabels ? '' : 'none';
   }, [showLabels]);
+
+  // ── Render mode (quick / realistic) ──
+  useEffect(() => {
+    const env = envLightsRef.current;
+    if (!env) return;
+    if (renderMode === 'realistic') {
+      env.ambient.intensity = 0.15;   // 降下來讓 LED 主導
+      env.hemi.intensity = 0.2;
+      if (env.key) env.key.intensity = 0.3;
+    } else {
+      env.ambient.intensity = 0.55;
+      env.hemi.intensity = 0.3;
+      if (env.key) env.key.intensity = 0.7;
+    }
+  }, [renderMode]);
+
+  // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const meshes = meshesRef.current;
+    const ledLights = ledLightsRef.current;
+    const accentGreen = new THREE.Color(0x10c78a);
+    const black = new THREE.Color(0x000000);
+
+    meshes.forEach((obj, id) => {
+      const so = stageObjMap.get(id);
+      const isSelected = id === selectedObjectId;
+      const isLed = so?.category === 'led_panel';
+
+      // 1. 材質基本屬性（color/roughness/metalness/opacity）
+      const mat = so?.materialProps || {};
+      obj.traverse((c) => {
+        if (!(c as THREE.Mesh).isMesh) return;
+        const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        if (!m || !('color' in m)) return;
+        if (mat.color) m.color.set(mat.color);
+        if (typeof mat.roughness === 'number') m.roughness = mat.roughness;
+        if (typeof mat.metalness === 'number') m.metalness = mat.metalness;
+        if (typeof mat.opacity === 'number') {
+          m.opacity = mat.opacity;
+          m.transparent = mat.opacity < 1;
+        }
+      });
+
+      // 2. emissive 統一決策
+      let emissiveColor = black;
+      let emissiveIntensity = 0;
+      const ledTint = so?.ledProps?.tint ? new THREE.Color(so.ledProps.tint) : new THREE.Color(0xffffff);
+      const ledBrightness = so?.ledProps?.brightness ?? 1.0;
+
+      if (isSelected) {
+        emissiveColor = accentGreen;
+        emissiveIntensity = 0.4;
+      } else if (isLed && renderMode === 'realistic') {
+        emissiveColor = ledTint;
+        emissiveIntensity = ledBrightness * 0.8;
+      }
+      obj.traverse((c) => {
+        if (!(c as THREE.Mesh).isMesh) return;
+        const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        if (!m || !('emissive' in m)) return;
+        m.emissive.copy(emissiveColor);
+        m.emissiveIntensity = emissiveIntensity;
+      });
+
+      // 3. LED RectAreaLight
+      let light = ledLights.get(id);
+      if (renderMode === 'realistic' && isLed && so) {
+        const led = so.ledProps || {};
+        const brightness = led.brightness ?? 1.0;
+        const castStrength = led.castLightStrength ?? 1.0;
+
+        if (!light) {
+          const w = 2 * (so.defaultScale.x || 1);
+          const h = 1.2 * (so.defaultScale.y || 1);
+          light = new THREE.RectAreaLight(0xffffff, 1, w, h);
+          scene.add(light);
+          ledLights.set(id, light);
+        }
+        light.position.copy(obj.position);
+        light.position.y += 0.05;
+        light.lookAt(obj.position.x, obj.position.y - 1, obj.position.z + 0.5);
+        light.color.copy(ledTint);
+        light.intensity = brightness * castStrength * 5;
+        light.visible = obj.visible;
+      } else if (light) {
+        scene.remove(light);
+        ledLights.delete(id);
+      }
+    });
+
+    for (const [id, light] of ledLights) {
+      if (!meshes.has(id)) {
+        scene.remove(light);
+        ledLights.delete(id);
+      }
+    }
+  }, [stageObjects, renderMode, states, selectedObjectId]);
+
+  void RectAreaLightHelper; // keep import in case we want helper toggle later
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -500,6 +609,11 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
           title="切換 world / local 軸 (Q)"
         >{space === 'world' ? '🌐 World' : '📦 Local'}</button>
         <span className="tool-sep" />
+        <button
+          className={'tool ' + (renderMode === 'realistic' ? 'is-active' : '')}
+          onClick={() => setRenderMode(m => m === 'quick' ? 'realistic' : 'quick')}
+          title={renderMode === 'realistic' ? '切回 Quick（純色）' : '切到 Realistic（LED 發光照明）'}
+        >{renderMode === 'realistic' ? '🎬 Realistic' : '⚡ Quick'}</button>
         <button
           className={'tool ' + (showLabels ? 'is-active' : '')}
           onClick={() => setShowLabels(s => !s)}

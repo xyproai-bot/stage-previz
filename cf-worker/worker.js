@@ -613,7 +613,7 @@ async function listStageObjects(env, projectId) {
   const r = await env.DB.prepare(`
     SELECT id, mesh_name, display_name, category, "order",
            default_position, default_rotation, default_scale, metadata, created_at,
-           locked
+           locked, material_props, led_props
     FROM stage_objects
     WHERE project_id = ?
     ORDER BY "order" ASC, created_at ASC
@@ -636,6 +636,8 @@ function parseStageObjectRow(o) {
     metadata: o.metadata ? safe(o.metadata, null) : null,
     createdAt: o.created_at,
     locked: !!o.locked,
+    materialProps: o.material_props ? safe(o.material_props, null) : null,
+    ledProps: o.led_props ? safe(o.led_props, null) : null,
   };
 }
 
@@ -692,6 +694,14 @@ async function updateStageObject(request, env, projectId, objId) {
   if ('defaultScale' in body) { sets.push('default_scale = ?'); values.push(JSON.stringify(body.defaultScale)); }
   if ('metadata' in body) { sets.push('metadata = ?'); values.push(body.metadata ? JSON.stringify(body.metadata) : null); }
   if ('locked' in body) { sets.push('locked = ?'); values.push(body.locked ? 1 : 0); }
+  if ('materialProps' in body) {
+    sets.push('material_props = ?');
+    values.push(body.materialProps ? JSON.stringify(body.materialProps) : null);
+  }
+  if ('ledProps' in body) {
+    sets.push('led_props = ?');
+    values.push(body.ledProps ? JSON.stringify(body.ledProps) : null);
+  }
 
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
   values.push(objId, projectId);

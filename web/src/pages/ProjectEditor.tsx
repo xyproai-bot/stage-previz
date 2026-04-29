@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
-import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler } from '../lib/api';
+import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler, MaterialProps, LedProps } from '../lib/api';
 import StageScene from '../components/StageScene';
 import UploadModelDialog from '../components/UploadModelDialog';
 import './ProjectEditor.css';
@@ -330,6 +330,27 @@ export default function ProjectEditor() {
       await refreshCueStates();
     } catch (e) { alert('失敗：' + msg(e)); }
   }
+  async function handleUpdateMaterial(objId: string, patch: MaterialProps) {
+    if (!projectId) return;
+    const obj = stageObjects.find(o => o.id === objId);
+    if (!obj) return;
+    const merged = { ...(obj.materialProps || {}), ...patch };
+    try {
+      await api.updateStageObject(projectId, objId, { materialProps: merged });
+      await refreshStageObjects();
+    } catch (e) { alert('材質更新失敗：' + msg(e)); }
+  }
+  async function handleUpdateLed(objId: string, patch: LedProps) {
+    if (!projectId) return;
+    const obj = stageObjects.find(o => o.id === objId);
+    if (!obj) return;
+    const merged = { ...(obj.ledProps || {}), ...patch };
+    try {
+      await api.updateStageObject(projectId, objId, { ledProps: merged });
+      await refreshStageObjects();
+    } catch (e) { alert('LED 屬性更新失敗：' + msg(e)); }
+  }
+
   async function handleToggleLock(obj: StageObject) {
     if (!projectId) return;
     try {
@@ -432,6 +453,7 @@ export default function ProjectEditor() {
           ) : (
             <StageScene
               states={viewportStates}
+              stageObjects={stageObjects}
               selectedObjectId={selectedObjectId}
               onSelect={(id) => {
                 setSelectedObjectId(id);
@@ -492,6 +514,8 @@ export default function ProjectEditor() {
                 onSet={handleSetState}
                 onReset={handleResetState}
                 onUpdateCueMeta={handleUpdateCueMeta}
+                onUpdateMaterial={handleUpdateMaterial}
+                onUpdateLed={handleUpdateLed}
                 onJumpToObjects={() => setRightTab('objects')}
               />
             ) : rightTab === 'proposals' ? (
@@ -659,7 +683,7 @@ function CueAddSplitButton({
 
 function ObjectStateEditor({
   cue, states, loading, stageObjects, selectedObjectId, onSelectObject,
-  onSet, onReset, onUpdateCueMeta, onJumpToObjects,
+  onSet, onReset, onUpdateCueMeta, onUpdateMaterial, onUpdateLed, onJumpToObjects,
 }: {
   cue: Cue | null;
   states: CueState[];
@@ -670,6 +694,8 @@ function ObjectStateEditor({
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
   onUpdateCueMeta: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) => Promise<void>;
+  onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
+  onUpdateLed: (objId: string, patch: LedProps) => Promise<void>;
   onJumpToObjects: () => void;
 }) {
   if (!cue) return <div className="editor-empty muted">先選一個 cue</div>;
@@ -691,16 +717,22 @@ function ObjectStateEditor({
     <div className="state-editor">
       <CueMetaEditor cue={cue} onUpdate={onUpdateCueMeta} />
       <ul className="object-state-list">
-        {states.map(s => (
-          <ObjectStateRow
-            key={s.objectId}
-            state={s}
-            forceOpen={s.objectId === selectedObjectId}
-            onClickHeader={() => onSelectObject(s.objectId === selectedObjectId ? null : s.objectId)}
-            onSet={onSet}
-            onReset={onReset}
-          />
-        ))}
+        {states.map(s => {
+          const so = stageObjects.find(o => o.id === s.objectId);
+          return (
+            <ObjectStateRow
+              key={s.objectId}
+              state={s}
+              stageObject={so}
+              forceOpen={s.objectId === selectedObjectId}
+              onClickHeader={() => onSelectObject(s.objectId === selectedObjectId ? null : s.objectId)}
+              onSet={onSet}
+              onReset={onReset}
+              onUpdateMaterial={onUpdateMaterial}
+              onUpdateLed={onUpdateLed}
+            />
+          );
+        })}
       </ul>
     </div>
   );
@@ -772,13 +804,16 @@ function CueMetaEditor({
 }
 
 function ObjectStateRow({
-  state, forceOpen, onClickHeader, onSet, onReset,
+  state, stageObject, forceOpen, onClickHeader, onSet, onReset, onUpdateMaterial, onUpdateLed,
 }: {
   state: CueState;
+  stageObject?: StageObject;
   forceOpen: boolean;
   onClickHeader: () => void;
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
+  onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
+  onUpdateLed: (objId: string, patch: LedProps) => Promise<void>;
 }) {
   const [saving, setSaving] = useState(false);
   const cat = CATEGORY_INFO[state.category];
@@ -878,9 +913,148 @@ function ObjectStateRow({
               📍 已在此 cue 設定位置（其他 cue 不受影響）。原始 default 位置 ({state.default.position.x}, {state.default.position.y}, {state.default.position.z})
             </div>
           )}
+
+          {stageObject && (
+            <MaterialSection
+              obj={stageObject}
+              onUpdate={(patch) => onUpdateMaterial(state.objectId, patch)}
+            />
+          )}
+          {stageObject && state.category === 'led_panel' && (
+            <LedSection
+              obj={stageObject}
+              onUpdate={(patch) => onUpdateLed(state.objectId, patch)}
+            />
+          )}
         </div>
       )}
     </li>
+  );
+}
+
+function MaterialSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: MaterialProps) => Promise<void> }) {
+  const m = obj.materialProps || {};
+  const [color, setColor] = useState(m.color || '#888888');
+  const [roughness, setRoughness] = useState(m.roughness ?? 0.6);
+  const [metalness, setMetalness] = useState(m.metalness ?? 0.1);
+  const [opacity, setOpacity] = useState(m.opacity ?? 1.0);
+
+  useEffect(() => {
+    setColor(m.color || '#888888');
+    setRoughness(m.roughness ?? 0.6);
+    setMetalness(m.metalness ?? 0.1);
+    setOpacity(m.opacity ?? 1.0);
+  }, [obj.id, m.color, m.roughness, m.metalness, m.opacity]);
+
+  function debouncedSave(patch: MaterialProps) {
+    onUpdate(patch);
+  }
+
+  return (
+    <div className="material-section">
+      <div className="section-title">🎨 材質</div>
+      <div className="form-row">
+        <label>顏色</label>
+        <div className="color-row">
+          <input type="color" value={color}
+            onChange={(e) => setColor(e.target.value)}
+            onBlur={() => debouncedSave({ color })}
+          />
+          <span className="mono small muted">{color}</span>
+        </div>
+      </div>
+      <div className="form-row">
+        <label>粗糙度 Roughness: {roughness.toFixed(2)}</label>
+        <input type="range" min={0} max={1} step={0.01}
+          value={roughness}
+          onChange={(e) => setRoughness(parseFloat(e.target.value))}
+          onMouseUp={() => debouncedSave({ roughness })}
+          onTouchEnd={() => debouncedSave({ roughness })}
+        />
+      </div>
+      <div className="form-row">
+        <label>金屬度 Metalness: {metalness.toFixed(2)}</label>
+        <input type="range" min={0} max={1} step={0.01}
+          value={metalness}
+          onChange={(e) => setMetalness(parseFloat(e.target.value))}
+          onMouseUp={() => debouncedSave({ metalness })}
+          onTouchEnd={() => debouncedSave({ metalness })}
+        />
+      </div>
+      <div className="form-row">
+        <label>不透明度: {opacity.toFixed(2)}</label>
+        <input type="range" min={0} max={1} step={0.01}
+          value={opacity}
+          onChange={(e) => setOpacity(parseFloat(e.target.value))}
+          onMouseUp={() => debouncedSave({ opacity })}
+          onTouchEnd={() => debouncedSave({ opacity })}
+        />
+      </div>
+    </div>
+  );
+}
+
+function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProps) => Promise<void> }) {
+  const led = obj.ledProps || {};
+  const [brightness, setBrightness] = useState(led.brightness ?? 1.0);
+  const [saturation, setSaturation] = useState(led.saturation ?? 1.0);
+  const [hue, setHue] = useState(led.hue ?? 0);
+  const [castStrength, setCastStrength] = useState(led.castLightStrength ?? 1.0);
+  const [tint, setTint] = useState(led.tint || '#ffffff');
+
+  useEffect(() => {
+    setBrightness(led.brightness ?? 1.0);
+    setSaturation(led.saturation ?? 1.0);
+    setHue(led.hue ?? 0);
+    setCastStrength(led.castLightStrength ?? 1.0);
+    setTint(led.tint || '#ffffff');
+  }, [obj.id, led.brightness, led.saturation, led.hue, led.castLightStrength, led.tint]);
+
+  function save(patch: LedProps) { onUpdate(patch); }
+
+  return (
+    <div className="material-section material-section--led">
+      <div className="section-title">💡 LED 屬性</div>
+      <div className="form-row">
+        <label>亮度: {brightness.toFixed(2)} ×</label>
+        <input type="range" min={0} max={3} step={0.05}
+          value={brightness}
+          onChange={(e) => setBrightness(parseFloat(e.target.value))}
+          onMouseUp={() => save({ brightness })} onTouchEnd={() => save({ brightness })} />
+      </div>
+      <div className="form-row">
+        <label>飽和度: {saturation.toFixed(2)} ×</label>
+        <input type="range" min={0} max={2} step={0.05}
+          value={saturation}
+          onChange={(e) => setSaturation(parseFloat(e.target.value))}
+          onMouseUp={() => save({ saturation })} onTouchEnd={() => save({ saturation })} />
+      </div>
+      <div className="form-row">
+        <label>色相偏移: {hue}°</label>
+        <input type="range" min={-180} max={180} step={1}
+          value={hue}
+          onChange={(e) => setHue(parseFloat(e.target.value))}
+          onMouseUp={() => save({ hue })} onTouchEnd={() => save({ hue })} />
+      </div>
+      <div className="form-row">
+        <label>色調 (Tint)</label>
+        <div className="color-row">
+          <input type="color" value={tint}
+            onChange={(e) => setTint(e.target.value)}
+            onBlur={() => save({ tint })} />
+          <span className="mono small muted">{tint}</span>
+        </div>
+      </div>
+      <div className="form-row">
+        <label>投光強度 (對周圍): {castStrength.toFixed(2)}</label>
+        <input type="range" min={0} max={3} step={0.05}
+          value={castStrength}
+          onChange={(e) => setCastStrength(parseFloat(e.target.value))}
+          onMouseUp={() => save({ castLightStrength: castStrength })}
+          onTouchEnd={() => save({ castLightStrength: castStrength })} />
+      </div>
+      <div className="muted small">提示：要看到 LED 投光效果，把上方 viewport 切到「🎬 Realistic」模式。</div>
+    </div>
   );
 }
 
