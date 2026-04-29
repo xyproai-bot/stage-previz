@@ -1,7 +1,8 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler } from '../lib/api';
+import StageScene from '../components/StageScene';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -35,6 +36,9 @@ export default function ProjectEditor() {
   // Cue object states (per selected cue)
   const [cueStates, setCueStates] = useState<CueState[]>([]);
   const [statesLoading, setStatesLoading] = useState(false);
+
+  // Selected object (synced between 3D viewport and right panel accordion)
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
 
   const [rightTab, setRightTab] = useState<RightTab>('cues');
 
@@ -150,6 +154,13 @@ export default function ProjectEditor() {
       if (selectedCueId === cueId) setSelectedCueId(null);
       await refreshCues();
     } catch (e) { alert('刪除失敗：' + msg(e)); }
+  }
+  async function handleUpdateCueMeta(patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) {
+    if (!projectId || !selectedSongId || !selectedCueId) return;
+    try {
+      await api.updateCue(projectId, selectedSongId, selectedCueId, patch);
+      await refreshCues();
+    } catch (e) { alert('更新 cue 失敗：' + msg(e)); }
   }
 
   // ── Cue state (per object override) actions ──
@@ -284,33 +295,30 @@ export default function ProjectEditor() {
           <button className="btn btn--ghost editor-songs__add" onClick={handleAddSong}>＋ 新增歌曲</button>
         </aside>
 
-        {/* Center — viewport placeholder + selected cue summary */}
+        {/* Center — 3D viewport */}
         <section className="editor-viewport">
-          <div className="viewport-toolbar">
-            <span className="muted">攝影機預設</span>
-            {['前台', '舞臺左', '舞臺右', '俯瞰', '表演者'].map(p => (
-              <button key={p} className="cam-chip">{p}</button>
-            ))}
-            <span className="grow" />
-            <span className="fps">B2: 3D viewport</span>
-          </div>
-
-          <div className="viewport-stage">
-            <div className="viewport-placeholder">
-              <div style={{ fontSize: 64, opacity: 0.4 }}>🎭</div>
-              <div className="muted">3D 預覽（B2 階段加入 Three.js）</div>
-              {selectedCue ? (
-                <div className="viewport-cue-info">
-                  <div className="strong">{selectedCue.name}</div>
-                  <div className="muted small">
-                    {cueStates.length} 物件 · {cueStates.filter(s => s.override).length} 有覆蓋
-                  </div>
-                </div>
-              ) : (
-                <small className="muted">先在右側選一個 cue</small>
-              )}
+          {selectedCue ? (
+            <StageScene
+              states={cueStates}
+              selectedObjectId={selectedObjectId}
+              onSelect={(id) => {
+                setSelectedObjectId(id);
+                if (id) setRightTab('state');
+              }}
+              onTransform={async (objId, position, rotation) => {
+                await handleSetState(objId, { position, rotation });
+              }}
+              cueName={selectedCue.name}
+            />
+          ) : (
+            <div className="viewport-stage">
+              <div className="viewport-placeholder">
+                <div style={{ fontSize: 64, opacity: 0.4 }}>🎭</div>
+                <div className="muted">先在右側選一個 cue</div>
+                <small className="muted">建立 cue 後可在 3D 中拖動物件設定其位置/旋轉</small>
+              </div>
             </div>
-          </div>
+          )}
         </section>
 
         {/* Right — Cue panel */}
@@ -348,8 +356,11 @@ export default function ProjectEditor() {
                 states={cueStates}
                 loading={statesLoading}
                 stageObjects={stageObjects}
+                selectedObjectId={selectedObjectId}
+                onSelectObject={setSelectedObjectId}
                 onSet={handleSetState}
                 onReset={handleResetState}
+                onUpdateCueMeta={handleUpdateCueMeta}
                 onJumpToObjects={() => setRightTab('objects')}
               />
             ) : rightTab === 'proposals' ? (
@@ -429,14 +440,18 @@ function CueList({
 }
 
 function ObjectStateEditor({
-  cue, states, loading, stageObjects, onSet, onReset, onJumpToObjects,
+  cue, states, loading, stageObjects, selectedObjectId, onSelectObject,
+  onSet, onReset, onUpdateCueMeta, onJumpToObjects,
 }: {
   cue: Cue | null;
   states: CueState[];
   loading: boolean;
   stageObjects: StageObject[];
+  selectedObjectId: string | null;
+  onSelectObject: (id: string | null) => void;
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
+  onUpdateCueMeta: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) => Promise<void>;
   onJumpToObjects: () => void;
 }) {
   if (!cue) return <div className="editor-empty muted">先選一個 cue</div>;
@@ -456,23 +471,94 @@ function ObjectStateEditor({
 
   return (
     <div className="state-editor">
-      <div className="state-editor__cue">
-        <span className="muted small">當前 cue：</span>
-        <span className="strong">{cue.name}</span>
-      </div>
+      <CueMetaEditor cue={cue} onUpdate={onUpdateCueMeta} />
       <ul className="object-state-list">
         {states.map(s => (
-          <ObjectStateRow key={s.objectId} state={s} onSet={onSet} onReset={onReset} />
+          <ObjectStateRow
+            key={s.objectId}
+            state={s}
+            forceOpen={s.objectId === selectedObjectId}
+            onClickHeader={() => onSelectObject(s.objectId === selectedObjectId ? null : s.objectId)}
+            onSet={onSet}
+            onReset={onReset}
+          />
         ))}
       </ul>
     </div>
   );
 }
 
+function CueMetaEditor({
+  cue, onUpdate,
+}: {
+  cue: Cue;
+  onUpdate: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) => Promise<void>;
+}) {
+  const [name, setName] = useState(cue.name);
+  const [crossfade, setCrossfade] = useState(cue.crossfadeSeconds);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setName(cue.name);
+    setCrossfade(cue.crossfadeSeconds);
+  }, [cue.id, cue.name, cue.crossfadeSeconds]);
+
+  const dirty = name !== cue.name || crossfade !== cue.crossfadeSeconds;
+
+  async function save() {
+    if (!dirty) return;
+    setSaving(true);
+    try {
+      const patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>> = {};
+      if (name !== cue.name) patch.name = name.trim().slice(0, 100);
+      if (crossfade !== cue.crossfadeSeconds) patch.crossfadeSeconds = Math.max(0, crossfade);
+      await onUpdate(patch);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="cue-meta-editor">
+      <div className="cue-meta-editor__row">
+        <label>當前 cue 名稱</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          maxLength={100}
+        />
+      </div>
+      <div className="cue-meta-editor__row">
+        <label>淡入淡出時間（秒）</label>
+        <input
+          type="number"
+          step={0.1}
+          min={0}
+          value={crossfade}
+          onChange={(e) => setCrossfade(parseFloat(e.target.value) || 0)}
+          onBlur={save}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+        />
+        <small className="muted">0 = 硬切；大於 0 時 cue 切換用此秒數漸變</small>
+      </div>
+      {dirty && (
+        <button className="btn btn--primary cue-meta-editor__save" onClick={save} disabled={saving}>
+          {saving ? '儲存中…' : '💾 儲存變更'}
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ObjectStateRow({
-  state, onSet, onReset,
+  state, forceOpen, onClickHeader, onSet, onReset,
 }: {
   state: CueState;
+  forceOpen: boolean;
+  onClickHeader: () => void;
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
 }) {
@@ -480,7 +566,17 @@ function ObjectStateRow({
   const [saving, setSaving] = useState(false);
   const cat = CATEGORY_INFO[state.category];
   const hasOverride = !!state.override;
+  const rowRef = useRef<HTMLLIElement>(null);
 
+  // forceOpen overrides local open state; auto-scroll into view
+  useEffect(() => {
+    if (forceOpen) {
+      setOpen(true);
+      rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }, [forceOpen]);
+
+  const isOpen = forceOpen || open;
   const eff = state.effective;
   const [pos, setPos] = useState<Vec3>(eff.position);
   const [rot, setRot] = useState<Euler>(eff.rotation);
@@ -505,14 +601,17 @@ function ObjectStateRow({
   }
 
   return (
-    <li className={'object-row' + (hasOverride ? ' has-override' : '')}>
-      <header className="object-row__head" onClick={() => setOpen(o => !o)}>
+    <li
+      ref={rowRef}
+      className={'object-row' + (hasOverride ? ' has-override' : '') + (forceOpen ? ' is-selected' : '')}
+    >
+      <header className="object-row__head" onClick={() => { onClickHeader(); setOpen(o => !o); }}>
         <span className="object-row__cat" title={cat.label}>{cat.icon}</span>
         <span className="object-row__name">{state.displayName}</span>
         {hasOverride && <span className="override-dot" title="此 cue 有覆蓋" />}
-        <span className="object-row__chev">{open ? '▾' : '▸'}</span>
+        <span className="object-row__chev">{isOpen ? '▾' : '▸'}</span>
       </header>
-      {open && (
+      {isOpen && (
         <div className="object-row__body">
           <div className="form-row">
             <label>Position (X / Y / Z)</label>

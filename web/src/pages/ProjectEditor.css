@@ -450,15 +450,61 @@
 .state-editor {
   padding: 12px 12px 24px;
 }
-.state-editor__cue {
-  padding: 8px 12px;
-  margin-bottom: 12px;
+
+/* Cue meta inline editor */
+.cue-meta-editor {
   background: var(--accent-dim);
+  border: 1px solid rgba(16, 199, 138, 0.25);
   border-radius: var(--radius-md);
-  font-size: 12.5px;
+  padding: 12px;
+  margin-bottom: 14px;
   display: flex;
-  gap: 6px;
-  align-items: center;
+  flex-direction: column;
+  gap: 10px;
+}
+.cue-meta-editor__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cue-meta-editor__row label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+.cue-meta-editor__row input {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(16, 199, 138, 0.3);
+  color: var(--text);
+  padding: 7px 10px;
+  font-size: 13px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  font-family: inherit;
+}
+.cue-meta-editor__row input[type="number"] {
+  font-family: var(--font-mono);
+}
+.cue-meta-editor__row input:focus {
+  border-color: var(--accent);
+}
+.cue-meta-editor__row small {
+  font-size: 10.5px;
+  margin-top: 2px;
+}
+.cue-meta-editor__save {
+  align-self: stretch;
+  padding: 7px 12px;
+  font-size: 12px;
+}
+
+/* selected highlight */
+.object-row.is-selected {
+  border-color: var(--accent) !important;
+  border-left-width: 3px !important;
+  box-shadow: 0 0 0 1px rgba(16, 199, 138, 0.3);
 }
 .object-state-list {
   list-style: none;
