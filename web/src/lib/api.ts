@@ -219,6 +219,24 @@ export async function seedDefaultStageObjects(projectId: string): Promise<{ inse
   });
 }
 
+export async function bulkCreateStageObjects(
+  projectId: string,
+  items: Array<{
+    meshName: string;
+    displayName?: string;
+    category?: StageObjectCategory;
+    defaultPosition?: Vec3;
+    defaultRotation?: Euler;
+    defaultScale?: Vec3;
+  }>,
+  options?: { replace?: boolean }
+): Promise<{ inserted: number; skipped: number }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects/bulk`, {
+    method: 'POST',
+    body: JSON.stringify({ items, replace: options?.replace ?? false }),
+  });
+}
+
 // ─── Cue Object States ────────────────────────────────
 
 export interface CueState {

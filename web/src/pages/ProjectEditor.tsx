@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler } from '../lib/api';
 import StageScene from '../components/StageScene';
+import UploadModelDialog from '../components/UploadModelDialog';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -41,6 +42,7 @@ export default function ProjectEditor() {
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
 
   const [rightTab, setRightTab] = useState<RightTab>('cues');
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   // ── Loaders ──
   const refreshSongs = useCallback(async () => {
@@ -378,6 +380,7 @@ export default function ProjectEditor() {
                 objects={stageObjects}
                 onSeed={handleSeedObjects}
                 onAdd={handleAddObject}
+                onUpload={() => setUploadOpen(true)}
                 onRename={handleRenameObject}
                 onChangeCategory={handleChangeCategory}
                 onDelete={handleDeleteObject}
@@ -386,6 +389,16 @@ export default function ProjectEditor() {
           </div>
         </aside>
       </div>
+
+      <UploadModelDialog
+        open={uploadOpen}
+        projectId={projectId || ''}
+        onClose={() => setUploadOpen(false)}
+        onImported={() => {
+          refreshStageObjects();
+          refreshCueStates();
+        }}
+      />
     </div>
   );
 }
@@ -665,11 +678,12 @@ function ObjectStateRow({
 }
 
 function ObjectsManager({
-  objects, onSeed, onAdd, onRename, onChangeCategory, onDelete,
+  objects, onSeed, onAdd, onUpload, onRename, onChangeCategory, onDelete,
 }: {
   objects: StageObject[];
   onSeed: () => void;
   onAdd: () => void;
+  onUpload: () => void;
   onRename: (obj: StageObject) => void;
   onChangeCategory: (obj: StageObject, cat: StageObjectCategory) => void;
   onDelete: (obj: StageObject) => void;
@@ -677,8 +691,9 @@ function ObjectsManager({
   return (
     <div className="objects-manager">
       <div className="objects-manager__bar">
-        <button className="btn btn--ghost" onClick={onSeed}>🌱 一鍵範例</button>
-        <button className="btn btn--primary" onClick={onAdd}>＋ 新增物件</button>
+        <button className="btn btn--primary" onClick={onUpload} title="從 .glb / .gltf 匯入">📦 上傳模型</button>
+        <button className="btn btn--ghost" onClick={onSeed} title="塞入 10 個常用範例">🌱 範例</button>
+        <button className="btn btn--ghost" onClick={onAdd} title="手動新增單一物件">＋ 手動</button>
       </div>
 
       {objects.length === 0 ? (

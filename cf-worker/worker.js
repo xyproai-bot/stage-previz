@@ -516,6 +516,10 @@ async function handleStageObjects(request, env, projectId, objIdOrAction) {
       if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
       return seedDefaultStageObjects(env, projectId);
     }
+    if (objIdOrAction === 'bulk') {
+      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+      return bulkCreateStageObjects(request, env, projectId);
+    }
 
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(objIdOrAction)) return jsonResp({ error: 'Invalid obj id' }, 400);
 
@@ -624,6 +628,52 @@ async function deleteStageObject(env, projectId, objId) {
   ).bind(objId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp({ ok: true });
+}
+
+// Bulk create stage_objects（GLB 解析後一次匯入）
+async function bulkCreateStageObjects(request, env, projectId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const items = Array.isArray(body?.items) ? body.items : null;
+  if (!items || !items.length) return jsonResp({ error: 'items required' }, 400);
+  if (items.length > 200) return jsonResp({ error: 'too many items (max 200)' }, 400);
+
+  const replace = !!body?.replace; // 若 true，先清掉專案所有舊 stage_objects
+  if (replace) {
+    await env.DB.prepare(`DELETE FROM stage_objects WHERE project_id = ?`).bind(projectId).run();
+  }
+
+  const maxRow = await env.DB.prepare(
+    `SELECT COALESCE(MAX("order"), -1) AS max_order FROM stage_objects WHERE project_id = ?`
+  ).bind(projectId).first();
+  let order = (maxRow?.max_order ?? -1) + 1;
+
+  const stmts = [];
+  let inserted = 0, skipped = 0;
+  for (const it of items) {
+    const meshName = (it?.meshName || '').toString().trim().slice(0, 80);
+    if (!meshName) { skipped++; continue; }
+    const category = STAGE_OBJ_CATEGORIES.includes(it?.category) ? it.category : 'other';
+    const displayName = (it?.displayName || '').toString().slice(0, 80) || null;
+    const defaultPosition = JSON.stringify(it?.defaultPosition || { x: 0, y: 0, z: 0 });
+    const defaultRotation = JSON.stringify(it?.defaultRotation || { pitch: 0, yaw: 0, roll: 0 });
+    const defaultScale = JSON.stringify(it?.defaultScale || { x: 1, y: 1, z: 1 });
+    const id = 'so_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + (order % 1000);
+
+    stmts.push(env.DB.prepare(`
+      INSERT OR IGNORE INTO stage_objects
+        (id, project_id, mesh_name, display_name, category, "order",
+         default_position, default_rotation, default_scale)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, projectId, meshName, displayName, category, order,
+            defaultPosition, defaultRotation, defaultScale));
+    order += 1;
+    inserted += 1;
+  }
+
+  await env.DB.batch(stmts);
+  return jsonResp({ ok: true, inserted, skipped });
 }
 
 const DEFAULT_STAGE_OBJECTS = [
