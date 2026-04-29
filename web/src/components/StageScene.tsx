@@ -100,36 +100,50 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     // Transform gizmo (Three.js r169+ : TransformControls 不是 Object3D，要用 getHelper)
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setSize(0.9);
+
+    // 用 dragging-changed 同時：暫停 orbit + drag 結束時自動存
     transform.addEventListener('dragging-changed', (event: any) => {
       orbit.enabled = !event.value;
+      // 從 dragging=true → false 表示鬆開
+      if (event.value === false) {
+        const obj = transform.object;
+        const id = selectedIdRef.current;
+        if (!obj || !id) return;
+        const pos = { x: round(obj.position.x), y: round(obj.position.y), z: round(obj.position.z) };
+        const rot = {
+          pitch: round(THREE.MathUtils.radToDeg(obj.rotation.x)),
+          yaw:   round(THREE.MathUtils.radToDeg(obj.rotation.y)),
+          roll:  round(THREE.MathUtils.radToDeg(obj.rotation.z)),
+        };
+        onTransformRef.current(id, pos, rot);
+      }
     });
-    transform.addEventListener('mouseUp', () => {
-      const obj = transform.object;
-      const id = selectedIdRef.current;
-      if (!obj || !id) return;
-      const pos = { x: round(obj.position.x), y: round(obj.position.y), z: round(obj.position.z) };
-      const rot = {
-        pitch: round(THREE.MathUtils.radToDeg(obj.rotation.x)),
-        yaw:   round(THREE.MathUtils.radToDeg(obj.rotation.y)),
-        roll:  round(THREE.MathUtils.radToDeg(obj.rotation.z)),
-      };
-      onTransformRef.current(id, pos, rot);
-    });
+
     // r169+：TransformControls extends Controls (不是 Object3D)，要 add 它的 helper
     const transformHelper = transform.getHelper();
     scene.add(transformHelper);
     transformRef.current = transform;
 
-    // Selection by click
+    // Selection by click — 但要先排除「點到 gizmo」的情況（不然會 detach 中斷 drag）
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     function onPointerDown(e: PointerEvent) {
-      // 不要在 gizmo dragging 中觸發 selection
+      // 已經在拖 gizmo 中 → 完全跳過
       if (transform.dragging) return;
+      // 只處理左鍵
+      if (e.button !== 0) return;
+
       const rect = renderer.domElement.getBoundingClientRect();
       ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
+
+      // 1. 先看 click 是不是打到 gizmo（旋轉環、移動軸、縮放方塊）
+      //    如果是，let TransformControls 自己處理，我們別 detach
+      const gizmoHits = raycaster.intersectObject(transformHelper, true);
+      if (gizmoHits.length > 0) return;
+
+      // 2. 沒打到 gizmo，那就嘗試選物件
       const meshes = Array.from(meshesRef.current.values());
       const hit = raycaster.intersectObjects(meshes, false);
       if (hit.length > 0) {
