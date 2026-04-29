@@ -104,6 +104,21 @@ export default function ProjectEditor() {
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId) || null, [cues, selectedCueId]);
   const selectedSong = useMemo(() => songs.find(s => s.id === selectedSongId) || null, [songs, selectedSongId]);
 
+  // viewport 用的 states：有 cue 用 cueStates，沒 cue 用 stageObjects 的 default 假裝成 state
+  const viewportStates: CueState[] = useMemo(() => {
+    if (selectedCueId && cueStates.length > 0) return cueStates;
+    return stageObjects.map(o => ({
+      objectId: o.id,
+      meshName: o.meshName,
+      displayName: o.displayName,
+      category: o.category,
+      order: o.order,
+      default: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale },
+      override: null,
+      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: true },
+    }));
+  }, [selectedCueId, cueStates, stageObjects]);
+
   // ── Song actions ──
   async function handleAddSong() {
     if (!projectId) return;
@@ -167,7 +182,17 @@ export default function ProjectEditor() {
 
   // ── Cue state (per object override) actions ──
   async function handleSetState(objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) {
-    if (!projectId || !selectedSongId || !selectedCueId) return;
+    if (!projectId) return;
+    // 沒選 cue 時 → 改 stage_object 的 default（影響所有 cue 預設值）
+    if (!selectedCueId) {
+      const objPatch: any = {};
+      if ('position' in patch) objPatch.defaultPosition = patch.position;
+      if ('rotation' in patch) objPatch.defaultRotation = patch.rotation;
+      await api.updateStageObject(projectId, objId, objPatch);
+      await refreshStageObjects();
+      return;
+    }
+    if (!selectedSongId) return;
     await api.setCueState(projectId, selectedSongId, selectedCueId, objId, patch);
     await refreshCueStates();
   }
@@ -297,11 +322,19 @@ export default function ProjectEditor() {
           <button className="btn btn--ghost editor-songs__add" onClick={handleAddSong}>＋ 新增歌曲</button>
         </aside>
 
-        {/* Center — 3D viewport */}
+        {/* Center — 3D viewport（永遠顯示；沒 cue 時編輯 = 改 default） */}
         <section className="editor-viewport">
-          {selectedCue ? (
+          {stageObjects.length === 0 ? (
+            <div className="viewport-stage">
+              <div className="viewport-placeholder">
+                <div style={{ fontSize: 64, opacity: 0.4 }}>📦</div>
+                <div className="muted">這個專案還沒有物件</div>
+                <small className="muted">右側「物件」分頁 → 上傳模型或一鍵範例</small>
+              </div>
+            </div>
+          ) : (
             <StageScene
-              states={cueStates}
+              states={viewportStates}
               selectedObjectId={selectedObjectId}
               onSelect={(id) => {
                 setSelectedObjectId(id);
@@ -310,16 +343,8 @@ export default function ProjectEditor() {
               onTransform={async (objId, position, rotation) => {
                 await handleSetState(objId, { position, rotation });
               }}
-              cueName={selectedCue.name}
+              cueName={selectedCue ? selectedCue.name : '(default — 改的是物件預設位置)'}
             />
-          ) : (
-            <div className="viewport-stage">
-              <div className="viewport-placeholder">
-                <div style={{ fontSize: 64, opacity: 0.4 }}>🎭</div>
-                <div className="muted">先在右側選一個 cue</div>
-                <small className="muted">建立 cue 後可在 3D 中拖動物件設定其位置/旋轉</small>
-              </div>
-            </div>
           )}
         </section>
 
