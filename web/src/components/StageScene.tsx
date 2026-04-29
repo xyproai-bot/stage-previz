@@ -97,7 +97,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     orbit.target.set(0, 1, 0);
     orbitRef.current = orbit;
 
-    // Transform gizmo
+    // Transform gizmo (Three.js r169+ : TransformControls 不是 Object3D，要用 getHelper)
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setSize(0.9);
     transform.addEventListener('dragging-changed', (event: any) => {
@@ -115,7 +115,9 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       };
       onTransformRef.current(id, pos, rot);
     });
-    scene.add(transform as unknown as THREE.Object3D);
+    // r169+：TransformControls extends Controls (不是 Object3D)，要 add 它的 helper
+    const transformHelper = transform.getHelper();
+    scene.add(transformHelper);
     transformRef.current = transform;
 
     // Selection by click
@@ -166,11 +168,12 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       stopped = true;
       ro.disconnect();
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
-      transform.dispose();
-      orbit.dispose();
-      renderer.dispose();
+      try { scene.remove(transformHelper); } catch {}
+      try { transform.detach(); } catch {}
+      try { transform.dispose(); } catch (e) { console.warn('TransformControls dispose:', e); }
+      try { orbit.dispose(); } catch {}
+      try { renderer.dispose(); } catch {}
       try { container.removeChild(renderer.domElement); } catch {}
-      // remove label layer if any
       const layer = labelLayerRef.current;
       if (layer) try { container.removeChild(layer); } catch {}
       labelsRef.current.clear();

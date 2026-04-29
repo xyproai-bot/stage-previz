@@ -20,3 +20,8 @@ binding = "DB"
 database_name = "stage-previz-db"
 database_id = "a6f04aab-39a8-4846-9640-f181a6b35302"
 migrations_dir = "migrations"
+
+# R2 — 模型檔（.glb / .gltf）+ thumbnail 等大型 binary
+[[r2_buckets]]
+binding = "MODELS"
+bucket_name = "stage-previz-models"

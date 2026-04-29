@@ -41,6 +41,10 @@ export default {
       return handleProjectsRouter(request, env, url);
     }
 
+    if (url.pathname.startsWith('/r2/models/')) {
+      return handleModelDownload(request, env, url);
+    }
+
     if (url.pathname === '/' || url.pathname === '') {
       return handleDriveProxy(request, url);
     }
@@ -81,6 +85,11 @@ async function handleProjectsRouter(request, env, url) {
   if (sub === 'stage-objects') {
     // segs[4] is obj id (or 'seed-defaults' magic action)
     return handleStageObjects(request, env, projectId, segs[4] || null);
+  }
+
+  if (sub === 'model') {
+    // /api/projects/:id/model → upload (PUT) / get info (GET)
+    return handleModel(request, env, projectId);
   }
 
   if (sub === 'songs' && sub2 === 'cues' && sub3 === 'states') {
@@ -628,6 +637,86 @@ async function deleteStageObject(env, projectId, objId) {
   ).bind(objId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp({ ok: true });
+}
+
+// ─────────────────────────────────────────────
+// Model file (R2) — upload & retrieve
+// PUT /api/projects/:id/model         body: binary glb（直接 raw bytes）
+// GET /api/projects/:id/model         → 回模型 metadata（r2 key、大小）
+// GET /r2/models/:projectId/:key      → 串流真檔
+// ─────────────────────────────────────────────
+
+const MAX_MODEL_SIZE = 100 * 1024 * 1024; // 100 MB
+
+async function handleModel(request, env, projectId) {
+  if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid project id' }, 400);
+
+  if (request.method === 'GET') {
+    const row = await env.DB.prepare(
+      `SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`
+    ).bind(projectId).first();
+    if (!row?.model_r2_key) return jsonResp({ model: null });
+    const obj = await env.MODELS.head(row.model_r2_key);
+    return jsonResp({
+      model: {
+        key: row.model_r2_key,
+        url: `/r2/${row.model_r2_key}`,
+        size: obj?.size || 0,
+        uploaded: obj?.uploaded?.toISOString?.() || null,
+      },
+    });
+  }
+
+  if (request.method === 'PUT') {
+    const ct = request.headers.get('content-type') || '';
+    if (!ct.includes('model/gltf-binary') && !ct.includes('application/octet-stream')) {
+      return jsonResp({ error: 'Content-Type must be model/gltf-binary or application/octet-stream' }, 400);
+    }
+    const cl = parseInt(request.headers.get('content-length') || '0', 10);
+    if (cl > MAX_MODEL_SIZE) {
+      return jsonResp({ error: `File too large (max ${MAX_MODEL_SIZE / 1024 / 1024} MB)` }, 413);
+    }
+
+    // 用 timestamp + project 當 key（保留版本紀錄）
+    const ts = Date.now();
+    const key = `models/${projectId}/${ts}.glb`;
+
+    // 把 body 直接串到 R2
+    await env.MODELS.put(key, request.body, {
+      httpMetadata: { contentType: 'model/gltf-binary' },
+      customMetadata: { projectId, uploadedAt: new Date().toISOString() },
+    });
+
+    // 更新 project.model_r2_key
+    await env.DB.prepare(
+      `UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`
+    ).bind(key, projectId).run();
+
+    return jsonResp({ ok: true, key, url: `/r2/${key}` });
+  }
+
+  return jsonResp({ error: 'Method not allowed' }, 405);
+}
+
+async function handleModelDownload(request, env, url) {
+  if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
+
+  // url.pathname 形如 /r2/models/<projectId>/<file>.glb
+  const r2Key = url.pathname.replace(/^\/r2\//, '');
+  if (!r2Key.startsWith('models/') || r2Key.includes('..')) {
+    return jsonResp({ error: 'Invalid key' }, 400);
+  }
+
+  const obj = await env.MODELS.get(r2Key);
+  if (!obj) return jsonResp({ error: 'Not found' }, 404);
+
+  const headers = new Headers();
+  obj.writeHttpMetadata(headers);
+  headers.set('Cache-Control', 'public, max-age=3600');
+  Object.entries(corsHeaders()).forEach(([k, v]) => headers.set(k, v));
+
+  return new Response(obj.body, { status: 200, headers });
 }
 
 // Bulk create stage_objects（GLB 解析後一次匯入）
