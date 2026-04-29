@@ -184,6 +184,23 @@ export type StageObjectCategory = 'led_panel' | 'walk_point' | 'mechanism' | 'fi
 export interface Vec3 { x: number; y: number; z: number; }
 export interface Euler { pitch: number; yaw: number; roll: number; }
 
+export interface MaterialProps {
+  color?: string;          // hex e.g. "#888888"
+  roughness?: number;      // 0-1
+  metalness?: number;      // 0-1
+  opacity?: number;        // 0-1
+  emissive?: string;       // hex
+  emissiveIntensity?: number; // 0-3
+}
+
+export interface LedProps {
+  brightness?: number;       // 0-3，1 = 正常
+  saturation?: number;       // 0-2，1 = 原色
+  hue?: number;              // -180~180 度
+  castLightStrength?: number; // 0-3，影響 RectAreaLight intensity
+  tint?: string;             // hex 色調，與 brightness 相乘
+}
+
 export interface StageObject {
   id: string;
   meshName: string;
@@ -196,6 +213,8 @@ export interface StageObject {
   metadata: Record<string, unknown> | null;
   createdAt: string;
   locked: boolean;
+  materialProps: MaterialProps | null;
+  ledProps: LedProps | null;
 }
 
 export async function listStageObjects(projectId: string): Promise<StageObject[]> {
@@ -227,6 +246,8 @@ export async function updateStageObject(projectId: string, objId: string, patch:
   defaultScale: Vec3;
   metadata: Record<string, unknown> | null;
   locked: boolean;
+  materialProps: MaterialProps | null;
+  ledProps: LedProps | null;
 }>): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects/${encodeURIComponent(objId)}`, {
     method: 'PATCH',
