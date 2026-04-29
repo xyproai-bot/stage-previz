@@ -83,7 +83,12 @@ export async function parseGlbFile(file: File): Promise<ParseResult> {
   const sceneSizeMeters = round(sceneSize.length());
   const scaleFactor = computeScaleFactor(sceneSizeMeters);
 
-  scene.children.forEach((child) => {
+  // 找出最佳 scope：哪一層的 children 命名規則匹配最多
+  // 例：root 只有 1 個 wrapper "舞臺" → 解開 → 看 wrapper.children 是不是 LED_xx 等
+  const bestScope = findBestScope(scene);
+  scene.updateMatrixWorld(true);  // 確保 matrixWorld 是新的
+
+  bestScope.children.forEach((child) => {
     const name = (child.name || '').trim();
     if (!name) {
       warnings.push('發現一個無命名的 top-level 節點，已跳過');
@@ -101,26 +106,32 @@ export async function parseGlbFile(file: File): Promise<ParseResult> {
     const sz = box.getSize(new THREE.Vector3());
     const sizeMeters = round(sz.length());
 
-    // 把 scaleFactor baked 進 default position/scale → DB 直接存「meter scale」
+    // 用 world transform 才對（child.position 是相對 parent 的 local；scope 在深層時不能直接用）
+    const wp = new THREE.Vector3();
+    const wq = new THREE.Quaternion();
+    const ws = new THREE.Vector3();
+    child.matrixWorld.decompose(wp, wq, ws);
+    const we = new THREE.Euler().setFromQuaternion(wq);
+
     meshes.push({
       meshName: name,
       displayName: prettifyName(name, prefix),
       category,
       matchedPrefix: prefix,
       defaultPosition: {
-        x: round(child.position.x * scaleFactor),
-        y: round(child.position.y * scaleFactor),
-        z: round(child.position.z * scaleFactor),
+        x: round(wp.x * scaleFactor),
+        y: round(wp.y * scaleFactor),
+        z: round(wp.z * scaleFactor),
       },
       defaultRotation: {
-        pitch: round(THREE.MathUtils.radToDeg(child.rotation.x)),
-        yaw:   round(THREE.MathUtils.radToDeg(child.rotation.y)),
-        roll:  round(THREE.MathUtils.radToDeg(child.rotation.z)),
+        pitch: round(THREE.MathUtils.radToDeg(we.x)),
+        yaw:   round(THREE.MathUtils.radToDeg(we.y)),
+        roll:  round(THREE.MathUtils.radToDeg(we.z)),
       },
       defaultScale: {
-        x: round(child.scale.x * scaleFactor),
-        y: round(child.scale.y * scaleFactor),
-        z: round(child.scale.z * scaleFactor),
+        x: round(ws.x * scaleFactor),
+        y: round(ws.y * scaleFactor),
+        z: round(ws.z * scaleFactor),
       },
       childCount,
       sizeMeters: round(sizeMeters * scaleFactor),
@@ -148,6 +159,42 @@ function countDescendants(node: THREE.Object3D): number {
   let n = 0;
   node.traverse(() => { n++; });
   return n - 1; // 不算自己
+}
+
+/**
+ * 找最佳 scope：走整棵樹，看哪個 node 的 children 命名規則匹配最多
+ * - 如果有任何 node 的 children 至少 1 個匹配 → 用該 node 當 scope
+ * - 都沒匹配 → 解開連續單一 wrapper（root.children.length===1 → 下一層）直到分岔
+ */
+export function findBestScope(root: THREE.Object3D): THREE.Object3D {
+  function countMatching(node: THREE.Object3D): number {
+    let c = 0;
+    for (const child of node.children) {
+      const name = (child.name || '').trim();
+      if (PREFIX_RULES.some(([re]) => re.test(name))) c++;
+    }
+    return c;
+  }
+
+  let bestNode: THREE.Object3D = root;
+  let bestCount = countMatching(root);
+  root.traverse((node) => {
+    const c = countMatching(node);
+    if (c > bestCount) {
+      bestCount = c;
+      bestNode = node;
+    }
+  });
+
+  // fallback：完全沒命名規則匹配時（例如 Sketchfab 模型），解開單一 wrapper
+  if (bestCount === 0) {
+    let n: THREE.Object3D = root;
+    while (n.children.length === 1) {
+      n = n.children[0];
+    }
+    bestNode = n;
+  }
+  return bestNode;
 }
 
 function round(n: number): number {

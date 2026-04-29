@@ -4,7 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { CueState, Vec3, Euler } from '../lib/api';
-import { computeScaleFactor } from '../lib/parseGlb';
+import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import './StageScene.css';
 
 const CATEGORY_COLORS: Record<string, number> = {
@@ -237,15 +237,28 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
         const diag = size.length();
         const scaleFactor = computeScaleFactor(diag);
 
-        // baked scaleFactor 進 children（不是設 gltf.scene.scale，因為 clone 不繼承父 scale）
+        // 用同樣的 findBestScope 找實際 LED/STAGE 等所在的層級
+        gltf.scene.updateMatrixWorld(true);
+        const bestScope = findBestScope(gltf.scene);
+
+        // baked scaleFactor 進 children + 把 children 從 wrapper detach 出來
+        // 改用 world transform，這樣 wrapper 的 transform 不會 leak
         const map = new Map<string, THREE.Object3D>();
-        gltf.scene.children.forEach((child) => {
+        const children = [...bestScope.children]; // 複製 array（detach 會改原 array）
+        children.forEach((child) => {
           const name = (child.name || '').trim();
           if (!name) return;
-          if (scaleFactor !== 1) {
-            child.scale.multiplyScalar(scaleFactor);
-            child.position.multiplyScalar(scaleFactor);
-          }
+
+          // 把 wrapper 的 world transform baked 進 child
+          const wp = new THREE.Vector3(), wq = new THREE.Quaternion(), ws = new THREE.Vector3();
+          child.matrixWorld.decompose(wp, wq, ws);
+
+          // detach（移到 root），然後 set world transform back
+          if (child.parent) child.parent.remove(child);
+          child.position.copy(wp).multiplyScalar(scaleFactor);
+          child.quaternion.copy(wq);
+          child.scale.copy(ws).multiplyScalar(scaleFactor);
+
           map.set(name, child);
         });
         modelMeshMapRef.current = map;
