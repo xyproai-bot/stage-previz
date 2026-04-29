@@ -33,7 +33,22 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
 
 export async function listProjects(): Promise<Project[]> {
   const data = await http<{ projects: Project[] }>('/api/projects');
-  return data.projects;
+  const list = data.projects;
+
+  // Fallback：worker 還沒部最新版時自己拉 songs 補 status counts
+  // worker 一旦回傳 songStatusCounts 就跳過此分支
+  const needFallback = list.filter(p => p.songCount > 0 && !p.songStatusCounts);
+  if (needFallback.length > 0) {
+    await Promise.all(needFallback.map(async (p) => {
+      try {
+        const songs = await listSongs(p.id);
+        const c = { todo: 0, in_review: 0, approved: 0, needs_changes: 0 };
+        for (const s of songs) c[s.status]++;
+        p.songStatusCounts = c;
+      } catch { /* 容錯：拉不到就保持 undefined → 卡片顯示全灰 */ }
+    }));
+  }
+  return list;
 }
 
 export async function createProject(input: { name: string; description: string }): Promise<{ id: string }> {

@@ -172,6 +172,160 @@
   border-radius: 3px;
   font-size: 10px;
 }
+
+/* ─── Song status badge / filter chips / dropdown ─── */
+.status-badge-wrap {
+  position: relative;
+}
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 7px 3px 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: filter 0.1s, border-color 0.1s;
+}
+.status-badge:hover {
+  filter: brightness(1.2);
+  border-color: var(--border-strong);
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: currentColor;
+}
+.status-label { line-height: 1; }
+
+.status-badge--todo,
+.status-dot--todo,
+.status-chip--todo .status-dot {
+  color: rgba(255, 255, 255, 0.55);
+}
+.status-badge--todo {
+  background: rgba(255, 255, 255, 0.06);
+}
+.status-badge--review,
+.status-dot--review,
+.status-chip--review .status-dot {
+  color: var(--warn);
+}
+.status-badge--review {
+  background: var(--warn-dim);
+}
+.status-badge--approved,
+.status-dot--approved,
+.status-chip--approved .status-dot {
+  color: var(--accent);
+}
+.status-badge--approved {
+  background: var(--accent-dim);
+}
+.status-badge--changes,
+.status-dot--changes,
+.status-chip--changes .status-dot {
+  color: var(--danger);
+}
+.status-badge--changes {
+  background: rgba(255, 84, 112, 0.15);
+}
+
+/* dropdown menu */
+.status-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  min-width: 160px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  z-index: 50;
+}
+.status-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.status-menu__item:hover {
+  background: var(--surface-2);
+}
+.status-menu__item.is-current {
+  color: var(--text-dim);
+}
+.status-menu__check {
+  margin-left: auto;
+  color: var(--accent);
+  font-size: 12px;
+}
+
+/* filter chips */
+.status-filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 12px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+.status-chip:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.status-chip.is-active {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.status-chip__count {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 0 4px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 999px;
+  min-width: 16px;
+  text-align: center;
+}
+.status-chip.is-active .status-chip__count {
+  color: var(--text);
+}
+.status-chip__label {
+  /* 在窄的 panel 縮成只剩 dot + count */
+}
+@media (max-width: 1100px) {
+  .status-chip__label { display: none; }
+}
+
 .editor-songs__add {
   margin: 12px;
   width: calc(100% - 24px);

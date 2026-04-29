@@ -7,6 +7,8 @@ import UploadModelDialog from '../components/UploadModelDialog';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
+type SongStatus = Song['status'];
+type StatusFilter = SongStatus | 'all';
 
 const CATEGORY_INFO: Record<StageObjectCategory, { icon: string; label: string }> = {
   led_panel:  { icon: '🟦', label: 'LED 面板' },
@@ -17,6 +19,14 @@ const CATEGORY_INFO: Record<StageObjectCategory, { icon: string; label: string }
   other:      { icon: '⬜', label: '其他' },
 };
 
+const STATUS_INFO: Record<SongStatus, { label: string; mod: string }> = {
+  todo:          { label: 'Todo',          mod: 'todo' },
+  in_review:     { label: 'In Review',     mod: 'review' },
+  approved:      { label: 'Approved',      mod: 'approved' },
+  needs_changes: { label: 'Needs Changes', mod: 'changes' },
+};
+const STATUS_ORDER: SongStatus[] = ['todo', 'in_review', 'approved', 'needs_changes'];
+
 export default function ProjectEditor() {
   const { projectId } = useParams();
   const navigate = useNavigate();
@@ -25,6 +35,7 @@ export default function ProjectEditor() {
   const [songs, setSongs] = useState<Song[]>([]);
   const [songsLoading, setSongsLoading] = useState(true);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
 
   // Cues
   const [cues, setCues] = useState<Cue[]>([]);
@@ -118,6 +129,23 @@ export default function ProjectEditor() {
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId) || null, [cues, selectedCueId]);
   const selectedSong = useMemo(() => songs.find(s => s.id === selectedSongId) || null, [songs, selectedSongId]);
 
+  const visibleSongs = useMemo(
+    () => statusFilter === 'all' ? songs : songs.filter(s => s.status === statusFilter),
+    [songs, statusFilter]
+  );
+  const statusCounts = useMemo(() => {
+    const c: Record<SongStatus, number> = { todo: 0, in_review: 0, approved: 0, needs_changes: 0 };
+    for (const s of songs) c[s.status]++;
+    return c;
+  }, [songs]);
+
+  // 當 filter 把當前選中的歌篩掉時，跳到第一個可見的歌
+  useEffect(() => {
+    if (!selectedSongId) return;
+    if (visibleSongs.some(s => s.id === selectedSongId)) return;
+    setSelectedSongId(visibleSongs[0]?.id ?? null);
+  }, [visibleSongs, selectedSongId]);
+
   // viewport 用的 states：有 cue 用 cueStates，沒 cue 用 stageObjects 的 default 假裝成 state
   const viewportStates: CueState[] = useMemo(() => {
     if (selectedCueId && cueStates.length > 0) return cueStates;
@@ -157,6 +185,18 @@ export default function ProjectEditor() {
       if (selectedSongId === songId) setSelectedSongId(null);
       await refreshSongs();
     } catch (e) { alert('刪除失敗：' + msg(e)); }
+  }
+  async function handleUpdateSongStatus(songId: string, status: SongStatus) {
+    if (!projectId) return;
+    const prev = songs;
+    // optimistic
+    setSongs(prev.map(s => s.id === songId ? { ...s, status } : s));
+    try {
+      await api.updateSong(projectId, songId, { status });
+    } catch (e) {
+      setSongs(prev);
+      alert('狀態更新失敗：' + msg(e));
+    }
   }
   async function moveSong(songId: string, direction: -1 | 1) {
     if (!projectId) return;
@@ -399,8 +439,19 @@ export default function ProjectEditor() {
         <aside className="editor-songs">
           <div className="editor-songs__header">
             <h3>歌曲</h3>
-            <span className="muted">{songs.length} 首</span>
+            <span className="muted">
+              {statusFilter === 'all' ? `${songs.length} 首` : `${visibleSongs.length} / ${songs.length}`}
+            </span>
           </div>
+
+          {songs.length > 0 && (
+            <StatusFilterChips
+              counts={statusCounts}
+              total={songs.length}
+              value={statusFilter}
+              onChange={setStatusFilter}
+            />
+          )}
 
           {songsLoading ? (
             <div className="editor-empty muted">載入中…</div>
@@ -410,30 +461,45 @@ export default function ProjectEditor() {
               <div>還沒有歌曲</div>
               <small className="muted">點下方按鈕新增第一首</small>
             </div>
+          ) : visibleSongs.length === 0 ? (
+            <div className="editor-empty muted">
+              <div style={{ fontSize: 28 }}>🔍</div>
+              <div>沒有「{STATUS_INFO[statusFilter as SongStatus].label}」狀態的歌</div>
+              <button className="btn btn--ghost" style={{ marginTop: 8 }} onClick={() => setStatusFilter('all')}>顯示全部</button>
+            </div>
           ) : (
             <ul className="song-list">
-              {songs.map((s, i) => (
-                <li
-                  key={s.id}
-                  className={'song-item' + (selectedSongId === s.id ? ' is-active' : '')}
-                  onClick={() => setSelectedSongId(s.id)}
-                >
-                  <div className="song-item__order">{String(i + 1).padStart(2, '0')}</div>
-                  <div className="song-item__main">
-                    <div className="song-item__name">{s.name}</div>
-                    <div className="song-item__meta">
-                      <span>{s.cueCount} cues</span>
-                      {s.proposalCount > 0 && <span className="proposal-badge">{s.proposalCount} 提案</span>}
+              {visibleSongs.map((s) => {
+                const fullIdx = songs.findIndex(x => x.id === s.id);
+                return (
+                  <li
+                    key={s.id}
+                    className={'song-item' + (selectedSongId === s.id ? ' is-active' : '')}
+                    onClick={() => setSelectedSongId(s.id)}
+                  >
+                    <div className="song-item__order">{String(fullIdx + 1).padStart(2, '0')}</div>
+                    <div className="song-item__main">
+                      <div className="song-item__name">{s.name}</div>
+                      <div className="song-item__meta">
+                        <span>{s.cueCount} cues</span>
+                        {s.proposalCount > 0 && <span className="proposal-badge">{s.proposalCount} 提案</span>}
+                      </div>
                     </div>
-                  </div>
-                  <div className="song-item__actions" onClick={(e) => e.stopPropagation()}>
-                    <button title="上移" onClick={() => moveSong(s.id, -1)} disabled={i === 0}>↑</button>
-                    <button title="下移" onClick={() => moveSong(s.id, 1)} disabled={i === songs.length - 1}>↓</button>
-                    <button title="改名" onClick={() => handleRenameSong(s.id, s.name)}>✎</button>
-                    <button title="刪除" onClick={() => handleDeleteSong(s.id, s.name)}>🗑</button>
-                  </div>
-                </li>
-              ))}
+                    <div onClick={(e) => e.stopPropagation()}>
+                      <StatusBadge
+                        value={s.status}
+                        onChange={(next) => handleUpdateSongStatus(s.id, next)}
+                      />
+                    </div>
+                    <div className="song-item__actions" onClick={(e) => e.stopPropagation()}>
+                      <button title="上移" onClick={() => moveSong(s.id, -1)} disabled={fullIdx === 0}>↑</button>
+                      <button title="下移" onClick={() => moveSong(s.id, 1)} disabled={fullIdx === songs.length - 1}>↓</button>
+                      <button title="改名" onClick={() => handleRenameSong(s.id, s.name)}>✎</button>
+                      <button title="刪除" onClick={() => handleDeleteSong(s.id, s.name)}>🗑</button>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
 
@@ -1127,3 +1193,82 @@ function ObjectsManager({
 }
 
 function msg(e: unknown) { return e instanceof Error ? e.message : String(e); }
+
+function StatusBadge({ value, onChange }: { value: SongStatus; onChange: (next: SongStatus) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  const info = STATUS_INFO[value];
+  return (
+    <div className="status-badge-wrap" ref={ref}>
+      <button
+        className={`status-badge status-badge--${info.mod}`}
+        onClick={() => setOpen(o => !o)}
+        title="點擊切換狀態"
+      >
+        <span className="status-dot" />
+        <span className="status-label">{info.label}</span>
+      </button>
+      {open && (
+        <div className="status-menu" role="menu">
+          {STATUS_ORDER.map(s => (
+            <button
+              key={s}
+              role="menuitem"
+              className={`status-menu__item${s === value ? ' is-current' : ''}`}
+              onClick={() => { setOpen(false); if (s !== value) onChange(s); }}
+            >
+              <span className={`status-dot status-dot--${STATUS_INFO[s].mod}`} />
+              <span>{STATUS_INFO[s].label}</span>
+              {s === value && <span className="status-menu__check">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusFilterChips({
+  counts, total, value, onChange,
+}: {
+  counts: Record<SongStatus, number>;
+  total: number;
+  value: StatusFilter;
+  onChange: (next: StatusFilter) => void;
+}) {
+  return (
+    <div className="status-filter-chips" role="tablist" aria-label="依狀態篩選歌曲">
+      <button
+        role="tab"
+        aria-selected={value === 'all'}
+        className={'status-chip' + (value === 'all' ? ' is-active' : '')}
+        onClick={() => onChange('all')}
+      >
+        全部 <span className="status-chip__count">{total}</span>
+      </button>
+      {STATUS_ORDER.map(s => (
+        <button
+          key={s}
+          role="tab"
+          aria-selected={value === s}
+          className={`status-chip status-chip--${STATUS_INFO[s].mod}` + (value === s ? ' is-active' : '')}
+          onClick={() => onChange(s)}
+          title={STATUS_INFO[s].label}
+        >
+          <span className={`status-dot status-dot--${STATUS_INFO[s].mod}`} />
+          <span className="status-chip__label">{STATUS_INFO[s].label}</span>
+          <span className="status-chip__count">{counts[s]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}

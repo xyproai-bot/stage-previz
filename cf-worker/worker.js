@@ -143,12 +143,16 @@ async function handleProjects(request, env, projectId, _unused) {
 }
 
 async function listProjects(env) {
-  // 主資料 + 子計數（song/cue/proposal）+ 成員
+  // 主資料 + 子計數（song/cue/proposal + song status breakdown）+ 成員
   const projects = await env.DB.prepare(`
     SELECT
       p.id, p.name, p.description, p.thumbnail_r2_key, p.status,
       p.created_at, p.updated_at,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id) AS song_count,
+      (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'todo') AS songs_todo,
+      (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'in_review') AS songs_in_review,
+      (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'approved') AS songs_approved,
+      (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'needs_changes') AS songs_needs_changes,
       (SELECT COUNT(*) FROM cues c
         JOIN songs s ON c.song_id = s.id
         WHERE s.project_id = p.id AND c.status = 'master') AS cue_count,
@@ -181,6 +185,12 @@ async function listProjects(env) {
     thumbnailUrl: p.thumbnail_r2_key ? `/r2/${p.thumbnail_r2_key}` : null,
     status: p.status,
     songCount: p.song_count,
+    songStatusCounts: {
+      todo: p.songs_todo,
+      in_review: p.songs_in_review,
+      approved: p.songs_approved,
+      needs_changes: p.songs_needs_changes,
+    },
     cueCount: p.cue_count,
     proposalCount: p.proposal_count,
     updatedAt: p.updated_at,

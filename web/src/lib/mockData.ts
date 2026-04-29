@@ -1,6 +1,14 @@
 // 暫時用的 mock data，Phase 1 後半接上 D1 backend 後移除
 
 export type ProjectStatus = 'active' | 'in_review' | 'archived';
+export type SongStatus = 'todo' | 'in_review' | 'approved' | 'needs_changes';
+
+export interface SongStatusCounts {
+  todo: number;
+  in_review: number;
+  approved: number;
+  needs_changes: number;
+}
 
 export interface Project {
   id: string;
@@ -9,6 +17,7 @@ export interface Project {
   thumbnailUrl?: string;
   status: ProjectStatus;
   songCount: number;
+  songStatusCounts?: SongStatusCounts;  // worker 已支援；mock 可省略，前端 fallback 全 todo
   cueCount: number;
   proposalCount: number;
   updatedAt: string; // ISO

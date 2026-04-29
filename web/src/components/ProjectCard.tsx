@@ -1,11 +1,19 @@
 import { useNavigate } from 'react-router-dom';
-import type { Project } from '../lib/mockData';
+import type { Project, SongStatus, SongStatusCounts } from '../lib/mockData';
 import './ProjectCard.css';
 
 const STATUS_LABELS: Record<Project['status'], { label: string; cls: string }> = {
   active: { label: '進行中', cls: 'status--active' },
   in_review: { label: '待修', cls: 'status--review' },
   archived: { label: '封存', cls: 'status--archived' },
+};
+
+const SONG_STATUS_ORDER: SongStatus[] = ['approved', 'in_review', 'needs_changes', 'todo'];
+const SONG_STATUS_LABEL: Record<SongStatus, string> = {
+  approved: '已通過',
+  in_review: '審查中',
+  needs_changes: '需修改',
+  todo: '未開始',
 };
 
 function timeAgo(iso: string) {
@@ -52,6 +60,11 @@ export default function ProjectCard({ project }: { project: Project }) {
         <h3 className="project-card__title">{project.name}</h3>
         <p className="project-card__desc">{project.description}</p>
 
+        <SongProgress
+          counts={project.songStatusCounts}
+          total={project.songCount}
+        />
+
         <div className="project-card__stats">
           <span>{project.songCount} 首歌</span>
           <span className="dot">·</span>
@@ -83,5 +96,45 @@ export default function ProjectCard({ project }: { project: Project }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function SongProgress({ counts, total }: { counts?: SongStatusCounts; total: number }) {
+  if (total === 0) {
+    return (
+      <div className="project-card__progress is-empty">
+        <div className="project-card__progressbar" aria-hidden="true">
+          <span className="seg seg--empty" style={{ flex: 1 }} />
+        </div>
+        <div className="project-card__progress-label">尚無歌曲</div>
+      </div>
+    );
+  }
+
+  // worker 還沒部署時 counts 會是 undefined → 顯示「待後端推送」的樣式（全顯灰）
+  const safe: SongStatusCounts = counts ?? { todo: total, in_review: 0, approved: 0, needs_changes: 0 };
+  const approved = safe.approved;
+  const pct = Math.round((approved / total) * 100);
+
+  return (
+    <div
+      className="project-card__progress"
+      title={SONG_STATUS_ORDER
+        .filter(s => safe[s] > 0)
+        .map(s => `${SONG_STATUS_LABEL[s]} ${safe[s]}`)
+        .join(' · ')}
+    >
+      <div className="project-card__progressbar" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label={`已通過 ${approved} / ${total}`}>
+        {SONG_STATUS_ORDER.map(s => {
+          const n = safe[s];
+          if (n === 0) return null;
+          return <span key={s} className={`seg seg--${s.replace('_', '-')}`} style={{ flex: n }} />;
+        })}
+      </div>
+      <div className="project-card__progress-label">
+        <span className="strong">{approved}</span> / {total} 已通過
+        <span className="muted"> · {pct}%</span>
+      </div>
+    </div>
   );
 }

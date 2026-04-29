@@ -107,6 +107,51 @@
 .project-card__time {
   color: var(--text-dim);
 }
+.project-card__progress {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.project-card__progressbar {
+  display: flex;
+  width: 100%;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.project-card__progressbar .seg {
+  display: block;
+  height: 100%;
+  transition: flex 0.2s;
+}
+.project-card__progressbar .seg--approved      { background: var(--accent); }
+.project-card__progressbar .seg--in-review     { background: var(--warn); }
+.project-card__progressbar .seg--needs-changes { background: var(--danger); }
+.project-card__progressbar .seg--todo          { background: rgba(255, 255, 255, 0.18); }
+.project-card__progressbar .seg--empty         { background: rgba(255, 255, 255, 0.05); }
+
+.project-card__progress.is-empty .project-card__progress-label {
+  color: var(--text-muted);
+  font-style: italic;
+}
+.project-card__progress-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+.project-card__progress-label .strong {
+  color: var(--accent);
+  font-weight: 700;
+}
+.project-card__progress-label .muted {
+  color: var(--text-muted);
+}
+
 .project-card__avatars {
   display: flex;
   gap: 4px;

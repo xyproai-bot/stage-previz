@@ -159,14 +159,44 @@ function EmptyState({ onCreate, hasFilter, hasAnyProjects }: {
       </div>
     );
   }
+  return <OnboardingWizard onStart={onCreate} />;
+}
+
+function OnboardingWizard({ onStart }: { onStart: () => void }) {
+  const steps = [
+    { icon: '📁', title: '建立專案', desc: '取一個名字，例如「魅影巡演 2026」', here: true },
+    { icon: '📦', title: '上傳 3D 模型', desc: '把舞臺的 .glb / .gltf 拖進來，自動分類 LED / 走位 / 機關' },
+    { icon: '🧩', title: '認識物件',     desc: '一鍵塞入 10 個常用範例，或手動加你的 mesh' },
+    { icon: '🎵', title: '加入歌曲',     desc: '依 set list 排好順序，每首歌可獨立追蹤狀態' },
+    { icon: '🎬', title: '製作第一個 cue', desc: '從 3D viewport 直接 snapshot 位置，或從空白建立' },
+  ];
   return (
-    <div className="empty-card">
-      <div className="empty-card__icon">＋</div>
-      <p>尚無專案，點右上角新增</p>
-      <small>開始建立您的第一個專案</small>
-      <button className="btn btn--primary" onClick={onCreate} style={{ marginTop: 12 }}>
-        ＋ 建立第一個專案
-      </button>
+    <div className="onboarding">
+      <div className="onboarding__head">
+        <div className="onboarding__hello">👋 歡迎</div>
+        <h2>5 個步驟建立你的第一個 LED 舞臺預覽</h2>
+        <p className="onboarding__sub">第 1 步在這裡，後面 4 步建好專案會自動帶你進編輯器繼續</p>
+      </div>
+      <ol className="onboarding__steps">
+        {steps.map((s, i) => (
+          <li key={i} className={'onboarding-step' + (s.here ? ' is-current' : '')}>
+            <div className="onboarding-step__num">{i + 1}</div>
+            <div className="onboarding-step__icon" aria-hidden="true">{s.icon}</div>
+            <div className="onboarding-step__body">
+              <div className="onboarding-step__title">
+                {s.title}
+                {s.here && <span className="onboarding-step__here">就在這一步</span>}
+              </div>
+              <div className="onboarding-step__desc">{s.desc}</div>
+            </div>
+            {s.here && (
+              <button className="btn btn--primary onboarding-step__cta" onClick={onStart}>
+                建立專案 →
+              </button>
+            )}
+          </li>
+        ))}
+      </ol>
     </div>
   );
 }
