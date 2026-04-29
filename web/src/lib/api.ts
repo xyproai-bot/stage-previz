@@ -5,7 +5,7 @@ import type { Project } from './mockData';
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
 
-function apiBase(): string {
+export function apiBase(): string {
   if (typeof window !== 'undefined') {
     const override = window.localStorage.getItem('stagepreviz-api-base');
     if (override) return override;
@@ -243,6 +243,43 @@ export async function seedDefaultStageObjects(projectId: string): Promise<{ inse
     method: 'POST',
     body: JSON.stringify({}),
   });
+}
+
+// ─── Model file (R2) ────────────────────────────────
+
+export interface ModelInfo {
+  key: string;
+  url: string;       // 相對 path（要 prepend apiBase 才能 fetch）
+  size: number;
+  uploaded: string | null;
+}
+
+export async function getModelInfo(projectId: string): Promise<ModelInfo | null> {
+  const data = await http<{ model: ModelInfo | null }>(
+    `/api/projects/${encodeURIComponent(projectId)}/model`
+  );
+  return data.model;
+}
+
+/** 把 .glb / .gltf binary 上傳到 R2 + 更新 project.model_r2_key */
+export async function uploadModel(projectId: string, file: File | Blob | ArrayBuffer): Promise<{ key: string; url: string }> {
+  const body: BodyInit = file instanceof ArrayBuffer ? file : (file as Blob);
+  const resp = await fetch(`${apiBase()}/api/projects/${encodeURIComponent(projectId)}/model`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'model/gltf-binary' },
+    body,
+  });
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try { const e = await resp.json(); if (e?.error) msg = e.error; } catch {}
+    throw new Error(msg);
+  }
+  return resp.json();
+}
+
+/** 取得真檔 URL（給 GLTFLoader.load 用） */
+export function modelDownloadUrl(key: string): string {
+  return `${apiBase()}/r2/${key}`;
 }
 
 export async function bulkCreateStageObjects(

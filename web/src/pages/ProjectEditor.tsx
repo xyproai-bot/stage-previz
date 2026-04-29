@@ -34,6 +34,9 @@ export default function ProjectEditor() {
   // Stage objects (project-level)
   const [stageObjects, setStageObjects] = useState<StageObject[]>([]);
 
+  // 3D 模型檔案（R2）
+  const [modelUrl, setModelUrl] = useState<string | null>(null);
+
   // Cue object states (per selected cue)
   const [cueStates, setCueStates] = useState<CueState[]>([]);
   const [statesLoading, setStatesLoading] = useState(false);
@@ -81,6 +84,17 @@ export default function ProjectEditor() {
     }
   }, [projectId]);
 
+  const refreshModel = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const info = await api.getModelInfo(projectId);
+      setModelUrl(info ? api.modelDownloadUrl(info.key) : null);
+    } catch (e) {
+      console.warn('load model info failed', e);
+      setModelUrl(null);
+    }
+  }, [projectId]);
+
   const refreshCueStates = useCallback(async () => {
     if (!projectId || !selectedSongId || !selectedCueId) { setCueStates([]); return; }
     setStatesLoading(true);
@@ -94,7 +108,7 @@ export default function ProjectEditor() {
     }
   }, [projectId, selectedSongId, selectedCueId]);
 
-  useEffect(() => { refreshSongs(); refreshStageObjects(); }, [refreshSongs, refreshStageObjects]);
+  useEffect(() => { refreshSongs(); refreshStageObjects(); refreshModel(); }, [refreshSongs, refreshStageObjects, refreshModel]);
   useEffect(() => { refreshCues(); }, [refreshCues]);
   useEffect(() => { refreshCueStates(); }, [refreshCueStates]);
 
@@ -416,6 +430,7 @@ export default function ProjectEditor() {
                 await handleSetState(objId, { position, rotation });
               }}
               cueName={selectedCue ? selectedCue.name : '(default — 改的是物件預設位置)'}
+              modelUrl={modelUrl}
             />
           )}
         </section>
@@ -499,6 +514,7 @@ export default function ProjectEditor() {
         onImported={() => {
           refreshStageObjects();
           refreshCueStates();
+          refreshModel();
         }}
       />
     </div>

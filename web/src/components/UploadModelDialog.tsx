@@ -29,6 +29,9 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   const [warnings, setWarnings] = useState<string[]>([]);
   const [replace, setReplace] = useState(false);
   const [filename, setFilename] = useState('');
+  const [pickedFile, setPickedFile] = useState<File | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<string>('');
+  void uploadProgress;  // future: show progress
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -39,6 +42,8 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       setWarnings([]);
       setReplace(false);
       setFilename('');
+      setPickedFile(null);
+      setUploadProgress('');
     }
   }, [open]);
 
@@ -60,6 +65,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       return;
     }
     setFilename(file.name);
+    setPickedFile(file);
     setStage('parsing');
     setError(null);
     try {
@@ -88,6 +94,14 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
     setStage('importing');
     setError(null);
     try {
+      // Step 1：把 .glb 真檔上傳到 R2（如果有 file）
+      if (pickedFile) {
+        setUploadProgress(`上傳 ${(pickedFile.size / 1024 / 1024).toFixed(1)} MB 到 R2…`);
+        await api.uploadModel(projectId, pickedFile);
+      }
+
+      // Step 2：bulk insert stage_objects metadata
+      setUploadProgress('匯入物件清單…');
       const items = meshes.map(m => ({
         meshName: m.meshName,
         displayName: m.displayName || m.meshName,
@@ -98,7 +112,6 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       }));
       const r = await api.bulkCreateStageObjects(projectId, items, { replace });
       setStage('done');
-      // 短暫 delay 後自動關
       setTimeout(() => { onImported(); onClose(); }, 1500);
       void r;
     } catch (e) {
