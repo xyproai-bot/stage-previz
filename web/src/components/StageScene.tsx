@@ -400,18 +400,16 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       );
       obj.visible = s.effective.visible;
 
-      // 高亮：對 obj 內所有 mesh 設 emissive
+      // 高亮：3D 場景裡只標「被選中」的物件，override 提示留在右側 panel
+      // 避免整個場景被染橘
       const isSelected = s.objectId === selectedObjectId;
       obj.traverse((child) => {
         if (!(child as THREE.Mesh).isMesh) return;
         const m = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
         if (!m || !('emissive' in m)) return;
         if (isSelected) {
-          m.emissive = new THREE.Color(0xffffff);
-          m.emissiveIntensity = 0.3;
-        } else if (s.override) {
-          m.emissive = new THREE.Color(0xffaa44);
-          m.emissiveIntensity = 0.15;
+          m.emissive = new THREE.Color(0x10c78a);  // accent green，柔和點
+          m.emissiveIntensity = 0.4;
         } else {
           m.emissive = new THREE.Color(0x000000);
           m.emissiveIntensity = 0;
