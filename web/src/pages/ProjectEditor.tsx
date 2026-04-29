@@ -4,6 +4,9 @@ import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler, MaterialProps, LedProps } from '../lib/api';
 import StageScene from '../components/StageScene';
 import UploadModelDialog from '../components/UploadModelDialog';
+import ModelVersionsDialog from '../components/ModelVersionsDialog';
+import AssetPickerDialog from '../components/AssetPickerDialog';
+import ActivityDrawer from '../components/ActivityDrawer';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -52,11 +55,52 @@ export default function ProjectEditor() {
   const [cueStates, setCueStates] = useState<CueState[]>([]);
   const [statesLoading, setStatesLoading] = useState(false);
 
-  // Selected object (synced between 3D viewport and right panel accordion)
-  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  // Selected objects (multi-select supported — viewport 點選預設單選，下方清單可勾多個)
+  const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
+  // 單選兼容：給 viewport 點選用（清空之前選的）
+  const selectSingle = useCallback((id: string | null) => {
+    setSelectedObjectIds(id ? [id] : []);
+  }, []);
+  // 加減選（checkbox / Shift+click 用）
+  const toggleSelected = useCallback((id: string) => {
+    setSelectedObjectIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  }, []);
 
   const [rightTab, setRightTab] = useState<RightTab>('cues');
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [activityOpen, setActivityOpen] = useState(false);
+
+  // ── Undo stack（限制最近 50 步，主要涵蓋 cue state 改動） ──
+  const undoStackRef = useRef<Array<() => Promise<void>>>([]);
+  const [undoCount, setUndoCount] = useState(0);
+  const pushUndo = useCallback((action: () => Promise<void>) => {
+    undoStackRef.current.push(action);
+    if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+    setUndoCount(undoStackRef.current.length);
+  }, []);
+  const undo = useCallback(async () => {
+    const action = undoStackRef.current.pop();
+    setUndoCount(undoStackRef.current.length);
+    if (!action) return;
+    try { await action(); }
+    catch (e) { console.warn('undo failed', e); alert('Undo 失敗：' + (e instanceof Error ? e.message : String(e))); }
+  }, []);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.shiftKey) return; // shift+cmd+z 是 redo（暫不做）
+      if (e.key !== 'z' && e.key !== 'Z') return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      undo();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo]);
 
   // ── Loaders ──
   const refreshSongs = useCallback(async () => {
@@ -312,22 +356,60 @@ export default function ProjectEditor() {
     if (!projectId) return;
     // 沒選 cue 時 → 改 stage_object 的 default（影響所有 cue 預設值）
     if (!selectedCueId) {
+      const obj = stageObjects.find(o => o.id === objId);
+      if (!obj) return;
+      const beforeDefault = {
+        defaultPosition: obj.defaultPosition,
+        defaultRotation: obj.defaultRotation,
+      };
       const objPatch: any = {};
       if ('position' in patch) objPatch.defaultPosition = patch.position;
       if ('rotation' in patch) objPatch.defaultRotation = patch.rotation;
       await api.updateStageObject(projectId, objId, objPatch);
       await refreshStageObjects();
+      pushUndo(async () => {
+        await api.updateStageObject(projectId, objId, beforeDefault);
+        await refreshStageObjects();
+        await refreshCueStates();
+      });
       return;
     }
     if (!selectedSongId) return;
-    await api.setCueState(projectId, selectedSongId, selectedCueId, objId, patch);
+    // 改 cue state — 抓 before override 用於 undo
+    const beforeState = cueStates.find(s => s.objectId === objId);
+    const beforeOverride = beforeState?.override;
+    const songIdSnap = selectedSongId, cueIdSnap = selectedCueId;
+    await api.setCueState(projectId, songIdSnap, cueIdSnap, objId, patch);
     await refreshCueStates();
+    pushUndo(async () => {
+      if (beforeOverride && (beforeOverride.position || beforeOverride.rotation)) {
+        await api.setCueState(projectId, songIdSnap, cueIdSnap, objId, {
+          position: beforeOverride.position || undefined,
+          rotation: beforeOverride.rotation || undefined,
+        });
+      } else {
+        await api.resetCueState(projectId, songIdSnap, cueIdSnap, objId);
+      }
+      await refreshCueStates();
+    });
   }
   async function handleResetState(objId: string) {
     if (!projectId || !selectedSongId || !selectedCueId) return;
     if (!confirm('重置這個物件回 default？')) return;
-    await api.resetCueState(projectId, selectedSongId, selectedCueId, objId);
+    const beforeState = cueStates.find(s => s.objectId === objId);
+    const beforeOverride = beforeState?.override;
+    const songIdSnap = selectedSongId, cueIdSnap = selectedCueId;
+    await api.resetCueState(projectId, songIdSnap, cueIdSnap, objId);
     await refreshCueStates();
+    if (beforeOverride && (beforeOverride.position || beforeOverride.rotation)) {
+      pushUndo(async () => {
+        await api.setCueState(projectId, songIdSnap, cueIdSnap, objId, {
+          position: beforeOverride.position || undefined,
+          rotation: beforeOverride.rotation || undefined,
+        });
+        await refreshCueStates();
+      });
+    }
   }
 
   // ── Stage object actions ──
@@ -396,7 +478,7 @@ export default function ProjectEditor() {
     try {
       await api.updateStageObject(projectId, obj.id, { locked: !obj.locked });
       // 鎖時取消當前 selection（如果鎖的剛好是 selected）
-      if (!obj.locked && selectedObjectId === obj.id) setSelectedObjectId(null);
+      if (!obj.locked) setSelectedObjectIds(prev => prev.filter(x => x !== obj.id));
       await refreshStageObjects();
       await refreshCueStates();
     } catch (e) { alert('失敗：' + msg(e)); }
@@ -431,6 +513,21 @@ export default function ProjectEditor() {
         </div>
         <div className="editor-topbar__right">
           <span className="muted small">{stageObjects.length} 物件</span>
+          <button
+            className="editor-topbar__activity"
+            onClick={undo}
+            disabled={undoCount === 0}
+            title={undoCount > 0 ? `Undo (${undoCount} 步可回退) — Cmd/Ctrl+Z` : '沒有可 undo 的動作'}
+          >
+            ↶ Undo {undoCount > 0 && <span className="muted small">({undoCount})</span>}
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => setActivityOpen(true)}
+            title="最近活動"
+          >
+            🕒 最近活動
+          </button>
         </div>
       </header>
 
@@ -520,9 +617,10 @@ export default function ProjectEditor() {
             <StageScene
               states={viewportStates}
               stageObjects={stageObjects}
-              selectedObjectId={selectedObjectId}
-              onSelect={(id) => {
-                setSelectedObjectId(id);
+              selectedObjectIds={selectedObjectIds}
+              onSelect={(id, mode) => {
+                if (mode === 'toggle' && id) toggleSelected(id);
+                else selectSingle(id);
                 if (id) setRightTab('state');
               }}
               onTransform={async (objId, position, rotation) => {
@@ -575,8 +673,9 @@ export default function ProjectEditor() {
                 states={cueStates}
                 loading={statesLoading}
                 stageObjects={stageObjects}
-                selectedObjectId={selectedObjectId}
-                onSelectObject={setSelectedObjectId}
+                selectedObjectIds={selectedObjectIds}
+                onSelectSingle={selectSingle}
+                onToggleSelected={toggleSelected}
                 onSet={handleSetState}
                 onReset={handleResetState}
                 onUpdateCueMeta={handleUpdateCueMeta}
@@ -599,6 +698,9 @@ export default function ProjectEditor() {
                 onSeed={handleSeedObjects}
                 onAdd={handleAddObject}
                 onUpload={() => setUploadOpen(true)}
+                onShowVersions={() => setVersionsOpen(true)}
+                onPickFromLibrary={() => setPickerOpen(true)}
+                hasModel={!!modelUrl}
                 onRename={handleRenameObject}
                 onChangeCategory={handleChangeCategory}
                 onToggleLock={handleToggleLock}
@@ -618,6 +720,33 @@ export default function ProjectEditor() {
           refreshCueStates();
           refreshModel();
         }}
+      />
+
+      <ModelVersionsDialog
+        open={versionsOpen}
+        projectId={projectId || ''}
+        onClose={() => setVersionsOpen(false)}
+        onChanged={() => {
+          refreshModel();
+        }}
+      />
+
+      <AssetPickerDialog
+        open={pickerOpen}
+        projectId={projectId || ''}
+        currentKey={modelUrl ? modelUrl.replace(api.apiBase() + '/r2/', '') : null}
+        onClose={() => setPickerOpen(false)}
+        onPicked={() => {
+          refreshModel();
+          refreshStageObjects();
+          refreshCueStates();
+        }}
+      />
+
+      <ActivityDrawer
+        open={activityOpen}
+        projectId={projectId || ''}
+        onClose={() => setActivityOpen(false)}
       />
     </div>
   );
@@ -748,15 +877,16 @@ function CueAddSplitButton({
 }
 
 function ObjectStateEditor({
-  cue, states, loading, stageObjects, selectedObjectId, onSelectObject,
+  cue, states, loading, stageObjects, selectedObjectIds, onSelectSingle, onToggleSelected,
   onSet, onReset, onUpdateCueMeta, onUpdateMaterial, onUpdateLed, onJumpToObjects,
 }: {
   cue: Cue | null;
   states: CueState[];
   loading: boolean;
   stageObjects: StageObject[];
-  selectedObjectId: string | null;
-  onSelectObject: (id: string | null) => void;
+  selectedObjectIds: string[];
+  onSelectSingle: (id: string | null) => void;
+  onToggleSelected: (id: string) => void;
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
   onUpdateCueMeta: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) => Promise<void>;
@@ -779,27 +909,239 @@ function ObjectStateEditor({
     );
   }
 
+  const selectedStates = states.filter(s => selectedObjectIds.includes(s.objectId));
+  const selectedSo = selectedStates.length === 1
+    ? stageObjects.find(o => o.id === selectedStates[0].objectId)
+    : undefined;
+
   return (
     <div className="state-editor">
       <CueMetaEditor cue={cue} onUpdate={onUpdateCueMeta} />
-      <ul className="object-state-list">
-        {states.map(s => {
-          const so = stageObjects.find(o => o.id === s.objectId);
-          return (
-            <ObjectStateRow
-              key={s.objectId}
-              state={s}
-              stageObject={so}
-              forceOpen={s.objectId === selectedObjectId}
-              onClickHeader={() => onSelectObject(s.objectId === selectedObjectId ? null : s.objectId)}
-              onSet={onSet}
-              onReset={onReset}
-              onUpdateMaterial={onUpdateMaterial}
-              onUpdateLed={onUpdateLed}
+
+      {/* 固定的 attribute panel — C4D / Maya 風格 */}
+      <div className="attribute-panel">
+        <div className="attribute-panel__selector">
+          <span className="attribute-panel__selector-label">
+            物件 {selectedObjectIds.length > 0 && <span className="muted small">已選 {selectedObjectIds.length}</span>}
+          </span>
+          <div className="attribute-panel__selector-actions">
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => onSelectSingle(null)}
+              disabled={selectedObjectIds.length === 0}
+            >清空</button>
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => {
+                const allIds = states.filter(s => !s.locked).map(s => s.objectId);
+                // 全選未鎖定的
+                if (selectedObjectIds.length === allIds.length) onSelectSingle(null);
+                else allIds.forEach(id => { if (!selectedObjectIds.includes(id)) onToggleSelected(id); });
+              }}
+            >全選</button>
+          </div>
+        </div>
+        <ul className="attribute-panel__objects">
+          {states.map(s => {
+            const cat = CATEGORY_INFO[s.category];
+            const checked = selectedObjectIds.includes(s.objectId);
+            return (
+              <li key={s.objectId} className={'attribute-panel__obj' + (checked ? ' is-selected' : '') + (s.locked ? ' is-locked' : '')}>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    disabled={s.locked}
+                    onChange={() => onToggleSelected(s.objectId)}
+                  />
+                  <span className="attribute-panel__obj-cat">{cat.icon}</span>
+                  <span className="attribute-panel__obj-name">{s.displayName}</span>
+                  {s.locked && <span className="lock-tag">🔒</span>}
+                  {s.override && <span className="override-dot" title="此 cue 已自訂" />}
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+
+        {selectedStates.length === 0 ? (
+          <div className="attribute-panel__hint">
+            <div style={{ fontSize: 28, opacity: 0.5 }}>🖱️</div>
+            <div>從上方清單勾選一個或多個物件</div>
+            <small className="muted">3D viewport 點物件 = 單選；右側勾選 = 加選</small>
+          </div>
+        ) : selectedStates.length === 1 ? (
+          <ObjectAttributePanel
+            key={selectedStates[0].objectId}
+            state={selectedStates[0]}
+            stageObject={selectedSo}
+            onSet={onSet}
+            onReset={onReset}
+            onUpdateMaterial={onUpdateMaterial}
+            onUpdateLed={onUpdateLed}
+          />
+        ) : (
+          <ObjectAttributePanelMulti
+            selectedStates={selectedStates}
+            stageObjects={stageObjects}
+            onSet={onSet}
+            onReset={onReset}
+            onUpdateMaterial={onUpdateMaterial}
+            onUpdateLed={onUpdateLed}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 多選 panel — 填的欄位才套到全部，沒填就不動 */
+function ObjectAttributePanelMulti({
+  selectedStates, stageObjects, onSet, onReset, onUpdateMaterial, onUpdateLed,
+}: {
+  selectedStates: CueState[];
+  stageObjects: StageObject[];
+  onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
+  onReset: (objId: string) => Promise<void>;
+  onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
+  onUpdateLed: (objId: string, patch: LedProps) => Promise<void>;
+}) {
+  const [pos, setPos] = useState<Partial<Vec3>>({});
+  const [rot, setRot] = useState<Partial<Euler>>({});
+  const [color, setColor] = useState<string>('');
+  const [saving, setSaving] = useState(false);
+
+  // 切換選中物件時清空輸入（避免上一次的殘留）
+  const idsKey = selectedStates.map(s => s.objectId).join(',');
+  useEffect(() => { setPos({}); setRot({}); setColor(''); }, [idsKey]);
+
+  const dirty = Object.keys(pos).length > 0 || Object.keys(rot).length > 0 || color !== '';
+
+  async function applyAll() {
+    setSaving(true);
+    try {
+      for (const s of selectedStates) {
+        const patch: Partial<{ position: Vec3; rotation: Euler }> = {};
+        if (pos.x != null || pos.y != null || pos.z != null) {
+          patch.position = {
+            x: pos.x ?? s.effective.position.x,
+            y: pos.y ?? s.effective.position.y,
+            z: pos.z ?? s.effective.position.z,
+          };
+        }
+        if (rot.pitch != null || rot.yaw != null || rot.roll != null) {
+          patch.rotation = {
+            pitch: rot.pitch ?? s.effective.rotation.pitch,
+            yaw: rot.yaw ?? s.effective.rotation.yaw,
+            roll: rot.roll ?? s.effective.rotation.roll,
+          };
+        }
+        if (Object.keys(patch).length > 0) {
+          await onSet(s.objectId, patch);
+        }
+        if (color) {
+          await onUpdateMaterial(s.objectId, { color });
+        }
+      }
+      setPos({}); setRot({}); setColor('');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function resetAll() {
+    if (!confirm(`重置 ${selectedStates.length} 個物件回 default？`)) return;
+    setSaving(true);
+    try {
+      for (const s of selectedStates) {
+        if (s.override) await onReset(s.objectId);
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // 用 stageObjects 防止 TS 警告
+  void stageObjects;
+  void onUpdateLed;
+
+  const allLed = selectedStates.every(s => s.category === 'led_panel');
+  void allLed;
+
+  return (
+    <div className="attribute-panel__body is-multi">
+      <div className="attribute-panel__title">
+        <span style={{ fontWeight: 700 }}>已選 {selectedStates.length} 個物件</span>
+      </div>
+      <div className="muted small" style={{ marginBottom: 8 }}>
+        填的欄位才會套到全部選中的物件，沒填就不動。
+      </div>
+
+      <div className="form-row">
+        <label>Position 套到全部 (X / Y / Z)</label>
+        <div className="vec3">
+          {(['x', 'y', 'z'] as const).map(axis => (
+            <input
+              key={axis}
+              type="number"
+              step={0.1}
+              value={pos[axis] ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                setPos(prev => v === '' ? (() => { const c = { ...prev }; delete c[axis]; return c; })() : { ...prev, [axis]: parseFloat(v) || 0 });
+              }}
+              placeholder={`— ${axis.toUpperCase()} —`}
             />
-          );
-        })}
-      </ul>
+          ))}
+        </div>
+      </div>
+      <div className="form-row">
+        <label>Rotation 套到全部 (P / Y / R)</label>
+        <div className="vec3">
+          {(['pitch', 'yaw', 'roll'] as const).map(axis => (
+            <input
+              key={axis}
+              type="number"
+              step={1}
+              value={rot[axis] ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                setRot(prev => v === '' ? (() => { const c = { ...prev }; delete c[axis]; return c; })() : { ...prev, [axis]: parseFloat(v) || 0 });
+              }}
+              placeholder={`— ${axis[0].toUpperCase()} —`}
+            />
+          ))}
+        </div>
+      </div>
+      <div className="form-row">
+        <label>材質顏色（套到全部）</label>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <input
+            type="color"
+            value={color || '#888888'}
+            onChange={(e) => setColor(e.target.value)}
+          />
+          <input
+            type="text"
+            value={color}
+            placeholder="— 不改 —"
+            onChange={(e) => setColor(e.target.value)}
+            style={{ flex: 1, fontFamily: 'var(--font-mono)' }}
+          />
+          {color && <button type="button" className="link-btn" onClick={() => setColor('')}>清除</button>}
+        </div>
+      </div>
+
+      <div className="object-row__actions">
+        <button className="btn btn--primary" onClick={applyAll} disabled={!dirty || saving}>
+          {saving ? '套用中…' : `💾 套到 ${selectedStates.length} 個物件`}
+        </button>
+        <button className="btn btn--ghost" onClick={resetAll} disabled={saving}>
+          ↺ 全部重置 default
+        </button>
+      </div>
     </div>
   );
 }
@@ -869,13 +1211,11 @@ function CueMetaEditor({
   );
 }
 
-function ObjectStateRow({
-  state, stageObject, forceOpen, onClickHeader, onSet, onReset, onUpdateMaterial, onUpdateLed,
+function ObjectAttributePanel({
+  state, stageObject, onSet, onReset, onUpdateMaterial, onUpdateLed,
 }: {
   state: CueState;
   stageObject?: StageObject;
-  forceOpen: boolean;
-  onClickHeader: () => void;
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
   onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
@@ -884,14 +1224,6 @@ function ObjectStateRow({
   const [saving, setSaving] = useState(false);
   const cat = CATEGORY_INFO[state.category];
   const hasOverride = !!state.override;
-  const rowRef = useRef<HTMLLIElement>(null);
-
-  // accordion 只跟 selectedObjectId 走 — 點 header 等同切換選取
-  useEffect(() => {
-    if (forceOpen) rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-  }, [forceOpen]);
-
-  const isOpen = forceOpen;
   const eff = state.effective;
   const [pos, setPos] = useState<Vec3>(eff.position);
   const [rot, setRot] = useState<Euler>(eff.rotation);
@@ -916,24 +1248,20 @@ function ObjectStateRow({
   }
 
   return (
-    <li
-      ref={rowRef}
-      className={'object-row'
-        + (hasOverride ? ' has-override' : '')
-        + (forceOpen ? ' is-selected' : '')
-        + (state.locked ? ' is-locked' : '')}
-    >
-      <header className="object-row__head" onClick={state.locked ? undefined : onClickHeader}>
+    <div className={'attribute-panel__body' + (hasOverride ? ' has-override' : '') + (state.locked ? ' is-locked' : '')}>
+      <div className="attribute-panel__title">
         <span className="object-row__cat" title={cat.label}>{cat.icon}</span>
-        <span className="object-row__name">
-          {state.displayName}
-          {state.locked && <span className="lock-tag" title="已鎖定">🔒</span>}
-        </span>
+        <span className="object-row__name">{state.displayName}</span>
+        {state.locked && <span className="lock-tag" title="已鎖定">🔒</span>}
         {hasOverride && <span className="override-dot" title="此 cue 把它放在自訂位置（跟其他 cue 獨立）" />}
-        <span className="object-row__chev">{isOpen ? '▾' : '▸'}</span>
-      </header>
-      {isOpen && (
-        <div className="object-row__body">
+      </div>
+
+      {state.locked ? (
+        <div className="muted small attribute-panel__locked">
+          已鎖定，無法編輯。請到「物件」分頁解鎖（🔒 → 🔓）。
+        </div>
+      ) : (
+        <>
           <div className="form-row">
             <label>Position (X / Y / Z)</label>
             <div className="vec3">
@@ -992,9 +1320,9 @@ function ObjectStateRow({
               onUpdate={(patch) => onUpdateLed(state.objectId, patch)}
             />
           )}
-        </div>
+        </>
       )}
-    </li>
+    </div>
   );
 }
 
@@ -1067,6 +1395,7 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
   const [hue, setHue] = useState(led.hue ?? 0);
   const [castStrength, setCastStrength] = useState(led.castLightStrength ?? 1.0);
   const [tint, setTint] = useState(led.tint || '#ffffff');
+  const [imageUrl, setImageUrl] = useState(led.imageUrl || '');
 
   useEffect(() => {
     setBrightness(led.brightness ?? 1.0);
@@ -1074,7 +1403,8 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
     setHue(led.hue ?? 0);
     setCastStrength(led.castLightStrength ?? 1.0);
     setTint(led.tint || '#ffffff');
-  }, [obj.id, led.brightness, led.saturation, led.hue, led.castLightStrength, led.tint]);
+    setImageUrl(led.imageUrl || '');
+  }, [obj.id, led.brightness, led.saturation, led.hue, led.castLightStrength, led.tint, led.imageUrl]);
 
   function save(patch: LedProps) { onUpdate(patch); }
 
@@ -1119,18 +1449,40 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
           onMouseUp={() => save({ castLightStrength: castStrength })}
           onTouchEnd={() => save({ castLightStrength: castStrength })} />
       </div>
+      <div className="form-row">
+        <label>貼圖 URL（測試用，CORS 友善的直連網址）</label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <input
+            type="text"
+            value={imageUrl}
+            placeholder="https://picsum.photos/512  或留空"
+            onChange={(e) => setImageUrl(e.target.value)}
+            onBlur={() => save({ imageUrl: imageUrl.trim() })}
+            onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+            style={{ flex: 1 }}
+          />
+          {imageUrl && (
+            <button type="button" className="link-btn" onClick={() => { setImageUrl(''); save({ imageUrl: '' }); }}>清除</button>
+          )}
+        </div>
+        <small className="muted">推薦：picsum.photos / imgur 直連 / 自己 R2 圖檔。Realistic 模式才會看到。</small>
+      </div>
       <div className="muted small">提示：要看到 LED 投光效果，把上方 viewport 切到「🎬 Realistic」模式。</div>
     </div>
   );
 }
 
 function ObjectsManager({
-  objects, onSeed, onAdd, onUpload, onRename, onChangeCategory, onToggleLock, onDelete,
+  objects, onSeed, onAdd, onUpload, onShowVersions, onPickFromLibrary, hasModel,
+  onRename, onChangeCategory, onToggleLock, onDelete,
 }: {
   objects: StageObject[];
   onSeed: () => void;
   onAdd: () => void;
   onUpload: () => void;
+  onShowVersions: () => void;
+  onPickFromLibrary: () => void;
+  hasModel: boolean;
   onRename: (obj: StageObject) => void;
   onChangeCategory: (obj: StageObject, cat: StageObjectCategory) => void;
   onToggleLock: (obj: StageObject) => void;
@@ -1140,6 +1492,17 @@ function ObjectsManager({
     <div className="objects-manager">
       <div className="objects-manager__bar">
         <button className="btn btn--primary" onClick={onUpload} title="從 .glb / .gltf 匯入">📦 上傳模型</button>
+        <button className="btn btn--ghost" onClick={onPickFromLibrary} title="從共用庫挑一個 model（不用重複上傳）">
+          📚 從庫選
+        </button>
+        <button
+          className="btn btn--ghost"
+          onClick={onShowVersions}
+          disabled={!hasModel}
+          title={hasModel ? '看以前上傳過的模型，可切回舊版' : '還沒上傳過模型'}
+        >
+          🕒 歷史版本
+        </button>
         <button className="btn btn--ghost" onClick={onSeed} title="塞入 10 個常用範例">🌱 範例</button>
         <button className="btn btn--ghost" onClick={onAdd} title="手動新增單一物件">＋ 手動</button>
       </div>

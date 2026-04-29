@@ -1,5 +1,6 @@
 import { ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
+import { useAuth } from '../lib/auth';
 import './AdminLayout.css';
 
 interface AdminLayoutProps {
@@ -8,6 +9,7 @@ interface AdminLayoutProps {
 
 const NAV = [
   { key: 'projects', icon: '📁', label: '專案', path: '/admin' },
+  { key: 'shows', icon: '🎫', label: 'Show 巡迴', path: '/admin/shows' },
   { key: 'drive', icon: '☁️', label: 'Drive 來源', path: '/admin/drive-sources' },
   { key: 'users', icon: '👥', label: '用戶', path: '/admin/users' },
   { key: 'templates', icon: '📐', label: '模板庫', path: '/admin/templates' },
@@ -16,6 +18,13 @@ const NAV = [
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
   const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  async function handleLogout() {
+    if (!confirm('登出？')) return;
+    await logout();
+    navigate('/login');
+  }
 
   return (
     <div className="admin-layout">
@@ -43,11 +52,22 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
 
         <div className="admin-sidebar__footer">
           <div className="admin-sidebar__user">
-            <div className="avatar avatar--sm" style={{ background: '#10c78a' }}>P</div>
-            <div className="admin-sidebar__user-info">
-              <div className="admin-sidebar__user-name">phang9111</div>
-              <div className="admin-sidebar__user-role">Admin</div>
+            <div
+              className="avatar avatar--sm"
+              style={{ background: user?.avatarColor || '#10c78a' }}
+            >
+              {user?.name?.[0] || '?'}
             </div>
+            <div className="admin-sidebar__user-info">
+              <div className="admin-sidebar__user-name">{user?.name || 'Loading…'}</div>
+              <div className="admin-sidebar__user-role">{user?.role || ''}</div>
+            </div>
+            <button
+              className="admin-sidebar__logout"
+              onClick={handleLogout}
+              title="登出"
+              aria-label="登出"
+            >⏻</button>
           </div>
         </div>
       </aside>

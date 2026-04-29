@@ -30,11 +30,14 @@ const CATEGORY_GEOM: Record<string, () => THREE.BufferGeometry> = {
   other:      () => new THREE.BoxGeometry(0.6, 0.6, 0.6),
 };
 
+export type SelectMode = 'replace' | 'toggle';
+
 interface Props {
   states: CueState[];
   stageObjects?: StageObject[];   // 含 materialProps / ledProps（不在 cue 層級因為材質是物件層級的）
-  selectedObjectId: string | null;
-  onSelect: (id: string | null) => void;
+  selectedObjectIds: string[];
+  /** mode: 'replace' = 取代之前選的（沒按 shift）；'toggle' = 加減選（按 shift） */
+  onSelect: (id: string | null, mode: SelectMode) => void;
   onTransform: (objectId: string, position: Vec3, rotation: Euler) => Promise<void> | void;
   cueName?: string;
   modelUrl?: string | null;
@@ -44,7 +47,7 @@ type RenderMode = 'quick' | 'realistic';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectId, onSelect, onTransform, cueName, modelUrl }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -57,23 +60,29 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
   const labelLayerRef = useRef<HTMLDivElement | null>(null);
   const onSelectRef = useRef(onSelect);
   const onTransformRef = useRef(onTransform);
-  const selectedIdRef = useRef<string | null>(selectedObjectId);
+  const selectedIdsRef = useRef<string[]>(selectedObjectIds);
+  // 多選共動的 pivot（虛擬中心點，gizmo attach 在它身上；mesh 暫時 reparent 進 pivot）
+  const multiPivotRef = useRef<THREE.Object3D | null>(null);
 
   const [mode, setMode] = useState<Mode>('translate');
   const [space, setSpace] = useState<'world' | 'local'>('world');
   const [showLabels, setShowLabels] = useState(true);
   const [renderMode, setRenderMode] = useState<RenderMode>('quick');
   const [, setModelLoading] = useState(false);
+  // bump 用：dragging-changed end 後讓 attach pivot 的 effect 重跑
+  const [pivotVersion, setPivotVersion] = useState(0);
 
   // 把 stageObjects 用 id 索引，給 mesh sync 拿 materialProps/ledProps
   const stageObjMap = new Map<string, StageObject>();
   (stageObjects || []).forEach(o => stageObjMap.set(o.id, o));
   const ledLightsRef = useRef<Map<string, THREE.RectAreaLight>>(new Map());
+  // LED emissive 貼圖快取（imageUrl → Texture），避免每次 effect 重 load
+  const ledTextureCacheRef = useRef<Map<string, THREE.Texture>>(new Map());
   const envLightsRef = useRef<{ ambient: THREE.AmbientLight; hemi: THREE.HemisphereLight; key: THREE.DirectionalLight | null } | null>(null);
 
   onSelectRef.current = onSelect;
+  selectedIdsRef.current = selectedObjectIds;
   onTransformRef.current = onTransform;
-  selectedIdRef.current = selectedObjectId;
 
   // ── Scene init (only once) ──
   useEffect(() => {
@@ -128,24 +137,51 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
       orbit.enabled = (event.value === null);
     });
 
-    // dragging-changed：drag 結束時自動存
+    // dragging-changed：drag 結束時自動存（支援單選 / 多選共動）
     transform.addEventListener('dragging-changed', (event: any) => {
-      // dragging=false 時鬆開 → 把 orbit 還回去 + 存
       if (event.value === false) {
-        // 沒在 hover 軸上才把 orbit 開回（hover 時 axis 不是 null）
         if (transform.axis === null) orbit.enabled = true;
         const obj = transform.object;
-        const id = selectedIdRef.current;
-        if (!obj || !id) return;
-        const pos = { x: round(obj.position.x), y: round(obj.position.y), z: round(obj.position.z) };
-        const rot = {
-          pitch: round(THREE.MathUtils.radToDeg(obj.rotation.x)),
-          yaw:   round(THREE.MathUtils.radToDeg(obj.rotation.y)),
-          roll:  round(THREE.MathUtils.radToDeg(obj.rotation.z)),
-        };
-        onTransformRef.current(id, pos, rot);
+        if (!obj) return;
+        const pivot = multiPivotRef.current;
+        if (pivot && obj === pivot) {
+          // ── 多選共動：對 pivot 內每個 mesh 算 final world transform，fire onTransform
+          const children = [...pivot.children];
+          for (const m of children) {
+            m.updateMatrixWorld();
+            const wpos = new THREE.Vector3();
+            const wquat = new THREE.Quaternion();
+            m.getWorldPosition(wpos);
+            m.getWorldQuaternion(wquat);
+            const euler = new THREE.Euler().setFromQuaternion(wquat, 'XYZ');
+            const id = m.userData.objectId as string | undefined;
+            scene.attach(m); // 拿回 scene（保留 world matrix）
+            if (id) {
+              onTransformRef.current(id,
+                { x: round(wpos.x), y: round(wpos.y), z: round(wpos.z) },
+                { pitch: round(THREE.MathUtils.radToDeg(euler.x)),
+                  yaw:   round(THREE.MathUtils.radToDeg(euler.y)),
+                  roll:  round(THREE.MathUtils.radToDeg(euler.z)) });
+            }
+          }
+          transform.detach();
+          scene.remove(pivot);
+          multiPivotRef.current = null;
+          // bump version 觸發 attach effect 重建 pivot（讓 user 可繼續拖）
+          setPivotVersion(v => v + 1);
+        } else {
+          // ── 單選
+          const id = obj.userData.objectId as string | undefined;
+          if (!id) return;
+          const pos = { x: round(obj.position.x), y: round(obj.position.y), z: round(obj.position.z) };
+          const rot = {
+            pitch: round(THREE.MathUtils.radToDeg(obj.rotation.x)),
+            yaw:   round(THREE.MathUtils.radToDeg(obj.rotation.y)),
+            roll:  round(THREE.MathUtils.radToDeg(obj.rotation.z)),
+          };
+          onTransformRef.current(id, pos, rot);
+        }
       } else {
-        // dragging=true → 確保 orbit disable
         orbit.enabled = false;
       }
     });
@@ -180,12 +216,17 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
       const objs = Array.from(meshesRef.current.values()).filter(o => !o.userData.locked);
       // recursive: GLB 物件可能有子 mesh
       const hit = raycaster.intersectObjects(objs, true);
+      const mode: SelectMode = e.shiftKey ? 'toggle' : 'replace';
       if (hit.length > 0) {
-        const id = (hit[0].object.userData.objectId
-          || hit[0].object.parent?.userData.objectId) as string | undefined;
-        if (id) onSelectRef.current(id);
-      } else {
-        onSelectRef.current(null);
+        let target: THREE.Object3D | null = hit[0].object;
+        let id: string | undefined;
+        // 沿著 parent 找 objectId（GLB 子 mesh 的 id 在 root，或 pivot 內被 reparent 的）
+        while (target && !(id = target.userData.objectId)) target = target.parent;
+        if (id) onSelectRef.current(id, mode);
+        else if (mode === 'replace') onSelectRef.current(null, 'replace');
+      } else if (mode === 'replace') {
+        // 點空白 + 沒 shift → 清空；按 shift 點空白 → 不動
+        onSelectRef.current(null, 'replace');
       }
     }
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
@@ -329,8 +370,12 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
     const container = containerRef.current;
     if (!scene || !container) return;
 
-    // ensure label layer
-    if (!labelLayerRef.current) {
+    // ensure label layer — 同時清掉之前 strict-mode/HMR 殘留的 .stage-scene__labels
+    {
+      const oldLayers = container.querySelectorAll('.stage-scene__labels');
+      oldLayers.forEach(l => { if (l !== labelLayerRef.current) l.remove(); });
+    }
+    if (!labelLayerRef.current || !container.contains(labelLayerRef.current)) {
       const layer = document.createElement('div');
       layer.className = 'stage-scene__labels';
       container.appendChild(layer);
@@ -339,6 +384,13 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
     const layer = labelLayerRef.current;
     const meshes = meshesRef.current;
     const labels = labelsRef.current;
+    // 移除 layer 內不在 labels Map 的孤兒 label DOM（避免重複）
+    {
+      const valid = new Set<Element>(Array.from(labels.values()));
+      Array.from(layer.children).forEach(child => {
+        if (!valid.has(child)) layer.removeChild(child);
+      });
+    }
 
     const currentIds = new Set(states.map(s => s.objectId));
 
@@ -408,13 +460,25 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
       obj.userData.objectId = s.objectId;
 
       const p = s.effective.position;
-      obj.position.set(p.x, p.y, p.z);
       const r = s.effective.rotation;
-      obj.rotation.set(
+      const worldQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
         THREE.MathUtils.degToRad(r.pitch),
         THREE.MathUtils.degToRad(r.yaw),
-        THREE.MathUtils.degToRad(r.roll)
-      );
+        THREE.MathUtils.degToRad(r.roll),
+      ));
+      // 如果 mesh 被 reparent 進 multiPivot，要把 world coord 換成 local
+      if (obj.parent && obj.parent !== scene) {
+        const wp = new THREE.Vector3(p.x, p.y, p.z);
+        obj.parent.updateMatrixWorld();
+        obj.parent.worldToLocal(wp);
+        obj.position.copy(wp);
+        const parentQuat = new THREE.Quaternion();
+        obj.parent.getWorldQuaternion(parentQuat);
+        obj.quaternion.copy(parentQuat.invert().multiply(worldQuat));
+      } else {
+        obj.position.set(p.x, p.y, p.z);
+        obj.quaternion.copy(worldQuat);
+      }
       obj.visible = s.effective.visible;
 
       // emissive 決策統一處理（避免兩個 useEffect 覆蓋）：
@@ -427,24 +491,60 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
 
       const lbl = labels.get(s.objectId);
       if (lbl) {
-        lbl.classList.toggle('is-selected', s.objectId === selectedObjectId);
+        lbl.classList.toggle('is-selected', selectedObjectIds.includes(s.objectId));
         lbl.classList.toggle('has-override', !!s.override);
       }
     }
-  }, [states, selectedObjectId]);
+  }, [states, selectedObjectIds]);
 
-  // ── Attach gizmo to selected object ──
+  // ── Attach gizmo：單選 attach mesh、多選建 pivot 把 mesh reparent 進去 ──
   useEffect(() => {
     const transform = transformRef.current;
-    if (!transform) return;
-    if (!selectedObjectId) {
+    const scene = sceneRef.current;
+    if (!transform || !scene) return;
+
+    // 先拆掉之前的 pivot（若有），把 children 還回 scene
+    const prevPivot = multiPivotRef.current;
+    if (prevPivot) {
+      [...prevPivot.children].forEach(c => scene.attach(c));
+      if (transform.object === prevPivot) transform.detach();
+      scene.remove(prevPivot);
+      multiPivotRef.current = null;
+    }
+
+    if (selectedObjectIds.length === 0) {
       transform.detach();
       return;
     }
-    const obj = meshesRef.current.get(selectedObjectId);
-    if (obj) transform.attach(obj);
-    else transform.detach();
-  }, [selectedObjectId, states.length]);
+    if (selectedObjectIds.length === 1) {
+      const obj = meshesRef.current.get(selectedObjectIds[0]);
+      if (obj) transform.attach(obj);
+      else transform.detach();
+      return;
+    }
+    // 多選：建 pivot 在 mesh 中心，把 mesh attach 進去
+    const meshes = selectedObjectIds
+      .map(id => meshesRef.current.get(id))
+      .filter((m): m is THREE.Object3D => !!m);
+    if (meshes.length < 2) {
+      if (meshes.length === 1) transform.attach(meshes[0]);
+      else transform.detach();
+      return;
+    }
+    const center = new THREE.Vector3();
+    meshes.forEach(m => {
+      const wp = new THREE.Vector3();
+      m.getWorldPosition(wp);
+      center.add(wp);
+    });
+    center.divideScalar(meshes.length);
+    const pivot = new THREE.Group();
+    pivot.position.copy(center);
+    scene.add(pivot);
+    multiPivotRef.current = pivot;
+    meshes.forEach(m => pivot.attach(m));
+    transform.attach(pivot);
+  }, [selectedObjectIds, states.length, pivotVersion]);
 
   // ── Mode / space ──
   useEffect(() => { transformRef.current?.setMode(mode); }, [mode]);
@@ -482,43 +582,90 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
 
     meshes.forEach((obj, id) => {
       const so = stageObjMap.get(id);
-      const isSelected = id === selectedObjectId;
+      const isSelected = selectedObjectIds.includes(id);
       const isLed = so?.category === 'led_panel';
-
-      // 1. 材質基本屬性（color/roughness/metalness/opacity）
+      const isRealistic = renderMode === 'realistic';
       const mat = so?.materialProps || {};
+      const ledTint = so?.ledProps?.tint ? new THREE.Color(so.ledProps.tint) : new THREE.Color(0xffffff);
+      const ledBrightness = so?.ledProps?.brightness ?? 1.0;
+
+      // LED 貼圖（only realistic mode）
+      const ledImageUrl = (isLed && isRealistic && so?.ledProps?.imageUrl) || null;
+      let ledTexture: THREE.Texture | null = null;
+      if (ledImageUrl) {
+        const cache = ledTextureCacheRef.current;
+        if (!cache.has(ledImageUrl)) {
+          const loader = new THREE.TextureLoader();
+          loader.setCrossOrigin('anonymous');
+          const tex = loader.load(ledImageUrl, undefined, undefined, (err) => {
+            console.warn('[StageScene] LED imageUrl load failed (CORS?):', ledImageUrl, err);
+          });
+          tex.colorSpace = THREE.SRGBColorSpace;
+          cache.set(ledImageUrl, tex);
+        }
+        ledTexture = cache.get(ledImageUrl) || null;
+      }
+
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
         const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
         if (!m || !('color' in m)) return;
-        if (mat.color) m.color.set(mat.color);
-        if (typeof mat.roughness === 'number') m.roughness = mat.roughness;
-        if (typeof mat.metalness === 'number') m.metalness = mat.metalness;
-        if (typeof mat.opacity === 'number') {
-          m.opacity = mat.opacity;
-          m.transparent = mat.opacity < 1;
+
+        if (isLed && isRealistic) {
+          // === LED in realistic mode ===
+          // 物理：自發光、不反射、不被環境光打亮
+          //   base color 黑 → 環境光 × 黑 = 黑（LED 不被打亮）
+          //   metalness 0、roughness 1、envMapIntensity 0 → 沒鏡面 / 沒環境反射
+          //   emissive(Map) 是 LED 唯一的亮度來源
+          m.color.setHex(0x000000);
+          m.metalness = 0;
+          m.roughness = 1;
+          m.envMapIntensity = 0;
+          m.opacity = 1;
+          m.transparent = false;
+
+          if (ledTexture) {
+            if (m.emissiveMap !== ledTexture) {
+              m.emissiveMap = ledTexture;
+              m.needsUpdate = true;
+            }
+            // 圖案的明暗 = emissiveMap 像素亮度 × emissive(tint) × emissiveIntensity
+            m.emissive.copy(ledTint);
+            m.emissiveIntensity = ledBrightness;
+          } else {
+            if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
+            m.emissive.copy(ledTint);
+            m.emissiveIntensity = ledBrightness;
+          }
+          // selected highlight：LED 不洗白，靠 RectAreaLightHelper / outline 之後做
+          // 這裡只在沒亮度時加一點點當 hint
+          if (isSelected && ledBrightness < 0.05 && !ledTexture) {
+            m.emissive.copy(accentGreen);
+            m.emissiveIntensity = 0.3;
+          }
+        } else {
+          // === 一般物件 / Quick mode 的 LED ===
+          // 套 user materialProps；emissive 只在 selected 時 highlight
+          const baseColor = mat.color || (CATEGORY_COLORS[so?.category || 'other'] !== undefined
+            ? `#${CATEGORY_COLORS[so?.category || 'other'].toString(16).padStart(6, '0')}`
+            : '#cccccc');
+          m.color.set(baseColor);
+          m.metalness = typeof mat.metalness === 'number' ? mat.metalness : 0.1;
+          m.roughness = typeof mat.roughness === 'number' ? mat.roughness : 0.6;
+          m.envMapIntensity = 1;
+          if (typeof mat.opacity === 'number') {
+            m.opacity = mat.opacity;
+            m.transparent = mat.opacity < 1;
+          }
+          if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
+          if (isSelected) {
+            m.emissive.copy(accentGreen);
+            m.emissiveIntensity = 0.4;
+          } else {
+            m.emissive.copy(black);
+            m.emissiveIntensity = 0;
+          }
         }
-      });
-
-      // 2. emissive 統一決策
-      let emissiveColor = black;
-      let emissiveIntensity = 0;
-      const ledTint = so?.ledProps?.tint ? new THREE.Color(so.ledProps.tint) : new THREE.Color(0xffffff);
-      const ledBrightness = so?.ledProps?.brightness ?? 1.0;
-
-      if (isSelected) {
-        emissiveColor = accentGreen;
-        emissiveIntensity = 0.4;
-      } else if (isLed && renderMode === 'realistic') {
-        emissiveColor = ledTint;
-        emissiveIntensity = ledBrightness * 0.8;
-      }
-      obj.traverse((c) => {
-        if (!(c as THREE.Mesh).isMesh) return;
-        const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
-        if (!m || !('emissive' in m)) return;
-        m.emissive.copy(emissiveColor);
-        m.emissiveIntensity = emissiveIntensity;
       });
 
       // 3. LED RectAreaLight
@@ -553,7 +700,7 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
         ledLights.delete(id);
       }
     }
-  }, [stageObjects, renderMode, states, selectedObjectId]);
+  }, [stageObjects, renderMode, states, selectedObjectIds]);
 
   void RectAreaLightHelper; // keep import in case we want helper toggle later
 
@@ -568,7 +715,7 @@ export default function StageScene({ states, stageObjects, selectedObjectId, onS
       else if (e.key === 'r' || e.key === 'R') setMode('scale');
       else if (e.key === 'q' || e.key === 'Q') setSpace(s => s === 'world' ? 'local' : 'world');
       else if (e.key === 'l' || e.key === 'L') setShowLabels(s => !s);
-      else if (e.key === 'Escape') onSelectRef.current(null);
+      else if (e.key === 'Escape') onSelectRef.current(null, 'replace');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

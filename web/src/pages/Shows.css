@@ -1,0 +1,99 @@
+.show-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.show-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: transform 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.show-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(16, 199, 138, 0.4);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.show-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.show-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.show-card__icon {
+  font-size: 28px;
+}
+.show-card__count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--surface-2);
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.show-card__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+.show-card__desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* Show detail page — reuse project-grid */
+.show-detail__crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-bottom: 8px;
+}
+.show-detail__crumb a {
+  color: var(--text-dim);
+  text-decoration: none;
+}
+.show-detail__crumb a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.show-detail__sep {
+  opacity: 0.5;
+}
+.show-detail__desc {
+  margin: 0 0 18px;
+  color: var(--text-dim);
+  font-size: 13px;
+  max-width: 640px;
+  line-height: 1.5;
+}
+.show-detail__delete {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  cursor: pointer;
+}
+.show-detail__delete:hover {
+  border-color: rgba(255, 84, 112, 0.5);
+  color: var(--danger);
+}

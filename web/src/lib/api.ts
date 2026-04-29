@@ -13,10 +13,29 @@ export function apiBase(): string {
   return DEFAULT_API_BASE;
 }
 
+const TOKEN_STORAGE_KEY = 'sp_session_token';
+
+export function getSessionToken(): string | null {
+  try { return localStorage.getItem(TOKEN_STORAGE_KEY); } catch { return null; }
+}
+export function setSessionToken(token: string | null) {
+  try {
+    if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch { /* ignore quota/private */ }
+}
+
 async function http<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getSessionToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((init?.headers as Record<string, string>) || {}),
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
   const resp = await fetch(apiBase() + path, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers || {}) },
+    credentials: 'include',  // 同 origin 時的 cookie 也會送
     ...init,
+    headers,
   });
   if (!resp.ok) {
     let msg = `HTTP ${resp.status}`;
@@ -24,9 +43,149 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
       const err = await resp.json();
       if (err?.error) msg = err.error;
     } catch { /* ignore */ }
-    throw new Error(msg);
+    const e: Error & { status?: number } = new Error(msg);
+    e.status = resp.status;
+    throw e;
   }
   return resp.json() as Promise<T>;
+}
+
+// ─── Auth ───
+
+export type UserRole = 'admin' | 'animator' | 'director';
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  role: UserRole;
+  avatarColor: string;
+}
+
+export async function authMe(): Promise<AuthUser | null> {
+  try {
+    const data = await http<{ user: AuthUser }>('/api/auth/me');
+    return data.user;
+  } catch (e) {
+    if ((e as { status?: number }).status === 401) return null;
+    throw e;
+  }
+}
+
+export async function authLogin(accessCode: string): Promise<AuthUser> {
+  const data = await http<{ user: AuthUser; token?: string }>('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ accessCode }),
+  });
+  if (data.token) setSessionToken(data.token);
+  return data.user;
+}
+
+export async function authLogout(): Promise<void> {
+  try { await http('/api/auth/logout', { method: 'POST' }); } catch { /* ignore */ }
+  setSessionToken(null);
+}
+
+// ─── Users (admin) ───
+
+export interface UserProjectMembership {
+  projectId: string;
+  projectName: string;
+  role: UserRole;
+}
+
+export interface UserAdmin {
+  id: string;
+  name: string;
+  role: UserRole;
+  avatarColor: string;
+  accessCode: string | null;
+  deactivated: boolean;
+  createdAt: string;
+  lastSeenAt: string | null;
+  projects: UserProjectMembership[];
+}
+
+export async function listUsers(): Promise<UserAdmin[]> {
+  const data = await http<{ users: UserAdmin[] }>('/api/users');
+  return data.users;
+}
+
+export async function createUserAdmin(input: {
+  name: string;
+  role: UserRole;
+  accessCode?: string;       // 留空就 server 自動產生
+  avatarColor?: string;
+  projectIds?: string[];
+}): Promise<{ id: string; accessCode: string }> {
+  return http('/api/users', { method: 'POST', body: JSON.stringify(input) });
+}
+
+export async function updateUserAdmin(id: string, patch: Partial<{
+  name: string; role: UserRole; avatarColor: string; deactivated: boolean;
+}>): Promise<void> {
+  await http(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export async function setAccessCode(id: string, accessCode?: string): Promise<{ ok: true; accessCode: string }> {
+  return http(`/api/users/${encodeURIComponent(id)}/access-code`, {
+    method: 'POST',
+    body: JSON.stringify({ accessCode: accessCode ?? '' }),
+  });
+}
+
+export async function deleteUserAdmin(id: string): Promise<void> {
+  await http(`/api/users/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function addUserToProject(userId: string, projectId: string, role: UserRole): Promise<void> {
+  await http(`/api/users/${encodeURIComponent(userId)}/projects`, {
+    method: 'POST',
+    body: JSON.stringify({ projectId, role }),
+  });
+}
+
+export async function removeUserFromProject(userId: string, projectId: string): Promise<void> {
+  await http(`/api/users/${encodeURIComponent(userId)}/projects`, {
+    method: 'DELETE',
+    body: JSON.stringify({ projectId }),
+  });
+}
+
+// ─── Shows ───────────────────────────────────
+
+export interface Show {
+  id: string;
+  name: string;
+  description: string;
+  projectCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ShowDetail extends Omit<Show, 'projectCount'> {
+  projects: { id: string; name: string }[];
+}
+
+export async function listShows(): Promise<Show[]> {
+  const data = await http<{ shows: Show[] }>('/api/shows');
+  return data.shows;
+}
+
+export async function getShow(id: string): Promise<ShowDetail> {
+  const data = await http<{ show: ShowDetail }>(`/api/shows/${encodeURIComponent(id)}`);
+  return data.show;
+}
+
+export async function createShow(input: { name: string; description: string }): Promise<{ id: string }> {
+  return http(`/api/shows`, { method: 'POST', body: JSON.stringify(input) });
+}
+
+export async function updateShow(id: string, patch: Partial<{ name: string; description: string }>): Promise<void> {
+  await http(`/api/shows/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export async function deleteShow(id: string): Promise<void> {
+  await http(`/api/shows/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
 // ─── Projects ────────────────────────────────
@@ -51,10 +210,17 @@ export async function listProjects(): Promise<Project[]> {
   return list;
 }
 
-export async function createProject(input: { name: string; description: string }): Promise<{ id: string }> {
+export async function createProject(input: { name: string; description: string; showId?: string | null }): Promise<{ id: string }> {
   return http<{ id: string }>('/api/projects', {
     method: 'POST',
     body: JSON.stringify(input),
+  });
+}
+
+export async function updateProject(id: string, patch: Partial<{ name: string; description: string; status: string; showId: string | null }>): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
   });
 }
 
@@ -214,6 +380,7 @@ export interface LedProps {
   hue?: number;              // -180~180 度
   castLightStrength?: number; // 0-3，影響 RectAreaLight intensity
   tint?: string;             // hex 色調，與 brightness 相乘
+  imageUrl?: string;         // 短期測試：貼一張圖在 LED 面板上發光（CORS 友善的直連 URL）
 }
 
 export interface StageObject {
@@ -318,6 +485,119 @@ export async function uploadModel(projectId: string, file: File | Blob | ArrayBu
 /** 取得真檔 URL（給 GLTFLoader.load 用） */
 export function modelDownloadUrl(key: string): string {
   return `${apiBase()}/r2/${key}`;
+}
+
+// ─── Model 版本歷史 ───
+
+export interface ModelVersion {
+  key: string;
+  url: string;
+  size: number;
+  uploaded: string | null;
+  timestamp: number;
+  isActive: boolean;
+}
+
+export async function listModelVersions(projectId: string): Promise<{ versions: ModelVersion[]; activeKey: string | null }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions`);
+}
+
+export async function activateModelVersion(projectId: string, key: string): Promise<{ key: string; url: string }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions/activate`, {
+    method: 'POST',
+    body: JSON.stringify({ key }),
+  });
+}
+
+export async function deleteModelVersion(projectId: string, key: string): Promise<void> {
+  // key = models/<projectId>/<ts>.glb → 取最後一段傳給 worker
+  const tsFile = key.split('/').pop() || '';
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/model/versions/${encodeURIComponent(tsFile)}`,
+    { method: 'DELETE' }
+  );
+}
+
+// ─── Shared Assets（model 庫） ───
+
+export interface SharedAsset {
+  id: string;
+  type: 'model';
+  name: string;
+  description: string;
+  key: string;
+  url: string;
+  sizeBytes: number;
+  uploaderName: string | null;
+  usedByCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listAssets(): Promise<SharedAsset[]> {
+  const data = await http<{ assets: SharedAsset[] }>('/api/assets');
+  return data.assets;
+}
+
+export async function createAsset(input: { name: string; description: string }): Promise<{ id: string; key: string }> {
+  return http('/api/assets', { method: 'POST', body: JSON.stringify({ ...input, type: 'model' }) });
+}
+
+export async function uploadAssetFile(assetId: string, file: File | Blob | ArrayBuffer): Promise<{ key: string; sizeBytes: number }> {
+  const body: BodyInit = file instanceof ArrayBuffer ? file : (file as Blob);
+  const resp = await fetch(`${apiBase()}/api/assets/${encodeURIComponent(assetId)}/file`, {
+    method: 'PUT',
+    credentials: 'include',
+    headers: { 'Content-Type': 'model/gltf-binary' },
+    body,
+  });
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try { const e = await resp.json(); if (e?.error) msg = e.error; } catch {}
+    throw new Error(msg);
+  }
+  return resp.json();
+}
+
+export async function updateAsset(id: string, patch: Partial<{ name: string; description: string; deactivated: boolean }>): Promise<void> {
+  await http(`/api/assets/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+}
+
+export async function deleteAsset(id: string): Promise<void> {
+  await http(`/api/assets/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 把 project 的 model 切到某個 shared asset */
+export async function useAssetForProject(projectId: string, assetId: string): Promise<{ key: string; url: string }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/model/use-asset`, {
+    method: 'POST',
+    body: JSON.stringify({ assetId }),
+  });
+}
+
+// ─── Activity feed ───
+
+export type ActivityAction = 'create' | 'update' | 'delete' | 'reorder' | 'reset' | 'activate' | 'archive' | 'upload' | 'bulk_create' | 'seed';
+export type ActivityTargetType = 'project' | 'song' | 'cue' | 'cue_state' | 'stage_object' | 'model';
+
+export interface ActivityEntry {
+  id: string;
+  projectId: string;
+  userId: string | null;
+  userName: string;
+  userAvatar: string;
+  action: ActivityAction;
+  targetType: ActivityTargetType;
+  targetId: string | null;
+  payload: Record<string, unknown>;
+  createdAt: string;
+}
+
+export async function listActivity(projectId: string, limit = 50): Promise<ActivityEntry[]> {
+  const data = await http<{ activities: ActivityEntry[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/activity?limit=${limit}`
+  );
+  return data.activities;
 }
 
 export async function bulkCreateStageObjects(

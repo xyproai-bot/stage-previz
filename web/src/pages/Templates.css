@@ -1,0 +1,123 @@
+.asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.asset-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.asset-card:hover {
+  border-color: var(--border-strong);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.asset-card__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+.asset-card__icon { font-size: 28px; }
+.asset-card__used {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+.asset-card__title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.asset-card__desc {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.asset-card__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.asset-card__meta .dot { opacity: 0.5; }
+.asset-card__actions {
+  margin-top: 6px;
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+.asset-card__actions button {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.asset-card__actions button:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.asset-card__actions button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* Picker dialog（從 ProjectEditor 開的） */
+.asset-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.asset-picker__row {
+  display: grid;
+  grid-template-columns: 32px 1fr auto;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  align-items: center;
+  cursor: pointer;
+  background: var(--bg);
+}
+.asset-picker__row:hover {
+  border-color: rgba(16, 199, 138, 0.4);
+  background: var(--accent-dim);
+}
+.asset-picker__row.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.asset-picker__row__main {
+  min-width: 0;
+}
+.asset-picker__row__title {
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.asset-picker__row__meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}

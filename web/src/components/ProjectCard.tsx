@@ -27,7 +27,7 @@ function timeAgo(iso: string) {
   return `${day} 天前`;
 }
 
-export default function ProjectCard({ project }: { project: Project }) {
+export default function ProjectCard({ project, showName }: { project: Project; showName?: string | null }) {
   const navigate = useNavigate();
   const status = STATUS_LABELS[project.status];
 
@@ -57,6 +57,16 @@ export default function ProjectCard({ project }: { project: Project }) {
       </div>
 
       <div className="project-card__body">
+        {showName && (
+          <button
+            type="button"
+            className="project-card__show"
+            onClick={(e) => { e.stopPropagation(); if (project.showId) navigate(`/admin/shows/${project.showId}`); }}
+            title={`Show: ${showName}`}
+          >
+            🎫 {showName}
+          </button>
+        )}
         <h3 className="project-card__title">{project.name}</h3>
         <p className="project-card__desc">{project.description}</p>
 

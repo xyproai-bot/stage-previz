@@ -27,34 +27,78 @@ const COMMENT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export default {
   async fetch(request, env) {
-    const url = new URL(request.url);
-
-    if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: corsHeaders() });
-    }
-
-    if (url.pathname === '/api/comments') {
-      return handleComments(request, env, url);
-    }
-
-    if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
-      return handleProjectsRouter(request, env, url);
-    }
-
-    if (url.pathname.startsWith('/r2/models/')) {
-      return handleModelDownload(request, env, url);
-    }
-
-    if (url.pathname === '/' || url.pathname === '') {
-      return handleDriveProxy(request, url);
-    }
-
-    return jsonResp({ error: 'Not found' }, 404);
+    const response = await routeRequest(request, env);
+    return applyCorsToResponse(response, request);
   }
 };
 
+// 把 response 的 CORS header 改成 reflect 真實 origin + 支援 cookie credentials
+// 為什麼：fetch 端用 credentials: 'include'，瀏覽器要求 Access-Control-Allow-Origin 是具體 origin
+// 不可以是 '*'，且必須有 Allow-Credentials: true
+function applyCorsToResponse(response, request) {
+  const origin = request.headers.get('origin');
+  if (!origin) return response;
+  const headers = new Headers(response.headers);
+  headers.set('Access-Control-Allow-Origin', origin);
+  headers.set('Access-Control-Allow-Credentials', 'true');
+  headers.set('Vary', 'Origin');
+  // 確保 OPTIONS preflight 也帶 methods / headers
+  if (!headers.has('Access-Control-Allow-Methods')) {
+    headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS');
+  }
+  // 一律覆蓋 Allow-Headers，確保包含 Authorization（讓前端可送 Bearer token）
+  headers.set('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization');
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+async function routeRequest(request, env) {
+  const url = new URL(request.url);
+
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { headers: corsHeaders() });
+  }
+
+  if (url.pathname === '/api/comments') {
+    return handleComments(request, env, url);
+  }
+
+  if (url.pathname === '/api/auth/login'  && request.method === 'POST')  return authLogin(request, env);
+  if (url.pathname === '/api/auth/logout' && request.method === 'POST')  return authLogout();
+  if (url.pathname === '/api/auth/me'     && request.method === 'GET')   return authMe(request, env);
+
+  if (url.pathname === '/api/users' || url.pathname.startsWith('/api/users/')) {
+    return handleUsersRouter(request, env, url);
+  }
+
+  if (url.pathname === '/api/assets' || url.pathname.startsWith('/api/assets/')) {
+    return handleAssetsRouter(request, env, url);
+  }
+
+  if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
+    return handleProjectsRouter(request, env, url);
+  }
+
+  if (url.pathname === '/api/shows' || url.pathname.startsWith('/api/shows/')) {
+    return handleShowsRouter(request, env, url);
+  }
+
+  if (url.pathname.startsWith('/r2/models/') || url.pathname.startsWith('/r2/assets/')) {
+    return handleModelDownload(request, env, url);
+  }
+
+  if (url.pathname === '/' || url.pathname === '') {
+    return handleDriveProxy(request, url);
+  }
+
+  return jsonResp({ error: 'Not found' }, 404);
+}
+
 // 統一 router：把 /api/projects/* 分派到對應 handler
 async function handleProjectsRouter(request, env, url) {
+  // 必須登入
+  const userId = await getRequestUserId(request, env);
+  if (!userId) return jsonResp({ error: '未登入' }, 401);
+
   const segs = url.pathname.split('/').filter(Boolean);
   // 路徑形態：
   //   /api/projects                                            → projects collection
@@ -88,8 +132,18 @@ async function handleProjectsRouter(request, env, url) {
   }
 
   if (sub === 'model') {
-    // /api/projects/:id/model → upload (PUT) / get info (GET)
-    return handleModel(request, env, projectId);
+    // /api/projects/:id/model              → upload (PUT) / get info (GET)
+    // /api/projects/:id/model/versions     → list all versions (GET)
+    // /api/projects/:id/model/versions/activate  → POST {key} 切換 active 版本
+    // /api/projects/:id/model/versions/:keySuffix → DELETE 刪某舊版本
+    return handleModel(request, env, projectId, segs[4] || null, segs[5] || null);
+  }
+
+  if (sub === 'activity') {
+    // /api/projects/:id/activity?limit=50  → 列最近活動
+    if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
+    const limit = url.searchParams.get('limit') || '50';
+    return listActivity(env, projectId, limit);
   }
 
   if (sub === 'songs' && sub2 === 'cues' && sub3 === 'states') {
@@ -121,10 +175,12 @@ const PROJECT_DESC_MAX = 300;
 
 async function handleProjects(request, env, projectId, _unused) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
 
   try {
     if (!projectId) {
-      if (request.method === 'GET') return listProjects(env);
+      if (request.method === 'GET') return listProjects(env, me);
       if (request.method === 'POST') return createProject(request, env);
       return jsonResp({ error: 'Method not allowed' }, 405);
     }
@@ -133,20 +189,33 @@ async function handleProjects(request, env, projectId, _unused) {
       return jsonResp({ error: 'Invalid project id' }, 400);
     }
 
+    // 非 admin 要檢查 project_members
+    if (me.role !== 'admin') {
+      const member = await env.DB.prepare(
+        `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
+      ).bind(projectId, me.id).first();
+      if (!member) return jsonResp({ error: '沒有權限存取此專案' }, 403);
+    }
+
     if (request.method === 'GET') return getProject(env, projectId);
     if (request.method === 'PATCH') return updateProject(request, env, projectId);
-    if (request.method === 'DELETE') return archiveProject(env, projectId);
+    if (request.method === 'DELETE') return archiveProject(request, env, projectId);
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
   }
 }
 
-async function listProjects(env) {
-  // 主資料 + 子計數（song/cue/proposal + song status breakdown）+ 成員
+async function listProjects(env, me) {
+  // admin 看全部，其他 role 只看自己被加進 project_members 的 project
+  const memberFilter = me?.role === 'admin'
+    ? ''
+    : ` AND p.id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = ?)`;
+  const binds = me?.role === 'admin' ? [] : [me.id];
+
   const projects = await env.DB.prepare(`
     SELECT
-      p.id, p.name, p.description, p.thumbnail_r2_key, p.status,
+      p.id, p.name, p.description, p.thumbnail_r2_key, p.status, p.show_id,
       p.created_at, p.updated_at,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id) AS song_count,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'todo') AS songs_todo,
@@ -160,9 +229,9 @@ async function listProjects(env) {
         JOIN songs s ON c.song_id = s.id
         WHERE s.project_id = p.id AND c.status = 'proposal') AS proposal_count
     FROM projects p
-    WHERE p.status != 'archived'
+    WHERE p.status != 'archived'${memberFilter}
     ORDER BY p.updated_at DESC
-  `).all();
+  `).bind(...binds).all();
 
   // 撈所有成員一次（避免 N+1）
   const members = await env.DB.prepare(`
@@ -184,6 +253,7 @@ async function listProjects(env) {
     description: p.description,
     thumbnailUrl: p.thumbnail_r2_key ? `/r2/${p.thumbnail_r2_key}` : null,
     status: p.status,
+    showId: p.show_id || null,
     songCount: p.song_count,
     songStatusCounts: {
       todo: p.songs_todo,
@@ -202,6 +272,9 @@ async function listProjects(env) {
 }
 
 async function createProject(request, env) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
@@ -209,19 +282,22 @@ async function createProject(request, env) {
   const description = (body?.description || '').toString().trim().slice(0, PROJECT_DESC_MAX);
   if (!name) return jsonResp({ error: 'name is required' }, 400);
 
+  const showId = body?.showId && /^[a-zA-Z0-9_-]{1,64}$/.test(body.showId) ? body.showId : null;
+
   const id = 'p_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
   await env.DB.prepare(`
-    INSERT INTO projects (id, name, description, created_by_user_id)
-    VALUES (?, ?, ?, 'u_phang')
-  `).bind(id, name, description).run();
+    INSERT INTO projects (id, name, description, created_by_user_id, show_id)
+    VALUES (?, ?, ?, ?, ?)
+  `).bind(id, name, description, me.id, showId).run();
 
-  // 把建立者加進 project_members
+  // 把建立者加進 project_members（admin 角色）
   await env.DB.prepare(`
     INSERT INTO project_members (project_id, user_id, role)
-    VALUES (?, 'u_phang', 'admin')
-  `).bind(id).run();
+    VALUES (?, ?, 'admin')
+  `).bind(id, me.id).run();
 
+  await logActivity(request, env, id, 'create', 'project', id, { name });
   return jsonResp({ ok: true, id }, 201);
 }
 
@@ -237,12 +313,16 @@ async function updateProject(request, env, projectId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'show_id'];
+  // 前端 camelCase showId 轉 snake_case show_id
+  if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
   const sets = [], values = [];
   for (const k of allowed) {
     if (k in body) { sets.push(`${k} = ?`); values.push(body[k]); }
   }
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
+
+  const before = await env.DB.prepare(`SELECT name FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
 
   values.push(projectId);
   const result = await env.DB.prepare(
@@ -250,14 +330,137 @@ async function updateProject(request, env, projectId) {
   ).bind(...values).run();
 
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
   return jsonResp({ ok: true });
 }
 
-async function archiveProject(env, projectId) {
+async function archiveProject(request, env, projectId) {
+  const before = await env.DB.prepare(`SELECT name FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
   const result = await env.DB.prepare(
     `UPDATE projects SET status = 'archived', updated_at = datetime('now') WHERE id = ?`
   ).bind(projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  await logActivity(request, env, projectId, 'archive', 'project', projectId, { name: before?.name });
+  return jsonResp({ ok: true });
+}
+
+// ─────────────────────────────────────────────
+// Shows API（admin Tier 1 #8）
+//   GET    /api/shows         → list（含 project_count）
+//   POST   /api/shows         body: {name, description}
+//   GET    /api/shows/:id     → 單筆 + projects
+//   PATCH  /api/shows/:id     body: {name?, description?}
+//   DELETE /api/shows/:id     → 只能刪空 show
+// ─────────────────────────────────────────────
+
+const SHOW_NAME_MAX = 80;
+const SHOW_DESC_MAX = 300;
+
+async function handleShowsRouter(request, env, url) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const userId = await getRequestUserId(request, env);
+  if (!userId) return jsonResp({ error: '未登入' }, 401);
+  const segs = url.pathname.split('/').filter(Boolean);
+  const showId = segs[2] || null;
+
+  try {
+    if (!showId) {
+      if (request.method === 'GET') return listShows(env);
+      if (request.method === 'POST') return createShow(request, env);
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(showId)) return jsonResp({ error: 'Invalid show id' }, 400);
+    if (request.method === 'GET') return getShow(env, showId);
+    if (request.method === 'PATCH') return updateShow(request, env, showId);
+    if (request.method === 'DELETE') return deleteShow(env, showId);
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+async function listShows(env) {
+  const rows = await env.DB.prepare(`
+    SELECT s.id, s.name, s.description, s.created_at, s.updated_at,
+           (SELECT COUNT(*) FROM projects p WHERE p.show_id = s.id AND p.status != 'archived') AS project_count
+    FROM shows s
+    ORDER BY s.updated_at DESC
+  `).all();
+  const list = (rows.results || []).map(s => ({
+    id: s.id, name: s.name, description: s.description,
+    projectCount: s.project_count,
+    createdAt: s.created_at, updatedAt: s.updated_at,
+  }));
+  return jsonResp({ shows: list });
+}
+
+async function createShow(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const name = (body?.name || '').toString().trim().slice(0, SHOW_NAME_MAX);
+  const description = (body?.description || '').toString().trim().slice(0, SHOW_DESC_MAX);
+  if (!name) return jsonResp({ error: 'name is required' }, 400);
+
+  const id = 'sh_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  await env.DB.prepare(
+    `INSERT INTO shows (id, name, description) VALUES (?, ?, ?)`
+  ).bind(id, name, description).run();
+  return jsonResp({ ok: true, id }, 201);
+}
+
+async function getShow(env, showId) {
+  const show = await env.DB.prepare(
+    `SELECT id, name, description, created_at, updated_at FROM shows WHERE id = ? LIMIT 1`
+  ).bind(showId).first();
+  if (!show) return jsonResp({ error: 'Not found' }, 404);
+
+  const projects = await env.DB.prepare(`
+    SELECT id, name FROM projects
+    WHERE show_id = ? AND status != 'archived'
+    ORDER BY updated_at DESC
+  `).bind(showId).all();
+
+  return jsonResp({
+    show: {
+      id: show.id, name: show.name, description: show.description,
+      createdAt: show.created_at, updatedAt: show.updated_at,
+      projects: (projects.results || []).map(p => ({ id: p.id, name: p.name })),
+    },
+  });
+}
+
+async function updateShow(request, env, showId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const allowed = ['name', 'description'];
+  const sets = [], values = [];
+  for (const k of allowed) {
+    if (k in body) {
+      let v = body[k];
+      if (k === 'name') v = (v || '').toString().trim().slice(0, SHOW_NAME_MAX);
+      if (k === 'description') v = (v || '').toString().trim().slice(0, SHOW_DESC_MAX);
+      sets.push(`${k} = ?`); values.push(v);
+    }
+  }
+  if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
+  values.push(showId);
+  const r = await env.DB.prepare(
+    `UPDATE shows SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`
+  ).bind(...values).run();
+  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true });
+}
+
+async function deleteShow(env, showId) {
+  // 安全：不能刪非空 show（避免誤刪一票 project）
+  const inUse = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM projects WHERE show_id = ? AND status != 'archived'`
+  ).bind(showId).first();
+  if ((inUse?.n || 0) > 0) {
+    return jsonResp({ error: `這個 Show 底下還有 ${inUse.n} 個專案，請先把專案移走或封存後再刪。` }, 400);
+  }
+  const r = await env.DB.prepare(`DELETE FROM shows WHERE id = ?`).bind(showId).run();
+  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp({ ok: true });
 }
 
@@ -291,8 +494,8 @@ async function handleSongs(request, env, projectId, songId) {
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(songId)) return jsonResp({ error: 'Invalid song id' }, 400);
 
     if (request.method === 'GET') return getSong(env, songId);
-    if (request.method === 'PATCH') return updateSong(request, env, songId);
-    if (request.method === 'DELETE') return deleteSong(env, songId);
+    if (request.method === 'PATCH') return updateSong(request, env, projectId, songId);
+    if (request.method === 'DELETE') return deleteSong(request, env, projectId, songId);
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
@@ -336,6 +539,7 @@ async function createSong(request, env, projectId) {
 
   // touch project updated_at
   await env.DB.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).bind(projectId).run();
+  await logActivity(request, env, projectId, 'create', 'song', id, { name });
   return jsonResp({ ok: true, id, order }, 201);
 }
 
@@ -345,9 +549,12 @@ async function getSong(env, songId) {
   return jsonResp({ song: row });
 }
 
-async function updateSong(request, env, songId) {
+async function updateSong(request, env, projectId, songId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  // 抓更動前狀態做 diff
+  const before = await env.DB.prepare(`SELECT name, status FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
 
   const allowed = ['name', 'order', 'status', 'animator_user_id', 'drive_folder_id'];
   const sets = [], values = [];
@@ -364,12 +571,21 @@ async function updateSong(request, env, songId) {
     `UPDATE songs SET ${sets.join(', ')} WHERE id = ?`
   ).bind(...values).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+
+  await logActivity(request, env, projectId, 'update', 'song', songId, {
+    name: before?.name,
+    changes: body,
+    statusFrom: before?.status,
+    statusTo: 'status' in body ? body.status : undefined,
+  });
   return jsonResp({ ok: true });
 }
 
-async function deleteSong(env, songId) {
+async function deleteSong(request, env, projectId, songId) {
+  const before = await env.DB.prepare(`SELECT name FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
   const result = await env.DB.prepare(`DELETE FROM songs WHERE id = ?`).bind(songId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  await logActivity(request, env, projectId, 'delete', 'song', songId, { name: before?.name });
   return jsonResp({ ok: true });
 }
 
@@ -384,6 +600,7 @@ async function reorderSongs(request, env, projectId) {
     env.DB.prepare(`UPDATE songs SET "order" = ? WHERE id = ? AND project_id = ?`).bind(i, id, projectId)
   );
   await env.DB.batch(stmts);
+  await logActivity(request, env, projectId, 'reorder', 'song', null, { count: ids.length });
   return jsonResp({ ok: true, updated: ids.length });
 }
 
@@ -404,14 +621,14 @@ async function handleCues(request, env, projectId, songId, cueId) {
   try {
     if (!cueId) {
       if (request.method === 'GET') return listCues(env, songId);
-      if (request.method === 'POST') return createCue(request, env, songId);
+      if (request.method === 'POST') return createCue(request, env, projectId, songId);
       return jsonResp({ error: 'Method not allowed' }, 405);
     }
 
     // 特殊 action：cues/reorder
     if (cueId === 'reorder') {
       if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return reorderCues(request, env, songId);
+      return reorderCues(request, env, projectId, songId);
     }
 
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cueId)) return jsonResp({ error: 'Invalid cue id' }, 400);
@@ -420,12 +637,12 @@ async function handleCues(request, env, projectId, songId, cueId) {
     const segs = new URL(request.url).pathname.split('/').filter(Boolean);
     if (segs[7] === 'reset') {
       if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return resetCue(env, cueId);
+      return resetCue(request, env, projectId, cueId);
     }
 
     if (request.method === 'GET') return getCue(env, cueId);
-    if (request.method === 'PATCH') return updateCue(request, env, cueId);
-    if (request.method === 'DELETE') return deleteCue(env, cueId);
+    if (request.method === 'PATCH') return updateCue(request, env, projectId, cueId);
+    if (request.method === 'DELETE') return deleteCue(request, env, projectId, cueId);
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
@@ -463,7 +680,7 @@ function parseCueRow(c) {
   };
 }
 
-async function createCue(request, env, songId) {
+async function createCue(request, env, projectId, songId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   const name = (body?.name || '').toString().trim().slice(0, CUE_NAME_MAX);
@@ -520,17 +737,24 @@ async function createCue(request, env, songId) {
   }
   // 都沒給 → 空白 cue（無 override）
 
+  const cueOrigin = body?.cloneFrom ? 'clone'
+                  : (Array.isArray(body?.snapshotStates) && body.snapshotStates.length > 0) ? 'snapshot'
+                  : 'blank';
+  await logActivity(request, env, projectId, 'create', 'cue', id, { name, songId, origin: cueOrigin });
+
   return jsonResp({ ok: true, id, order }, 201);
 }
 
-async function resetCue(env, cueId) {
+async function resetCue(request, env, projectId, cueId) {
+  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? LIMIT 1`).bind(cueId).first();
   const result = await env.DB.prepare(
     `DELETE FROM cue_object_states WHERE cue_id = ?`
   ).bind(cueId).run();
+  await logActivity(request, env, projectId, 'reset', 'cue', cueId, { name: before?.name, removed: result.meta.changes });
   return jsonResp({ ok: true, removed: result.meta.changes });
 }
 
-async function reorderCues(request, env, songId) {
+async function reorderCues(request, env, projectId, songId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   const ids = Array.isArray(body?.orderedIds) ? body.orderedIds : null;
@@ -540,6 +764,7 @@ async function reorderCues(request, env, songId) {
     env.DB.prepare(`UPDATE cues SET "order" = ? WHERE id = ? AND song_id = ?`).bind(i, id, songId)
   );
   await env.DB.batch(stmts);
+  await logActivity(request, env, projectId, 'reorder', 'cue', null, { songId, count: ids.length });
   return jsonResp({ ok: true, updated: ids.length });
 }
 
@@ -549,9 +774,11 @@ async function getCue(env, cueId) {
   return jsonResp({ cue: parseCueRow(row) });
 }
 
-async function updateCue(request, env, cueId) {
+async function updateCue(request, env, projectId, cueId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? LIMIT 1`).bind(cueId).first();
 
   const sets = [], values = [];
   if ('name' in body) { sets.push('name = ?'); values.push((body.name || '').toString().trim().slice(0, CUE_NAME_MAX)); }
@@ -569,12 +796,15 @@ async function updateCue(request, env, cueId) {
     `UPDATE cues SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`
   ).bind(...values).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  await logActivity(request, env, projectId, 'update', 'cue', cueId, { name: before?.name, changes: body });
   return jsonResp({ ok: true });
 }
 
-async function deleteCue(env, cueId) {
+async function deleteCue(request, env, projectId, cueId) {
+  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? LIMIT 1`).bind(cueId).first();
   const result = await env.DB.prepare(`DELETE FROM cues WHERE id = ?`).bind(cueId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  await logActivity(request, env, projectId, 'delete', 'cue', cueId, { name: before?.name });
   return jsonResp({ ok: true });
 }
 
@@ -602,7 +832,7 @@ async function handleStageObjects(request, env, projectId, objIdOrAction) {
 
     if (objIdOrAction === 'seed-defaults') {
       if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return seedDefaultStageObjects(env, projectId);
+      return seedDefaultStageObjects(request, env, projectId);
     }
     if (objIdOrAction === 'bulk') {
       if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
@@ -612,7 +842,7 @@ async function handleStageObjects(request, env, projectId, objIdOrAction) {
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(objIdOrAction)) return jsonResp({ error: 'Invalid obj id' }, 400);
 
     if (request.method === 'PATCH') return updateStageObject(request, env, projectId, objIdOrAction);
-    if (request.method === 'DELETE') return deleteStageObject(env, projectId, objIdOrAction);
+    if (request.method === 'DELETE') return deleteStageObject(request, env, projectId, objIdOrAction);
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
@@ -686,6 +916,7 @@ async function createStageObject(request, env, projectId) {
     throw e;
   }
 
+  await logActivity(request, env, projectId, 'create', 'stage_object', id, { name: displayName || meshName, category });
   return jsonResp({ ok: true, id }, 201);
 }
 
@@ -714,20 +945,43 @@ async function updateStageObject(request, env, projectId, objId) {
   }
 
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
-  values.push(objId, projectId);
 
+  // 抓物件名稱以利 log（同時偵測是否有 meta 性質的改動）
+  const before = await env.DB.prepare(
+    `SELECT display_name, mesh_name FROM stage_objects WHERE id = ? LIMIT 1`
+  ).bind(objId).first();
+
+  values.push(objId, projectId);
   const result = await env.DB.prepare(
     `UPDATE stage_objects SET ${sets.join(', ')} WHERE id = ? AND project_id = ?`
   ).bind(...values).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+
+  // 只有有意義的 meta 變更才寫 activity，避免 transform 拖動 spam
+  const META_KEYS = ['displayName', 'category', 'locked', 'materialProps', 'ledProps'];
+  const hasMeta = META_KEYS.some(k => k in body);
+  if (hasMeta) {
+    const meta = {};
+    for (const k of META_KEYS) if (k in body) meta[k] = body[k];
+    await logActivity(request, env, projectId, 'update', 'stage_object', objId, {
+      name: before?.display_name || before?.mesh_name,
+      changes: meta,
+    });
+  }
   return jsonResp({ ok: true });
 }
 
-async function deleteStageObject(env, projectId, objId) {
+async function deleteStageObject(request, env, projectId, objId) {
+  const before = await env.DB.prepare(
+    `SELECT display_name, mesh_name FROM stage_objects WHERE id = ? LIMIT 1`
+  ).bind(objId).first();
   const result = await env.DB.prepare(
     `DELETE FROM stage_objects WHERE id = ? AND project_id = ?`
   ).bind(objId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  await logActivity(request, env, projectId, 'delete', 'stage_object', objId, {
+    name: before?.display_name || before?.mesh_name,
+  });
   return jsonResp({ ok: true });
 }
 
@@ -740,9 +994,30 @@ async function deleteStageObject(env, projectId, objId) {
 
 const MAX_MODEL_SIZE = 100 * 1024 * 1024; // 100 MB
 
-async function handleModel(request, env, projectId) {
+async function handleModel(request, env, projectId, subAction, subAction2) {
   if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid project id' }, 400);
+
+  // 子路徑：/model/use-asset
+  if (subAction === 'use-asset') {
+    if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+    return useSharedAssetForProject(request, env, projectId);
+  }
+
+  // 子路徑：/model/versions, /model/versions/activate, /model/versions/:ts
+  if (subAction === 'versions') {
+    if (!subAction2) {
+      if (request.method === 'GET') return listModelVersions(env, projectId);
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+    if (subAction2 === 'activate') {
+      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+      return activateModelVersion(request, env, projectId);
+    }
+    // /model/versions/:tsFile  → DELETE 一個舊版本（不能刪 active）
+    if (request.method === 'DELETE') return deleteModelVersion(request, env, projectId, subAction2);
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  }
 
   if (request.method === 'GET') {
     const row = await env.DB.prepare(
@@ -785,18 +1060,117 @@ async function handleModel(request, env, projectId) {
       `UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`
     ).bind(key, projectId).run();
 
+    await logActivity(request, env, projectId, 'upload', 'model', key, { key, sizeBytes: cl });
     return jsonResp({ ok: true, key, url: `/r2/${key}` });
   }
 
   return jsonResp({ error: 'Method not allowed' }, 405);
 }
 
+// 切換 project 的 model 到某個共用資產
+async function useSharedAssetForProject(request, env, projectId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const assetId = (body?.assetId || '').toString();
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(assetId)) return jsonResp({ error: 'Invalid assetId' }, 400);
+
+  const a = await env.DB.prepare(
+    `SELECT id, r2_key, name FROM shared_assets WHERE id = ? AND deactivated = 0 LIMIT 1`
+  ).bind(assetId).first();
+  if (!a) return jsonResp({ error: 'Asset 不存在或已停用' }, 404);
+
+  // 確認 R2 上有檔案（避免設成空 key 卡 viewport）
+  const head = await env.MODELS.head(a.r2_key);
+  if (!head) return jsonResp({ error: 'Asset 還沒上傳檔案，請先上傳 .glb 後再使用' }, 400);
+
+  await env.DB.prepare(
+    `UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(a.r2_key, projectId).run();
+
+  await logActivity(request, env, projectId, 'activate', 'model', a.r2_key, {
+    fromAsset: assetId, assetName: a.name, key: a.r2_key,
+  });
+  return jsonResp({ ok: true, key: a.r2_key, url: `/r2/${a.r2_key}` });
+}
+
+// 列某 project 的所有 model 版本（依時間倒序）
+async function listModelVersions(env, projectId) {
+  const prefix = `models/${projectId}/`;
+  const listed = await env.MODELS.list({ prefix });
+
+  // 取得當前 active key（用來標 isActive）
+  const row = await env.DB.prepare(
+    `SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`
+  ).bind(projectId).first();
+  const activeKey = row?.model_r2_key || null;
+
+  // 物件解析：key = models/{projectId}/{ts}.glb；ts 是 Date.now()
+  const versions = (listed.objects || []).map(obj => {
+    const m = obj.key.match(/\/(\d+)\.glb$/);
+    const ts = m ? parseInt(m[1], 10) : 0;
+    return {
+      key: obj.key,
+      url: `/r2/${obj.key}`,
+      size: obj.size,
+      uploaded: obj.uploaded?.toISOString?.() || null,
+      timestamp: ts,
+      isActive: obj.key === activeKey,
+    };
+  }).sort((a, b) => b.timestamp - a.timestamp);
+
+  return jsonResp({ versions, activeKey });
+}
+
+// 切換 active 版本（更新 projects.model_r2_key）
+async function activateModelVersion(request, env, projectId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const key = (body?.key || '').toString();
+  if (!key.startsWith(`models/${projectId}/`) || !key.endsWith('.glb') || key.includes('..')) {
+    return jsonResp({ error: 'Invalid key' }, 400);
+  }
+  // 確認該 key 真的存在於 R2
+  const head = await env.MODELS.head(key);
+  if (!head) return jsonResp({ error: 'Version not found in R2' }, 404);
+
+  const beforeRow = await env.DB.prepare(
+    `SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`
+  ).bind(projectId).first();
+
+  await env.DB.prepare(
+    `UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(key, projectId).run();
+
+  await logActivity(request, env, projectId, 'activate', 'model', key, {
+    fromKey: beforeRow?.model_r2_key,
+    toKey: key,
+  });
+  return jsonResp({ ok: true, key, url: `/r2/${key}` });
+}
+
+// 刪除某舊版本（不能刪當前 active）
+async function deleteModelVersion(request, env, projectId, tsFile) {
+  if (!/^\d+\.glb$/.test(tsFile)) return jsonResp({ error: 'Invalid version' }, 400);
+  const key = `models/${projectId}/${tsFile}`;
+
+  const row = await env.DB.prepare(
+    `SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`
+  ).bind(projectId).first();
+  if (row?.model_r2_key === key) {
+    return jsonResp({ error: '不能刪除當前使用的版本，請先切到別的版本再刪' }, 400);
+  }
+
+  await env.MODELS.delete(key);
+  await logActivity(request, env, projectId, 'delete', 'model', key, { key });
+  return jsonResp({ ok: true });
+}
+
 async function handleModelDownload(request, env, url) {
   if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
 
-  // url.pathname 形如 /r2/models/<projectId>/<file>.glb
+  // url.pathname 形如 /r2/models/<projectId>/<file>.glb 或 /r2/assets/models/<assetId>.glb
   const r2Key = url.pathname.replace(/^\/r2\//, '');
-  if (!r2Key.startsWith('models/') || r2Key.includes('..')) {
+  if (!(r2Key.startsWith('models/') || r2Key.startsWith('assets/')) || r2Key.includes('..')) {
     return jsonResp({ error: 'Invalid key' }, 400);
   }
 
@@ -854,6 +1228,7 @@ async function bulkCreateStageObjects(request, env, projectId) {
   }
 
   await env.DB.batch(stmts);
+  await logActivity(request, env, projectId, 'bulk_create', 'stage_object', null, { inserted, skipped, replace });
   return jsonResp({ ok: true, inserted, skipped });
 }
 
@@ -870,7 +1245,7 @@ const DEFAULT_STAGE_OBJECTS = [
   { meshName: '走位-中',      displayName: '走位 - 中',   category: 'walk_point' },
 ];
 
-async function seedDefaultStageObjects(env, projectId) {
+async function seedDefaultStageObjects(request, env, projectId) {
   // 檢查專案存在
   const p = await env.DB.prepare(`SELECT id FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
   if (!p) return jsonResp({ error: 'Project not found' }, 404);
@@ -894,6 +1269,7 @@ async function seedDefaultStageObjects(env, projectId) {
     inserted += 1;
   }
   await env.DB.batch(stmts);
+  await logActivity(request, env, projectId, 'seed', 'stage_object', null, { inserted });
   return jsonResp({ ok: true, inserted });
 }
 
@@ -922,7 +1298,7 @@ async function handleCueStates(request, env, projectId, songId, cueId, objId) {
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(objId)) return jsonResp({ error: 'Invalid obj id' }, 400);
 
     if (request.method === 'PUT') return upsertCueState(request, env, cueId, objId);
-    if (request.method === 'DELETE') return deleteCueState(env, cueId, objId);
+    if (request.method === 'DELETE') return deleteCueState(request, env, projectId, cueId, objId);
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
@@ -1033,10 +1409,21 @@ async function upsertCueState(request, env, cueId, objId) {
   return jsonResp({ ok: true, id }, 201);
 }
 
-async function deleteCueState(env, cueId, objId) {
+async function deleteCueState(request, env, projectId, cueId, objId) {
+  const before = await env.DB.prepare(`
+    SELECT c.name AS cue_name, o.display_name, o.mesh_name
+    FROM cues c, stage_objects o
+    WHERE c.id = ? AND o.id = ? LIMIT 1
+  `).bind(cueId, objId).first();
   const result = await env.DB.prepare(
     `DELETE FROM cue_object_states WHERE cue_id = ? AND stage_object_id = ?`
   ).bind(cueId, objId).run();
+  if (result.meta.changes > 0) {
+    await logActivity(request, env, projectId, 'reset', 'cue_state', cueId, {
+      cueName: before?.cue_name,
+      objectName: before?.display_name || before?.mesh_name,
+    });
+  }
   return jsonResp({ ok: true, removed: result.meta.changes });
 }
 
@@ -1183,7 +1570,7 @@ function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': 'Range, Content-Type',
+    'Access-Control-Allow-Headers': 'Range, Content-Type, Authorization',
     'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
     'Access-Control-Max-Age': '86400'
   };
@@ -1202,6 +1589,587 @@ function jsonResp(obj, status = 200) {
     status,
     headers: { ...corsHeaders(), 'Content-Type': 'application/json' }
   });
+}
+
+// ─────────────────────────────────────────────
+// Auth — 共享密碼系統（admin 後台發放密碼）
+// ─────────────────────────────────────────────
+
+const SESSION_COOKIE = 'sp_session';
+const SESSION_TTL_SEC = 90 * 24 * 3600;
+const SETUP_TOKEN_TTL = 600; // setup token 10 分鐘
+
+function getAuthSecret(env) {
+  return env.AUTH_SECRET || 'dev-only-secret-change-me';
+}
+
+async function hmacSign(secret, data) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, enc.encode(data));
+  return base64UrlEncode(new Uint8Array(sig));
+}
+
+function base64UrlEncode(bytes) {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function base64UrlDecode(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  const bin = atob(str);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+function bytesToBase64(bytes) {
+  let s = '';
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
+}
+function base64ToBytes(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+// 產生 8 位英數字 access code（去掉容易混的 0/O/1/I/l）
+function generateAccessCode() {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  let s = '';
+  for (const b of bytes) s += alphabet[b % alphabet.length];
+  return s;
+}
+
+async function newSessionToken(secret, userId) {
+  const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_SEC;
+  const data = `${userId}.${exp}`;
+  const sig = await hmacSign(secret, data);
+  return `${data}.${sig}`;
+}
+
+async function verifySessionToken(secret, token) {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [userId, expStr, sig] = parts;
+  const exp = parseInt(expStr, 10);
+  if (!exp || exp < Math.floor(Date.now() / 1000)) return null;
+  const expectedSig = await hmacSign(secret, `${userId}.${expStr}`);
+  if (sig !== expectedSig) return null;
+  return userId;
+}
+
+function parseCookies(request) {
+  const header = request.headers.get('cookie') || '';
+  const map = {};
+  for (const part of header.split(';')) {
+    const [k, ...rest] = part.trim().split('=');
+    if (k) map[k] = rest.join('=');
+  }
+  return map;
+}
+
+async function getRequestUserId(request, env) {
+  // 優先讀 Authorization: Bearer <token>（避開 third-party cookie 限制）
+  let token = null;
+  const auth = request.headers.get('authorization') || '';
+  if (auth.toLowerCase().startsWith('bearer ')) {
+    token = auth.slice(7).trim();
+  }
+  // fallback：cookie（同 origin 部署時用）
+  if (!token) {
+    const cookies = parseCookies(request);
+    token = cookies[SESSION_COOKIE] || null;
+  }
+  if (!token) return null;
+  const userId = await verifySessionToken(getAuthSecret(env), token);
+  if (!userId) return null;
+  // 確認該 user 仍然 active
+  const u = await env.DB.prepare(
+    `SELECT id FROM users WHERE id = ? AND deactivated = 0 LIMIT 1`
+  ).bind(userId).first();
+  return u ? userId : null;
+}
+
+async function getCurrentUser(request, env) {
+  const userId = await getRequestUserId(request, env);
+  if (!userId) return null;
+  const u = await env.DB.prepare(
+    `SELECT id, name, role, avatar_color FROM users WHERE id = ? LIMIT 1`
+  ).bind(userId).first();
+  if (!u) return null;
+  return { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color };
+}
+
+function setSessionCookie(token) {
+  // SameSite=None 必填：前端在 localhost / vercel.app / haimiaan.com 等等 cross-origin
+  // fetch 到 proxy.haimiaan.com，瀏覽器才會送 cookie。SameSite=None 必須配 Secure。
+  return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${SESSION_TTL_SEC}`;
+}
+function clearSessionCookie() {
+  return `${SESSION_COOKIE}=; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=0`;
+}
+
+// 加 cookie 到既有的 jsonResp
+function jsonRespWithCookie(obj, cookieValue, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Set-Cookie': cookieValue }
+  });
+}
+
+// ─── Auth endpoints ───
+
+async function authLogin(request, env) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const code = (body?.accessCode || '').toString().trim().toUpperCase().replace(/\s+/g, '');
+  if (!code) return jsonResp({ error: '請輸入號碼' }, 400);
+
+  const u = await env.DB.prepare(
+    `SELECT id, name, role, avatar_color, deactivated
+       FROM users WHERE access_code = ? LIMIT 1`
+  ).bind(code).first();
+  if (!u) return jsonResp({ error: '號碼無效' }, 401);
+  if (u.deactivated) return jsonResp({ error: '此號碼已停用，請聯絡 admin' }, 403);
+
+  await env.DB.prepare(`UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`).bind(u.id).run();
+
+  const token = await newSessionToken(getAuthSecret(env), u.id);
+  return jsonRespWithCookie({
+    user: { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color },
+    token,  // 前端把這個存 localStorage，每個 request 帶 Authorization: Bearer <token>
+  }, setSessionCookie(token));
+}
+
+function authLogout() {
+  return jsonRespWithCookie({ ok: true }, clearSessionCookie());
+}
+
+async function authMe(request, env) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  return jsonResp({ user: me });
+}
+
+// ─── Users (admin) CRUD ───
+
+async function handleUsersRouter(request, env, url) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  if (me.role !== 'admin') return jsonResp({ error: '權限不足，需要 admin' }, 403);
+
+  const segs = url.pathname.split('/').filter(Boolean);
+  const userId = segs[2] || null;
+  const action = segs[3] || null;
+
+  try {
+    if (!userId) {
+      if (request.method === 'GET') return listUsers(env);
+      if (request.method === 'POST') return createUser(request, env);
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+    if (action === 'access-code') {
+      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+      return setAccessCode(request, env, userId);
+    }
+    if (action === 'projects') {
+      if (request.method === 'GET') return listUserProjects(env, userId);
+      if (request.method === 'POST') return addUserToProject(request, env, userId);
+      if (request.method === 'DELETE') return removeUserFromProject(request, env, userId);
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+    if (request.method === 'PATCH') return updateUser(request, env, userId);
+    if (request.method === 'DELETE') return deleteUser(env, me.id, userId);
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+async function listUsers(env) {
+  // 含每人的 project memberships
+  const users = await env.DB.prepare(
+    `SELECT id, name, role, avatar_color, access_code, deactivated, created_at, last_seen_at
+       FROM users ORDER BY created_at`
+  ).all();
+  const memberships = await env.DB.prepare(`
+    SELECT pm.user_id, pm.project_id, pm.role, p.name AS project_name
+      FROM project_members pm
+      JOIN projects p ON pm.project_id = p.id
+     WHERE p.status != 'archived'
+  `).all();
+  const byUser = {};
+  for (const m of memberships.results || []) {
+    (byUser[m.user_id] = byUser[m.user_id] || []).push({
+      projectId: m.project_id, projectName: m.project_name, role: m.role,
+    });
+  }
+  return jsonResp({
+    users: (users.results || []).map(u => ({
+      id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color,
+      accessCode: u.access_code, deactivated: !!u.deactivated,
+      createdAt: u.created_at, lastSeenAt: u.last_seen_at,
+      projects: byUser[u.id] || [],
+    })),
+  });
+}
+
+async function createUser(request, env) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const name = (body?.name || '').toString().trim().slice(0, 80);
+  const role = ['admin', 'animator', 'director'].includes(body?.role) ? body.role : 'animator';
+  const avatarColor = (body?.avatarColor || '#10c78a').toString().slice(0, 8);
+  let accessCode = (body?.accessCode || '').toString().trim().toUpperCase().replace(/\s+/g, '');
+  if (!name) return jsonResp({ error: 'name 必填' }, 400);
+  if (accessCode && accessCode.length < 4) return jsonResp({ error: '自訂 access code 至少 4 個字' }, 400);
+  if (accessCode && accessCode.length > 32) return jsonResp({ error: 'access code 太長（最多 32 字）' }, 400);
+
+  // 沒給就自動產生
+  if (!accessCode) accessCode = generateAccessCode();
+
+  // 檢查 code 重複
+  const exists = await env.DB.prepare(`SELECT id FROM users WHERE access_code = ? LIMIT 1`).bind(accessCode).first();
+  if (exists) return jsonResp({ error: '這個 access code 已被使用，請改一個' }, 409);
+
+  const id = 'u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  // email 必填（schema NOT NULL）→ 內部 placeholder
+  const placeholderEmail = `${id}@auto.local`;
+  await env.DB.prepare(
+    `INSERT INTO users (id, email, name, role, avatar_color, access_code)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(id, placeholderEmail, name, role, avatarColor, accessCode).run();
+
+  // optional: 同時指派 project
+  const projectIds = Array.isArray(body?.projectIds) ? body.projectIds : [];
+  for (const pid of projectIds) {
+    if (typeof pid !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(pid)) continue;
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)`
+    ).bind(pid, id, role).run();
+  }
+
+  return jsonResp({ ok: true, id, accessCode }, 201);
+}
+
+async function updateUser(request, env, userId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const sets = [], values = [];
+  if ('name' in body) { sets.push('name = ?'); values.push((body.name || '').toString().slice(0, 80)); }
+  if ('role' in body && ['admin', 'animator', 'director'].includes(body.role)) {
+    sets.push('role = ?'); values.push(body.role);
+  }
+  if ('avatarColor' in body) { sets.push('avatar_color = ?'); values.push(body.avatarColor); }
+  if ('deactivated' in body) { sets.push('deactivated = ?'); values.push(body.deactivated ? 1 : 0); }
+  if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
+  values.push(userId);
+  const r = await env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...values).run();
+  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true });
+}
+
+async function setAccessCode(request, env, userId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  let code = (body?.accessCode || '').toString().trim().toUpperCase().replace(/\s+/g, '');
+  // 沒給就自動產生
+  if (!code) code = generateAccessCode();
+  if (code.length < 4) return jsonResp({ error: 'access code 至少 4 個字' }, 400);
+  if (code.length > 32) return jsonResp({ error: 'access code 太長' }, 400);
+
+  const exists = await env.DB.prepare(
+    `SELECT id FROM users WHERE access_code = ? AND id != ? LIMIT 1`
+  ).bind(code, userId).first();
+  if (exists) return jsonResp({ error: '這個 access code 已被別人使用' }, 409);
+
+  const r = await env.DB.prepare(`UPDATE users SET access_code = ? WHERE id = ?`).bind(code, userId).run();
+  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true, accessCode: code });
+}
+
+async function deleteUser(env, currentUserId, targetUserId) {
+  if (currentUserId === targetUserId) return jsonResp({ error: '不能刪除自己的帳號' }, 400);
+  const r = await env.DB.prepare(`DELETE FROM users WHERE id = ?`).bind(targetUserId).run();
+  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true });
+}
+
+// ─── User project memberships（admin 專案指派）
+
+async function listUserProjects(env, userId) {
+  const r = await env.DB.prepare(`
+    SELECT pm.project_id, pm.role, p.name
+      FROM project_members pm
+      JOIN projects p ON pm.project_id = p.id
+     WHERE pm.user_id = ? AND p.status != 'archived'
+     ORDER BY p.updated_at DESC
+  `).bind(userId).all();
+  return jsonResp({
+    projects: (r.results || []).map(m => ({
+      projectId: m.project_id, projectName: m.name, role: m.role,
+    })),
+  });
+}
+
+async function addUserToProject(request, env, userId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const projectId = (body?.projectId || '').toString();
+  const role = ['admin', 'animator', 'director'].includes(body?.role) ? body.role : null;
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid projectId' }, 400);
+  if (!role) return jsonResp({ error: 'role 必填（admin/animator/director）' }, 400);
+
+  // 確認 project 跟 user 都存在
+  const p = await env.DB.prepare(`SELECT id FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+  if (!p) return jsonResp({ error: 'Project not found' }, 404);
+  const u = await env.DB.prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
+  if (!u) return jsonResp({ error: 'User not found' }, 404);
+
+  await env.DB.prepare(
+    `INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)
+     ON CONFLICT (project_id, user_id) DO UPDATE SET role = excluded.role`
+  ).bind(projectId, userId, role).run();
+  return jsonResp({ ok: true });
+}
+
+async function removeUserFromProject(request, env, userId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const projectId = (body?.projectId || '').toString();
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid projectId' }, 400);
+
+  const r = await env.DB.prepare(
+    `DELETE FROM project_members WHERE project_id = ? AND user_id = ?`
+  ).bind(projectId, userId).run();
+  if (!r.meta.changes) return jsonResp({ error: '此 user 不在這個 project 內' }, 404);
+  return jsonResp({ ok: true });
+}
+
+// ─────────────────────────────────────────────
+// Shared Assets（admin Tier 1 #10）— 跨專案共用的 model 庫
+// GET    /api/assets                       → 列所有 active asset
+// POST   /api/assets    body json{name,description}  → 建 metadata，回 id + r2_key（前端再 PUT binary）
+// PATCH  /api/assets/:id                   → 改 name / description / deactivated
+// DELETE /api/assets/:id                   → 軟刪除（deactivated=1，不真砍 R2，避免引用 broken）
+// PUT    /api/assets/:id/file              → 上傳 .glb binary（content-type: model/gltf-binary）
+// POST   /api/projects/:id/model/use-asset → 把 project 的 model 切到某個 shared asset
+// ─────────────────────────────────────────────
+
+const MAX_ASSET_NAME = 80;
+const MAX_ASSET_DESC = 300;
+
+async function handleAssetsRouter(request, env, url) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
+  const segs = url.pathname.split('/').filter(Boolean);
+  const assetId = segs[2] || null;
+  const action = segs[3] || null;
+
+  try {
+    if (!assetId) {
+      if (request.method === 'GET') return listAssets(env);
+      if (request.method === 'POST') {
+        if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+        return createAsset(request, env, me);
+      }
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(assetId)) return jsonResp({ error: 'Invalid asset id' }, 400);
+
+    if (action === 'file') {
+      if (request.method === 'PUT') {
+        if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+        return uploadAssetFile(request, env, assetId);
+      }
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+
+    if (request.method === 'GET') return getAsset(env, assetId);
+    if (request.method === 'PATCH') {
+      if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+      return updateAsset(request, env, assetId);
+    }
+    if (request.method === 'DELETE') {
+      if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+      return deleteAsset(env, assetId);
+    }
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+async function listAssets(env) {
+  const r = await env.DB.prepare(`
+    SELECT a.id, a.type, a.name, a.description, a.r2_key, a.size_bytes,
+           a.uploaded_by_user_id, a.created_at, a.updated_at,
+           u.name AS uploader_name,
+           (SELECT COUNT(*) FROM projects p WHERE p.model_r2_key = a.r2_key AND p.status != 'archived') AS used_by_count
+      FROM shared_assets a
+      LEFT JOIN users u ON a.uploaded_by_user_id = u.id
+     WHERE a.deactivated = 0
+     ORDER BY a.updated_at DESC
+  `).all();
+  return jsonResp({
+    assets: (r.results || []).map(a => ({
+      id: a.id, type: a.type, name: a.name, description: a.description,
+      key: a.r2_key, url: `/r2/${a.r2_key}`, sizeBytes: a.size_bytes,
+      uploaderName: a.uploader_name, usedByCount: a.used_by_count,
+      createdAt: a.created_at, updatedAt: a.updated_at,
+    })),
+  });
+}
+
+async function getAsset(env, assetId) {
+  const a = await env.DB.prepare(`SELECT * FROM shared_assets WHERE id = ? LIMIT 1`).bind(assetId).first();
+  if (!a) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ asset: {
+    id: a.id, type: a.type, name: a.name, description: a.description,
+    key: a.r2_key, url: `/r2/${a.r2_key}`, sizeBytes: a.size_bytes,
+    createdAt: a.created_at, updatedAt: a.updated_at,
+    deactivated: !!a.deactivated,
+  }});
+}
+
+async function createAsset(request, env, me) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const name = (body?.name || '').toString().trim().slice(0, MAX_ASSET_NAME);
+  const description = (body?.description || '').toString().trim().slice(0, MAX_ASSET_DESC);
+  const type = body?.type === 'model' ? 'model' : 'model';
+  if (!name) return jsonResp({ error: 'name 必填' }, 400);
+
+  const id = 'as_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  const r2Key = `assets/models/${id}.glb`;
+
+  await env.DB.prepare(`
+    INSERT INTO shared_assets (id, type, name, description, r2_key, uploaded_by_user_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(id, type, name, description, r2Key, me.id).run();
+
+  // 還沒上傳檔案 → r2_key 在 R2 還不存在，前端要接著 PUT /file
+  return jsonResp({ ok: true, id, key: r2Key }, 201);
+}
+
+async function uploadAssetFile(request, env, assetId) {
+  if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
+
+  const ct = request.headers.get('content-type') || '';
+  if (!ct.includes('model/gltf-binary') && !ct.includes('application/octet-stream')) {
+    return jsonResp({ error: 'Content-Type must be model/gltf-binary' }, 400);
+  }
+  const cl = parseInt(request.headers.get('content-length') || '0', 10);
+  if (cl > MAX_MODEL_SIZE) return jsonResp({ error: `File too large` }, 413);
+
+  const a = await env.DB.prepare(
+    `SELECT id, r2_key FROM shared_assets WHERE id = ? LIMIT 1`
+  ).bind(assetId).first();
+  if (!a) return jsonResp({ error: 'Asset not found' }, 404);
+
+  await env.MODELS.put(a.r2_key, request.body, {
+    httpMetadata: { contentType: 'model/gltf-binary' },
+    customMetadata: { assetId, uploadedAt: new Date().toISOString() },
+  });
+
+  await env.DB.prepare(
+    `UPDATE shared_assets SET size_bytes = ?, updated_at = datetime('now') WHERE id = ?`
+  ).bind(cl, assetId).run();
+
+  return jsonResp({ ok: true, key: a.r2_key, sizeBytes: cl });
+}
+
+async function updateAsset(request, env, assetId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const sets = [], values = [];
+  if ('name' in body) { sets.push('name = ?'); values.push((body.name || '').toString().trim().slice(0, MAX_ASSET_NAME)); }
+  if ('description' in body) { sets.push('description = ?'); values.push((body.description || '').toString().slice(0, MAX_ASSET_DESC)); }
+  if ('deactivated' in body) { sets.push('deactivated = ?'); values.push(body.deactivated ? 1 : 0); }
+  if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
+  values.push(assetId);
+  const r = await env.DB.prepare(
+    `UPDATE shared_assets SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`
+  ).bind(...values).run();
+  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true });
+}
+
+async function deleteAsset(env, assetId) {
+  const a = await env.DB.prepare(`SELECT r2_key FROM shared_assets WHERE id = ? LIMIT 1`).bind(assetId).first();
+  if (!a) return jsonResp({ error: 'Not found' }, 404);
+  // 檢查是否有 project 還在用
+  const inUse = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM projects WHERE model_r2_key = ? AND status != 'archived'`
+  ).bind(a.r2_key).first();
+  if ((inUse?.n || 0) > 0) {
+    return jsonResp({ error: `這個資產還有 ${inUse.n} 個專案在用，請先把專案切到別的 model 再刪。` }, 400);
+  }
+  // 軟刪除：標 deactivated，R2 物件保留（避免 race 下舊 client 還在 fetch）
+  await env.DB.prepare(`UPDATE shared_assets SET deactivated = 1 WHERE id = ?`).bind(assetId).run();
+  return jsonResp({ ok: true });
+}
+
+// ─────────────────────────────────────────────
+// Activity log（admin Tier 1 #1）
+// 在每個 mutation success 之後 fire-and-forget 寫一筆。
+// 寫失敗只 log 不 throw —— activity log 失敗不該影響 mutation 結果。
+// userId 暫時 hardcoded 'u_phang'，等 #13 權限細分才有多人。
+// ─────────────────────────────────────────────
+async function logActivity(request, env, projectId, action, targetType, targetId, payload = {}) {
+  if (!env.DB || !projectId) return;
+  try {
+    const userId = (request && (await getRequestUserId(request, env))) || 'u_phang';
+    const id = 'a_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    await env.DB.prepare(
+      `INSERT INTO activity_log (id, project_id, user_id, action, target_type, target_id, payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(id, projectId, userId, action, targetType, targetId || null, JSON.stringify(payload)).run();
+  } catch (e) {
+    console.warn('logActivity failed', e?.message || e);
+  }
+}
+
+async function listActivity(env, projectId, limit = 50) {
+  const lim = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+  const rows = await env.DB.prepare(
+    `SELECT a.id, a.project_id, a.user_id, a.action, a.target_type, a.target_id, a.payload, a.created_at,
+            u.name AS user_name, u.avatar_color AS user_avatar
+       FROM activity_log a
+       LEFT JOIN users u ON a.user_id = u.id
+      WHERE a.project_id = ?
+      ORDER BY a.created_at DESC
+      LIMIT ?`
+  ).bind(projectId, lim).all();
+
+  const list = (rows.results || []).map(r => ({
+    id: r.id,
+    projectId: r.project_id,
+    userId: r.user_id,
+    userName: r.user_name || 'Unknown',
+    userAvatar: r.user_avatar || '#888888',
+    action: r.action,
+    targetType: r.target_type,
+    targetId: r.target_id,
+    payload: safeJson(r.payload),
+    createdAt: r.created_at,
+  }));
+  return jsonResp({ activities: list });
+}
+
+function safeJson(s) {
+  try { return JSON.parse(s); } catch { return {}; }
 }
 
 function parseConfirmTokens(html) {

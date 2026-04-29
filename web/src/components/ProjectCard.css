@@ -72,6 +72,22 @@
   gap: 8px;
   flex: 1;
 }
+.project-card__show {
+  align-self: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  cursor: pointer;
+  margin-bottom: 2px;
+  transition: background 0.12s, color 0.12s;
+}
+.project-card__show:hover {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
 .project-card__title {
   margin: 0;
   font-size: 15px;

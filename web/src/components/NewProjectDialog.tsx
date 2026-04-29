@@ -1,25 +1,33 @@
 import { useEffect, useRef, useState } from 'react';
+import * as api from '../lib/api';
+import type { Show } from '../lib/api';
 import './NewProjectDialog.css';
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onCreate: (data: { name: string; description: string }) => void | Promise<void>;
+  onCreate: (data: { name: string; description: string; showId?: string | null }) => void | Promise<void>;
   submitting?: boolean;
+  /** 如果提供，新專案會 pre-select 這個 Show */
+  defaultShowId?: string | null;
 }
 
-export default function NewProjectDialog({ open, onClose, onCreate, submitting = false }: Props) {
+export default function NewProjectDialog({ open, onClose, onCreate, submitting = false, defaultShowId = null }: Props) {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [showId, setShowId] = useState<string>(defaultShowId || '');
+  const [shows, setShows] = useState<Show[]>([]);
   const nameRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
       setName('');
       setDescription('');
+      setShowId(defaultShowId || '');
       setTimeout(() => nameRef.current?.focus(), 50);
+      api.listShows().then(setShows).catch(() => setShows([]));
     }
-  }, [open]);
+  }, [open, defaultShowId]);
 
   useEffect(() => {
     if (!open) return;
@@ -35,7 +43,11 @@ export default function NewProjectDialog({ open, onClose, onCreate, submitting =
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
-    onCreate({ name: name.trim(), description: description.trim() });
+    onCreate({
+      name: name.trim(),
+      description: description.trim(),
+      showId: showId || null,
+    });
   }
 
   return (
@@ -72,6 +84,21 @@ export default function NewProjectDialog({ open, onClose, onCreate, submitting =
               placeholder="一句話描述這個專案"
             />
             <small className="form-hint">{description.length}/300</small>
+          </div>
+
+          <div className="form-row">
+            <label htmlFor="proj-show">歸屬於 Show（巡迴）</label>
+            <select
+              id="proj-show"
+              value={showId}
+              onChange={(e) => setShowId(e.target.value)}
+            >
+              <option value="">— 不歸屬任何 Show（獨立專案）—</option>
+              {shows.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+            <small className="form-hint">同一場巡迴的多個場次選同一個 Show，方便一起管理</small>
           </div>
 
           <div className="form-row form-row--upload">

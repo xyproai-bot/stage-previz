@@ -47,6 +47,24 @@
 }
 .editor-topbar__right {
   margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.editor-topbar__activity {
+  background: var(--surface-1);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  padding: 5px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.editor-topbar__activity:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--border-strong);
 }
 .save-indicator {
   font-size: 12px;
@@ -727,7 +745,138 @@
   font-size: 12px;
 }
 
-/* selected highlight */
+/* C4D / Maya 風格固定 attribute panel — 切物件不重排 */
+.attribute-panel {
+  background: rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.attribute-panel__selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.25);
+}
+.attribute-panel__selector-label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  font-weight: 700;
+}
+.attribute-panel__selector select {
+  flex: 1;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 6px 9px;
+  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+  outline: none;
+  font-family: inherit;
+}
+.attribute-panel__selector select:focus {
+  border-color: var(--accent);
+}
+.attribute-panel__selector-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.link-btn:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.link-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.attribute-panel__objects {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 28vh;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.1);
+}
+.attribute-panel__obj {
+  font-size: 12.5px;
+}
+.attribute-panel__obj label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  user-select: none;
+}
+.attribute-panel__obj label:hover {
+  background: var(--surface-2);
+}
+.attribute-panel__obj.is-selected label {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+.attribute-panel__obj.is-locked label {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.attribute-panel__obj input[type="checkbox"] {
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+.attribute-panel__obj-cat { font-size: 14px; flex-shrink: 0; }
+.attribute-panel__obj-name { flex: 1; }
+.attribute-panel__body.is-multi {
+  /* 跟 single 同樣 padding，差異只在文字 */
+}
+.attribute-panel__hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12.5px;
+}
+.attribute-panel__hint small {
+  font-size: 10.5px;
+}
+.attribute-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.12);
+}
+.attribute-panel__body.has-override .attribute-panel__title {
+  background: rgba(255, 170, 68, 0.08);
+  border-bottom-color: rgba(255, 170, 68, 0.3);
+}
+.attribute-panel__body.is-locked .attribute-panel__title {
+  opacity: 0.6;
+}
+.attribute-panel__locked {
+  padding: 16px;
+  text-align: center;
+  font-style: italic;
+}
+/* legacy — accordion 已廢，留 class 給其他地方 fallback */
 .object-row.is-selected {
   border-color: var(--accent) !important;
   border-left-width: 3px !important;
@@ -783,21 +932,25 @@
   width: 14px;
   text-align: center;
 }
-.object-row__body {
-  padding: 10px 12px 14px;
-  border-top: 1px solid var(--border);
+.object-row__body,
+.attribute-panel__body {
+  padding: 12px;
   background: rgba(0, 0, 0, 0.15);
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
-.object-row__body .form-row label {
+.object-row__body { border-top: 1px solid var(--border); padding: 10px 12px 14px; }
+.attribute-panel__body .attribute-panel__title { margin: -12px -12px 0; }
+.object-row__body .form-row label,
+.attribute-panel__body .form-row label {
   font-size: 10.5px;
   text-transform: uppercase;
   color: var(--text-dim);
   letter-spacing: 0.05em;
 }
-.object-row__body input[type="number"] {
+.object-row__body input[type="number"],
+.attribute-panel__body input[type="number"] {
   width: 100%;
   background: rgba(0, 0, 0, 0.4);
   border: 1px solid var(--border-strong);
@@ -809,7 +962,8 @@
   outline: none;
   box-sizing: border-box;
 }
-.object-row__body input[type="number"]:focus {
+.object-row__body input[type="number"]:focus,
+.attribute-panel__body input[type="number"]:focus {
   border-color: var(--accent);
 }
 .object-row__actions {

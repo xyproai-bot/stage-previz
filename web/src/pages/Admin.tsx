@@ -27,6 +27,7 @@ export default function Admin() {
 
 function ProjectsTab() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [showsById, setShowsById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -38,8 +39,11 @@ function ProjectsTab() {
     try {
       setLoading(true);
       setError(null);
-      const list = await api.listProjects();
+      const [list, shows] = await Promise.all([api.listProjects(), api.listShows().catch(() => [])]);
       setProjects(list);
+      const map: Record<string, string> = {};
+      for (const s of shows) map[s.id] = s.name;
+      setShowsById(map);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -68,7 +72,7 @@ function ProjectsTab() {
     mine: projects.filter(p => p.members.some(m => m.name === ME)).length,
   }), [projects]);
 
-  async function handleCreate(data: { name: string; description: string }) {
+  async function handleCreate(data: { name: string; description: string; showId?: string | null }) {
     try {
       setCreating(true);
       await api.createProject(data);
@@ -130,7 +134,11 @@ function ProjectsTab() {
         ) : (
           <div className="project-grid">
             {filtered.map((p) => (
-              <ProjectCard key={p.id} project={p} />
+              <ProjectCard
+                key={p.id}
+                project={p}
+                showName={p.showId ? showsById[p.showId] : null}
+              />
             ))}
           </div>
         )}
