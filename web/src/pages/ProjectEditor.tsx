@@ -828,7 +828,7 @@ function ObjectStateRow({
           {state.displayName}
           {state.locked && <span className="lock-tag" title="已鎖定">🔒</span>}
         </span>
-        {hasOverride && <span className="override-dot" title="此 cue 有覆蓋" />}
+        {hasOverride && <span className="override-dot" title="此 cue 把它放在自訂位置（跟其他 cue 獨立）" />}
         <span className="object-row__chev">{isOpen ? '▾' : '▸'}</span>
       </header>
       {isOpen && (
@@ -875,7 +875,7 @@ function ObjectStateRow({
           </div>
           {hasOverride && (
             <div className="muted small object-row__hint">
-              📍 此 cue 有覆蓋；default 是 ({state.default.position.x}, {state.default.position.y}, {state.default.position.z})
+              📍 已在此 cue 設定位置（其他 cue 不受影響）。原始 default 位置 ({state.default.position.x}, {state.default.position.y}, {state.default.position.z})
             </div>
           )}
         </div>

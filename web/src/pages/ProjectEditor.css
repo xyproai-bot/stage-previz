@@ -594,7 +594,7 @@
   overflow: hidden;
 }
 .object-row.has-override {
-  border-color: var(--warn);
+  border-left-color: rgba(255, 170, 68, 0.5);
   border-left-width: 3px;
 }
 .object-row__head {
@@ -618,11 +618,10 @@
   font-weight: 500;
 }
 .override-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--warn);
-  box-shadow: 0 0 6px var(--warn);
+  background: rgba(255, 170, 68, 0.7);
 }
 .object-row__chev {
   color: var(--text-muted);

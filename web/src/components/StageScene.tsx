@@ -53,6 +53,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
 
   const [mode, setMode] = useState<Mode>('translate');
   const [space, setSpace] = useState<'world' | 'local'>('world');
+  const [showLabels, setShowLabels] = useState(true);
   const [, setModelLoading] = useState(false);
 
   onSelectRef.current = onSelect;
@@ -179,7 +180,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       if (stopped) return;
       orbit.update();
       renderer.render(scene, camera);
-      // update HTML labels
+      // update HTML labels（layer.style 控制全體顯隱，個別 label 仍會被 updateLabels 算位置）
       updateLabels(labelsRef.current, meshesRef.current, camera, container);
       requestAnimationFrame(tick);
     };
@@ -441,6 +442,12 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
   useEffect(() => { transformRef.current?.setMode(mode); }, [mode]);
   useEffect(() => { transformRef.current?.setSpace(space); }, [space]);
 
+  // ── Label visibility ──
+  useEffect(() => {
+    const layer = labelLayerRef.current;
+    if (layer) layer.style.display = showLabels ? '' : 'none';
+  }, [showLabels]);
+
   // ── Keyboard shortcuts ──
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -451,6 +458,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       else if (e.key === 'e' || e.key === 'E') setMode('rotate');
       else if (e.key === 'r' || e.key === 'R') setMode('scale');
       else if (e.key === 'q' || e.key === 'Q') setSpace(s => s === 'world' ? 'local' : 'world');
+      else if (e.key === 'l' || e.key === 'L') setShowLabels(s => !s);
       else if (e.key === 'Escape') onSelectRef.current(null);
     };
     window.addEventListener('keydown', onKey);
@@ -492,13 +500,18 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
           title="切換 world / local 軸 (Q)"
         >{space === 'world' ? '🌐 World' : '📦 Local'}</button>
         <span className="tool-sep" />
+        <button
+          className={'tool ' + (showLabels ? 'is-active' : '')}
+          onClick={() => setShowLabels(s => !s)}
+          title={showLabels ? '隱藏物件名稱 label (L)' : '顯示物件名稱 label (L)'}
+        >🏷️ Label</button>
         <button className="tool" onClick={resetCamera} title="重置攝影機">🎥</button>
         <span className="grow" />
         {cueName && <span className="cue-tag">當前 cue：<strong>{cueName}</strong></span>}
       </div>
       {/* Help overlay */}
       <div className="stage-scene__help">
-        <kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>R</kbd> 縮放 · <kbd>Q</kbd> world/local · <kbd>Esc</kbd> 取消選取
+        <kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>R</kbd> 縮放 · <kbd>Q</kbd> world/local · <kbd>L</kbd> label · <kbd>Esc</kbd> 取消選取
       </div>
     </div>
   );
