@@ -31,7 +31,9 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   const [filename, setFilename] = useState('');
   const [pickedFile, setPickedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string>('');
-  void uploadProgress;  // future: show progress
+  const [sceneSize, setSceneSize] = useState(0);
+  const [unitGuess, setUnitGuess] = useState<'normal' | 'too_big' | 'too_small'>('normal');
+  void uploadProgress;
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -69,9 +71,11 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
     setStage('parsing');
     setError(null);
     try {
-      const { meshes, warnings } = await parseGlbFile(file);
+      const { meshes, warnings, sceneSizeMeters, unitGuess: ug } = await parseGlbFile(file);
       setMeshes(meshes);
       setWarnings(warnings);
+      setSceneSize(sceneSizeMeters);
+      setUnitGuess(ug);
       setStage(meshes.length > 0 ? 'review' : 'error');
       if (meshes.length === 0) setError('GLB 解析後找不到 top-level 物件 — 確認模型是有 group/mesh，沒被全展平');
     } catch (e) {
@@ -182,6 +186,9 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
             <div className="upload-summary">
               <span className="upload-summary__file">📄 {filename}</span>
               <span className="upload-summary__count">{meshes.length} 個物件</span>
+              <span className={'upload-summary__size' + (unitGuess !== 'normal' ? ' is-warn' : '')}>
+                📐 對角 {sceneSize.toFixed(sceneSize < 10 ? 2 : 1)} m
+              </span>
               {Object.entries(counts).filter(([, n]) => n > 0).map(([cat, n]) => {
                 const opt = CATEGORY_OPTIONS.find(c => c[0] === cat as StageObjectCategory)!;
                 return (
@@ -197,7 +204,22 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
 
             {warnings.length > 0 && (
               <div className="upload-warnings">
-                {warnings.map((w, i) => <div key={i}>⚠️ {w}</div>)}
+                {warnings.map((w, i) => <div key={i}>{w}</div>)}
+              </div>
+            )}
+
+            {unitGuess !== 'normal' && (
+              <div className="upload-unit-hint">
+                <strong>📏 尺寸看起來不對</strong>
+                <p>
+                  GLB 標準是 1 unit = 1 公尺，舞臺對角通常 5-50 m 之間。
+                  你的模型對角是 <strong>{sceneSize.toFixed(2)} m</strong>，看起來
+                  {unitGuess === 'too_big' ? ' 過大' : ' 過小'}。
+                </p>
+                <p className="muted">
+                  匯入後系統會 <strong>自動 {unitGuess === 'too_big' ? '縮小到 1/100' : '放大 100×'}</strong>。
+                  建議：在 C4D / Blender 把單位改成「公尺」再匯出 .glb。
+                </p>
               </div>
             )}
 

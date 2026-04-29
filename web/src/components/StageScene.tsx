@@ -140,6 +140,9 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     // Selection by click — 但要先排除「點到 gizmo」的情況（不然會 detach 中斷 drag）
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
+
+    // Debug 暴露
+    (window as any).__stage = { scene, camera, raycaster, transform, transformHelper, meshes: meshesRef, modelMap: modelMeshMapRef };
     function onPointerDown(e: PointerEvent) {
       // 已經在拖 gizmo 中 → 跳過
       if (transform.dragging) return;
@@ -204,8 +207,11 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       try { container.removeChild(renderer.domElement); } catch {}
       const layer = labelLayerRef.current;
       if (layer) try { container.removeChild(layer); } catch {}
+      labelLayerRef.current = null;  // strict mode 双跑時別 leak 到舊 detached DOM
       labelsRef.current.clear();
       meshesRef.current.clear();
+      modelMeshMapRef.current.clear();
+      sceneRef.current = null;
     };
   }, []);
 
@@ -224,14 +230,43 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       modelUrl,
       (gltf) => {
         if (cancelled) return;
+        // 算 scene bbox 用來 auto-fit camera + 警告太大太小
+        const box = new THREE.Box3().setFromObject(gltf.scene);
+        const size = box.getSize(new THREE.Vector3());
+        const diag = size.length();
+
+        if (diag > 100) {
+          console.warn(`[StageScene] model diag ${diag.toFixed(1)}m — 太大，auto-scale 1/100`);
+          gltf.scene.scale.setScalar(0.01);
+        } else if (diag < 0.5 && diag > 0) {
+          console.warn(`[StageScene] model diag ${diag.toFixed(3)}m — 太小，auto-scale 100x`);
+          gltf.scene.scale.setScalar(100);
+        }
+        // 重新算 bbox after scale
+        const finalBox = new THREE.Box3().setFromObject(gltf.scene);
+        const finalSize = finalBox.getSize(new THREE.Vector3());
+        const finalCenter = finalBox.getCenter(new THREE.Vector3());
+        const finalDiag = finalSize.length();
+
+        // Auto-fit camera：把整個模型框入視角
+        const cam = cameraRef.current;
+        const orb = orbitRef.current;
+        if (cam && orb && finalDiag > 0) {
+          const fitDist = (finalDiag * 0.6) / Math.tan((cam.fov * Math.PI) / 360);
+          const dir = new THREE.Vector3(1, 0.6, 1).normalize();
+          cam.position.copy(finalCenter).addScaledVector(dir, fitDist);
+          orb.target.copy(finalCenter);
+          cam.near = Math.max(0.01, finalDiag / 1000);
+          cam.far  = Math.max(200, finalDiag * 10);
+          cam.updateProjectionMatrix();
+        }
+
         const map = new Map<string, THREE.Object3D>();
-        // 走 top-level children — 每個對應一個 stage_object（按 mesh_name match）
         gltf.scene.children.forEach((child) => {
           const name = (child.name || '').trim();
           if (name) map.set(name, child);
         });
         modelMeshMapRef.current = map;
-        // 觸發 mesh 重建（清掉現有 mesh、用新 geometry）
         meshesRef.current.forEach((m) => {
           scene.remove(m);
           disposeObject3D(m);

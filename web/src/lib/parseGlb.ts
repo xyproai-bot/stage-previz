@@ -22,6 +22,14 @@ export interface ParsedMesh {
   defaultRotation: Euler;
   defaultScale: Vec3;
   childCount: number;
+  sizeMeters: number; // bbox 對角線長度（以 GLB 單位算）
+}
+
+export interface ParseResult {
+  meshes: ParsedMesh[];
+  warnings: string[];
+  sceneSizeMeters: number;       // 整個 scene 的 bbox 對角線
+  unitGuess: 'normal' | 'too_big' | 'too_small'; // 提示用
 }
 
 const PREFIX_RULES: Array<[RegExp, StageObjectCategory, string]> = [
@@ -50,7 +58,7 @@ export function prettifyName(name: string, prefix: string | null): string {
   return stripped.replace(/[_-]/g, ' ');
 }
 
-export async function parseGlbFile(file: File): Promise<{ meshes: ParsedMesh[]; warnings: string[] }> {
+export async function parseGlbFile(file: File): Promise<ParseResult> {
   const buf = await file.arrayBuffer();
   const loader = new GLTFLoader();
   const gltf = await new Promise<any>((resolve, reject) => {
@@ -62,8 +70,11 @@ export async function parseGlbFile(file: File): Promise<{ meshes: ParsedMesh[]; 
   const meshes: ParsedMesh[] = [];
   const seen = new Set<string>();
 
-  // 走 top-level children（直接子節點）
-  // 規則：每個 top-level node 視為一個「物件」（即使它內部有多個 mesh 子節點）
+  // 算整個 scene 的 bbox
+  const sceneBox = new THREE.Box3().setFromObject(scene);
+  const sceneSize = sceneBox.getSize(new THREE.Vector3());
+  const sceneSizeMeters = round(sceneSize.length());
+
   scene.children.forEach((child) => {
     const name = (child.name || '').trim();
     if (!name) {
@@ -78,6 +89,10 @@ export async function parseGlbFile(file: File): Promise<{ meshes: ParsedMesh[]; 
 
     const { category, prefix } = classifyMeshName(name);
     const childCount = countDescendants(child);
+    const box = new THREE.Box3().setFromObject(child);
+    const sz = box.getSize(new THREE.Vector3());
+    const sizeMeters = round(sz.length());
+
     meshes.push({
       meshName: name,
       displayName: prettifyName(name, prefix),
@@ -91,6 +106,7 @@ export async function parseGlbFile(file: File): Promise<{ meshes: ParsedMesh[]; 
       },
       defaultScale: { x: round(child.scale.x), y: round(child.scale.y), z: round(child.scale.z) },
       childCount,
+      sizeMeters,
     });
   });
 
@@ -98,7 +114,17 @@ export async function parseGlbFile(file: File): Promise<{ meshes: ParsedMesh[]; 
     warnings.push('找不到任何 top-level 節點 — 確認模型有匯出 group / mesh');
   }
 
-  return { meshes, warnings };
+  // 尺寸推測（GLB 標準 = 1 unit = 1 公尺，正常 stage 對角約 5-50 公尺）
+  let unitGuess: 'normal' | 'too_big' | 'too_small' = 'normal';
+  if (sceneSizeMeters > 100) {
+    unitGuess = 'too_big';
+    warnings.push(`⚠️ 整個場景對角約 ${sceneSizeMeters.toFixed(1)} 公尺 — 看起來太大（單位可能是 cm / mm）。建議匯出時把單位改 1 unit = 1 公尺。`);
+  } else if (sceneSizeMeters < 0.5 && meshes.length > 0) {
+    unitGuess = 'too_small';
+    warnings.push(`⚠️ 整個場景對角約 ${sceneSizeMeters.toFixed(2)} 公尺 — 看起來太小（單位可能是英呎或英吋）。`);
+  }
+
+  return { meshes, warnings, sceneSizeMeters, unitGuess };
 }
 
 function countDescendants(node: THREE.Object3D): number {
