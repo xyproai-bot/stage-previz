@@ -397,7 +397,21 @@ async function handleCues(request, env, projectId, songId, cueId) {
       if (request.method === 'POST') return createCue(request, env, songId);
       return jsonResp({ error: 'Method not allowed' }, 405);
     }
+
+    // 特殊 action：cues/reorder
+    if (cueId === 'reorder') {
+      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+      return reorderCues(request, env, songId);
+    }
+
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cueId)) return jsonResp({ error: 'Invalid cue id' }, 400);
+
+    // /cues/:id/reset
+    const segs = new URL(request.url).pathname.split('/').filter(Boolean);
+    if (segs[7] === 'reset') {
+      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+      return resetCue(env, cueId);
+    }
 
     if (request.method === 'GET') return getCue(env, cueId);
     if (request.method === 'PATCH') return updateCue(request, env, cueId);
@@ -461,7 +475,62 @@ async function createCue(request, env, songId) {
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'master')
   `).bind(id, songId, name, order, position, rotation, fov, crossfade).run();
 
+  // 三選一：cloneFrom 或 snapshotStates 或空白
+  if (body?.cloneFrom && /^[a-zA-Z0-9_-]{1,64}$/.test(body.cloneFrom)) {
+    // 複製來源 cue 的所有 cue_object_states
+    const src = await env.DB.prepare(`
+      SELECT stage_object_id, position, rotation, scale, visible, custom_props
+      FROM cue_object_states WHERE cue_id = ?
+    `).bind(body.cloneFrom).all();
+
+    const stmts = [];
+    for (const r of (src.results || [])) {
+      const newId = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + stmts.length;
+      stmts.push(env.DB.prepare(`
+        INSERT INTO cue_object_states (id, cue_id, stage_object_id, position, rotation, scale, visible, custom_props)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(newId, id, r.stage_object_id, r.position, r.rotation, r.scale, r.visible, r.custom_props));
+    }
+    if (stmts.length > 0) await env.DB.batch(stmts);
+  } else if (Array.isArray(body?.snapshotStates) && body.snapshotStates.length > 0) {
+    // 顯式 snapshot：每個 object 的 position/rotation
+    const stmts = [];
+    for (const s of body.snapshotStates) {
+      if (!s?.objectId || !/^[a-zA-Z0-9_-]{1,64}$/.test(s.objectId)) continue;
+      const cosId = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + stmts.length;
+      const sPos = s.position ? JSON.stringify(s.position) : null;
+      const sRot = s.rotation ? JSON.stringify(s.rotation) : null;
+      const sScl = s.scale    ? JSON.stringify(s.scale)    : null;
+      stmts.push(env.DB.prepare(`
+        INSERT INTO cue_object_states (id, cue_id, stage_object_id, position, rotation, scale)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(cosId, id, s.objectId, sPos, sRot, sScl));
+    }
+    if (stmts.length > 0) await env.DB.batch(stmts);
+  }
+  // 都沒給 → 空白 cue（無 override）
+
   return jsonResp({ ok: true, id, order }, 201);
+}
+
+async function resetCue(env, cueId) {
+  const result = await env.DB.prepare(
+    `DELETE FROM cue_object_states WHERE cue_id = ?`
+  ).bind(cueId).run();
+  return jsonResp({ ok: true, removed: result.meta.changes });
+}
+
+async function reorderCues(request, env, songId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const ids = Array.isArray(body?.orderedIds) ? body.orderedIds : null;
+  if (!ids || !ids.length) return jsonResp({ error: 'orderedIds required' }, 400);
+
+  const stmts = ids.map((id, i) =>
+    env.DB.prepare(`UPDATE cues SET "order" = ? WHERE id = ? AND song_id = ?`).bind(i, id, songId)
+  );
+  await env.DB.batch(stmts);
+  return jsonResp({ ok: true, updated: ids.length });
 }
 
 async function getCue(env, cueId) {

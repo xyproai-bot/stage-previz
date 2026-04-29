@@ -156,12 +156,71 @@ export default function ProjectEditor() {
   }
 
   // ── Cue actions ──
-  async function handleAddCue() {
+  async function handleAddBlankCue() {
     if (!projectId || !selectedSongId) return;
-    const name = prompt('新增 cue 名稱（例：開場、副歌爆破）')?.trim();
+    const defaultName = `Cue ${cues.length + 1}`;
+    const name = prompt('新增空白 cue（全部用 default）— 名稱：', defaultName)?.trim();
     if (!name) return;
     try { await api.createCue(projectId, selectedSongId, { name }); await refreshCues(); setRightTab('cues'); }
-    catch (e) { alert('新增 cue 失敗：' + msg(e)); }
+    catch (e) { alert('新增失敗：' + msg(e)); }
+  }
+  async function handleCloneCue(sourceCueId?: string) {
+    if (!projectId || !selectedSongId) return;
+    const src = sourceCueId
+      ? cues.find(c => c.id === sourceCueId)
+      : (selectedCue);
+    if (!src) { alert('沒有選中的 cue 可沿用，請先在左側選一個 cue'); return; }
+    const defaultName = `${src.name} (副本)`;
+    const name = prompt(`沿用「${src.name}」— 新 cue 名稱：`, defaultName)?.trim();
+    if (!name) return;
+    try {
+      await api.createCue(projectId, selectedSongId, { name, cloneFrom: src.id });
+      await refreshCues();
+      setRightTab('cues');
+    } catch (e) { alert('沿用失敗：' + msg(e)); }
+  }
+  async function handleSnapshotCue() {
+    if (!projectId || !selectedSongId) return;
+    if (viewportStates.length === 0) { alert('沒有物件可 snapshot'); return; }
+    const defaultName = selectedCue ? `${selectedCue.name} (snapshot)` : `Cue ${cues.length + 1}`;
+    const name = prompt('從目前 3D 狀態建立 cue — 名稱：', defaultName)?.trim();
+    if (!name) return;
+    try {
+      const snapshotStates = viewportStates.map(s => ({
+        objectId: s.objectId,
+        position: s.effective.position,
+        rotation: s.effective.rotation,
+      }));
+      await api.createCue(projectId, selectedSongId, { name, snapshotStates });
+      await refreshCues();
+      setRightTab('cues');
+    } catch (e) { alert('snapshot 失敗：' + msg(e)); }
+  }
+  async function handleDuplicateCueQuick(cueId: string) {
+    if (!projectId || !selectedSongId) return;
+    const src = cues.find(c => c.id === cueId);
+    if (!src) return;
+    try {
+      await api.createCue(projectId, selectedSongId, { name: `${src.name} (副本)`, cloneFrom: cueId });
+      await refreshCues();
+    } catch (e) { alert('複製失敗：' + msg(e)); }
+  }
+  async function handleResetCue(cueId: string, name: string) {
+    if (!projectId || !selectedSongId) return;
+    if (!confirm(`重置「${name}」cue 的所有物件 override？這會把所有物件回到 default。`)) return;
+    try {
+      await api.resetCue(projectId, selectedSongId, cueId);
+      await refreshCueStates();
+    } catch (e) { alert('重置失敗：' + msg(e)); }
+  }
+  async function handleRenameCue(cueId: string, currentName: string) {
+    if (!projectId || !selectedSongId) return;
+    const name = prompt('改名稱', currentName)?.trim();
+    if (!name || name === currentName) return;
+    try {
+      await api.updateCue(projectId, selectedSongId, cueId, { name });
+      await refreshCues();
+    } catch (e) { alert('改名失敗：' + msg(e)); }
   }
   async function handleDeleteCue(cueId: string, name: string) {
     if (!projectId || !selectedSongId) return;
@@ -171,6 +230,19 @@ export default function ProjectEditor() {
       if (selectedCueId === cueId) setSelectedCueId(null);
       await refreshCues();
     } catch (e) { alert('刪除失敗：' + msg(e)); }
+  }
+  async function moveCue(cueId: string, direction: -1 | 1) {
+    if (!projectId || !selectedSongId) return;
+    const list = masterCues;
+    const idx = list.findIndex(c => c.id === cueId);
+    const newIdx = idx + direction;
+    if (idx < 0 || newIdx < 0 || newIdx >= list.length) return;
+    const reordered = [...list];
+    [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
+    try {
+      await api.reorderCues(projectId, selectedSongId, reordered.map(c => c.id));
+      await refreshCues();
+    } catch (e) { alert('排序失敗：' + msg(e)); }
   }
   async function handleUpdateCueMeta(patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) {
     if (!projectId || !selectedSongId || !selectedCueId) return;
@@ -374,8 +446,14 @@ export default function ProjectEditor() {
                 loading={cuesLoading}
                 selectedId={selectedCueId}
                 onSelect={(id) => { setSelectedCueId(id); setRightTab('state'); }}
-                onAdd={handleAddCue}
+                onAddBlank={handleAddBlankCue}
+                onClone={handleCloneCue}
+                onSnapshot={handleSnapshotCue}
+                onDuplicateQuick={handleDuplicateCueQuick}
+                onReset={handleResetCue}
+                onRename={handleRenameCue}
                 onDelete={handleDeleteCue}
+                onMove={moveCue}
               />
             ) : rightTab === 'state' ? (
               <ObjectStateEditor
@@ -396,7 +474,6 @@ export default function ProjectEditor() {
                 loading={cuesLoading}
                 selectedId={selectedCueId}
                 onSelect={(id) => { setSelectedCueId(id); setRightTab('state'); }}
-                onAdd={null}
                 onDelete={handleDeleteCue}
                 emptyText="尚無提案"
               />
@@ -433,14 +510,21 @@ export default function ProjectEditor() {
 // ──────────────────────────────────────────────────
 
 function CueList({
-  cues, loading, selectedId, onSelect, onAdd, onDelete, emptyText,
+  cues, loading, selectedId, onSelect, onAddBlank, onClone, onSnapshot, onDuplicateQuick,
+  onReset, onRename, onDelete, onMove, emptyText,
 }: {
   cues: Cue[];
   loading: boolean;
   selectedId: string | null;
   onSelect: (id: string) => void;
-  onAdd: (() => void) | null;
+  onAddBlank?: () => void;
+  onClone?: (sourceCueId?: string) => void;
+  onSnapshot?: () => void;
+  onDuplicateQuick?: (cueId: string) => void;
+  onReset?: (cueId: string, name: string) => void;
+  onRename?: (cueId: string, name: string) => void;
   onDelete: (id: string, name: string) => void;
+  onMove?: (cueId: string, direction: -1 | 1) => void;
   emptyText?: string;
 }) {
   if (loading) return <div className="editor-empty muted">載入中…</div>;
@@ -467,13 +551,81 @@ function CueList({
                   {c.status === 'proposal' && <span className="proposal-tag">提案</span>}
                 </div>
               </div>
-              <button className="cue-item__del" onClick={(e) => { e.stopPropagation(); onDelete(c.id, c.name); }} title="刪除">🗑</button>
+              <div className="cue-item__actions" onClick={(e) => e.stopPropagation()}>
+                {onMove && <>
+                  <button title="上移" onClick={() => onMove(c.id, -1)} disabled={i === 0}>↑</button>
+                  <button title="下移" onClick={() => onMove(c.id, 1)} disabled={i === cues.length - 1}>↓</button>
+                </>}
+                {onDuplicateQuick && <button title="一鍵複製" onClick={() => onDuplicateQuick(c.id)}>📋</button>}
+                {onReset && <button title="重置（清掉所有 override）" onClick={() => onReset(c.id, c.name)}>↺</button>}
+                {onRename && <button title="改名" onClick={() => onRename(c.id, c.name)}>✎</button>}
+                <button title="刪除" onClick={() => onDelete(c.id, c.name)}>🗑</button>
+              </div>
             </li>
           ))}
         </ul>
       )}
-      {onAdd && <button className="btn btn--primary editor-cues__add" onClick={onAdd}>＋ 新增 cue</button>}
+      {onAddBlank && (
+        <CueAddSplitButton
+          onAddBlank={onAddBlank}
+          onClone={onClone}
+          onSnapshot={onSnapshot}
+          hasSelectedCue={!!selectedId}
+        />
+      )}
     </>
+  );
+}
+
+function CueAddSplitButton({
+  onAddBlank, onClone, onSnapshot, hasSelectedCue,
+}: {
+  onAddBlank: () => void;
+  onClone?: (id?: string) => void;
+  onSnapshot?: () => void;
+  hasSelectedCue: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [open]);
+
+  return (
+    <div className="cue-split editor-cues__add" ref={ref}>
+      <button className="cue-split__main btn btn--primary" onClick={onAddBlank} title="新增空白 cue（全部用 default）">
+        ＋ 新增 cue
+      </button>
+      <button className="cue-split__caret btn btn--primary" onClick={() => setOpen(o => !o)} aria-label="更多新增方式">
+        ▾
+      </button>
+      {open && (
+        <div className="cue-split__menu">
+          <button onClick={() => { setOpen(false); onAddBlank(); }}>
+            <span>🆕 空白 cue</span>
+            <small>全部用 default 位置</small>
+          </button>
+          <button
+            onClick={() => { setOpen(false); onClone && onClone(); }}
+            disabled={!onClone || !hasSelectedCue}
+            title={!hasSelectedCue ? '先在左側選一個 cue' : ''}
+          >
+            <span>📋 沿用當前 cue</span>
+            <small>{hasSelectedCue ? '複製當前 cue 的所有 override' : '需先選一個 cue'}</small>
+          </button>
+          <button onClick={() => { setOpen(false); onSnapshot && onSnapshot(); }} disabled={!onSnapshot}>
+            <span>📸 從目前 3D 狀態建立</span>
+            <small>capture 現在 viewport 看到的位置</small>
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

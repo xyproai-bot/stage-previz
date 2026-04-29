@@ -124,12 +124,38 @@ export async function listCues(projectId: string, songId: string): Promise<Cue[]
 export async function createCue(
   projectId: string,
   songId: string,
-  input: { name: string; position?: Cue['position']; rotation?: Cue['rotation']; fov?: number; crossfadeSeconds?: number }
+  input: {
+    name: string;
+    position?: Cue['position'];
+    rotation?: Cue['rotation'];
+    fov?: number;
+    crossfadeSeconds?: number;
+    cloneFrom?: string;       // cue id — 複製其 overrides
+    snapshotStates?: Array<{  // 顯式 snapshot
+      objectId: string;
+      position?: { x: number; y: number; z: number };
+      rotation?: { pitch: number; yaw: number; roll: number };
+    }>;
+  }
 ): Promise<{ id: string }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues`, {
     method: 'POST',
     body: JSON.stringify(input),
   });
+}
+
+export async function resetCue(projectId: string, songId: string, cueId: string): Promise<{ removed: number }> {
+  return http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/reset`,
+    { method: 'POST', body: JSON.stringify({}) }
+  );
+}
+
+export async function reorderCues(projectId: string, songId: string, orderedIds: string[]): Promise<void> {
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/reorder`,
+    { method: 'POST', body: JSON.stringify({ orderedIds }) }
+  );
 }
 
 export async function updateCue(
