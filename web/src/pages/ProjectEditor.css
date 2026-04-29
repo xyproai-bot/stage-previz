@@ -594,7 +594,7 @@
   overflow: hidden;
 }
 .object-row.has-override {
-  border-color: var(--warn);
+  border-left-color: rgba(255, 170, 68, 0.5);
   border-left-width: 3px;
 }
 .object-row__head {
@@ -618,11 +618,10 @@
   font-weight: 500;
 }
 .override-dot {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: var(--warn);
-  box-shadow: 0 0 6px var(--warn);
+  background: rgba(255, 170, 68, 0.7);
 }
 .object-row__chev {
   color: var(--text-muted);
@@ -750,9 +749,37 @@
   cursor: pointer;
   padding: 0;
 }
-.object-mgr-actions button:hover {
+.object-mgr-actions button:hover:not(:disabled) {
   background: var(--surface-2);
   color: var(--text);
+}
+.object-mgr-actions button:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+.object-mgr-actions button.is-locked-btn {
+  background: var(--warn-dim);
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.object-mgr-row.is-locked .object-mgr-name,
+.object-mgr-row.is-locked .object-mgr-mesh {
+  opacity: 0.55;
+}
+
+.lock-tag {
+  margin-left: 6px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.object-row.is-locked {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.object-row.is-locked .object-row__head {
+  cursor: not-allowed;
 }
 
 @media (max-width: 1100px) {

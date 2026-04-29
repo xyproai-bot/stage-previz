@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { CueState, Vec3, Euler } from '../lib/api';
+import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import './StageScene.css';
 
 const CATEGORY_COLORS: Record<string, number> = {
@@ -29,18 +31,20 @@ interface Props {
   onSelect: (id: string | null) => void;
   onTransform: (objectId: string, position: Vec3, rotation: Euler) => Promise<void> | void;
   cueName?: string;
+  modelUrl?: string | null;  // GLB 真檔 URL — 有就 load，沒就用 primitive
 }
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, selectedObjectId, onSelect, onTransform, cueName }: Props) {
+export default function StageScene({ states, selectedObjectId, onSelect, onTransform, cueName, modelUrl }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitRef = useRef<OrbitControls | null>(null);
   const transformRef = useRef<TransformControls | null>(null);
-  const meshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
+  const meshesRef = useRef<Map<string, THREE.Object3D>>(new Map());
+  const modelMeshMapRef = useRef<Map<string, THREE.Object3D>>(new Map()); // mesh_name → top-level node from .glb
   const labelsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const labelLayerRef = useRef<HTMLDivElement | null>(null);
   const onSelectRef = useRef(onSelect);
@@ -49,6 +53,8 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
 
   const [mode, setMode] = useState<Mode>('translate');
   const [space, setSpace] = useState<'world' | 'local'>('world');
+  const [showLabels, setShowLabels] = useState(true);
+  const [, setModelLoading] = useState(false);
 
   onSelectRef.current = onSelect;
   onTransformRef.current = onTransform;
@@ -136,6 +142,9 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     // Selection by click — 但要先排除「點到 gizmo」的情況（不然會 detach 中斷 drag）
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
+
+    // Debug 暴露
+    (window as any).__stage = { scene, camera, raycaster, transform, transformHelper, meshes: meshesRef, modelMap: modelMeshMapRef };
     function onPointerDown(e: PointerEvent) {
       // 已經在拖 gizmo 中 → 跳過
       if (transform.dragging) return;
@@ -151,11 +160,14 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
 
-      const meshes = Array.from(meshesRef.current.values());
-      const hit = raycaster.intersectObjects(meshes, false);
+      // 鎖定的物件不參與 raycast
+      const objs = Array.from(meshesRef.current.values()).filter(o => !o.userData.locked);
+      // recursive: GLB 物件可能有子 mesh
+      const hit = raycaster.intersectObjects(objs, true);
       if (hit.length > 0) {
-        const id = (hit[0].object as THREE.Mesh).userData.objectId as string;
-        onSelectRef.current(id);
+        const id = (hit[0].object.userData.objectId
+          || hit[0].object.parent?.userData.objectId) as string | undefined;
+        if (id) onSelectRef.current(id);
       } else {
         onSelectRef.current(null);
       }
@@ -168,7 +180,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       if (stopped) return;
       orbit.update();
       renderer.render(scene, camera);
-      // update HTML labels
+      // update HTML labels（layer.style 控制全體顯隱，個別 label 仍會被 updateLabels 算位置）
       updateLabels(labelsRef.current, meshesRef.current, camera, container);
       requestAnimationFrame(tick);
     };
@@ -197,10 +209,103 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       try { container.removeChild(renderer.domElement); } catch {}
       const layer = labelLayerRef.current;
       if (layer) try { container.removeChild(layer); } catch {}
+      labelLayerRef.current = null;  // strict mode 双跑時別 leak 到舊 detached DOM
       labelsRef.current.clear();
       meshesRef.current.clear();
+      modelMeshMapRef.current.clear();
+      sceneRef.current = null;
     };
   }, []);
+
+  // ── Load .glb model (if any) → build mesh_name map ──
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene || !modelUrl) {
+      modelMeshMapRef.current.clear();
+      return;
+    }
+
+    let cancelled = false;
+    setModelLoading(true);
+    const loader = new GLTFLoader();
+    loader.load(
+      modelUrl,
+      (gltf) => {
+        if (cancelled) return;
+        // 算 scene bbox + scaleFactor（跟 parseGlb 同邏輯，避免兩邊不一致）
+        const box = new THREE.Box3().setFromObject(gltf.scene);
+        const size = box.getSize(new THREE.Vector3());
+        const diag = size.length();
+        const scaleFactor = computeScaleFactor(diag);
+
+        // 用同樣的 findBestScope 找實際 LED/STAGE 等所在的層級
+        gltf.scene.updateMatrixWorld(true);
+        const bestScope = findBestScope(gltf.scene);
+
+        // baked scaleFactor 進 children + 把 children 從 wrapper detach 出來
+        // 改用 world transform，這樣 wrapper 的 transform 不會 leak
+        const map = new Map<string, THREE.Object3D>();
+        const children = [...bestScope.children]; // 複製 array（detach 會改原 array）
+        children.forEach((child) => {
+          const name = (child.name || '').trim();
+          if (!name) return;
+
+          // 把 wrapper 的 world transform baked 進 child
+          const wp = new THREE.Vector3(), wq = new THREE.Quaternion(), ws = new THREE.Vector3();
+          child.matrixWorld.decompose(wp, wq, ws);
+
+          // detach（移到 root），然後 set world transform back
+          if (child.parent) child.parent.remove(child);
+          child.position.copy(wp).multiplyScalar(scaleFactor);
+          child.quaternion.copy(wq);
+          child.scale.copy(ws).multiplyScalar(scaleFactor);
+
+          map.set(name, child);
+        });
+        modelMeshMapRef.current = map;
+
+        // 重新算 bbox after scale baking
+        const finalBox = new THREE.Box3();
+        gltf.scene.children.forEach(c => finalBox.expandByObject(c));
+        const finalSize = finalBox.getSize(new THREE.Vector3());
+        const finalCenter = finalBox.getCenter(new THREE.Vector3());
+        const finalDiag = finalSize.length();
+
+        if (scaleFactor !== 1) {
+          console.warn(`[StageScene] model diag ${diag.toFixed(2)}m → scaled by ${scaleFactor} → final ${finalDiag.toFixed(2)}m`);
+        }
+
+        // Auto-fit camera
+        const cam = cameraRef.current;
+        const orb = orbitRef.current;
+        if (cam && orb && finalDiag > 0) {
+          const fitDist = (finalDiag * 0.6) / Math.tan((cam.fov * Math.PI) / 360);
+          const dir = new THREE.Vector3(1, 0.6, 1).normalize();
+          cam.position.copy(finalCenter).addScaledVector(dir, fitDist);
+          orb.target.copy(finalCenter);
+          cam.near = Math.max(0.01, finalDiag / 1000);
+          cam.far  = Math.max(200, finalDiag * 10);
+          cam.updateProjectionMatrix();
+        }
+
+        // 觸發 mesh 重建
+        meshesRef.current.forEach((m) => {
+          scene.remove(m);
+          disposeObject3D(m);
+        });
+        meshesRef.current.clear();
+        setModelLoading(false);
+      },
+      undefined,
+      (err) => {
+        if (cancelled) return;
+        console.error('GLTF load failed:', err);
+        setModelLoading(false);
+      }
+    );
+
+    return () => { cancelled = true; };
+  }, [modelUrl]);
 
   // ── Sync states → scene meshes ──
   useEffect(() => {
@@ -222,11 +327,10 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     const currentIds = new Set(states.map(s => s.objectId));
 
     // Remove gone
-    for (const [id, mesh] of meshes) {
+    for (const [id, obj] of meshes) {
       if (!currentIds.has(id)) {
-        scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.Material).dispose();
+        scene.remove(obj);
+        disposeObject3D(obj);
         meshes.delete(id);
         const lbl = labels.get(id);
         if (lbl) { layer.removeChild(lbl); labels.delete(id); }
@@ -235,53 +339,83 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
 
     // Add / update
     for (const s of states) {
-      let mesh = meshes.get(s.objectId);
-      if (!mesh) {
-        const geom = (CATEGORY_GEOM[s.category] || CATEGORY_GEOM.other)();
-        const mat = new THREE.MeshStandardMaterial({
-          color: CATEGORY_COLORS[s.category] || CATEGORY_COLORS.other,
-          roughness: 0.55,
-          metalness: 0.1,
-        });
-        mesh = new THREE.Mesh(geom, mat);
-        mesh.userData.objectId = s.objectId;
-        scene.add(mesh);
-        meshes.set(s.objectId, mesh);
+      let obj = meshes.get(s.objectId);
+      if (!obj) {
+        // 優先：從 GLB 模型 clone 對應 mesh_name 的物件；沒有 → 用 primitive
+        const fromModel = modelMeshMapRef.current.get(s.meshName);
+        if (fromModel) {
+          obj = fromModel.clone(true);
+          // 給每個子 mesh 標 objectId 讓 raycaster 抓得到
+          obj.traverse((child) => {
+            child.userData.objectId = s.objectId;
+            // 如果原 material 是 MeshBasicMaterial 之類，換成 PBR 才能高亮
+            if ((child as THREE.Mesh).isMesh) {
+              const m = child as THREE.Mesh;
+              const old = m.material as THREE.Material;
+              if (!(old instanceof THREE.MeshStandardMaterial)) {
+                const stdMat = new THREE.MeshStandardMaterial({
+                  color: (old as any).color || new THREE.Color(0xcccccc),
+                  roughness: 0.6,
+                  metalness: 0.1,
+                });
+                m.material = stdMat;
+              }
+            }
+          });
+        } else {
+          const geom = (CATEGORY_GEOM[s.category] || CATEGORY_GEOM.other)();
+          const mat = new THREE.MeshStandardMaterial({
+            color: CATEGORY_COLORS[s.category] || CATEGORY_COLORS.other,
+            roughness: 0.55,
+            metalness: 0.1,
+          });
+          obj = new THREE.Mesh(geom, mat);
+        }
+        obj.userData.objectId = s.objectId;
+        scene.add(obj);
+        meshes.set(s.objectId, obj);
 
-        // label
         const lbl = document.createElement('div');
         lbl.className = 'stage-scene__label';
-        lbl.textContent = s.displayName;
+        lbl.textContent = (s.locked ? '🔒 ' : '') + s.displayName;
         lbl.dataset.objectId = s.objectId;
         layer.appendChild(lbl);
         labels.set(s.objectId, lbl);
       } else {
-        // update label text in case displayName changed
         const lbl = labels.get(s.objectId);
-        if (lbl && lbl.textContent !== s.displayName) lbl.textContent = s.displayName;
+        if (lbl) {
+          const lblText = (s.locked ? '🔒 ' : '') + s.displayName;
+          if (lbl.textContent !== lblText) lbl.textContent = lblText;
+        }
       }
+      obj.userData.locked = !!s.locked;
+      obj.userData.objectId = s.objectId;
 
       const p = s.effective.position;
-      mesh.position.set(p.x, p.y, p.z);
+      obj.position.set(p.x, p.y, p.z);
       const r = s.effective.rotation;
-      mesh.rotation.set(
+      obj.rotation.set(
         THREE.MathUtils.degToRad(r.pitch),
         THREE.MathUtils.degToRad(r.yaw),
         THREE.MathUtils.degToRad(r.roll)
       );
-      mesh.visible = s.effective.visible;
+      obj.visible = s.effective.visible;
 
-      // outline / highlight
+      // 高亮：3D 場景裡只標「被選中」的物件，override 提示留在右側 panel
+      // 避免整個場景被染橘
       const isSelected = s.objectId === selectedObjectId;
-      const mat = mesh.material as THREE.MeshStandardMaterial;
-      mat.emissive = new THREE.Color(isSelected ? 0xffffff : 0x000000);
-      mat.emissiveIntensity = isSelected ? 0.3 : 0;
-
-      // override 標記（橘色 emissive）
-      if (s.override) {
-        mat.emissive = new THREE.Color(isSelected ? 0xffffff : 0xffaa44);
-        mat.emissiveIntensity = isSelected ? 0.3 : 0.15;
-      }
+      obj.traverse((child) => {
+        if (!(child as THREE.Mesh).isMesh) return;
+        const m = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+        if (!m || !('emissive' in m)) return;
+        if (isSelected) {
+          m.emissive = new THREE.Color(0x10c78a);  // accent green，柔和點
+          m.emissiveIntensity = 0.4;
+        } else {
+          m.emissive = new THREE.Color(0x000000);
+          m.emissiveIntensity = 0;
+        }
+      });
 
       const lbl = labels.get(s.objectId);
       if (lbl) {
@@ -291,7 +425,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     }
   }, [states, selectedObjectId]);
 
-  // ── Attach gizmo to selected mesh ──
+  // ── Attach gizmo to selected object ──
   useEffect(() => {
     const transform = transformRef.current;
     if (!transform) return;
@@ -299,14 +433,20 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       transform.detach();
       return;
     }
-    const mesh = meshesRef.current.get(selectedObjectId);
-    if (mesh) transform.attach(mesh);
+    const obj = meshesRef.current.get(selectedObjectId);
+    if (obj) transform.attach(obj);
     else transform.detach();
   }, [selectedObjectId, states.length]);
 
   // ── Mode / space ──
   useEffect(() => { transformRef.current?.setMode(mode); }, [mode]);
   useEffect(() => { transformRef.current?.setSpace(space); }, [space]);
+
+  // ── Label visibility ──
+  useEffect(() => {
+    const layer = labelLayerRef.current;
+    if (layer) layer.style.display = showLabels ? '' : 'none';
+  }, [showLabels]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -318,6 +458,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       else if (e.key === 'e' || e.key === 'E') setMode('rotate');
       else if (e.key === 'r' || e.key === 'R') setMode('scale');
       else if (e.key === 'q' || e.key === 'Q') setSpace(s => s === 'world' ? 'local' : 'world');
+      else if (e.key === 'l' || e.key === 'L') setShowLabels(s => !s);
       else if (e.key === 'Escape') onSelectRef.current(null);
     };
     window.addEventListener('keydown', onKey);
@@ -359,13 +500,18 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
           title="切換 world / local 軸 (Q)"
         >{space === 'world' ? '🌐 World' : '📦 Local'}</button>
         <span className="tool-sep" />
+        <button
+          className={'tool ' + (showLabels ? 'is-active' : '')}
+          onClick={() => setShowLabels(s => !s)}
+          title={showLabels ? '隱藏物件名稱 label (L)' : '顯示物件名稱 label (L)'}
+        >🏷️ Label</button>
         <button className="tool" onClick={resetCamera} title="重置攝影機">🎥</button>
         <span className="grow" />
         {cueName && <span className="cue-tag">當前 cue：<strong>{cueName}</strong></span>}
       </div>
       {/* Help overlay */}
       <div className="stage-scene__help">
-        <kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>R</kbd> 縮放 · <kbd>Q</kbd> world/local · <kbd>Esc</kbd> 取消選取
+        <kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>R</kbd> 縮放 · <kbd>Q</kbd> world/local · <kbd>L</kbd> label · <kbd>Esc</kbd> 取消選取
       </div>
     </div>
   );
@@ -375,9 +521,20 @@ function round(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
 
+function disposeObject3D(obj: THREE.Object3D) {
+  obj.traverse((child) => {
+    const m = child as THREE.Mesh;
+    if (m.geometry) m.geometry.dispose?.();
+    if (m.material) {
+      const mats = Array.isArray(m.material) ? m.material : [m.material];
+      mats.forEach((mat) => mat.dispose?.());
+    }
+  });
+}
+
 function updateLabels(
   labels: Map<string, HTMLDivElement>,
-  meshes: Map<string, THREE.Mesh>,
+  meshes: Map<string, THREE.Object3D>,
   camera: THREE.PerspectiveCamera,
   container: HTMLElement
 ) {

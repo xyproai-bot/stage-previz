@@ -612,7 +612,8 @@ async function handleStageObjects(request, env, projectId, objIdOrAction) {
 async function listStageObjects(env, projectId) {
   const r = await env.DB.prepare(`
     SELECT id, mesh_name, display_name, category, "order",
-           default_position, default_rotation, default_scale, metadata, created_at
+           default_position, default_rotation, default_scale, metadata, created_at,
+           locked
     FROM stage_objects
     WHERE project_id = ?
     ORDER BY "order" ASC, created_at ASC
@@ -634,6 +635,7 @@ function parseStageObjectRow(o) {
     defaultScale: safe(o.default_scale, { x: 1, y: 1, z: 1 }),
     metadata: o.metadata ? safe(o.metadata, null) : null,
     createdAt: o.created_at,
+    locked: !!o.locked,
   };
 }
 
@@ -689,6 +691,7 @@ async function updateStageObject(request, env, projectId, objId) {
   if ('defaultRotation' in body) { sets.push('default_rotation = ?'); values.push(JSON.stringify(body.defaultRotation)); }
   if ('defaultScale' in body) { sets.push('default_scale = ?'); values.push(JSON.stringify(body.defaultScale)); }
   if ('metadata' in body) { sets.push('metadata = ?'); values.push(body.metadata ? JSON.stringify(body.metadata) : null); }
+  if ('locked' in body) { sets.push('locked = ?'); values.push(body.locked ? 1 : 0); }
 
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
   values.push(objId, projectId);
@@ -919,6 +922,7 @@ async function listCueStates(env, projectId, cueId) {
       o.default_rotation,
       o.default_scale,
       o.metadata,
+      o.locked        AS object_locked,
       cos.position    AS state_position,
       cos.rotation    AS state_rotation,
       cos.scale       AS state_scale,
@@ -947,6 +951,7 @@ async function listCueStates(env, projectId, cueId) {
       displayName: row.display_name || row.mesh_name,
       category: row.category,
       order: row.object_order,
+      locked: !!row.object_locked,
       default: def,
       override: hasOverride ? {
         position: safe(row.state_position, null),
