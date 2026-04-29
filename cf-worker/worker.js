@@ -74,6 +74,9 @@ async function routeRequest(request, env) {
     return handleAssetsRouter(request, env, url);
   }
 
+  if (url.pathname === '/api/projects/import' && request.method === 'POST') {
+    return importProject(request, env);
+  }
   if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
     return handleProjectsRouter(request, env, url);
   }
@@ -144,6 +147,16 @@ async function handleProjectsRouter(request, env, url) {
     if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
     const limit = url.searchParams.get('limit') || '50';
     return listActivity(env, projectId, limit);
+  }
+
+  if (sub === 'duplicate') {
+    if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+    return duplicateProject(request, env, projectId);
+  }
+
+  if (sub === 'export') {
+    if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
+    return exportProject(request, env, projectId);
   }
 
   if (sub === 'songs' && sub2 === 'cues' && sub3 === 'states') {
@@ -332,6 +345,292 @@ async function updateProject(request, env, projectId) {
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
   return jsonResp({ ok: true });
+}
+
+// 複製整棵 project（含 stage_objects / songs / cues / cue_states）
+// 不複製：activity_log（新 project 從零開始）、model 檔案（共用同一個 R2 key — 多 project 指同一個 model OK）
+async function duplicateProject(request, env, projectId) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
+  let body = {};
+  try { body = await request.json(); } catch {}
+
+  // 抓原 project
+  const src = await env.DB.prepare(
+    `SELECT id, name, description, model_r2_key, show_id FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+  ).bind(projectId).first();
+  if (!src) return jsonResp({ error: 'Source project not found' }, 404);
+
+  const newName = (body?.newName || `${src.name} (副本)`).toString().trim().slice(0, PROJECT_NAME_MAX);
+  const showId = ('showId' in body ? body.showId : src.show_id) || null;
+  const newId = 'p_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+  // 1. 建新 project
+  await env.DB.prepare(
+    `INSERT INTO projects (id, name, description, model_r2_key, show_id, created_by_user_id)
+     VALUES (?, ?, ?, ?, ?, ?)`
+  ).bind(newId, newName, src.description || '', src.model_r2_key, showId, me.id).run();
+
+  // 2. 加 admin 進 project_members
+  await env.DB.prepare(
+    `INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, 'admin')`
+  ).bind(newId, me.id).run();
+
+  // 3. 複製 stage_objects（記下舊→新 id mapping）
+  const oldObjs = await env.DB.prepare(
+    `SELECT * FROM stage_objects WHERE project_id = ?`
+  ).bind(projectId).all();
+  const objIdMap = new Map();
+  const objStmts = [];
+  for (const o of (oldObjs.results || [])) {
+    const newObjId = 'so_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + objStmts.length;
+    objIdMap.set(o.id, newObjId);
+    objStmts.push(env.DB.prepare(`
+      INSERT INTO stage_objects (id, project_id, mesh_name, display_name, category, "order",
+        default_position, default_rotation, default_scale, metadata, locked, material_props, led_props)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(newObjId, newId, o.mesh_name, o.display_name, o.category, o.order,
+            o.default_position, o.default_rotation, o.default_scale, o.metadata,
+            o.locked, o.material_props, o.led_props));
+  }
+  if (objStmts.length > 0) await env.DB.batch(objStmts);
+
+  // 4. 複製 songs（記下舊→新 song id mapping）
+  const oldSongs = await env.DB.prepare(
+    `SELECT * FROM songs WHERE project_id = ?`
+  ).bind(projectId).all();
+  const songIdMap = new Map();
+  const songStmts = [];
+  for (const s of (oldSongs.results || [])) {
+    const newSongId = 's_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + songStmts.length;
+    songIdMap.set(s.id, newSongId);
+    songStmts.push(env.DB.prepare(`
+      INSERT INTO songs (id, project_id, name, "order", animator_user_id, drive_folder_id, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(newSongId, newId, s.name, s.order, s.animator_user_id, s.drive_folder_id, s.status));
+  }
+  if (songStmts.length > 0) await env.DB.batch(songStmts);
+
+  // 5. 複製 cues（依新 song id；記 cue id mapping）
+  const oldCues = await env.DB.prepare(`
+    SELECT c.* FROM cues c
+    JOIN songs s ON c.song_id = s.id
+    WHERE s.project_id = ?
+  `).bind(projectId).all();
+  const cueIdMap = new Map();
+  const cueStmts = [];
+  for (const c of (oldCues.results || [])) {
+    const newCueId = 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + cueStmts.length;
+    cueIdMap.set(c.id, newCueId);
+    const newSongId = songIdMap.get(c.song_id);
+    if (!newSongId) continue;
+    // base_cue_id 也要 remap（如有）
+    const newBaseCueId = c.base_cue_id ? cueIdMap.get(c.base_cue_id) || null : null;
+    cueStmts.push(env.DB.prepare(`
+      INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds,
+                        status, base_cue_id, thumbnail_r2_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(newCueId, newSongId, c.name, c.order, c.position_xyz, c.rotation_xyz, c.fov, c.crossfade_seconds,
+            c.status, newBaseCueId, c.thumbnail_r2_key));
+  }
+  if (cueStmts.length > 0) await env.DB.batch(cueStmts);
+
+  // 6. 複製 cue_object_states（cue_id + stage_object_id 都 remap 到新 id）
+  const oldStates = await env.DB.prepare(`
+    SELECT cos.* FROM cue_object_states cos
+    JOIN cues c ON cos.cue_id = c.id
+    JOIN songs s ON c.song_id = s.id
+    WHERE s.project_id = ?
+  `).bind(projectId).all();
+  const stateStmts = [];
+  for (const cs of (oldStates.results || [])) {
+    const newCueId = cueIdMap.get(cs.cue_id);
+    const newObjId = objIdMap.get(cs.stage_object_id);
+    if (!newCueId || !newObjId) continue;
+    const newStateId = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + stateStmts.length;
+    stateStmts.push(env.DB.prepare(`
+      INSERT INTO cue_object_states (id, cue_id, stage_object_id, position, rotation, scale, visible, custom_props)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(newStateId, newCueId, newObjId, cs.position, cs.rotation, cs.scale, cs.visible, cs.custom_props));
+  }
+  if (stateStmts.length > 0) await env.DB.batch(stateStmts);
+
+  await logActivity(request, env, newId, 'create', 'project', newId, {
+    name: newName,
+    duplicatedFrom: projectId,
+    duplicatedFromName: src.name,
+    objCount: oldObjs.results?.length || 0,
+    songCount: oldSongs.results?.length || 0,
+    cueCount: oldCues.results?.length || 0,
+  });
+
+  return jsonResp({
+    ok: true,
+    id: newId,
+    name: newName,
+    counts: {
+      stageObjects: oldObjs.results?.length || 0,
+      songs: oldSongs.results?.length || 0,
+      cues: oldCues.results?.length || 0,
+      cueStates: oldStates.results?.length || 0,
+    },
+  }, 201);
+}
+
+// 匯出整個 project 為 JSON（user 下載備份）
+async function exportProject(request, env, projectId) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
+  const project = await env.DB.prepare(
+    `SELECT id, name, description, model_r2_key, show_id FROM projects WHERE id = ? LIMIT 1`
+  ).bind(projectId).first();
+  if (!project) return jsonResp({ error: 'Not found' }, 404);
+
+  const stageObjects = (await env.DB.prepare(
+    `SELECT * FROM stage_objects WHERE project_id = ? ORDER BY "order"`
+  ).bind(projectId).all()).results || [];
+
+  const songs = (await env.DB.prepare(
+    `SELECT * FROM songs WHERE project_id = ? ORDER BY "order"`
+  ).bind(projectId).all()).results || [];
+
+  const cues = (await env.DB.prepare(`
+    SELECT c.* FROM cues c
+    JOIN songs s ON c.song_id = s.id
+    WHERE s.project_id = ?
+    ORDER BY c."order"
+  `).bind(projectId).all()).results || [];
+
+  const states = (await env.DB.prepare(`
+    SELECT cos.* FROM cue_object_states cos
+    JOIN cues c ON cos.cue_id = c.id
+    JOIN songs s ON c.song_id = s.id
+    WHERE s.project_id = ?
+  `).bind(projectId).all()).results || [];
+
+  const payload = {
+    schemaVersion: 1,
+    exportedAt: new Date().toISOString(),
+    project: {
+      id: project.id, name: project.name, description: project.description,
+      modelR2Key: project.model_r2_key, showId: project.show_id,
+    },
+    stageObjects, songs, cues, cueObjectStates: states,
+  };
+  return new Response(JSON.stringify(payload, null, 2), {
+    status: 200,
+    headers: {
+      ...corsHeaders(),
+      'Content-Type': 'application/json',
+      'Content-Disposition': `attachment; filename="${project.name.replace(/[^\w-]/g, '_')}.stage-previz.json"`,
+    },
+  });
+}
+
+// 匯入整個 project（從 user 上傳的 JSON）
+async function importProject(request, env) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  if (!body?.project || !Array.isArray(body?.stageObjects)) {
+    return jsonResp({ error: '不像有效的匯出檔（缺 project 或 stageObjects）' }, 400);
+  }
+
+  const newName = (body?.newName || `${body.project.name} (匯入)`).toString().trim().slice(0, PROJECT_NAME_MAX);
+  const newId = 'p_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+
+  // model_r2_key 預設保留（指向同一個 R2，跨 D1 匯入時可能 broken link，user 自己重 upload）
+  const modelKey = body.project.modelR2Key || null;
+
+  await env.DB.prepare(
+    `INSERT INTO projects (id, name, description, model_r2_key, created_by_user_id)
+     VALUES (?, ?, ?, ?, ?)`
+  ).bind(newId, newName, body.project.description || '', modelKey, me.id).run();
+
+  await env.DB.prepare(
+    `INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, 'admin')`
+  ).bind(newId, me.id).run();
+
+  // stage_objects
+  const objIdMap = new Map();
+  const objStmts = [];
+  for (const o of body.stageObjects) {
+    const newObjId = 'so_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + objStmts.length;
+    objIdMap.set(o.id, newObjId);
+    objStmts.push(env.DB.prepare(`
+      INSERT INTO stage_objects (id, project_id, mesh_name, display_name, category, "order",
+        default_position, default_rotation, default_scale, metadata, locked, material_props, led_props)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(newObjId, newId, o.mesh_name, o.display_name, o.category, o.order,
+            o.default_position, o.default_rotation, o.default_scale, o.metadata,
+            o.locked ?? 0, o.material_props, o.led_props));
+  }
+  if (objStmts.length > 0) await env.DB.batch(objStmts);
+
+  // songs
+  const songIdMap = new Map();
+  const songStmts = [];
+  for (const s of (body.songs || [])) {
+    const newSongId = 's_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + songStmts.length;
+    songIdMap.set(s.id, newSongId);
+    songStmts.push(env.DB.prepare(`
+      INSERT INTO songs (id, project_id, name, "order", animator_user_id, drive_folder_id, status)
+      VALUES (?, ?, ?, ?, NULL, ?, ?)
+    `).bind(newSongId, newId, s.name, s.order, s.drive_folder_id, s.status || 'todo'));
+  }
+  if (songStmts.length > 0) await env.DB.batch(songStmts);
+
+  // cues
+  const cueIdMap = new Map();
+  const cueStmts = [];
+  for (const c of (body.cues || [])) {
+    const newCueId = 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + cueStmts.length;
+    cueIdMap.set(c.id, newCueId);
+    const newSongId = songIdMap.get(c.song_id);
+    if (!newSongId) continue;
+    cueStmts.push(env.DB.prepare(`
+      INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(newCueId, newSongId, c.name, c.order, c.position_xyz, c.rotation_xyz,
+            c.fov, c.crossfade_seconds, c.status || 'master'));
+  }
+  if (cueStmts.length > 0) await env.DB.batch(cueStmts);
+
+  // cue_object_states
+  const stateStmts = [];
+  for (const cs of (body.cueObjectStates || [])) {
+    const newCueId = cueIdMap.get(cs.cue_id);
+    const newObjId = objIdMap.get(cs.stage_object_id);
+    if (!newCueId || !newObjId) continue;
+    const newStateId = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + stateStmts.length;
+    stateStmts.push(env.DB.prepare(`
+      INSERT INTO cue_object_states (id, cue_id, stage_object_id, position, rotation, scale, visible, custom_props)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(newStateId, newCueId, newObjId, cs.position, cs.rotation, cs.scale, cs.visible, cs.custom_props));
+  }
+  if (stateStmts.length > 0) await env.DB.batch(stateStmts);
+
+  await logActivity(request, env, newId, 'create', 'project', newId, {
+    name: newName,
+    importedFrom: body.project.name || 'unknown',
+    objCount: body.stageObjects.length,
+    songCount: (body.songs || []).length,
+    cueCount: (body.cues || []).length,
+  });
+
+  return jsonResp({
+    ok: true, id: newId, name: newName,
+    counts: {
+      stageObjects: body.stageObjects.length,
+      songs: (body.songs || []).length,
+      cues: (body.cues || []).length,
+      cueStates: (body.cueObjectStates || []).length,
+    },
+  }, 201);
 }
 
 async function archiveProject(request, env, projectId) {

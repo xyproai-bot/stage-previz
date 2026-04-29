@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project, SongStatus, SongStatusCounts } from '../lib/mockData';
 import './ProjectCard.css';
@@ -27,17 +28,44 @@ function timeAgo(iso: string) {
   return `${day} 天前`;
 }
 
-export default function ProjectCard({ project, showName }: { project: Project; showName?: string | null }) {
+export default function ProjectCard({
+  project, showName, onDuplicate, onArchive, onExport,
+  selected, onToggleSelect,
+}: {
+  project: Project;
+  showName?: string | null;
+  onDuplicate?: (project: Project) => void;
+  onArchive?: (project: Project) => void;
+  onExport?: (project: Project) => void;
+  selected?: boolean;
+  onToggleSelect?: (project: Project) => void;
+}) {
   const navigate = useNavigate();
   const status = STATUS_LABELS[project.status];
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onClick(e: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    }
+    document.addEventListener('mousedown', onClick);
+    return () => document.removeEventListener('mousedown', onClick);
+  }, [menuOpen]);
 
   const visibleMembers = project.members.slice(0, 5);
   const overflow = project.members.length - visibleMembers.length;
 
   return (
     <article
-      className="project-card"
-      onClick={() => navigate(`/admin/projects/${project.id}`)}
+      className={'project-card' + (selected ? ' is-selected' : '')}
+      onClick={(e) => {
+        // 點 checkbox / menu 不要當「進入專案」
+        const t = e.target as HTMLElement;
+        if (t.closest('.project-card__menu') || t.closest('.project-card__select')) return;
+        navigate(`/admin/projects/${project.id}`);
+      }}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
@@ -47,6 +75,16 @@ export default function ProjectCard({ project, showName }: { project: Project; s
         }
       }}
     >
+      {onToggleSelect && (
+        <div className="project-card__select" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={!!selected}
+            onChange={() => onToggleSelect(project)}
+            aria-label="選擇此專案"
+          />
+        </div>
+      )}
       <div className="project-card__thumb">
         {project.thumbnailUrl ? (
           <img src={project.thumbnailUrl} alt={project.name} />
@@ -54,6 +92,38 @@ export default function ProjectCard({ project, showName }: { project: Project; s
           <div className="project-card__thumb-placeholder">16:9</div>
         )}
         <span className={`project-card__status ${status.cls}`}>{status.label}</span>
+        {(onDuplicate || onArchive || onExport) && (
+          <div className="project-card__menu" ref={menuRef} onClick={(e) => e.stopPropagation()}>
+            <button
+              className="project-card__menu-trigger"
+              onClick={() => setMenuOpen(o => !o)}
+              aria-label="更多動作"
+              title="更多動作"
+            >⋯</button>
+            {menuOpen && (
+              <div className="project-card__menu-list">
+                {onDuplicate && (
+                  <button
+                    className="project-card__menu-item"
+                    onClick={() => { setMenuOpen(false); onDuplicate(project); }}
+                  >📋 複製專案</button>
+                )}
+                {onExport && (
+                  <button
+                    className="project-card__menu-item"
+                    onClick={() => { setMenuOpen(false); onExport(project); }}
+                  >💾 匯出 JSON</button>
+                )}
+                {onArchive && (
+                  <button
+                    className="project-card__menu-item project-card__menu-item--danger"
+                    onClick={() => { setMenuOpen(false); onArchive(project); }}
+                  >🗑 封存</button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="project-card__body">

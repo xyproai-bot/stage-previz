@@ -228,6 +228,45 @@ export async function archiveProject(id: string): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
 
+export async function duplicateProject(id: string, input: { newName?: string; showId?: string | null } = {}): Promise<{
+  id: string;
+  name: string;
+  counts: { stageObjects: number; songs: number; cues: number; cueStates: number };
+}> {
+  return http(`/api/projects/${encodeURIComponent(id)}/duplicate`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+/** 下載 project 的 JSON 備份 — 走 fetch 拿 blob 觸發瀏覽器下載 */
+export async function exportProjectToFile(projectId: string, projectName: string): Promise<void> {
+  const token = getSessionToken();
+  const resp = await fetch(`${apiBase()}/api/projects/${encodeURIComponent(projectId)}/export`, {
+    credentials: 'include',
+    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+  });
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try { const e = await resp.json(); if (e?.error) msg = e.error; } catch {}
+    throw new Error(msg);
+  }
+  const blob = await resp.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${projectName.replace(/[^\w-]/g, '_')}.stage-previz.json`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 100);
+}
+
+export async function importProject(payload: object & { newName?: string }): Promise<{
+  id: string; name: string;
+  counts: { stageObjects: number; songs: number; cues: number; cueStates: number };
+}> {
+  return http('/api/projects/import', { method: 'POST', body: JSON.stringify(payload) });
+}
+
 // ─── Songs ────────────────────────────────
 
 export interface Song {

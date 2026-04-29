@@ -86,6 +86,22 @@
   gap: 18px;
 }
 
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(16, 199, 138, 0.3);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+.btn--sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .empty-card {
   background: var(--surface-1);
   border: 1px dashed var(--border-strong);

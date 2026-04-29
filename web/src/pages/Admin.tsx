@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import ProjectCard from '../components/ProjectCard';
 import NewProjectDialog from '../components/NewProjectDialog';
@@ -26,6 +26,7 @@ export default function Admin() {
 }
 
 function ProjectsTab() {
+  const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
   const [showsById, setShowsById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -34,6 +35,30 @@ function ProjectsTab() {
   const [filter, setFilter] = useState<Filter>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  function toggleSelect(p: Project) {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(p.id)) next.delete(p.id);
+      else next.add(p.id);
+      return next;
+    });
+  }
+  function clearSelection() { setSelectedIds(new Set()); }
+  async function bulkArchive() {
+    const ids = Array.from(selectedIds);
+    if (!confirm(`封存 ${ids.length} 個選中的專案？`)) return;
+    let ok = 0, fail = 0;
+    for (const id of ids) {
+      try { await api.archiveProject(id); ok++; }
+      catch { fail++; }
+    }
+    alert(`✅ 封存 ${ok} 個${fail ? ` · ❌ 失敗 ${fail}` : ''}`);
+    clearSelection();
+    await refresh();
+  }
 
   async function refresh() {
     try {
@@ -85,6 +110,74 @@ function ProjectsTab() {
     }
   }
 
+  async function handleDuplicate(p: Project) {
+    if (duplicating) return;
+    const newName = prompt(
+      `複製專案「${p.name}」\n\n新專案會包含全部 stage objects、歌曲、cue 跟 cue 內的物件位置。\n模型檔共用同一份（不重新上傳）。\n\n新專案名稱：`,
+      `${p.name} (副本)`,
+    );
+    if (!newName) return;
+    setDuplicating(p.id);
+    try {
+      const res = await api.duplicateProject(p.id, { newName: newName.trim() });
+      alert(`✅ 已複製：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
+      await refresh();
+      navigate(`/admin/projects/${res.id}`);
+    } catch (e) {
+      alert('複製失敗：' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setDuplicating(null);
+    }
+  }
+
+  async function handleArchive(p: Project) {
+    if (!confirm(`封存專案「${p.name}」？\n\n封存後不會在列表中出現，但所有資料保留。日後可以從 D1 還原。`)) return;
+    try {
+      await api.archiveProject(p.id);
+      await refresh();
+    } catch (e) {
+      alert('封存失敗：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function handleExport(p: Project) {
+    try {
+      await api.exportProjectToFile(p.id, p.name);
+    } catch (e) {
+      alert('匯出失敗：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function handleImport(file: File) {
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data?.project || !Array.isArray(data?.stageObjects)) {
+        alert('檔案格式不對 — 不像匯出檔');
+        return;
+      }
+      const newName = prompt('匯入後的新專案名稱：', `${data.project.name} (匯入)`);
+      if (!newName) return;
+      const res = await api.importProject({ ...data, newName: newName.trim() });
+      alert(`✅ 已匯入：${res.counts.stageObjects} 物件、${res.counts.songs} 歌、${res.counts.cues} cue`);
+      await refresh();
+      navigate(`/admin/projects/${res.id}`);
+    } catch (e) {
+      alert('匯入失敗：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  function triggerImport() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = () => {
+      const f = input.files?.[0];
+      if (f) handleImport(f);
+    };
+    input.click();
+  }
+
   return (
     <>
       <header className="admin-topbar">
@@ -97,6 +190,9 @@ function ProjectsTab() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <button className="btn btn--ghost" onClick={triggerImport} title="從 JSON 匯入專案備份">
+            ⬆ 匯入
+          </button>
           <button className="btn btn--primary" onClick={() => setDialogOpen(true)}>
             ＋ 新增專案
           </button>
@@ -132,15 +228,30 @@ function ProjectsTab() {
             hasAnyProjects={projects.length > 0}
           />
         ) : (
-          <div className="project-grid">
-            {filtered.map((p) => (
-              <ProjectCard
-                key={p.id}
-                project={p}
-                showName={p.showId ? showsById[p.showId] : null}
-              />
-            ))}
-          </div>
+          <>
+            {selectedIds.size > 0 && (
+              <div className="bulk-bar">
+                <span><strong>已選 {selectedIds.size}</strong> 個專案</span>
+                <button className="btn btn--ghost btn--sm" onClick={clearSelection}>清空選擇</button>
+                <span style={{ flex: 1 }} />
+                <button className="btn btn--ghost btn--sm" onClick={bulkArchive}>🗑 批次封存</button>
+              </div>
+            )}
+            <div className="project-grid">
+              {filtered.map((p) => (
+                <ProjectCard
+                  key={p.id}
+                  project={p}
+                  showName={p.showId ? showsById[p.showId] : null}
+                  onDuplicate={handleDuplicate}
+                  onArchive={handleArchive}
+                  onExport={handleExport}
+                  selected={selectedIds.has(p.id)}
+                  onToggleSelect={toggleSelect}
+                />
+              ))}
+            </div>
+          </>
         )}
       </div>
 
