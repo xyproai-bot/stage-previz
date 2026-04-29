@@ -28,8 +28,15 @@ export interface ParsedMesh {
 export interface ParseResult {
   meshes: ParsedMesh[];
   warnings: string[];
-  sceneSizeMeters: number;       // 整個 scene 的 bbox 對角線
-  unitGuess: 'normal' | 'too_big' | 'too_small'; // 提示用
+  sceneSizeMeters: number;
+  unitGuess: 'normal' | 'too_big' | 'too_small';
+  scaleFactor: number;  // 自動套到每個 mesh 的 default_position/scale 的倍數（StageScene 也會用同邏輯）
+}
+
+export function computeScaleFactor(sizeMeters: number): number {
+  if (sizeMeters > 100) return 0.01;
+  if (sizeMeters < 0.5 && sizeMeters > 0) return 100;
+  return 1;
 }
 
 const PREFIX_RULES: Array<[RegExp, StageObjectCategory, string]> = [
@@ -74,6 +81,7 @@ export async function parseGlbFile(file: File): Promise<ParseResult> {
   const sceneBox = new THREE.Box3().setFromObject(scene);
   const sceneSize = sceneBox.getSize(new THREE.Vector3());
   const sceneSizeMeters = round(sceneSize.length());
+  const scaleFactor = computeScaleFactor(sceneSizeMeters);
 
   scene.children.forEach((child) => {
     const name = (child.name || '').trim();
@@ -93,20 +101,29 @@ export async function parseGlbFile(file: File): Promise<ParseResult> {
     const sz = box.getSize(new THREE.Vector3());
     const sizeMeters = round(sz.length());
 
+    // 把 scaleFactor baked 進 default position/scale → DB 直接存「meter scale」
     meshes.push({
       meshName: name,
       displayName: prettifyName(name, prefix),
       category,
       matchedPrefix: prefix,
-      defaultPosition: { x: round(child.position.x), y: round(child.position.y), z: round(child.position.z) },
+      defaultPosition: {
+        x: round(child.position.x * scaleFactor),
+        y: round(child.position.y * scaleFactor),
+        z: round(child.position.z * scaleFactor),
+      },
       defaultRotation: {
         pitch: round(THREE.MathUtils.radToDeg(child.rotation.x)),
         yaw:   round(THREE.MathUtils.radToDeg(child.rotation.y)),
         roll:  round(THREE.MathUtils.radToDeg(child.rotation.z)),
       },
-      defaultScale: { x: round(child.scale.x), y: round(child.scale.y), z: round(child.scale.z) },
+      defaultScale: {
+        x: round(child.scale.x * scaleFactor),
+        y: round(child.scale.y * scaleFactor),
+        z: round(child.scale.z * scaleFactor),
+      },
       childCount,
-      sizeMeters,
+      sizeMeters: round(sizeMeters * scaleFactor),
     });
   });
 
@@ -124,7 +141,7 @@ export async function parseGlbFile(file: File): Promise<ParseResult> {
     warnings.push(`⚠️ 整個場景對角約 ${sceneSizeMeters.toFixed(2)} 公尺 — 看起來太小（單位可能是英呎或英吋）。`);
   }
 
-  return { meshes, warnings, sceneSizeMeters, unitGuess };
+  return { meshes, warnings, sceneSizeMeters, unitGuess, scaleFactor };
 }
 
 function countDescendants(node: THREE.Object3D): number {

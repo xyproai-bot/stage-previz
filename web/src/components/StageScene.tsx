@@ -4,6 +4,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import type { CueState, Vec3, Euler } from '../lib/api';
+import { computeScaleFactor } from '../lib/parseGlb';
 import './StageScene.css';
 
 const CATEGORY_COLORS: Record<string, number> = {
@@ -230,25 +231,37 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
       modelUrl,
       (gltf) => {
         if (cancelled) return;
-        // 算 scene bbox 用來 auto-fit camera + 警告太大太小
+        // 算 scene bbox + scaleFactor（跟 parseGlb 同邏輯，避免兩邊不一致）
         const box = new THREE.Box3().setFromObject(gltf.scene);
         const size = box.getSize(new THREE.Vector3());
         const diag = size.length();
+        const scaleFactor = computeScaleFactor(diag);
 
-        if (diag > 100) {
-          console.warn(`[StageScene] model diag ${diag.toFixed(1)}m — 太大，auto-scale 1/100`);
-          gltf.scene.scale.setScalar(0.01);
-        } else if (diag < 0.5 && diag > 0) {
-          console.warn(`[StageScene] model diag ${diag.toFixed(3)}m — 太小，auto-scale 100x`);
-          gltf.scene.scale.setScalar(100);
-        }
-        // 重新算 bbox after scale
-        const finalBox = new THREE.Box3().setFromObject(gltf.scene);
+        // baked scaleFactor 進 children（不是設 gltf.scene.scale，因為 clone 不繼承父 scale）
+        const map = new Map<string, THREE.Object3D>();
+        gltf.scene.children.forEach((child) => {
+          const name = (child.name || '').trim();
+          if (!name) return;
+          if (scaleFactor !== 1) {
+            child.scale.multiplyScalar(scaleFactor);
+            child.position.multiplyScalar(scaleFactor);
+          }
+          map.set(name, child);
+        });
+        modelMeshMapRef.current = map;
+
+        // 重新算 bbox after scale baking
+        const finalBox = new THREE.Box3();
+        gltf.scene.children.forEach(c => finalBox.expandByObject(c));
         const finalSize = finalBox.getSize(new THREE.Vector3());
         const finalCenter = finalBox.getCenter(new THREE.Vector3());
         const finalDiag = finalSize.length();
 
-        // Auto-fit camera：把整個模型框入視角
+        if (scaleFactor !== 1) {
+          console.warn(`[StageScene] model diag ${diag.toFixed(2)}m → scaled by ${scaleFactor} → final ${finalDiag.toFixed(2)}m`);
+        }
+
+        // Auto-fit camera
         const cam = cameraRef.current;
         const orb = orbitRef.current;
         if (cam && orb && finalDiag > 0) {
@@ -261,12 +274,7 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
           cam.updateProjectionMatrix();
         }
 
-        const map = new Map<string, THREE.Object3D>();
-        gltf.scene.children.forEach((child) => {
-          const name = (child.name || '').trim();
-          if (name) map.set(name, child);
-        });
-        modelMeshMapRef.current = map;
+        // 觸發 mesh 重建
         meshesRef.current.forEach((m) => {
           scene.remove(m);
           disposeObject3D(m);
