@@ -31,8 +31,15 @@ function ProjectsTab() {
   const [showsById, setShowsById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState<Filter>('all');
+  const [search, setSearch] = useState(() => {
+    try { return localStorage.getItem('sp_admin_search') || ''; } catch { return ''; }
+  });
+  const [filter, setFilter] = useState<Filter>(() => {
+    try { return (localStorage.getItem('sp_admin_filter') as Filter) || 'all'; } catch { return 'all'; }
+  });
+
+  useEffect(() => { try { localStorage.setItem('sp_admin_search', search); } catch {} }, [search]);
+  useEffect(() => { try { localStorage.setItem('sp_admin_filter', filter); } catch {} }, [filter]);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [creating, setCreating] = useState(false);
   const [duplicating, setDuplicating] = useState<string | null>(null);

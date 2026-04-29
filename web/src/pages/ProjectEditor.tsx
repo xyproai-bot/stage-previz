@@ -7,6 +7,7 @@ import UploadModelDialog from '../components/UploadModelDialog';
 import ModelVersionsDialog from '../components/ModelVersionsDialog';
 import AssetPickerDialog from '../components/AssetPickerDialog';
 import ActivityDrawer from '../components/ActivityDrawer';
+import { pushRecentProject } from '../components/CommandPalette';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -88,15 +89,43 @@ export default function ProjectEditor() {
     catch (e) { console.warn('undo failed', e); alert('Undo 失敗：' + (e instanceof Error ? e.message : String(e))); }
   }, []);
 
+  // 把最新值放進 ref，給 keyboard listener 用（避免 useEffect 因 derived value 變化重綁）
+  const navRef = useRef({ masterCues: [] as Cue[], visibleSongs: [] as Song[], selectedCueId: null as string | null, selectedSongId: null as string | null });
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      if (e.shiftKey) return; // shift+cmd+z 是 redo（暫不做）
-      if (e.key !== 'z' && e.key !== 'Z') return;
       const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+
+      // Cmd/Ctrl+Z = undo
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+        if (inField) return;
+        e.preventDefault();
+        undo();
+        return;
+      }
+
+      // j/k = 切歌；Shift+J/K = 切 cue
+      if (inField || e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'j' && k !== 'k') return;
       e.preventDefault();
-      undo();
+      const { masterCues: cs, visibleSongs: ss, selectedCueId: cid, selectedSongId: sid } = navRef.current;
+      if (e.shiftKey) {
+        if (cs.length === 0) return;
+        const curIdx = cs.findIndex(c => c.id === cid);
+        const nextIdx = k === 'j'
+          ? (curIdx < 0 ? 0 : Math.min(curIdx + 1, cs.length - 1))
+          : (curIdx <= 0 ? 0 : curIdx - 1);
+        setSelectedCueId(cs[nextIdx].id);
+        setRightTab('state');
+      } else {
+        if (ss.length === 0) return;
+        const curIdx = ss.findIndex(s => s.id === sid);
+        const nextIdx = k === 'j'
+          ? (curIdx < 0 ? 0 : Math.min(curIdx + 1, ss.length - 1))
+          : (curIdx <= 0 ? 0 : curIdx - 1);
+        setSelectedSongId(ss[nextIdx].id);
+      }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -164,6 +193,17 @@ export default function ProjectEditor() {
   }, [projectId, selectedSongId, selectedCueId]);
 
   useEffect(() => { refreshSongs(); refreshStageObjects(); refreshModel(); }, [refreshSongs, refreshStageObjects, refreshModel]);
+
+  // 進入專案時推進 recent（Cmd+K palette 用）— 等專案 metadata 拉到才推（取真實名稱）
+  // 簡化：用 projectId + 從 listProjects 找 name；如果還沒拉到就用 projectId
+  useEffect(() => {
+    if (!projectId) return;
+    // 拉 project name（不增 round-trip — 用 listProjects 一個 lazy fetch）
+    api.listProjects().then(list => {
+      const p = list.find(x => x.id === projectId);
+      if (p) pushRecentProject(p.id, p.name);
+    }).catch(() => { /* swallow */ });
+  }, [projectId]);
   useEffect(() => { refreshCues(); }, [refreshCues]);
   useEffect(() => { refreshCueStates(); }, [refreshCueStates]);
 
@@ -177,6 +217,8 @@ export default function ProjectEditor() {
     () => statusFilter === 'all' ? songs : songs.filter(s => s.status === statusFilter),
     [songs, statusFilter]
   );
+  // 同步 navRef 給 keyboard listener
+  navRef.current = { masterCues, visibleSongs, selectedCueId, selectedSongId };
   const statusCounts = useMemo(() => {
     const c: Record<SongStatus, number> = { todo: 0, in_review: 0, approved: 0, needs_changes: 0 };
     for (const s of songs) c[s.status]++;
