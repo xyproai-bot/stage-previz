@@ -446,9 +446,199 @@
   gap: 6px;
 }
 
+/* ── Object state editor (accordion per cue) ── */
+.state-editor {
+  padding: 12px 12px 24px;
+}
+.state-editor__cue {
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--accent-dim);
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.object-state-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.object-row {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.object-row.has-override {
+  border-color: var(--warn);
+  border-left-width: 3px;
+}
+.object-row__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.object-row__head:hover {
+  background: var(--surface-2);
+}
+.object-row__cat {
+  font-size: 16px;
+  flex-shrink: 0;
+}
+.object-row__name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+}
+.override-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 6px var(--warn);
+}
+.object-row__chev {
+  color: var(--text-muted);
+  font-size: 10px;
+  width: 14px;
+  text-align: center;
+}
+.object-row__body {
+  padding: 10px 12px 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.object-row__body .form-row label {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  letter-spacing: 0.05em;
+}
+.object-row__body input[type="number"] {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-sizing: border-box;
+}
+.object-row__body input[type="number"]:focus {
+  border-color: var(--accent);
+}
+.object-row__actions {
+  display: flex;
+  gap: 6px;
+}
+.object-row__actions .btn {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.object-row__hint {
+  padding: 6px 8px;
+  background: rgba(255, 170, 68, 0.1);
+  border-radius: var(--radius-sm);
+}
+
+/* ── Objects manager tab ── */
+.objects-manager {
+  padding: 12px;
+}
+.objects-manager__bar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.objects-manager__bar .btn {
+  flex: 1;
+  padding: 7px 10px;
+  font-size: 12px;
+}
+.object-mgr-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.object-mgr-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.object-mgr-main { min-width: 0; }
+.object-mgr-name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.object-mgr-mesh {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.object-mgr-cat {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 3px 4px;
+  font-size: 11px;
+  cursor: pointer;
+  font-family: inherit;
+  outline: none;
+  max-width: 110px;
+}
+.object-mgr-cat:focus {
+  border-color: var(--accent);
+}
+.object-mgr-actions {
+  display: flex;
+  gap: 2px;
+}
+.object-mgr-actions button {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  width: 24px;
+  height: 24px;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.object-mgr-actions button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
 @media (max-width: 1100px) {
   .editor-body {
-    grid-template-columns: 240px 1fr 280px;
+    grid-template-columns: 240px 1fr 300px;
   }
 }
 @media (max-width: 900px) {
@@ -461,6 +651,6 @@
     border-bottom: 1px solid var(--border);
   }
   .editor-cues {
-    max-height: 50vh;
+    max-height: 60vh;
   }
 }

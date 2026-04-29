@@ -49,25 +49,42 @@ export default {
   }
 };
 
-// 統一 router：把 /api/projects/* 分派到 projects / songs / cues 對應 handler
+// 統一 router：把 /api/projects/* 分派到對應 handler
 async function handleProjectsRouter(request, env, url) {
   const segs = url.pathname.split('/').filter(Boolean);
   // 路徑形態：
-  //   /api/projects                          → projects collection
-  //   /api/projects/:id                      → project item
-  //   /api/projects/:id/songs                → songs collection
-  //   /api/projects/:id/songs/:songId        → song item
-  //   /api/projects/:id/songs/:songId/cues   → cues collection
-  //   /api/projects/:id/songs/:songId/cues/:cueId → cue item
+  //   /api/projects                                            → projects collection
+  //   /api/projects/:id                                        → project item
+  //   /api/projects/:id/stage-objects                          → stage_objects collection
+  //   /api/projects/:id/stage-objects/:objId                   → stage_object item
+  //   /api/projects/:id/stage-objects/seed-defaults            → 一鍵塞範例物件
+  //   /api/projects/:id/songs                                  → songs collection
+  //   /api/projects/:id/songs/:songId                          → song item
+  //   /api/projects/:id/songs/reorder                          → 批次排序
+  //   /api/projects/:id/songs/:songId/cues                     → cues collection
+  //   /api/projects/:id/songs/:songId/cues/:cueId              → cue item
+  //   /api/projects/:id/songs/:songId/cues/:cueId/states       → object states for this cue
+  //   /api/projects/:id/songs/:songId/cues/:cueId/states/:objId → set/clear single state
 
   const projectId = segs[2] || null;
-  const sub = segs[3] || null; // 'songs' or undefined
+  const sub = segs[3] || null;
   const songId = segs[4] || null;
-  const sub2 = segs[5] || null; // 'cues' or undefined
+  const sub2 = segs[5] || null;
   const cueId = segs[6] || null;
+  const sub3 = segs[7] || null;
+  const objId = segs[8] || null;
 
   if (!projectId) {
     return handleProjects(request, env, null, null);
+  }
+
+  if (sub === 'stage-objects') {
+    // segs[4] is obj id (or 'seed-defaults' magic action)
+    return handleStageObjects(request, env, projectId, segs[4] || null);
+  }
+
+  if (sub === 'songs' && sub2 === 'cues' && sub3 === 'states') {
+    return handleCueStates(request, env, projectId, songId, cueId, objId);
   }
 
   if (sub === 'songs' && sub2 === 'cues') {
@@ -471,6 +488,323 @@ async function deleteCue(env, cueId) {
   const result = await env.DB.prepare(`DELETE FROM cues WHERE id = ?`).bind(cueId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp({ ok: true });
+}
+
+// ─────────────────────────────────────────────
+// Stage Objects API（每個專案的可動物件清單）
+// GET    /api/projects/:id/stage-objects                  → list
+// POST   /api/projects/:id/stage-objects                  body: {meshName, displayName?, category?, defaultPosition?, defaultRotation?, metadata?}
+// PATCH  /api/projects/:id/stage-objects/:objId
+// DELETE /api/projects/:id/stage-objects/:objId
+// POST   /api/projects/:id/stage-objects/seed-defaults    → 一鍵塞範例
+// ─────────────────────────────────────────────
+
+const STAGE_OBJ_CATEGORIES = ['led_panel', 'walk_point', 'mechanism', 'fixture', 'performer', 'other'];
+
+async function handleStageObjects(request, env, projectId, objIdOrAction) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid project id' }, 400);
+
+  try {
+    if (!objIdOrAction) {
+      if (request.method === 'GET') return listStageObjects(env, projectId);
+      if (request.method === 'POST') return createStageObject(request, env, projectId);
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+
+    if (objIdOrAction === 'seed-defaults') {
+      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+      return seedDefaultStageObjects(env, projectId);
+    }
+
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(objIdOrAction)) return jsonResp({ error: 'Invalid obj id' }, 400);
+
+    if (request.method === 'PATCH') return updateStageObject(request, env, projectId, objIdOrAction);
+    if (request.method === 'DELETE') return deleteStageObject(env, projectId, objIdOrAction);
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+async function listStageObjects(env, projectId) {
+  const r = await env.DB.prepare(`
+    SELECT id, mesh_name, display_name, category, "order",
+           default_position, default_rotation, default_scale, metadata, created_at
+    FROM stage_objects
+    WHERE project_id = ?
+    ORDER BY "order" ASC, created_at ASC
+  `).bind(projectId).all();
+
+  return jsonResp({ stageObjects: (r.results || []).map(parseStageObjectRow) });
+}
+
+function parseStageObjectRow(o) {
+  const safe = (s, fb) => { try { return JSON.parse(s); } catch { return fb; } };
+  return {
+    id: o.id,
+    meshName: o.mesh_name,
+    displayName: o.display_name || o.mesh_name,
+    category: o.category,
+    order: o.order,
+    defaultPosition: safe(o.default_position, { x: 0, y: 0, z: 0 }),
+    defaultRotation: safe(o.default_rotation, { pitch: 0, yaw: 0, roll: 0 }),
+    defaultScale: safe(o.default_scale, { x: 1, y: 1, z: 1 }),
+    metadata: o.metadata ? safe(o.metadata, null) : null,
+    createdAt: o.created_at,
+  };
+}
+
+async function createStageObject(request, env, projectId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const meshName = (body?.meshName || '').toString().trim().slice(0, 80);
+  if (!meshName) return jsonResp({ error: 'meshName is required' }, 400);
+
+  const category = STAGE_OBJ_CATEGORIES.includes(body?.category) ? body.category : 'other';
+  const displayName = (body?.displayName || '').toString().slice(0, 80) || null;
+  const defaultPosition = JSON.stringify(body?.defaultPosition || { x: 0, y: 0, z: 0 });
+  const defaultRotation = JSON.stringify(body?.defaultRotation || { pitch: 0, yaw: 0, roll: 0 });
+  const defaultScale = JSON.stringify(body?.defaultScale || { x: 1, y: 1, z: 1 });
+  const metadata = body?.metadata ? JSON.stringify(body.metadata) : null;
+
+  // 計算 order
+  const maxRow = await env.DB.prepare(
+    `SELECT COALESCE(MAX("order"), -1) AS max_order FROM stage_objects WHERE project_id = ?`
+  ).bind(projectId).first();
+  const order = (maxRow?.max_order ?? -1) + 1;
+
+  const id = 'so_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  try {
+    await env.DB.prepare(`
+      INSERT INTO stage_objects (id, project_id, mesh_name, display_name, category, "order",
+        default_position, default_rotation, default_scale, metadata)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, projectId, meshName, displayName, category, order,
+            defaultPosition, defaultRotation, defaultScale, metadata).run();
+  } catch (e) {
+    if (/UNIQUE/.test(e.message)) {
+      return jsonResp({ error: `mesh "${meshName}" 已存在` }, 409);
+    }
+    throw e;
+  }
+
+  return jsonResp({ ok: true, id }, 201);
+}
+
+async function updateStageObject(request, env, projectId, objId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const sets = [], values = [];
+  if ('displayName' in body) { sets.push('display_name = ?'); values.push((body.displayName || '').toString().slice(0, 80) || null); }
+  if ('category' in body && STAGE_OBJ_CATEGORIES.includes(body.category)) {
+    sets.push('category = ?'); values.push(body.category);
+  }
+  if ('order' in body) { sets.push('"order" = ?'); values.push(body.order); }
+  if ('defaultPosition' in body) { sets.push('default_position = ?'); values.push(JSON.stringify(body.defaultPosition)); }
+  if ('defaultRotation' in body) { sets.push('default_rotation = ?'); values.push(JSON.stringify(body.defaultRotation)); }
+  if ('defaultScale' in body) { sets.push('default_scale = ?'); values.push(JSON.stringify(body.defaultScale)); }
+  if ('metadata' in body) { sets.push('metadata = ?'); values.push(body.metadata ? JSON.stringify(body.metadata) : null); }
+
+  if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
+  values.push(objId, projectId);
+
+  const result = await env.DB.prepare(
+    `UPDATE stage_objects SET ${sets.join(', ')} WHERE id = ? AND project_id = ?`
+  ).bind(...values).run();
+  if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true });
+}
+
+async function deleteStageObject(env, projectId, objId) {
+  const result = await env.DB.prepare(
+    `DELETE FROM stage_objects WHERE id = ? AND project_id = ?`
+  ).bind(objId, projectId).run();
+  if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true });
+}
+
+const DEFAULT_STAGE_OBJECTS = [
+  { meshName: 'SKY',         displayName: '天幕 LED',  category: 'led_panel'  },
+  { meshName: 'LED-1',       displayName: '主牆 LED-1', category: 'led_panel' },
+  { meshName: 'LED-2',       displayName: '主牆 LED-2', category: 'led_panel' },
+  { meshName: 'LED-3',       displayName: '主牆 LED-3', category: 'led_panel' },
+  { meshName: 'LED-4',       displayName: '主牆 LED-4', category: 'led_panel' },
+  { meshName: 'LED-樂手',     displayName: '樂手 LED',   category: 'led_panel' },
+  { meshName: '旋轉舞臺',     displayName: '旋轉舞臺',   category: 'mechanism' },
+  { meshName: '升降台-中',    displayName: '中央升降台', category: 'mechanism' },
+  { meshName: '走位-FOH',    displayName: '走位 - FOH',  category: 'walk_point' },
+  { meshName: '走位-中',      displayName: '走位 - 中',   category: 'walk_point' },
+];
+
+async function seedDefaultStageObjects(env, projectId) {
+  // 檢查專案存在
+  const p = await env.DB.prepare(`SELECT id FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+  if (!p) return jsonResp({ error: 'Project not found' }, 404);
+
+  const maxRow = await env.DB.prepare(
+    `SELECT COALESCE(MAX("order"), -1) AS max_order FROM stage_objects WHERE project_id = ?`
+  ).bind(projectId).first();
+  let order = (maxRow?.max_order ?? -1) + 1;
+
+  let inserted = 0;
+  const stmts = [];
+  for (const def of DEFAULT_STAGE_OBJECTS) {
+    const id = 'so_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + order;
+    stmts.push(env.DB.prepare(`
+      INSERT OR IGNORE INTO stage_objects (id, project_id, mesh_name, display_name, category, "order",
+        default_position, default_rotation, default_scale)
+      VALUES (?, ?, ?, ?, ?, ?,
+        '{"x":0,"y":0,"z":0}', '{"pitch":0,"yaw":0,"roll":0}', '{"x":1,"y":1,"z":1}')
+    `).bind(id, projectId, def.meshName, def.displayName, def.category, order));
+    order += 1;
+    inserted += 1;
+  }
+  await env.DB.batch(stmts);
+  return jsonResp({ ok: true, inserted });
+}
+
+// ─────────────────────────────────────────────
+// Cue Object States API
+// GET    /api/projects/:id/songs/:songId/cues/:cueId/states
+//        → 含每個 stage_object 的「當前 cue 狀態（如有覆蓋）+ default」
+// PUT    /api/projects/:id/songs/:songId/cues/:cueId/states/:objId
+//        body: {position?, rotation?, scale?, visible?, customProps?}
+//        → upsert override
+// DELETE /api/projects/:id/songs/:songId/cues/:cueId/states/:objId
+//        → 重置為 default（刪除 row）
+// ─────────────────────────────────────────────
+
+async function handleCueStates(request, env, projectId, songId, cueId, objId) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  if (![projectId, songId, cueId].every(s => /^[a-zA-Z0-9_-]{1,64}$/.test(s))) {
+    return jsonResp({ error: 'Invalid id' }, 400);
+  }
+
+  try {
+    if (!objId) {
+      if (request.method === 'GET') return listCueStates(env, projectId, cueId);
+      return jsonResp({ error: 'Method not allowed' }, 405);
+    }
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(objId)) return jsonResp({ error: 'Invalid obj id' }, 400);
+
+    if (request.method === 'PUT') return upsertCueState(request, env, cueId, objId);
+    if (request.method === 'DELETE') return deleteCueState(env, cueId, objId);
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+async function listCueStates(env, projectId, cueId) {
+  // LEFT JOIN：每個 stage_object 都列出，有覆蓋的話 state 有值，沒覆蓋 state 為 NULL
+  const r = await env.DB.prepare(`
+    SELECT
+      o.id            AS object_id,
+      o.mesh_name,
+      o.display_name,
+      o.category,
+      o."order"       AS object_order,
+      o.default_position,
+      o.default_rotation,
+      o.default_scale,
+      o.metadata,
+      cos.position    AS state_position,
+      cos.rotation    AS state_rotation,
+      cos.scale       AS state_scale,
+      cos.visible     AS state_visible,
+      cos.custom_props AS state_custom,
+      cos.updated_at  AS state_updated_at
+    FROM stage_objects o
+    LEFT JOIN cue_object_states cos
+      ON cos.stage_object_id = o.id AND cos.cue_id = ?
+    WHERE o.project_id = ?
+    ORDER BY o."order" ASC, o.created_at ASC
+  `).bind(cueId, projectId).all();
+
+  const safe = (s, fb) => s == null ? fb : (() => { try { return JSON.parse(s); } catch { return fb; } })();
+
+  const items = (r.results || []).map(row => {
+    const def = {
+      position: safe(row.default_position, { x: 0, y: 0, z: 0 }),
+      rotation: safe(row.default_rotation, { pitch: 0, yaw: 0, roll: 0 }),
+      scale: safe(row.default_scale, { x: 1, y: 1, z: 1 }),
+    };
+    const hasOverride = row.state_updated_at != null;
+    return {
+      objectId: row.object_id,
+      meshName: row.mesh_name,
+      displayName: row.display_name || row.mesh_name,
+      category: row.category,
+      order: row.object_order,
+      default: def,
+      override: hasOverride ? {
+        position: safe(row.state_position, null),
+        rotation: safe(row.state_rotation, null),
+        scale: safe(row.state_scale, null),
+        visible: row.state_visible == null ? null : !!row.state_visible,
+        customProps: safe(row.state_custom, null),
+        updatedAt: row.state_updated_at,
+      } : null,
+      // 「effective」= override 蓋過 default
+      effective: {
+        position: hasOverride && row.state_position ? safe(row.state_position, def.position) : def.position,
+        rotation: hasOverride && row.state_rotation ? safe(row.state_rotation, def.rotation) : def.rotation,
+        scale: hasOverride && row.state_scale ? safe(row.state_scale, def.scale) : def.scale,
+        visible: hasOverride && row.state_visible != null ? !!row.state_visible : true,
+      },
+    };
+  });
+
+  return jsonResp({ states: items });
+}
+
+async function upsertCueState(request, env, cueId, objId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  // 看 row 是否已存在
+  const existing = await env.DB.prepare(
+    `SELECT id FROM cue_object_states WHERE cue_id = ? AND stage_object_id = ?`
+  ).bind(cueId, objId).first();
+
+  const position = 'position' in body ? JSON.stringify(body.position) : (existing ? null : null);
+  const rotation = 'rotation' in body ? JSON.stringify(body.rotation) : null;
+  const scale    = 'scale' in body    ? JSON.stringify(body.scale)    : null;
+  const visible  = 'visible' in body  ? (body.visible ? 1 : 0)        : null;
+  const custom   = 'customProps' in body ? JSON.stringify(body.customProps) : null;
+
+  if (existing) {
+    // PATCH-style merge
+    const sets = [], values = [];
+    if ('position' in body)    { sets.push('position = ?');    values.push(position); }
+    if ('rotation' in body)    { sets.push('rotation = ?');    values.push(rotation); }
+    if ('scale' in body)       { sets.push('scale = ?');       values.push(scale); }
+    if ('visible' in body)     { sets.push('visible = ?');     values.push(visible); }
+    if ('customProps' in body) { sets.push('custom_props = ?'); values.push(custom); }
+    if (!sets.length) return jsonResp({ ok: true, noop: true });
+    sets.push(`updated_at = datetime('now')`);
+    values.push(existing.id);
+    await env.DB.prepare(`UPDATE cue_object_states SET ${sets.join(', ')} WHERE id = ?`).bind(...values).run();
+    return jsonResp({ ok: true, id: existing.id });
+  }
+
+  // 新增
+  const id = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  await env.DB.prepare(`
+    INSERT INTO cue_object_states (id, cue_id, stage_object_id, position, rotation, scale, visible, custom_props)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(id, cueId, objId, position, rotation, scale, visible, custom).run();
+  return jsonResp({ ok: true, id }, 201);
+}
+
+async function deleteCueState(env, cueId, objId) {
+  const result = await env.DB.prepare(
+    `DELETE FROM cue_object_states WHERE cue_id = ? AND stage_object_id = ?`
+  ).bind(cueId, objId).run();
+  return jsonResp({ ok: true, removed: result.meta.changes });
 }
 
 // ─────────────────────────────────────────────

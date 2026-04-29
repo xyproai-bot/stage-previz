@@ -150,3 +150,117 @@ export async function deleteCue(projectId: string, songId: string, cueId: string
     { method: 'DELETE' }
   );
 }
+
+// ─── Stage Objects ────────────────────────────────
+
+export type StageObjectCategory = 'led_panel' | 'walk_point' | 'mechanism' | 'fixture' | 'performer' | 'other';
+
+export interface Vec3 { x: number; y: number; z: number; }
+export interface Euler { pitch: number; yaw: number; roll: number; }
+
+export interface StageObject {
+  id: string;
+  meshName: string;
+  displayName: string;
+  category: StageObjectCategory;
+  order: number;
+  defaultPosition: Vec3;
+  defaultRotation: Euler;
+  defaultScale: Vec3;
+  metadata: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export async function listStageObjects(projectId: string): Promise<StageObject[]> {
+  const data = await http<{ stageObjects: StageObject[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/stage-objects`
+  );
+  return data.stageObjects;
+}
+
+export async function createStageObject(projectId: string, input: {
+  meshName: string;
+  displayName?: string;
+  category?: StageObjectCategory;
+  defaultPosition?: Vec3;
+  defaultRotation?: Euler;
+}): Promise<{ id: string }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects`, {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateStageObject(projectId: string, objId: string, patch: Partial<{
+  displayName: string;
+  category: StageObjectCategory;
+  order: number;
+  defaultPosition: Vec3;
+  defaultRotation: Euler;
+  defaultScale: Vec3;
+  metadata: Record<string, unknown> | null;
+}>): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects/${encodeURIComponent(objId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function deleteStageObject(projectId: string, objId: string): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects/${encodeURIComponent(objId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function seedDefaultStageObjects(projectId: string): Promise<{ inserted: number }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects/seed-defaults`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+// ─── Cue Object States ────────────────────────────────
+
+export interface CueState {
+  objectId: string;
+  meshName: string;
+  displayName: string;
+  category: StageObjectCategory;
+  order: number;
+  default: { position: Vec3; rotation: Euler; scale: Vec3 };
+  override: {
+    position: Vec3 | null;
+    rotation: Euler | null;
+    scale: Vec3 | null;
+    visible: boolean | null;
+    customProps: Record<string, unknown> | null;
+    updatedAt: string;
+  } | null;
+  effective: { position: Vec3; rotation: Euler; scale: Vec3; visible: boolean };
+}
+
+export async function listCueStates(projectId: string, songId: string, cueId: string): Promise<CueState[]> {
+  const data = await http<{ states: CueState[] }>(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states`
+  );
+  return data.states;
+}
+
+export async function setCueState(
+  projectId: string, songId: string, cueId: string, objId: string,
+  patch: Partial<{ position: Vec3; rotation: Euler; scale: Vec3; visible: boolean; customProps: Record<string, unknown> }>
+): Promise<void> {
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states/${encodeURIComponent(objId)}`,
+    { method: 'PUT', body: JSON.stringify(patch) }
+  );
+}
+
+export async function resetCueState(
+  projectId: string, songId: string, cueId: string, objId: string
+): Promise<void> {
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states/${encodeURIComponent(objId)}`,
+    { method: 'DELETE' }
+  );
+}
