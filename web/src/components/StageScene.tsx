@@ -137,23 +137,20 @@ export default function StageScene({ states, selectedObjectId, onSelect, onTrans
     const raycaster = new THREE.Raycaster();
     const ndc = new THREE.Vector2();
     function onPointerDown(e: PointerEvent) {
-      // 已經在拖 gizmo 中 → 完全跳過
+      // 已經在拖 gizmo 中 → 跳過
       if (transform.dragging) return;
       // 只處理左鍵
       if (e.button !== 0) return;
+
+      // 用 transform.axis 判斷是否點在 gizmo handle 上（hover 時會被設成 'X'/'Y'/'Z'/'XY' 等）
+      // 比 raycast gizmoHelper 可靠 — 後者會把隱形 drag plane 也 hit 中、擋住所有 click
+      if (transform.axis !== null) return;
 
       const rect = renderer.domElement.getBoundingClientRect();
       ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
 
-      // 1. 只在 gizmo 真的 attached（有物件可拖）時才檢查 gizmo hit
-      //    沒 attach 時 gizmo 雖 visible=false 但內部 plane mesh 仍會 raycast 中 → 不能 short-circuit
-      if (transform.object) {
-        const gizmoHits = raycaster.intersectObject(transformHelper, true);
-        if (gizmoHits.length > 0) return;
-      }
-      // 2. 嘗試選物件
       const meshes = Array.from(meshesRef.current.values());
       const hit = raycaster.intersectObjects(meshes, false);
       if (hit.length > 0) {

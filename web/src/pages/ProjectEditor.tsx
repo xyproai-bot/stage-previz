@@ -600,21 +600,17 @@ function ObjectStateRow({
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
 }) {
-  const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const cat = CATEGORY_INFO[state.category];
   const hasOverride = !!state.override;
   const rowRef = useRef<HTMLLIElement>(null);
 
-  // forceOpen overrides local open state; auto-scroll into view
+  // accordion 只跟 selectedObjectId 走 — 點 header 等同切換選取
   useEffect(() => {
-    if (forceOpen) {
-      setOpen(true);
-      rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
+    if (forceOpen) rowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [forceOpen]);
 
-  const isOpen = forceOpen || open;
+  const isOpen = forceOpen;
   const eff = state.effective;
   const [pos, setPos] = useState<Vec3>(eff.position);
   const [rot, setRot] = useState<Euler>(eff.rotation);
@@ -643,7 +639,7 @@ function ObjectStateRow({
       ref={rowRef}
       className={'object-row' + (hasOverride ? ' has-override' : '') + (forceOpen ? ' is-selected' : '')}
     >
-      <header className="object-row__head" onClick={() => { onClickHeader(); setOpen(o => !o); }}>
+      <header className="object-row__head" onClick={onClickHeader}>
         <span className="object-row__cat" title={cat.label}>{cat.icon}</span>
         <span className="object-row__name">{state.displayName}</span>
         {hasOverride && <span className="override-dot" title="此 cue 有覆蓋" />}
