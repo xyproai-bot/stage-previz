@@ -2956,7 +2956,9 @@ async function driveOAuthStart(request, env, url) {
   if (!me) return jsonResp({ error: '未登入' }, 401);
   if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可連 Drive' }, 403);
 
-  const returnTo = url.searchParams.get('return') || '/admin/drive-sources';
+  // 接受完整 URL 或相對路徑；只允許 stage-previz.vercel.app / haimiaan.com 子網域 / localhost
+  const rawReturn = url.searchParams.get('return') || '/admin/drive-sources';
+  const returnTo = sanitizeReturnUrl(rawReturn);
   const state = randHex(16);
 
   await env.DB.prepare(
@@ -3467,6 +3469,30 @@ function htmlPage(body) {
 
 function escapeHtml(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// 過濾 OAuth return URL — 只允許白名單 origin，避免被當 open redirect
+function sanitizeReturnUrl(raw) {
+  const allowedHosts = [
+    'stage-previz.vercel.app',
+    'haimiaan.com',
+    'localhost',
+    '127.0.0.1',
+  ];
+  if (!raw || typeof raw !== 'string') return 'https://stage-previz.vercel.app/admin/drive-sources';
+  // 相對路徑 → 直接配 vercel
+  if (raw.startsWith('/')) {
+    return 'https://stage-previz.vercel.app' + raw;
+  }
+  try {
+    const u = new URL(raw);
+    const host = u.hostname;
+    const okHost = allowedHosts.some(h => host === h || host.endsWith('.' + h));
+    if (!okHost) return 'https://stage-previz.vercel.app/admin/drive-sources';
+    return u.toString();
+  } catch {
+    return 'https://stage-previz.vercel.app/admin/drive-sources';
+  }
 }
 
 // ─────────────────────────────────────────────

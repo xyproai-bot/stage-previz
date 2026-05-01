@@ -946,9 +946,13 @@ export async function deleteDriveAccount(id: string): Promise<void> {
 
 /** 開 Google 同意頁；callback 完成後 server 跳回 returnTo */
 export async function startDriveOAuth(returnTo: string = '/admin/drive-sources'): Promise<void> {
-  // 用 POST 拿 authUrl（POST 可以帶 Authorization header，避開 third-party cookie 限制）
+  // 用完整 URL（含 origin）— worker 端會 validate 白名單
+  // 這樣 callback 才知道要跳回哪個前端 host（vercel 而不是 worker proxy host）
+  const absolute = returnTo.startsWith('http')
+    ? returnTo
+    : `${window.location.origin}${returnTo.startsWith('/') ? '' : '/'}${returnTo}`;
   const data = await http<{ authUrl: string }>(
-    `/api/drive/oauth/start?return=${encodeURIComponent(returnTo)}`,
+    `/api/drive/oauth/start?return=${encodeURIComponent(absolute)}`,
     { method: 'POST', body: JSON.stringify({}) }
   );
   window.location.href = data.authUrl;
