@@ -576,6 +576,9 @@ function SongDetail({
             songId={song.id}
             comments={comments}
             onAddCommentAtTime={(t) => setPendingCommentTime(t)}
+            cuesWithTime={cues.map(c => ({ id: c.id, videoTimeSec: c.videoTimeSec }))}
+            selectedCueId={selectedCueId}
+            onSelectCueByTime={onSelectCue}
           />
 
           <div className="song-detail__stage">
@@ -1036,11 +1039,16 @@ function SongComments({
 
 function SongVideoPane({
   projectId, songId, comments, onAddCommentAtTime,
+  cuesWithTime, selectedCueId, onSelectCueByTime,
 }: {
   projectId: string;
   songId: string;
   comments: SongComment[];
   onAddCommentAtTime: (time: number) => void;
+  /** Cue 列表（含 videoTimeSec），用來算「影片播到 X 秒應該是哪個 cue」 */
+  cuesWithTime: { id: string; videoTimeSec: number | null }[];
+  selectedCueId: string | null;
+  onSelectCueByTime: (cueId: string) => void;
 }) {
   const [files, setFiles] = useState<DriveFile[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1107,6 +1115,47 @@ function SongVideoPane({
       v.removeEventListener('durationchange', onMeta);
     };
   }, [primaryFid]);
+
+  // ── 雙向同步用的 refs（必須在 effect 之前宣告以避開 TDZ）──
+  const prevCueIdRef = useRef(selectedCueId);
+  const ignoreNextCueChangeRef = useRef(false);
+
+  // ── 影片時間 → 自動切 cue ──
+  // 找 videoTimeSec ≤ currentTime 的最後一個 cue（依 time 升冪），跟現在 selectedCueId 不同就 callback
+  useEffect(() => {
+    if (!cuesWithTime || cuesWithTime.length === 0) return;
+    const timed = cuesWithTime
+      .filter(c => c.videoTimeSec != null)
+      .sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0));
+    if (timed.length === 0) return;
+    let target = timed[0];
+    for (const c of timed) {
+      if ((c.videoTimeSec || 0) <= currentTime) target = c;
+      else break;
+    }
+    if (target.id !== selectedCueId) {
+      ignoreNextCueChangeRef.current = true; // 防止 seek 影片造成反向迴圈
+      onSelectCueByTime(target.id);
+    }
+  }, [currentTime, cuesWithTime, selectedCueId, onSelectCueByTime]);
+
+  // ── Cue 切換（手動）→ 影片自動 seek 到對應時間（只在用戶手動切時做） ──
+  useEffect(() => {
+    if (selectedCueId === prevCueIdRef.current) return;
+    if (ignoreNextCueChangeRef.current) {
+      ignoreNextCueChangeRef.current = false;
+      prevCueIdRef.current = selectedCueId;
+      return;
+    }
+    const cue = cuesWithTime.find(c => c.id === selectedCueId);
+    if (cue && cue.videoTimeSec != null) {
+      const v = videoARef.current;
+      if (v && Math.abs(v.currentTime - cue.videoTimeSec) > 0.5) {
+        v.currentTime = cue.videoTimeSec;
+      }
+    }
+    prevCueIdRef.current = selectedCueId;
+  }, [selectedCueId, cuesWithTime]);
 
   // ── 對比模式：A ↔ B sync（time + play/pause + rate）──
   useEffect(() => {

@@ -357,6 +357,7 @@ export interface Cue {
   rotation: { pitch: number; yaw: number; roll: number };
   fov: number;
   crossfadeSeconds: number;
+  videoTimeSec: number | null;   // 對應到 Drive 影片的第幾秒；null = 無對應
   status: 'master' | 'proposal' | 'alternate';
   proposedByUserId: string | null;
   baseCueId: string | null;
@@ -403,6 +404,16 @@ export async function resetCue(projectId: string, songId: string, cueId: string)
   );
 }
 
+export async function importCuesFromSong(
+  projectId: string, songId: string,
+  input: { fromSongId: string; replace?: boolean }
+): Promise<{ ok: true; cuesInserted: number; statesInserted: number; statesSkipped: number; message: string }> {
+  return http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/import-cues`,
+    { method: 'POST', body: JSON.stringify(input) },
+  );
+}
+
 export async function reorderCues(projectId: string, songId: string, orderedIds: string[]): Promise<void> {
   await http(
     `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/reorder`,
@@ -414,7 +425,7 @@ export async function updateCue(
   projectId: string,
   songId: string,
   cueId: string,
-  patch: Partial<Pick<Cue, 'name' | 'order' | 'position' | 'rotation' | 'fov' | 'crossfadeSeconds' | 'status'>>
+  patch: Partial<Pick<Cue, 'name' | 'order' | 'position' | 'rotation' | 'fov' | 'crossfadeSeconds' | 'videoTimeSec' | 'status'>>
 ): Promise<void> {
   await http(
     `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}`,
@@ -1118,6 +1129,27 @@ export async function getShareSongCues(token: string, songId: string, password?:
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const data = await r.json() as { cues: Cue[] };
   return data.cues;
+}
+
+export interface ShareVideo {
+  id: string;
+  driveFileId: string;
+  filename: string;
+  mimeType: string | null;
+  modifiedTime: string | null;
+  sizeBytes: number | null;
+  streamUrl: string;  // 相對路徑 /api/share/:token/videos/:fid/stream
+}
+
+export async function getShareSongVideos(token: string, songId: string, password?: string): Promise<ShareVideo[]> {
+  const headers: Record<string, string> = {};
+  if (password) headers['x-share-password'] = password;
+  try {
+    const r = await fetch(`${apiBase()}/api/share/${encodeURIComponent(token)}/songs/${encodeURIComponent(songId)}/videos`, { headers });
+    if (!r.ok) return [];
+    const data = await r.json() as { videos: ShareVideo[] };
+    return Array.isArray(data?.videos) ? data.videos : [];
+  } catch { return []; }
 }
 
 export async function getShareCueStates(token: string, songId: string, cueId: string, password?: string): Promise<CueState[]> {

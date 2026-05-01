@@ -116,6 +116,34 @@
   min-height: 0;
 }
 .share-stage > .stage-scene { flex: 1; }
+.share-video-pane {
+  background: #000;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  max-height: 45vh;
+  position: relative;
+}
+.share-video-pane__select {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 5;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.share-video {
+  width: 100%;
+  max-height: 45vh;
+  display: block;
+  background: #000;
+}
+
 .share-empty {
   flex: 1;
   display: flex;

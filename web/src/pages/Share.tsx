@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import * as api from '../lib/api';
-import type { Cue, CueState, SharePublicData } from '../lib/api';
+import type { Cue, CueState, SharePublicData, ShareVideo } from '../lib/api';
 import StageScene from '../components/StageScene';
 import './Share.css';
 
@@ -22,6 +22,8 @@ export default function Share() {
   const [cues, setCues] = useState<Cue[]>([]);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [cueStates, setCueStates] = useState<CueState[]>([]);
+  const [videos, setVideos] = useState<ShareVideo[]>([]);
+  const [selectedVideoFid, setSelectedVideoFid] = useState<string | null>(null);
 
   const load = useCallback(async (pwd?: string) => {
     if (!token) return;
@@ -48,13 +50,17 @@ export default function Share() {
 
   useEffect(() => { load(); }, [load]);
 
-  // 切歌 → 拉 cues
+  // 切歌 → 拉 cues + videos
   useEffect(() => {
     if (!token || !selectedSongId) return;
     api.getShareSongCues(token, selectedSongId, submittedPwd ?? undefined).then(list => {
       setCues(list);
       setSelectedCueId(list[0]?.id ?? null);
     }).catch(() => setCues([]));
+    api.getShareSongVideos(token, selectedSongId, submittedPwd ?? undefined).then(list => {
+      setVideos(list);
+      setSelectedVideoFid(list[0]?.driveFileId ?? null);
+    }).catch(() => setVideos([]));
   }, [token, selectedSongId, submittedPwd]);
 
   // 切 cue → 拉 states
@@ -142,6 +148,30 @@ export default function Share() {
         )}
 
         <main className="share-stage">
+          {videos.length > 0 && selectedVideoFid && (
+            <div className="share-video-pane">
+              {videos.length > 1 && (
+                <select
+                  className="share-video-pane__select"
+                  value={selectedVideoFid}
+                  onChange={e => setSelectedVideoFid(e.target.value)}
+                >
+                  {videos.map((v, i) => (
+                    <option key={v.driveFileId} value={v.driveFileId}>
+                      {i === 0 ? '最新 · ' : `V${videos.length - i} · `}{v.filename}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <video
+                key={selectedVideoFid}
+                className="share-video"
+                src={api.apiBase() + videos.find(v => v.driveFileId === selectedVideoFid)!.streamUrl}
+                controls
+                preload="metadata"
+              />
+            </div>
+          )}
           {selectedSongId && data.stageObjects.length > 0 ? (
             <StageScene
               key={selectedSongId}

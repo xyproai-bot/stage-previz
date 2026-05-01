@@ -257,6 +257,11 @@ async function handleProjectsRouter(request, env, url) {
     return handleCueStates(request, env, projectId, songId, cueId, objId);
   }
 
+  // /api/projects/:id/songs/:songId/import-cues  POST {fromSongId} → 從別的 song 把 cue 全複製進來
+  if (sub === 'songs' && songId && sub2 === 'import-cues' && request.method === 'POST') {
+    return importCuesFromSong(request, env, projectId, songId);
+  }
+
   if (sub === 'songs' && sub2 === 'cues') {
     return handleCues(request, env, projectId, songId, cueId);
   }
@@ -1185,9 +1190,109 @@ async function handleCues(request, env, projectId, songId, cueId) {
   }
 }
 
+// 從另一首歌（同 project 或跨 project）把所有 master cue + cue_object_states 複製進此 song
+// 物件 id 用 mesh_name 對應（兩邊 mesh_name 相同就 map）— 避免硬綁 stage_object id
+async function importCuesFromSong(request, env, targetProjectId, targetSongId) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
+  let body = {};
+  try { body = await request.json(); } catch {}
+  const fromSongId = body?.fromSongId;
+  const replace = !!body?.replace;
+  if (!fromSongId || typeof fromSongId !== 'string') return jsonResp({ error: 'Missing fromSongId' }, 400);
+
+  // 驗 source song 存在 + 用戶有權限存取它的 project
+  const srcSong = await env.DB.prepare(
+    `SELECT id, project_id FROM songs WHERE id = ? LIMIT 1`
+  ).bind(fromSongId).first();
+  if (!srcSong) return jsonResp({ error: 'Source song not found' }, 404);
+  if (me.role !== 'admin') {
+    const m = await env.DB.prepare(
+      `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
+    ).bind(srcSong.project_id, me.id).first();
+    if (!m) return jsonResp({ error: '沒有權限存取來源專案' }, 403);
+  }
+
+  // 抓 source cues + cue_object_states + stage_objects（取 mesh_name）
+  const srcCues = (await env.DB.prepare(
+    `SELECT * FROM cues WHERE song_id = ? AND status = 'master' ORDER BY "order"`
+  ).bind(fromSongId).all()).results || [];
+  if (srcCues.length === 0) return jsonResp({ error: '來源歌曲沒有 cue' }, 400);
+
+  // 抓 source project 的 stage_objects → mesh_name → src_obj_id 對照
+  const srcObjs = (await env.DB.prepare(
+    `SELECT id, mesh_name FROM stage_objects WHERE project_id = ?`
+  ).bind(srcSong.project_id).all()).results || [];
+  const srcObjMap = new Map(srcObjs.map(o => [o.id, o.mesh_name]));
+
+  // 抓 target project 的 stage_objects → mesh_name → tgt_obj_id
+  const tgtObjs = (await env.DB.prepare(
+    `SELECT id, mesh_name FROM stage_objects WHERE project_id = ?`
+  ).bind(targetProjectId).all()).results || [];
+  const meshNameToTgt = new Map(tgtObjs.map(o => [o.mesh_name, o.id]));
+
+  // 如果 replace = true，先清掉 target song 既有 master cue
+  if (replace) {
+    await env.DB.prepare(
+      `DELETE FROM cues WHERE song_id = ? AND status = 'master'`
+    ).bind(targetSongId).run();
+  }
+
+  // 找 target song 既有 cue 的最大 order，新 cue append 在後
+  const maxOrderRow = await env.DB.prepare(
+    `SELECT COALESCE(MAX("order"), -1) AS max_order FROM cues WHERE song_id = ?`
+  ).bind(targetSongId).first();
+  let nextOrder = (maxOrderRow?.max_order ?? -1) + 1;
+
+  let cuesInserted = 0;
+  let statesInserted = 0;
+  let statesSkipped = 0;
+
+  for (const c of srcCues) {
+    const newCueId = 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + cuesInserted;
+    await env.DB.prepare(`
+      INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds, video_time_sec, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'master')
+    `).bind(newCueId, targetSongId, c.name, nextOrder++, c.position_xyz, c.rotation_xyz, c.fov, c.crossfade_seconds, c.video_time_sec).run();
+    cuesInserted++;
+
+    // 複製 cue_object_states，依 mesh_name 重新對應到 target obj id
+    const states = (await env.DB.prepare(
+      `SELECT * FROM cue_object_states WHERE cue_id = ?`
+    ).bind(c.id).all()).results || [];
+
+    for (const s of states) {
+      const meshName = srcObjMap.get(s.stage_object_id);
+      const tgtObjId = meshName ? meshNameToTgt.get(meshName) : null;
+      if (!tgtObjId) { statesSkipped++; continue; }
+      const newStateId = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + statesInserted;
+      await env.DB.prepare(`
+        INSERT INTO cue_object_states (id, cue_id, stage_object_id, position, rotation, scale, visible, custom_props)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(newStateId, newCueId, tgtObjId, s.position, s.rotation, s.scale, s.visible, s.custom_props).run();
+      statesInserted++;
+    }
+  }
+
+  await logActivity(request, env, targetProjectId, 'bulk_create', 'cue', targetSongId, {
+    importedFrom: fromSongId, cuesInserted, statesInserted, statesSkipped,
+  });
+
+  return jsonResp({
+    ok: true,
+    cuesInserted,
+    statesInserted,
+    statesSkipped,
+    message: statesSkipped > 0
+      ? `匯入 ${cuesInserted} 個 cue；${statesSkipped} 個物件位置因 mesh 名稱對不到被略過`
+      : `匯入 ${cuesInserted} 個 cue + ${statesInserted} 個物件位置`,
+  }, 201);
+}
+
 async function listCues(env, songId) {
   const r = await env.DB.prepare(`
-    SELECT id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds,
+    SELECT id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds, video_time_sec,
            status, proposed_by_user_id, base_cue_id, thumbnail_r2_key,
            created_at, updated_at
     FROM cues WHERE song_id = ?
@@ -1207,6 +1312,7 @@ function parseCueRow(c) {
     rotation: safeJson(c.rotation_xyz, { pitch: 0, yaw: 0, roll: 0 }),
     fov: c.fov,
     crossfadeSeconds: c.crossfade_seconds,
+    videoTimeSec: typeof c.video_time_sec === 'number' ? c.video_time_sec : null,
     status: c.status,
     proposedByUserId: c.proposed_by_user_id,
     baseCueId: c.base_cue_id,
@@ -1362,6 +1468,11 @@ async function updateCue(request, env, projectId, cueId) {
   if ('rotation' in body) { sets.push('rotation_xyz = ?'); values.push(JSON.stringify(body.rotation)); }
   if ('fov' in body) { sets.push('fov = ?'); values.push(body.fov); }
   if ('crossfadeSeconds' in body) { sets.push('crossfade_seconds = ?'); values.push(body.crossfadeSeconds); }
+  if ('videoTimeSec' in body) {
+    const v = body.videoTimeSec;
+    sets.push('video_time_sec = ?');
+    values.push(typeof v === 'number' && isFinite(v) && v >= 0 ? v : null);
+  }
   if ('status' in body) { sets.push('status = ?'); values.push(body.status); }
 
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
@@ -3644,6 +3755,7 @@ async function handleShareRouter(request, env, url, token) {
     const cuesOnly = segs[5] === 'cues' && !segs[6];
     const cueId = segs[5] === 'cues' && segs[6] ? segs[6] : null;
     const wantStates = cueId && segs[7] === 'states';
+    const wantVideos = segs[5] === 'videos';
     if (!songId) return jsonResp({ error: 'Missing songId' }, 400);
     // 驗證 song 屬於 project / 限制 song
     if (link.song_id && link.song_id !== songId) return jsonResp({ error: 'Song not in scope' }, 403);
@@ -3654,11 +3766,33 @@ async function handleShareRouter(request, env, url, token) {
 
     if (cuesOnly) {
       const r = await env.DB.prepare(
-        `SELECT id, name, "order", crossfade_seconds, status FROM cues WHERE song_id = ? AND status = 'master' ORDER BY "order"`
+        `SELECT id, name, "order", crossfade_seconds, video_time_sec, status FROM cues WHERE song_id = ? AND status = 'master' ORDER BY "order"`
       ).bind(songId).all();
       return jsonResp({
         cues: (r.results || []).map(c => ({
-          id: c.id, name: c.name, order: c.order, crossfadeSeconds: c.crossfade_seconds, status: c.status,
+          id: c.id, name: c.name, order: c.order,
+          crossfadeSeconds: c.crossfade_seconds,
+          videoTimeSec: typeof c.video_time_sec === 'number' ? c.video_time_sec : null,
+          status: c.status,
+        })),
+      });
+    }
+    if (wantVideos) {
+      const r = await env.DB.prepare(
+        `SELECT id, drive_file_id, filename, mime_type, modified_time, size_bytes
+           FROM drive_files WHERE project_id = ? AND song_id = ?
+           ORDER BY COALESCE(modified_time, cached_at) DESC`
+      ).bind(link.project_id, songId).all();
+      return jsonResp({
+        videos: (r.results || []).map(f => ({
+          id: f.id,
+          driveFileId: f.drive_file_id,
+          filename: f.filename,
+          mimeType: f.mime_type,
+          modifiedTime: f.modified_time,
+          sizeBytes: f.size_bytes,
+          // 公開存取的 stream URL：用 share token 認證
+          streamUrl: `/api/share/${token}/videos/${f.drive_file_id}/stream`,
         })),
       });
     }
@@ -3704,6 +3838,42 @@ async function handleShareRouter(request, env, url, token) {
       return jsonResp({ states: out });
     }
     return jsonResp({ error: 'Bad share sub-path' }, 404);
+  }
+
+  // /api/share/:token/videos/:driveFileId/stream — 公開存取串流
+  if (sub === 'videos' && segs[4] && segs[5] === 'stream' && (request.method === 'GET' || request.method === 'HEAD')) {
+    const driveFileId = segs[4];
+    // 驗 driveFileId 屬於這個分享範圍（同 project，且如有限制 song 的話也對）
+    const f = await env.DB.prepare(`
+      SELECT df.project_id, df.song_id, df.mime_type, p.drive_oauth_token_id
+        FROM drive_files df
+        JOIN projects p ON df.project_id = p.id
+       WHERE df.drive_file_id = ?
+       LIMIT 1
+    `).bind(driveFileId).first();
+    if (!f) return jsonResp({ error: 'Video not found' }, 404);
+    if (f.project_id !== link.project_id) return jsonResp({ error: '不在分享範圍' }, 403);
+    if (link.song_id && link.song_id !== f.song_id) return jsonResp({ error: '不在分享範圍' }, 403);
+    if (!f.drive_oauth_token_id) return jsonResp({ error: 'Project missing OAuth token' }, 412);
+
+    let at;
+    try { at = await driveGetAccessToken(env, f.drive_oauth_token_id); }
+    catch (e) { return jsonResp({ error: 'Token refresh failed: ' + e.message }, 500); }
+
+    const range = request.headers.get('range');
+    const headers = { Authorization: `Bearer ${at}` };
+    if (range) headers['Range'] = range;
+    const upstream = await fetch(`${DRIVE_FILES_FETCH}/${encodeURIComponent(driveFileId)}?alt=media`, {
+      method: request.method,
+      headers,
+    });
+    const passHeaders = new Headers();
+    for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
+      const v = upstream.headers.get(k);
+      if (v) passHeaders.set(k, v);
+    }
+    if (!passHeaders.has('content-type') && f.mime_type) passHeaders.set('content-type', f.mime_type);
+    return new Response(upstream.body, { status: upstream.status, headers: passHeaders });
   }
 
   return jsonResp({ error: 'Bad share request' }, 404);

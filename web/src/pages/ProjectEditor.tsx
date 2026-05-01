@@ -12,6 +12,7 @@ import DriveSettingsDialog from '../components/DriveSettingsDialog';
 import CueStoryboard from '../components/CueStoryboard';
 import SaveIndicator from '../components/SaveIndicator';
 import CueDiffDialog from '../components/CueDiffDialog';
+import ImportCuesDialog from '../components/ImportCuesDialog';
 import ShareLinksDialog from '../components/ShareLinksDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import { pushRecentProject } from '../components/CommandPalette';
@@ -88,6 +89,7 @@ export default function ProjectEditor() {
   const [shareOpen, setShareOpen] = useState(false);
   const [commentSearchOpen, setCommentSearchOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
+  const [importCuesOpen, setImportCuesOpen] = useState(false);
   const [projectMeta, setProjectMeta] = useState<api.ProjectFull | null>(null);
   const refreshProjectMeta = useCallback(async () => {
     if (!projectId) return;
@@ -460,7 +462,7 @@ export default function ProjectEditor() {
       await refreshCues();
     } catch (e) { alert('排序失敗：' + msg(e)); }
   }
-  async function handleUpdateCueMeta(patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) {
+  async function handleUpdateCueMeta(patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>>) {
     if (!projectId || !selectedSongId || !selectedCueId) return;
     try {
       await api.updateCue(projectId, selectedSongId, selectedCueId, patch);
@@ -654,6 +656,14 @@ export default function ProjectEditor() {
             disabled={!selectedSong || masterCues.length < 2}
           >
             🔀 對比
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => setImportCuesOpen(true)}
+            title="從別首歌匯入 cue（巡迴複製、跨專案沿用）"
+            disabled={!selectedSong}
+          >
+            📥 匯入 Cue
           </button>
           <button
             className="editor-topbar__activity"
@@ -954,6 +964,15 @@ export default function ProjectEditor() {
         onClose={() => setDiffOpen(false)}
       />
 
+      <ImportCuesDialog
+        open={importCuesOpen}
+        projectId={projectId || ''}
+        songId={selectedSongId || ''}
+        songName={selectedSong?.name || ''}
+        onClose={() => setImportCuesOpen(false)}
+        onImported={refreshCues}
+      />
+
       {storyboardOpen && selectedSong && projectId && (
         <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) setStoryboardOpen(false); }}>
           <div className="dlg" style={{ maxWidth: 1100, width: '95vw' }}>
@@ -1204,7 +1223,7 @@ function ObjectStateEditor({
   onToggleSelected: (id: string) => void;
   onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
   onReset: (objId: string) => Promise<void>;
-  onUpdateCueMeta: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) => Promise<void>;
+  onUpdateCueMeta: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>>) => Promise<void>;
   onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
   onUpdateLed: (objId: string, patch: LedProps) => Promise<void>;
   onJumpToObjects: () => void;
@@ -1465,26 +1484,44 @@ function CueMetaEditor({
   cue, onUpdate,
 }: {
   cue: Cue;
-  onUpdate: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>>) => Promise<void>;
+  onUpdate: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>>) => Promise<void>;
 }) {
   const [name, setName] = useState(cue.name);
   const [crossfade, setCrossfade] = useState(cue.crossfadeSeconds);
+  const [videoTime, setVideoTime] = useState<string>(cue.videoTimeSec != null ? String(cue.videoTimeSec) : '');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setName(cue.name);
     setCrossfade(cue.crossfadeSeconds);
-  }, [cue.id, cue.name, cue.crossfadeSeconds]);
+    setVideoTime(cue.videoTimeSec != null ? String(cue.videoTimeSec) : '');
+  }, [cue.id, cue.name, cue.crossfadeSeconds, cue.videoTimeSec]);
 
-  const dirty = name !== cue.name || crossfade !== cue.crossfadeSeconds;
+  const parsedVideoTime: number | null = (() => {
+    const v = videoTime.trim();
+    if (!v) return null;
+    // 支援 "1:23" 格式
+    if (v.includes(':')) {
+      const [m, s] = v.split(':').map(x => parseFloat(x));
+      if (isFinite(m) && isFinite(s)) return m * 60 + s;
+      return null;
+    }
+    const f = parseFloat(v);
+    return isFinite(f) ? f : null;
+  })();
+
+  const dirty = name !== cue.name
+    || crossfade !== cue.crossfadeSeconds
+    || parsedVideoTime !== cue.videoTimeSec;
 
   async function save() {
     if (!dirty) return;
     setSaving(true);
     try {
-      const patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds'>> = {};
+      const patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>> = {};
       if (name !== cue.name) patch.name = name.trim().slice(0, 100);
       if (crossfade !== cue.crossfadeSeconds) patch.crossfadeSeconds = Math.max(0, crossfade);
+      if (parsedVideoTime !== cue.videoTimeSec) patch.videoTimeSec = parsedVideoTime;
       await onUpdate(patch);
     } finally {
       setSaving(false);
@@ -1516,6 +1553,22 @@ function CueMetaEditor({
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         />
         <small className="muted">0 = 硬切；大於 0 時 cue 切換用此秒數漸變</small>
+      </div>
+      <div className="cue-meta-editor__row">
+        <label>對應影片時間</label>
+        <input
+          type="text"
+          value={videoTime}
+          onChange={(e) => setVideoTime(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          placeholder="例：15.5 或 1:23"
+        />
+        <small className="muted">
+          {parsedVideoTime != null
+            ? `→ ${formatVideoTime(parsedVideoTime)}（導演端影片播到這秒會自動切到此 cue）`
+            : '空白 = 沒對應影片時間；填了之後播影片會自動切 cue'}
+        </small>
       </div>
       {dirty && (
         <button className="btn btn--primary cue-meta-editor__save" onClick={save} disabled={saving}>
@@ -1893,6 +1946,12 @@ function ObjectsManager({
 }
 
 function msg(e: unknown) { return e instanceof Error ? e.message : String(e); }
+function formatVideoTime(s: number): string {
+  if (!isFinite(s) || s < 0) return '00:00';
+  const m = Math.floor(s / 60);
+  const sec = (s % 60).toFixed(1);
+  return `${String(m).padStart(2, '0')}:${sec.padStart(4, '0')}`;
+}
 
 function StatusBadge({ value, onChange }: { value: SongStatus; onChange: (next: SongStatus) => void }) {
   const [open, setOpen] = useState(false);

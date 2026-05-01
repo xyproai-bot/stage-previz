@@ -36,6 +36,8 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   const [unitGuess, setUnitGuess] = useState<'normal' | 'too_big' | 'too_small'>('normal');
   const [urlInput, setUrlInput] = useState('');
   const [fetchingUrl, setFetchingUrl] = useState(false);
+  // 3D pin 留言會被影響的 mesh 名稱（current 模型有但新模型沒有的）
+  const [orphanedMeshes, setOrphanedMeshes] = useState<string[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -80,6 +82,16 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       setUnitGuess(ug);
       setStage(meshes.length > 0 ? 'review' : 'error');
       if (meshes.length === 0) setError('GLB 解析後找不到 top-level 物件 — 確認模型是有 group/mesh，沒被全展平');
+
+      // 比對既有 stage_objects 的 mesh_name → 找出在新模型裡消失的（影響 3D pin 留言）
+      try {
+        const existing = await api.listStageObjects(projectId);
+        const newMeshNames = new Set(meshes.map(m => m.meshName));
+        const orphans = existing
+          .map(o => o.meshName)
+          .filter(n => !newMeshNames.has(n));
+        setOrphanedMeshes(orphans);
+      } catch { setOrphanedMeshes([]); }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setStage('error');
@@ -251,6 +263,23 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
             {warnings.length > 0 && (
               <div className="upload-warnings">
                 {warnings.map((w, i) => <div key={i}>{w}</div>)}
+              </div>
+            )}
+
+            {orphanedMeshes.length > 0 && (
+              <div className="upload-orphan-warn">
+                <strong>⚠ 留言可能跑掉</strong>
+                <p>
+                  舊模型有 <strong>{orphanedMeshes.length}</strong> 個物件名稱在新模型裡找不到：
+                  <code className="upload-orphan-warn__list">
+                    {orphanedMeshes.slice(0, 8).join('、')}
+                    {orphanedMeshes.length > 8 && ` …等 ${orphanedMeshes.length} 個`}
+                  </code>
+                </p>
+                <p className="muted">
+                  如果之前有人在這些物件上釘 3D 留言，匯入後留言會掛在錯的位置（fallback 顯示）。
+                  保留原本 mesh 命名可避免這問題。
+                </p>
               </div>
             )}
 

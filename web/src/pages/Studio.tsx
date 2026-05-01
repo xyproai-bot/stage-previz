@@ -295,6 +295,27 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   async function handleSubmitForReview(note: string) {
     if (!selectedSong || !user) return;
+
+    // Pre-flight check：強制觸發 Drive 同步一次，然後檢查這首歌有沒有影片
+    let hasVideo = false;
+    try {
+      toast.info('檢查 Drive 影片中…');
+      // 先試強制同步（worker 端如果該 project 沒設 Drive 會 500，吞掉繼續）
+      try { await api.syncDriveProject(projectId); } catch { /* 沒設 Drive 也 OK */ }
+      const allFiles = await api.listDriveProjectFiles(projectId);
+      hasVideo = allFiles.some(f => f.songId === selectedSong.id && (f.mimeType?.startsWith('video/')));
+    } catch { /* 抓失敗就不擋 */ }
+
+    if (!hasVideo) {
+      const ok = confirm(
+        `這首歌「${selectedSong.name}」目前還沒有影片在平台上。\n\n` +
+        `導演看到的可能會是空的。\n\n` +
+        `你確定要繼續提交嗎？\n\n` +
+        `（如果你剛上傳到 Drive，可能需要再等 5 分鐘讓平台同步，或關掉這個視窗等一下再試）`
+      );
+      if (!ok) return;
+    }
+
     if (note.trim()) {
       try {
         await api.postSongComment(projectId, selectedSong.id, {
@@ -307,6 +328,7 @@ function StudioInner({ projectId }: { projectId: string }) {
       }
     }
     await changeStatus('in_review');
+    toast.success('已提交審查 ✓ 導演會收到通知');
   }
 
   /* ──────────── UI ──────────── */
