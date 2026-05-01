@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import ProjectCard from '../components/ProjectCard';
 import NewProjectDialog from '../components/NewProjectDialog';
+import RecentProjectsBar from '../components/RecentProjectsBar';
 import * as api from '../lib/api';
 import type { Project } from '../lib/mockData';
 import './Admin.css';
@@ -20,6 +21,7 @@ export default function Admin() {
 
   return (
     <AdminLayout>
+      <RecentProjectsBar />
       <ProjectsTab />
     </AdminLayout>
   );
@@ -201,8 +203,51 @@ function ProjectsTab() {
     input.click();
   }
 
+  // Drag-and-drop JSON import 全頁支援
+  const [dragActive, setDragActive] = useState(false);
+  useEffect(() => {
+    let dragCounter = 0;
+    function onDragEnter(e: DragEvent) {
+      if (!e.dataTransfer?.types.includes('Files')) return;
+      dragCounter++;
+      setDragActive(true);
+    }
+    function onDragLeave() {
+      dragCounter--;
+      if (dragCounter <= 0) { dragCounter = 0; setDragActive(false); }
+    }
+    function onDragOver(e: DragEvent) { e.preventDefault(); }
+    function onDrop(e: DragEvent) {
+      e.preventDefault();
+      dragCounter = 0;
+      setDragActive(false);
+      const files = Array.from(e.dataTransfer?.files || []);
+      const json = files.find(f => /\.json$/i.test(f.name));
+      if (json) handleImport(json);
+    }
+    window.addEventListener('dragenter', onDragEnter);
+    window.addEventListener('dragleave', onDragLeave);
+    window.addEventListener('dragover', onDragOver);
+    window.addEventListener('drop', onDrop);
+    return () => {
+      window.removeEventListener('dragenter', onDragEnter);
+      window.removeEventListener('dragleave', onDragLeave);
+      window.removeEventListener('dragover', onDragOver);
+      window.removeEventListener('drop', onDrop);
+    };
+  }, []);
+
   return (
     <>
+      {dragActive && (
+        <div className="admin-drop-overlay">
+          <div className="admin-drop-overlay__inner">
+            <div className="admin-drop-overlay__icon">📥</div>
+            <div className="admin-drop-overlay__title">放開即匯入專案</div>
+            <div className="admin-drop-overlay__hint">.json 備份檔（從匯出產生的）</div>
+          </div>
+        </div>
+      )}
       <header className="admin-topbar">
         <h1>專案總覽</h1>
         <div className="admin-topbar__actions">
@@ -213,7 +258,7 @@ function ProjectsTab() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button className="btn btn--ghost" onClick={triggerImport} title="從 JSON 匯入專案備份">
+          <button className="btn btn--ghost" onClick={triggerImport} title="從 JSON 匯入專案備份（也可拖檔到頁面）">
             ⬆ 匯入
           </button>
           <button className="btn btn--primary" onClick={() => setDialogOpen(true)}>

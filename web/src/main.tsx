@@ -14,3 +14,12 @@ createRoot(document.getElementById('root')!).render(
     </BrowserRouter>
   </StrictMode>
 );
+
+// PWA — 註冊 Service Worker（dev 模式跳過避免 cache 卡 HMR）
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch((e) => {
+      console.warn('[PWA] SW register failed:', e);
+    });
+  });
+}

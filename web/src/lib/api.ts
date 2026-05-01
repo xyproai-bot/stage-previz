@@ -1,6 +1,7 @@
 // API client — 對接 cf-worker 在 proxy.haimiaan.com 的 endpoints
 
 import type { Project } from './mockData';
+import { saveStatus } from './saveStatus';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -32,22 +33,36 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     ...((init?.headers as Record<string, string>) || {}),
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const resp = await fetch(apiBase() + path, {
-    credentials: 'include',  // 同 origin 時的 cookie 也會送
-    ...init,
-    headers,
-  });
-  if (!resp.ok) {
-    let msg = `HTTP ${resp.status}`;
-    try {
-      const err = await resp.json();
-      if (err?.error) msg = err.error;
-    } catch { /* ignore */ }
-    const e: Error & { status?: number } = new Error(msg);
-    e.status = resp.status;
+  // 寫入操作（POST/PUT/PATCH/DELETE）→ 觸發 saveStatus
+  const method = (init?.method || 'GET').toUpperCase();
+  const isMutation = method !== 'GET' && method !== 'HEAD';
+  if (isMutation) saveStatus.saving();
+  try {
+    const resp = await fetch(apiBase() + path, {
+      credentials: 'include',  // 同 origin 時的 cookie 也會送
+      ...init,
+      headers,
+    });
+    if (!resp.ok) {
+      let msg = `HTTP ${resp.status}`;
+      try {
+        const err = await resp.json();
+        if (err?.error) msg = err.error;
+      } catch { /* ignore */ }
+      const e: Error & { status?: number } = new Error(msg);
+      e.status = resp.status;
+      throw e;
+    }
+    const result = await resp.json() as T;
+    if (isMutation) saveStatus.done();
+    return result;
+  } catch (e) {
+    if (isMutation) {
+      saveStatus.done();
+      saveStatus.fail(e instanceof Error ? e.message : String(e));
+    }
     throw e;
   }
-  return resp.json() as Promise<T>;
 }
 
 // ─── Auth ───
@@ -226,6 +241,22 @@ export async function updateProject(id: string, patch: Partial<{ name: string; d
 
 export async function archiveProject(id: string): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function listArchivedProjects(): Promise<Project[]> {
+  try {
+    const data = await http<{ projects: Project[] }>('/api/projects-archived');
+    return data.projects;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return [];
+    throw e;
+  }
+}
+
+export async function restoreProject(id: string): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(id)}/restore`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
 }
 
 export async function duplicateProject(id: string, input: { newName?: string; showId?: string | null } = {}): Promise<{
@@ -506,20 +537,40 @@ export async function getModelInfo(projectId: string): Promise<ModelInfo | null>
   return data.model;
 }
 
-/** 把 .glb / .gltf binary 上傳到 R2 + 更新 project.model_r2_key */
-export async function uploadModel(projectId: string, file: File | Blob | ArrayBuffer): Promise<{ key: string; url: string }> {
-  const body: BodyInit = file instanceof ArrayBuffer ? file : (file as Blob);
-  const resp = await fetch(`${apiBase()}/api/projects/${encodeURIComponent(projectId)}/model`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'model/gltf-binary' },
-    body,
+/** 把 .glb / .gltf binary 上傳到 R2 + 更新 project.model_r2_key — 支援進度回呼 */
+export async function uploadModel(
+  projectId: string,
+  file: File | Blob | ArrayBuffer,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<{ key: string; url: string }> {
+  // 用 XHR 才能拿 upload progress（fetch 沒支援上傳 progress）
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', `${apiBase()}/api/projects/${encodeURIComponent(projectId)}/model`);
+    xhr.setRequestHeader('Content-Type', 'model/gltf-binary');
+    const token = getSessionToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.withCredentials = true;
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress(e.loaded, e.total);
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); }
+        catch { reject(new Error('Invalid JSON response')); }
+      } else {
+        let msg = `HTTP ${xhr.status}`;
+        try { const e = JSON.parse(xhr.responseText); if (e?.error) msg = e.error; } catch {}
+        reject(new Error(msg));
+      }
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.onabort = () => reject(new Error('Upload aborted'));
+    const body: BodyInit = file instanceof ArrayBuffer ? file : (file as Blob);
+    xhr.send(body);
   });
-  if (!resp.ok) {
-    let msg = `HTTP ${resp.status}`;
-    try { const e = await resp.json(); if (e?.error) msg = e.error; } catch {}
-    throw new Error(msg);
-  }
-  return resp.json();
 }
 
 /** 取得真檔 URL（給 GLTFLoader.load 用） */
@@ -748,4 +799,356 @@ export async function resetCueState(
     `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states/${encodeURIComponent(objId)}`,
     { method: 'DELETE' }
   );
+}
+
+// ─── Comments (legacy KV /api/comments — re-used per song) ─────
+//
+// session id 必須 ^[a-zA-Z0-9_-]{1,64}$ — project/song id 已合規。為了長度安全
+// 取 12 + 12 字元 + 一個分隔線：`p_<12>-s_<12>`。
+//
+// 一首歌一個 thread；admin / director / animator 共用同一 thread。
+
+export type CommentAnchor =
+  | { type: 'screen' }
+  | { type: 'world'; world: { x: number; y: number; z: number } }
+  | { type: 'mesh'; meshName: string; offset?: { x: number; y: number; z: number } | null };
+
+export interface SongComment {
+  id: string;
+  time: number;            // 影片秒數（無片時填 0）
+  x: number;               // 0-1 螢幕座標（screen anchor 用）
+  y: number;
+  text: string;
+  author: string;          // 顯示名稱
+  email: string | null;
+  role: 'designer' | 'director' | 'animator';
+  createdAt: string;
+  anchor?: CommentAnchor;  // 3D 錨點
+  status?: 'open' | 'resolved';
+  resolvedBy?: string;
+  resolvedAt?: string;
+  mentions?: { userId: string; name: string }[];  // @ 提及
+}
+
+export function songCommentSession(projectId: string, songId: string): string {
+  // truncate 每段 28 字元 + 連字號 = ≤ 57 字元，符合 64 字元上限
+  const p = projectId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 28);
+  const s = songId.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 28);
+  return `${p}-${s}`;
+}
+
+async function commentsFetch<T>(session: string, init?: RequestInit, extraQuery = ''): Promise<T> {
+  const token = getSessionToken();
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...((init?.headers as Record<string, string>) || {}),
+  };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const url = `${apiBase()}/api/comments?session=${encodeURIComponent(session)}${extraQuery}`;
+  const resp = await fetch(url, { credentials: 'include', ...init, headers });
+  if (!resp.ok) {
+    let msg = `HTTP ${resp.status}`;
+    try { const e = await resp.json(); if (e?.error) msg = e.error; } catch {}
+    const err: Error & { status?: number } = new Error(msg);
+    err.status = resp.status;
+    throw err;
+  }
+  return resp.json() as Promise<T>;
+}
+
+export async function listSongComments(projectId: string, songId: string): Promise<SongComment[]> {
+  try {
+    const data = await commentsFetch<{ comments: SongComment[] }>(songCommentSession(projectId, songId));
+    return Array.isArray(data.comments) ? data.comments : [];
+  } catch (e) {
+    // 沒設 KV / 沒有舊的 comment → 回空陣列，UI 不應因此整個壞掉
+    if ((e as { status?: number }).status === 500) return [];
+    throw e;
+  }
+}
+
+export async function postSongComment(
+  projectId: string, songId: string,
+  comment: { text: string; author: string; role: SongComment['role']; time?: number; x?: number; y?: number; email?: string | null; anchor?: CommentAnchor; mentions?: { userId: string; name: string }[] }
+): Promise<SongComment[]> {
+  const c: Record<string, unknown> = {
+    id: 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
+    text: comment.text,
+    author: comment.author,
+    role: comment.role,
+    time: comment.time ?? 0,
+    x: comment.x ?? 0.5,
+    y: comment.y ?? 0.5,
+    email: comment.email ?? null,
+    createdAt: new Date().toISOString(),
+  };
+  if (comment.anchor) c.anchor = comment.anchor;
+  if (comment.mentions && comment.mentions.length > 0) c.mentions = comment.mentions;
+  const data = await commentsFetch<{ comments: SongComment[] }>(
+    songCommentSession(projectId, songId),
+    { method: 'POST', body: JSON.stringify({ comment: c }) }
+  );
+  return Array.isArray(data.comments) ? data.comments : [];
+}
+
+export async function deleteSongComment(projectId: string, songId: string, commentId: string): Promise<SongComment[]> {
+  const data = await commentsFetch<{ comments: SongComment[] }>(
+    songCommentSession(projectId, songId),
+    { method: 'DELETE' },
+    `&id=${encodeURIComponent(commentId)}`
+  );
+  return Array.isArray(data.comments) ? data.comments : [];
+}
+
+export async function patchSongComment(
+  projectId: string, songId: string, commentId: string,
+  patch: Partial<{ status: 'open' | 'resolved'; text: string; resolvedBy: string; resolvedAt: string }>
+): Promise<SongComment[]> {
+  const data = await commentsFetch<{ comments: SongComment[] }>(
+    songCommentSession(projectId, songId),
+    { method: 'PATCH', body: JSON.stringify({ id: commentId, ...patch }) }
+  );
+  return Array.isArray(data.comments) ? data.comments : [];
+}
+
+// ─── Convenience: get single project metadata (uses list, no separate endpoint) ───
+
+export async function getProjectMeta(projectId: string): Promise<Project | null> {
+  const list = await listProjects();
+  return list.find(p => p.id === projectId) || null;
+}
+
+// ─── Drive integration（OAuth + 同步） ────────
+
+export interface DriveAccount {
+  id: string;
+  email: string;
+  name: string;
+  scopes: string;
+  createdAt: string;
+  lastUsedAt: string | null;
+}
+
+export async function listDriveAccounts(): Promise<{ configured: boolean; accounts: DriveAccount[] }> {
+  try {
+    const data = await http<{ configured: boolean; accounts: DriveAccount[] }>('/api/drive/accounts');
+    return { configured: !!data.configured, accounts: Array.isArray(data.accounts) ? data.accounts : [] };
+  } catch (e) {
+    const status = (e as { status?: number }).status;
+    if (status === 404) return { configured: false, accounts: [] };
+    throw e;
+  }
+}
+
+export async function deleteDriveAccount(id: string): Promise<void> {
+  await http(`/api/drive/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+/** 開 Google 同意頁；callback 完成後 server 跳回 returnTo */
+export async function startDriveOAuth(returnTo: string = '/admin/drive-sources'): Promise<void> {
+  // 用 POST 拿 authUrl（POST 可以帶 Authorization header，避開 third-party cookie 限制）
+  const data = await http<{ authUrl: string }>(
+    `/api/drive/oauth/start?return=${encodeURIComponent(returnTo)}`,
+    { method: 'POST', body: JSON.stringify({}) }
+  );
+  window.location.href = data.authUrl;
+}
+
+export interface DriveFolder {
+  id: string;
+  name: string;
+  parents?: string[];
+  modifiedTime?: string;
+}
+
+export async function listDriveFolders(accountId: string, parent: string = 'root'): Promise<DriveFolder[]> {
+  const data = await http<{ folders: DriveFolder[] }>(
+    `/api/drive/folders?account=${encodeURIComponent(accountId)}&parent=${encodeURIComponent(parent)}`
+  );
+  return data.folders;
+}
+
+export interface DriveFile {
+  id: string;
+  driveFileId: string;
+  filename: string;
+  mimeType: string | null;
+  modifiedTime: string | null;
+  sizeBytes: number | null;
+  thumbnailUrl: string | null;
+  viewUrl: string | null;
+  songId: string | null;
+  songName: string | null;
+  classifiedBy: 'pattern' | 'manual';
+  cachedAt: string;
+}
+
+export async function listDriveProjectFiles(projectId: string): Promise<DriveFile[]> {
+  try {
+    const data = await http<{ files: DriveFile[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/drive/files`
+    );
+    return Array.isArray(data?.files) ? data.files : [];
+  } catch (e) {
+    // worker 還沒部新版 → 404 / Drive route not found，回空陣列即可（功能 graceful degrade）
+    const status = (e as { status?: number }).status;
+    if (status === 404) return [];
+    throw e;
+  }
+}
+
+export async function syncDriveProject(projectId: string): Promise<{
+  filesFound: number;
+  classified: number;
+  unclassified: number;
+  durationMs: number;
+}> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/drive/sync`, {
+    method: 'POST', body: JSON.stringify({}),
+  });
+}
+
+export async function assignDriveFile(projectId: string, fileId: string, songId: string | null): Promise<void> {
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/drive/files/${encodeURIComponent(fileId)}/assign`,
+    { method: 'POST', body: JSON.stringify({ songId }) }
+  );
+}
+
+export interface DriveSyncLogEntry {
+  id: string;
+  triggeredBy: 'cron' | 'manual';
+  filesFound: number;
+  filesClassified: number;
+  filesUnclassified: number;
+  errorMessage: string | null;
+  durationMs: number | null;
+  ranAt: string;
+}
+
+export async function listDriveSyncLog(projectId: string): Promise<DriveSyncLogEntry[]> {
+  try {
+    const data = await http<{ logs: DriveSyncLogEntry[] }>(
+      `/api/projects/${encodeURIComponent(projectId)}/drive/sync-log`
+    );
+    return Array.isArray(data?.logs) ? data.logs : [];
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return [];
+    throw e;
+  }
+}
+
+/** 影片串流 URL（給 <video> 用） */
+export function driveStreamUrl(driveFileId: string): string {
+  return `${apiBase()}/api/drive/stream/${encodeURIComponent(driveFileId)}`;
+}
+
+/** 把 project 的 drive_folder_id / drive_filename_pattern / drive_oauth_token_id 一次更新 */
+export async function updateProjectDriveSettings(projectId: string, patch: Partial<{
+  drive_folder_id: string | null;
+  drive_filename_pattern: string;
+  drive_oauth_token_id: string | null;
+}>): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
+// ─── Share Links ──────────────────────────────
+
+export interface ShareLink {
+  token: string;
+  projectId: string;
+  songId: string | null;
+  hasPassword: boolean;
+  expiresAt: string | null;
+  viewCount: number;
+  lastViewedAt: string | null;
+  createdAt: string;
+}
+
+export async function listShareLinks(projectId: string): Promise<ShareLink[]> {
+  const data = await http<{ links: ShareLink[] }>(`/api/projects/${encodeURIComponent(projectId)}/share-links`);
+  return Array.isArray(data?.links) ? data.links : [];
+}
+
+export async function createShareLink(projectId: string, input: { songId?: string | null; password?: string; expiresInDays?: number }): Promise<{ token: string; expiresAt: string | null }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/share-links`, {
+    method: 'POST',
+    body: JSON.stringify(input || {}),
+  });
+}
+
+export async function deleteShareLink(projectId: string, token: string): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(token)}`, { method: 'DELETE' });
+}
+
+export interface SharePublicData {
+  project: { id: string; name: string; description: string };
+  modelUrl: string | null;
+  songs: { id: string; name: string; order: number; status: string }[];
+  stageObjects: StageObject[];
+  restrictedToSongId: string | null;
+}
+
+/** 公開存取 — 無需 auth，可選 password */
+export async function getSharePublicData(token: string, password?: string): Promise<SharePublicData> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (password) headers['x-share-password'] = password;
+  const r = await fetch(`${apiBase()}/api/share/${encodeURIComponent(token)}/data`, { headers });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    const e: Error & { status?: number; requiresPassword?: boolean } = new Error(err.error || `HTTP ${r.status}`);
+    e.status = r.status;
+    e.requiresPassword = !!err.requiresPassword;
+    throw e;
+  }
+  return r.json();
+}
+
+export async function getShareSongCues(token: string, songId: string, password?: string): Promise<Cue[]> {
+  const headers: Record<string, string> = {};
+  if (password) headers['x-share-password'] = password;
+  const r = await fetch(`${apiBase()}/api/share/${encodeURIComponent(token)}/songs/${encodeURIComponent(songId)}/cues`, { headers });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const data = await r.json() as { cues: Cue[] };
+  return data.cues;
+}
+
+export async function getShareCueStates(token: string, songId: string, cueId: string, password?: string): Promise<CueState[]> {
+  const headers: Record<string, string> = {};
+  if (password) headers['x-share-password'] = password;
+  const r = await fetch(
+    `${apiBase()}/api/share/${encodeURIComponent(token)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states`,
+    { headers }
+  );
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  const data = await r.json() as { states: CueState[] };
+  return data.states;
+}
+
+/** 直接從 GET /api/projects/:id 拉完整 row（含 drive_folder_id / drive_filename_pattern / drive_oauth_token_id） */
+export interface ProjectFull {
+  id: string;
+  name: string;
+  description: string;
+  drive_folder_id: string | null;
+  drive_filename_pattern: string;
+  drive_oauth_token_id: string | null;
+  drive_refresh_interval_min: number;
+  status: string;
+  show_id: string | null;
+  tags: string | null;   // JSON string
+  created_at: string;
+  updated_at: string;
+}
+export async function getProjectFull(projectId: string): Promise<ProjectFull | null> {
+  try {
+    const data = await http<{ project: ProjectFull }>(`/api/projects/${encodeURIComponent(projectId)}`);
+    return data.project;
+  } catch (e) {
+    if ((e as { status?: number }).status === 404) return null;
+    throw e;
+  }
 }

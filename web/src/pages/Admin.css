@@ -1,3 +1,32 @@
+.admin-drop-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 199, 138, 0.15);
+  border: 4px dashed var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+  pointer-events: none;
+  backdrop-filter: blur(4px);
+  animation: drop-pulse 1s ease-in-out infinite;
+}
+.admin-drop-overlay__inner {
+  background: var(--surface-1);
+  border: 1px solid var(--accent);
+  border-radius: 12px;
+  padding: 32px 48px;
+  text-align: center;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}
+.admin-drop-overlay__icon { font-size: 56px; margin-bottom: 8px; }
+.admin-drop-overlay__title { font-size: 20px; color: var(--accent); font-weight: 600; margin-bottom: 4px; }
+.admin-drop-overlay__hint { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+@keyframes drop-pulse {
+  0%, 100% { background: rgba(16, 199, 138, 0.10); }
+  50%      { background: rgba(16, 199, 138, 0.20); }
+}
+
 .admin-topbar {
   display: flex;
   align-items: center;

@@ -25,3 +25,30 @@ migrations_dir = "migrations"
 [[r2_buckets]]
 binding = "MODELS"
 bucket_name = "stage-previz-models"
+
+# Cron Trigger — 每 5 分鐘掃所有有 drive_folder_id 的 project 同步檔案
+[triggers]
+crons = ["*/5 * * * *"]
+
+# ─────────────────────────────────────────────────────────────
+# 必要 secrets（用 wrangler secret put 設，不放 toml）：
+#   AUTH_SECRET           — session HMAC + Drive 加密 key 衍生來源（已設）
+#   GOOGLE_CLIENT_ID      — OAuth client id（Google Cloud Console 開）
+#   GOOGLE_CLIENT_SECRET  — OAuth client secret
+#   GOOGLE_REDIRECT_URI   — 例：https://proxy.haimiaan.com/api/drive/oauth/callback
+#
+# 設定流程：
+#   1. https://console.cloud.google.com/ 開新專案
+#   2. APIs & Services → Library → 啟用「Google Drive API」
+#   3. APIs & Services → OAuth consent screen → External + 加 scopes:
+#         /auth/drive.readonly  /auth/userinfo.email  /auth/userinfo.profile
+#      並加 phang9111@gmail.com 進 test users（沒上正式版前）
+#   4. Credentials → Create OAuth client ID → Web application
+#      Authorized redirect URIs 加：https://proxy.haimiaan.com/api/drive/oauth/callback
+#   5. 下載 client id + secret → 三個 wrangler secret 設下去：
+#         npx wrangler secret put GOOGLE_CLIENT_ID
+#         npx wrangler secret put GOOGLE_CLIENT_SECRET
+#         npx wrangler secret put GOOGLE_REDIRECT_URI
+#   6. npx wrangler deploy
+#   7. 在 admin 的 /admin/drive-sources 點「連接 Google」
+# ─────────────────────────────────────────────────────────────

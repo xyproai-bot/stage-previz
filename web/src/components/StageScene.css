@@ -68,6 +68,315 @@
   margin-left: 4px;
 }
 
+/* NDI status pill */
+.stage-scene__toolbar .ndi-pill {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 3px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.05em;
+  margin-right: 8px;
+}
+.ndi-pill--live {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  animation: ndi-pulse 2s ease-in-out infinite;
+}
+.ndi-pill--idle {
+  background: var(--surface-2);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+@keyframes ndi-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(16, 199, 138, 0.5); }
+  50%      { box-shadow: 0 0 0 4px rgba(16, 199, 138, 0); }
+}
+
+.ndi-wrap { position: relative; margin-right: 8px; }
+.ndi-wrap .ndi-pill {
+  cursor: pointer;
+  border: none;
+  font: inherit;
+  margin-right: 0;
+}
+.ndi-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 100;
+  font-size: 12px;
+  cursor: default;
+}
+.ndi-popover__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.ndi-popover__close {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  font-size: 18px;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+}
+.ndi-popover__close:hover { background: var(--surface-2); color: var(--text); }
+.ndi-popover__body { padding: 10px 12px; }
+.ndi-popover__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.ndi-popover__table th {
+  text-align: left;
+  color: var(--text-muted);
+  font-weight: normal;
+  padding: 4px 0;
+  width: 90px;
+  vertical-align: top;
+}
+.ndi-popover__table td {
+  padding: 4px 0;
+  word-break: break-all;
+}
+.ndi-popover__table code {
+  background: var(--surface-2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.ndi-state {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.ndi-state--idle         { background: var(--surface-2); color: var(--text-muted); }
+.ndi-state--connecting   { background: rgba(82,148,255,0.2); color: #5294ff; }
+.ndi-state--connected    { background: var(--accent-dim); color: var(--accent); }
+.ndi-state--disconnected { background: rgba(255, 170, 68, 0.2); color: var(--warn); }
+.ndi-state--error        { background: rgba(255, 84, 112, 0.2); color: var(--danger); }
+
+.ndi-popover__actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+.ndi-popover__actions .btn {
+  flex: 1;
+  text-align: center;
+  text-decoration: none;
+  font-size: 11.5px;
+  padding: 6px 8px;
+}
+.ndi-popover__hint {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: 0 0 8px 8px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.ndi-popover__hint strong {
+  display: block;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.ndi-popover__hint ol {
+  margin: 0;
+  padding-left: 18px;
+  line-height: 1.6;
+}
+.ndi-popover__sources {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.ndi-popover__sources-title {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.ndi-popover__sources ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+.ndi-source-row {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+.ndi-source-row:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.ndi-source-row.is-active {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  cursor: default;
+}
+
+/* Camera bookmark popover */
+.bm-wrap { position: relative; }
+.bm-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  width: 280px;
+  z-index: 50;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  cursor: default;
+}
+.bm-popover__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.bm-popover__save {
+  margin: 8px 10px;
+  width: calc(100% - 20px);
+}
+.bm-popover__empty {
+  padding: 14px 10px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.bm-popover__list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0 6px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+.bm-popover__list li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+.bm-row {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+.bm-row:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.bm-row__name { color: var(--text); }
+.bm-row__coords {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+}
+.bm-row__del {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 16px;
+  width: 22px;
+  height: 22px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.bm-row__del:hover { background: rgba(255, 84, 112, 0.15); color: var(--danger); }
+
+/* WebXR Enter VR button — three.js 注入的 button 用 inline style，這裡覆蓋成 toolbar 風格 */
+.stage-scene__vr-btn {
+  position: absolute !important;
+  bottom: 12px !important;
+  right: 12px !important;
+  left: auto !important;
+  top: auto !important;
+  margin: 0 !important;
+  padding: 8px 16px !important;
+  background: rgba(20, 22, 27, 0.85) !important;
+  border: 1px solid var(--border-strong) !important;
+  border-radius: 8px !important;
+  color: var(--text) !important;
+  font: inherit !important;
+  font-size: 12px !important;
+  letter-spacing: 0.05em !important;
+  z-index: 6 !important;
+  backdrop-filter: blur(10px);
+  cursor: pointer;
+}
+.stage-scene__vr-btn:hover {
+  background: var(--surface-2) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent) !important;
+}
+
+/* Measure overlay */
+.stage-scene__measure-overlay {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 170, 68, 0.95);
+  color: #000;
+  padding: 8px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  z-index: 5;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+.stage-scene__measure-overlay .measure-dist {
+  font-size: 16px;
+  background: rgba(0, 0, 0, 0.15);
+  padding: 1px 8px;
+  border-radius: 3px;
+}
+
 /* Help overlay */
 .stage-scene__help {
   position: absolute;
@@ -89,6 +398,64 @@
   font-size: 10.5px;
   color: var(--text);
 }
+
+/* Lock pins — always visible (不被 L toggle 隱藏) */
+.stage-scene__lock-pins {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.stage-scene__lock-pin {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font-size: 14px;
+  background: rgba(255, 170, 68, 0.95);
+  color: #000;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  pointer-events: auto;
+  cursor: help;
+}
+
+/* 3D-anchored comment pins */
+.stage-scene__comment-pins {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+.stage-scene__comment-pin {
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  cursor: pointer;
+  pointer-events: auto;
+  border: 2px solid var(--accent);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  transition: transform 0.1s;
+}
+.stage-scene__comment-pin:hover {
+  transform: translate(-50%, -100%) scale(1.2) !important;
+}
+.stage-scene__comment-pin--animator { border-color: var(--accent); }
+.stage-scene__comment-pin--director { border-color: var(--warn); }
+.stage-scene__comment-pin--designer { border-color: #c264ff; }
 
 /* Object labels */
 .stage-scene__labels {

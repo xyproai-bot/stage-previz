@@ -1018,6 +1018,42 @@
   background: transparent;
   cursor: pointer;
 }
+.color-swatches {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: 2px solid transparent;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.1s;
+}
+.color-swatch:hover { transform: scale(1.15); }
+.color-swatch.is-active {
+  border-color: #fff;
+  box-shadow: 0 0 0 1px #000, 0 0 0 3px var(--accent);
+}
+
+.editor-songs__mine-toggle {
+  padding: 6px 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.editor-songs__mine-toggle label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--text-dim);
+}
+.editor-songs__mine-toggle input { accent-color: var(--accent); }
+.editor-songs__mine-toggle label:has(input:checked) { color: var(--accent); }
 
 /* ── Objects manager tab ── */
 .objects-manager {

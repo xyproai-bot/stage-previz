@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
+  <rect width="192" height="192" rx="32" fill="#16181c"/>
+  <g transform="translate(96 96)">
+    <!-- Stage floor (perspective) -->
+    <path d="M -64 32 L 64 32 L 48 16 L -48 16 Z" fill="#10c78a" opacity="0.25"/>
+    <!-- LED panels -->
+    <rect x="-40" y="-28" width="22" height="36" rx="2" fill="#10c78a"/>
+    <rect x="-12" y="-32" width="24" height="40" rx="2" fill="#10c78a"/>
+    <rect x="18"  y="-28" width="22" height="36" rx="2" fill="#10c78a"/>
+  </g>
+  <text x="96" y="170" text-anchor="middle" font-family="monospace" font-size="14" font-weight="bold" fill="#e8eaed" letter-spacing="2">STAGE</text>
+</svg>

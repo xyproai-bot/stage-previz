@@ -9,6 +9,18 @@ const STATUS_LABELS: Record<Project['status'], { label: string; cls: string }> =
   archived: { label: '封存', cls: 'status--archived' },
 };
 
+// Tag 文字 → 穩定 hash → HSL 色相（讓同一 tag 永遠同色）
+function tagStyle(tag: string): React.CSSProperties {
+  let hash = 0;
+  for (let i = 0; i < tag.length; i++) hash = (hash * 31 + tag.charCodeAt(i)) | 0;
+  const h = Math.abs(hash) % 360;
+  return {
+    background: `hsla(${h}, 60%, 45%, 0.18)`,
+    color: `hsl(${h}, 70%, 65%)`,
+    border: `1px solid hsla(${h}, 60%, 45%, 0.4)`,
+  };
+}
+
 const SONG_STATUS_ORDER: SongStatus[] = ['approved', 'in_review', 'needs_changes', 'todo'];
 const SONG_STATUS_LABEL: Record<SongStatus, string> = {
   approved: '已通過',
@@ -148,7 +160,7 @@ export default function ProjectCard({
         {project.tags && project.tags.length > 0 && (
           <div className="project-card__tags">
             {project.tags.map(t => (
-              <span key={t} className="project-card__tag">#{t}</span>
+              <span key={t} className="project-card__tag" style={tagStyle(t)}>#{t}</span>
             ))}
           </div>
         )}

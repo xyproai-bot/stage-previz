@@ -1,0 +1,16 @@
+{
+  "name": "Stage Previz",
+  "short_name": "Stage Previz",
+  "description": "3D LED 舞臺預覽 · 跨團隊協作平台",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#16181c",
+  "theme_color": "#10c78a",
+  "icons": [
+    { "src": "/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable" }
+  ],
+  "categories": ["productivity", "video"]
+}

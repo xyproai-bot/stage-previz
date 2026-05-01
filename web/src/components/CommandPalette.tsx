@@ -25,7 +25,7 @@ export function pushRecentProject(id: string, name: string) {
     localStorage.setItem(RECENT_KEY, JSON.stringify(filtered.slice(0, RECENT_MAX)));
   } catch { /* ignore */ }
 }
-function getRecentProjects(): { id: string; name: string }[] {
+export function getRecentProjects(): { id: string; name: string }[] {
   try {
     const raw = localStorage.getItem(RECENT_KEY);
     return raw ? JSON.parse(raw) : [];
@@ -109,9 +109,14 @@ export default function CommandPalette() {
       { id: 'a:projects',   group: '動作', icon: '📁', label: '專案總覽',        run: () => { navigate('/admin'); close(); } },
       { id: 'a:shows',      group: '動作', icon: '🎫', label: 'Show 巡迴',       run: () => { navigate('/admin/shows'); close(); } },
       { id: 'a:templates',  group: '動作', icon: '📐', label: '模板庫',          run: () => { navigate('/admin/templates'); close(); } },
+      { id: 'a:studio',     group: '動作', icon: '🎨', label: '動畫師工作站',     hint: '/studio', run: () => { navigate('/studio'); close(); } },
+      { id: 'a:preview',    group: '動作', icon: '🎬', label: '導演進度頁',       hint: '/preview', run: () => { navigate('/preview'); close(); } },
     );
     if (user?.role === 'admin') {
-      cmds.push({ id: 'a:users', group: '動作', icon: '👥', label: '用戶管理', run: () => { navigate('/admin/users'); close(); } });
+      cmds.push(
+        { id: 'a:users', group: '動作', icon: '👥', label: '用戶管理', run: () => { navigate('/admin/users'); close(); } },
+        { id: 'a:drive', group: '動作', icon: '☁', label: 'Drive 來源', run: () => { navigate('/admin/drive-sources'); close(); } },
+      );
     }
     cmds.push(
       { id: 'a:logout',     group: '動作', icon: '⏻',  label: '登出',           run: async () => { close(); await logout(); navigate('/login'); } },

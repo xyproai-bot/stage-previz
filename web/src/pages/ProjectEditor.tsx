@@ -2,11 +2,18 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler, MaterialProps, LedProps } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
 import UploadModelDialog from '../components/UploadModelDialog';
 import ModelVersionsDialog from '../components/ModelVersionsDialog';
 import AssetPickerDialog from '../components/AssetPickerDialog';
 import ActivityDrawer from '../components/ActivityDrawer';
+import DriveSettingsDialog from '../components/DriveSettingsDialog';
+import CueStoryboard from '../components/CueStoryboard';
+import SaveIndicator from '../components/SaveIndicator';
+import CueDiffDialog from '../components/CueDiffDialog';
+import ShareLinksDialog from '../components/ShareLinksDialog';
+import CommentSearchDialog from '../components/CommentSearchDialog';
 import { pushRecentProject } from '../components/CommandPalette';
 import './ProjectEditor.css';
 
@@ -34,12 +41,16 @@ const STATUS_ORDER: SongStatus[] = ['todo', 'in_review', 'approved', 'needs_chan
 export default function ProjectEditor() {
   const { projectId } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   // Songs
   const [songs, setSongs] = useState<Song[]>([]);
   const [songsLoading, setSongsLoading] = useState(true);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  // 「我改過的」filter — 用 activity log 算出當前用戶有動過的 song id
+  const [mineOnly, setMineOnly] = useState(false);
+  const [mineSongIds, setMineSongIds] = useState<Set<string>>(new Set());
 
   // Cues
   const [cues, setCues] = useState<Cue[]>([]);
@@ -72,6 +83,20 @@ export default function ProjectEditor() {
   const [versionsOpen, setVersionsOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [activityOpen, setActivityOpen] = useState(false);
+  const [driveOpen, setDriveOpen] = useState(false);
+  const [storyboardOpen, setStoryboardOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const [commentSearchOpen, setCommentSearchOpen] = useState(false);
+  const [diffOpen, setDiffOpen] = useState(false);
+  const [projectMeta, setProjectMeta] = useState<api.ProjectFull | null>(null);
+  const refreshProjectMeta = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const p = await api.getProjectFull(projectId);
+      setProjectMeta(p);
+    } catch (e) { console.warn('load project meta failed', e); }
+  }, [projectId]);
+  useEffect(() => { refreshProjectMeta(); }, [refreshProjectMeta]);
 
   // ── Undo stack（限制最近 50 步，主要涵蓋 cue state 改動） ──
   const undoStackRef = useRef<Array<() => Promise<void>>>([]);
@@ -213,10 +238,31 @@ export default function ProjectEditor() {
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId) || null, [cues, selectedCueId]);
   const selectedSong = useMemo(() => songs.find(s => s.id === selectedSongId) || null, [songs, selectedSongId]);
 
-  const visibleSongs = useMemo(
-    () => statusFilter === 'all' ? songs : songs.filter(s => s.status === statusFilter),
-    [songs, statusFilter]
-  );
+  const visibleSongs = useMemo(() => {
+    let list = statusFilter === 'all' ? songs : songs.filter(s => s.status === statusFilter);
+    if (mineOnly && mineSongIds.size > 0) list = list.filter(s => mineSongIds.has(s.id));
+    return list;
+  }, [songs, statusFilter, mineOnly, mineSongIds]);
+
+  // 開啟 mineOnly 時拉 activity log 算出當前用戶有動過的 song
+  useEffect(() => {
+    if (!mineOnly || !projectId || !user) return;
+    let cancelled = false;
+    api.listActivity(projectId, 200).then(list => {
+      if (cancelled) return;
+      const ids = new Set<string>();
+      for (const a of list) {
+        if (a.userId !== user.id) continue;
+        // payload 可能含 songId / song_id；target_type 是 song / cue / cue_state
+        const payload = a.payload as Record<string, unknown>;
+        if (a.targetType === 'song' && a.targetId) ids.add(a.targetId);
+        if (typeof payload?.songId === 'string') ids.add(payload.songId);
+        if (typeof payload?.song_id === 'string') ids.add(payload.song_id);
+      }
+      setMineSongIds(ids);
+    }).catch(() => { /* 略 */ });
+    return () => { cancelled = true; };
+  }, [mineOnly, projectId, user?.id]);
   // 同步 navRef 給 keyboard listener
   navRef.current = { masterCues, visibleSongs, selectedCueId, selectedSongId };
   const statusCounts = useMemo(() => {
@@ -583,6 +629,7 @@ export default function ProjectEditor() {
           </>)}
         </div>
         <div className="editor-topbar__right">
+          <SaveIndicator />
           <span className="muted small">{stageObjects.length} 物件</span>
           <button
             className="editor-topbar__activity"
@@ -591,6 +638,44 @@ export default function ProjectEditor() {
             title={undoCount > 0 ? `Undo (${undoCount} 步可回退) — Cmd/Ctrl+Z` : '沒有可 undo 的動作'}
           >
             ↶ Undo {undoCount > 0 && <span className="muted small">({undoCount})</span>}
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => setStoryboardOpen(true)}
+            title="Cue Storyboard（縮圖一覽）"
+            disabled={!selectedSong || masterCues.length === 0}
+          >
+            🎬 Storyboard
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => setDiffOpen(true)}
+            title="兩個 cue 並排對比"
+            disabled={!selectedSong || masterCues.length < 2}
+          >
+            🔀 對比
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => setCommentSearchOpen(true)}
+            title="搜尋專案內所有歌的留言"
+          >
+            🔍 搜留言
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => setShareOpen(true)}
+            title="建立公開分享連結（外部人看 read-only 預覽）"
+          >
+            🔗 分享
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => setDriveOpen(true)}
+            title="Drive 來源設定"
+          >
+            ☁ Drive
+            {projectMeta?.drive_folder_id && <span className="muted small"> ●</span>}
           </button>
           <button
             className="editor-topbar__activity"
@@ -619,6 +704,19 @@ export default function ProjectEditor() {
               value={statusFilter}
               onChange={setStatusFilter}
             />
+          )}
+
+          {user && songs.length > 0 && (
+            <div className="editor-songs__mine-toggle">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={mineOnly}
+                  onChange={e => setMineOnly(e.target.checked)}
+                />
+                <span>只看我改過的{mineOnly ? `（${mineSongIds.size}）` : ''}</span>
+              </label>
+            </div>
           )}
 
           {songsLoading ? (
@@ -821,6 +919,65 @@ export default function ProjectEditor() {
         projectId={projectId || ''}
         onClose={() => setActivityOpen(false)}
       />
+
+      <DriveSettingsDialog
+        open={driveOpen}
+        onClose={() => setDriveOpen(false)}
+        projectId={projectId || ''}
+        songs={songs}
+        initialFolderId={projectMeta?.drive_folder_id || ''}
+        initialPattern={projectMeta?.drive_filename_pattern || '^S(\\d+)_'}
+        initialAccountId={projectMeta?.drive_oauth_token_id || ''}
+        onChanged={() => { refreshProjectMeta(); }}
+      />
+
+      <ShareLinksDialog
+        open={shareOpen}
+        projectId={projectId || ''}
+        songs={songs}
+        onClose={() => setShareOpen(false)}
+      />
+
+      <CommentSearchDialog
+        open={commentSearchOpen}
+        projectId={projectId || ''}
+        songs={songs}
+        onClose={() => setCommentSearchOpen(false)}
+        onJump={(songId) => { setSelectedSongId(songId); setCommentSearchOpen(false); }}
+      />
+
+      <CueDiffDialog
+        open={diffOpen}
+        projectId={projectId || ''}
+        songId={selectedSongId || ''}
+        cues={masterCues}
+        onClose={() => setDiffOpen(false)}
+      />
+
+      {storyboardOpen && selectedSong && projectId && (
+        <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) setStoryboardOpen(false); }}>
+          <div className="dlg" style={{ maxWidth: 1100, width: '95vw' }}>
+            <header className="dlg__header">
+              <h2>🎬 {selectedSong.name} — Storyboard</h2>
+              <button className="dlg__close" onClick={() => setStoryboardOpen(false)}>×</button>
+            </header>
+            <div className="dlg__body">
+              <CueStoryboard
+                projectId={projectId}
+                songId={selectedSong.id}
+                cues={masterCues}
+                stageObjects={stageObjects}
+                modelUrl={modelUrl}
+                selectedCueId={selectedCueId}
+                onSelectCue={(id) => { setSelectedCueId(id); }}
+                onReordered={refreshCues}
+                projectName={projectMeta?.name}
+                songName={selectedSong.name}
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       <CueTemplatePickerDialog
         open={templatePickerOpen}
@@ -1597,6 +1754,28 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
             onChange={(e) => setTint(e.target.value)}
             onBlur={() => save({ tint })} />
           <span className="mono small muted">{tint}</span>
+        </div>
+        <div className="color-swatches">
+          {[
+            { name: '白', val: '#ffffff' },
+            { name: '紅', val: '#ff3838' },
+            { name: '橘', val: '#ffaa44' },
+            { name: '黃', val: '#ffd84a' },
+            { name: '綠', val: '#10c78a' },
+            { name: '青', val: '#22ccdd' },
+            { name: '藍', val: '#5294ff' },
+            { name: '紫', val: '#c264ff' },
+            { name: '粉', val: '#ff64aa' },
+          ].map(c => (
+            <button
+              key={c.val}
+              type="button"
+              className={'color-swatch' + (tint.toLowerCase() === c.val ? ' is-active' : '')}
+              style={{ background: c.val }}
+              onClick={() => { setTint(c.val); save({ tint: c.val }); }}
+              title={`${c.name} ${c.val}`}
+            />
+          ))}
         </div>
       </div>
       <div className="form-row">

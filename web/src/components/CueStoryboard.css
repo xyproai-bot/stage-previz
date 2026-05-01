@@ -1,0 +1,120 @@
+.storyboard {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.storyboard--empty {
+  color: var(--text-muted);
+  text-align: center;
+  padding: 20px;
+}
+.storyboard__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.storyboard__strip {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.storyboard__card {
+  flex-shrink: 0;
+  width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.storyboard__card.is-active .storyboard__thumb {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.storyboard__card.is-dragging { opacity: 0.4; }
+.storyboard__card.is-over .storyboard__thumb {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 2px var(--warn);
+}
+.storyboard__drag-hint {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: grab;
+}
+.storyboard__card[draggable="true"] { cursor: grab; }
+.storyboard__card.is-dragging { cursor: grabbing; }
+.storyboard__thumb {
+  position: relative;
+  width: 100%;
+  height: 90px;
+  background: #000;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  overflow: hidden;
+  cursor: pointer;
+  padding: 0;
+}
+.storyboard__thumb:hover { border-color: var(--accent); }
+.storyboard__thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.storyboard__placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.storyboard__num {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+.storyboard__meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+}
+.storyboard__name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.storyboard__hidden-stage {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  width: 800px;
+  height: 450px;
+  pointer-events: none;
+  /* visibility 要保持 visible 否則 WebGL 不會 render */
+}

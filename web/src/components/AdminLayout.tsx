@@ -14,6 +14,7 @@ const NAV = [
   { key: 'drive', icon: '☁️', label: 'Drive 來源', path: '/admin/drive-sources' },
   { key: 'users', icon: '👥', label: '用戶', path: '/admin/users' },
   { key: 'templates', icon: '📐', label: '模板庫', path: '/admin/templates' },
+  { key: 'archived', icon: '🗑', label: '封存的專案', path: '/admin/archived' },
   { key: 'settings', icon: '⚙️', label: '設定', path: '/admin/settings' },
 ];
 

@@ -1,0 +1,66 @@
+[package]
+name = "stage-previz-ndi-helper"
+version = "0.1.0"
+edition = "2021"
+authors = ["phang <phang9111@gmail.com>"]
+description = "NDI receiver bridge — pulls frames from NDI sources and serves to web browser via local WebSocket"
+
+[[bin]]
+name = "stage-previz-ndi-helper"
+path = "src/main.rs"
+
+[dependencies]
+# NDI SDK 載入用 — 動態載入 Processing.NDI.Lib.x64.dll，避免硬綁版本
+libloading = "0.8"
+
+# WebSocket server（給瀏覽器接收 NDI frames）
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+
+# JPEG 編碼（NDI BGRA → JPEG 給瀏覽器，控制 payload 大小）
+turbojpeg = "1.1"
+
+# JSON for config + WebSocket protocol
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Tray icon + 視窗事件（Windows / macOS / Linux）
+tray-icon = "0.19"
+tao = { version = "0.30", default-features = false, features = ["rwh_06"] }
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+
+# 命令列 args / config 路徑解析
+dirs = "5"
+
+# Single-instance lock (避免 user 開兩個 helper)
+single-instance = "0.3"
+
+# 開瀏覽器 / 檔案總管
+open = "5"
+
+[target.'cfg(windows)'.dependencies]
+# Windows-specific: registry 操作（開機自啟）
+winreg = "0.52"
+windows = { version = "0.58", features = [
+  "Win32_Foundation",
+  "Win32_System_Console",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "z"
+strip = true
+
+# cargo-wix（Windows MSI installer）
+# 跑：cargo install cargo-wix; cargo wix init; cargo wix
+[package.metadata.wix]
+upgrade-guid = "B9C5A3E8-7F4D-4E2B-9A1C-2D5F8B1E3C7A"
+path-guid = "F2A4D1B8-3E7C-4F9A-8B2D-1C6E5F4A7B3D"
+license = false
+eula = false

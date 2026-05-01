@@ -29,6 +29,28 @@ export default {
   async fetch(request, env) {
     const response = await routeRequest(request, env);
     return applyCorsToResponse(response, request);
+  },
+
+  // Cron Trigger（每 5 分鐘掃所有有 drive_folder_id 的 project 同步檔案）
+  async scheduled(_event, env, ctx) {
+    if (!env.DB) return;
+    try {
+      const r = await env.DB.prepare(
+        `SELECT id FROM projects
+          WHERE status != 'archived'
+            AND drive_folder_id IS NOT NULL
+            AND drive_folder_id != ''
+            AND drive_oauth_token_id IS NOT NULL`
+      ).all();
+      for (const row of (r.results || [])) {
+        // 用 ctx.waitUntil 讓多個 sync 並行（每個 5s 上限避免拖太久）
+        ctx.waitUntil(driveSyncProjectInternal(env, row.id, 'cron').catch(e => {
+          console.error('[cron sync]', row.id, e?.message || e);
+        }));
+      }
+    } catch (e) {
+      console.error('[cron]', e?.message || e);
+    }
   }
 };
 
@@ -66,6 +88,34 @@ async function routeRequest(request, env) {
   if (url.pathname === '/api/auth/logout' && request.method === 'POST')  return authLogout();
   if (url.pathname === '/api/auth/me'     && request.method === 'GET')   return authMe(request, env);
 
+  // 公開分享連結（read-only，無需登入）
+  if (url.pathname.startsWith('/api/share/')) {
+    const token = url.pathname.replace('/api/share/', '').split('/')[0];
+    return handleShareRouter(request, env, url, token);
+  }
+  if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
+    // 短路：share-links 子路由屬於 admin 管理
+    if (url.pathname.match(/^\/api\/projects\/[^/]+\/share-links/)) {
+      return handleProjectShareLinks(request, env, url);
+    }
+  }
+
+  // Drive OAuth & accounts
+  if (url.pathname === '/api/drive/oauth/start'    && (request.method === 'GET' || request.method === 'POST')) return driveOAuthStart(request, env, url);
+  if (url.pathname === '/api/drive/oauth/callback' && request.method === 'GET')    return driveOAuthCallback(request, env, url);
+  if (url.pathname === '/api/drive/accounts'       && request.method === 'GET')    return driveListAccounts(request, env);
+  if (url.pathname.startsWith('/api/drive/accounts/') && request.method === 'DELETE') {
+    const accId = url.pathname.replace('/api/drive/accounts/', '');
+    return driveDeleteAccount(request, env, accId);
+  }
+  // Drive folder browse (admin pick folder UI)
+  if (url.pathname === '/api/drive/folders' && request.method === 'GET') return driveListFolders(request, env, url);
+  // Drive file stream proxy（給導演端 video player 用）
+  if (url.pathname.startsWith('/api/drive/stream/') && (request.method === 'GET' || request.method === 'HEAD')) {
+    const fid = url.pathname.replace('/api/drive/stream/', '');
+    return driveStreamFile(request, env, fid);
+  }
+
   if (url.pathname === '/api/users' || url.pathname.startsWith('/api/users/')) {
     return handleUsersRouter(request, env, url);
   }
@@ -76,6 +126,12 @@ async function routeRequest(request, env) {
 
   if (url.pathname === '/api/projects/import' && request.method === 'POST') {
     return importProject(request, env);
+  }
+  if (url.pathname === '/api/projects-archived' && request.method === 'GET') {
+    const me = await getCurrentUser(request, env);
+    if (!me) return jsonResp({ error: '未登入' }, 401);
+    if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可看封存' }, 403);
+    return listProjects(env, me, { archived: true });
   }
   if (url.pathname === '/api/search' && request.method === 'GET') {
     return handleSearch(request, env, url);
@@ -161,6 +217,16 @@ async function handleProjectsRouter(request, env, url) {
     return duplicateProject(request, env, projectId);
   }
 
+  if (sub === 'restore') {
+    if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+    if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可還原' }, 403);
+    await env.DB.prepare(
+      `UPDATE projects SET status = 'active', updated_at = datetime('now') WHERE id = ?`
+    ).bind(projectId).run();
+    await logActivity(request, env, projectId, 'update', 'project', projectId, { restored: true });
+    return jsonResp({ ok: true });
+  }
+
   if (sub === 'export') {
     if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
     return exportProject(request, env, projectId);
@@ -170,6 +236,21 @@ async function handleProjectsRouter(request, env, url) {
     if (request.method === 'GET') return listCueTemplates(env, projectId);
     if (request.method === 'POST') return createCueTemplate(request, env, projectId);
     return jsonResp({ error: 'Method not allowed' }, 405);
+  }
+
+  if (sub === 'drive') {
+    // /api/projects/:id/drive/files            GET   → cached files list
+    // /api/projects/:id/drive/sync             POST  → trigger manual sync
+    // /api/projects/:id/drive/files/:fid/assign POST → 手動把檔案歸到某 song
+    // /api/projects/:id/drive/sync-log         GET   → 看同步歷史
+    const sub2v = segs[4] || null;
+    const fid   = segs[5] || null;
+    const sub3v = segs[6] || null;
+    if (sub2v === 'files' && !fid && request.method === 'GET') return driveListProjectFiles(env, projectId);
+    if (sub2v === 'files' && fid && sub3v === 'assign' && request.method === 'POST') return driveAssignFile(request, env, projectId, fid);
+    if (sub2v === 'sync' && request.method === 'POST') return driveSyncProject(request, env, projectId, 'manual');
+    if (sub2v === 'sync-log' && request.method === 'GET') return driveSyncLog(env, projectId);
+    return jsonResp({ error: 'Drive route not found' }, 404);
   }
 
   if (sub === 'songs' && sub2 === 'cues' && sub3 === 'states') {
@@ -206,7 +287,11 @@ async function handleProjects(request, env, projectId, _unused) {
 
   try {
     if (!projectId) {
-      if (request.method === 'GET') return listProjects(env, me);
+      if (request.method === 'GET') {
+        // 用 URL search params 拿 archived flag — 但 handleProjects 沒拿到 url，找原 caller
+        // 簡化：在 router 層多傳一個 archived flag
+        return listProjects(env, me);
+      }
       if (request.method === 'POST') return createProject(request, env);
       return jsonResp({ error: 'Method not allowed' }, 405);
     }
@@ -232,12 +317,13 @@ async function handleProjects(request, env, projectId, _unused) {
   }
 }
 
-async function listProjects(env, me) {
+async function listProjects(env, me, opts = {}) {
   // admin 看全部，其他 role 只看自己被加進 project_members 的 project
   const memberFilter = me?.role === 'admin'
     ? ''
     : ` AND p.id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = ?)`;
   const binds = me?.role === 'admin' ? [] : [me.id];
+  const archivedFilter = opts.archived ? `p.status = 'archived'` : `p.status != 'archived'`;
 
   const projects = await env.DB.prepare(`
     SELECT
@@ -255,7 +341,7 @@ async function listProjects(env, me) {
         JOIN songs s ON c.song_id = s.id
         WHERE s.project_id = p.id AND c.status = 'proposal') AS proposal_count
     FROM projects p
-    WHERE p.status != 'archived'${memberFilter}
+    WHERE ${archivedFilter}${memberFilter}
     ORDER BY p.updated_at DESC
   `).bind(...binds).all();
 
@@ -341,7 +427,7 @@ async function updateProject(request, env, projectId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'show_id', 'tags'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
   // tags 是 array → 存成 JSON string
@@ -2006,6 +2092,30 @@ async function handleComments(request, env, url) {
     return jsonResp({ ok: true, comments: list });
   }
 
+  if (request.method === 'PATCH') {
+    let body;
+    try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+    const id = (body && typeof body.id === 'string') ? body.id : null;
+    if (!id || !COMMENT_ID_RE.test(id)) return jsonResp({ error: 'Missing or invalid id' }, 400);
+    const existing = await env.COMMENTS.get(key);
+    if (!existing) return jsonResp({ error: 'Not found' }, 404);
+    const list = JSON.parse(existing);
+    const idx = list.findIndex(x => x.id === id);
+    if (idx < 0) return jsonResp({ error: 'Not found' }, 404);
+    // 只允許特定欄位 patch
+    const allowed = ['status', 'text', 'resolvedBy', 'resolvedAt'];
+    const patched = { ...list[idx] };
+    for (const k of allowed) {
+      if (k in body) patched[k] = body[k];
+    }
+    // 重跑 sanitize
+    const safe = sanitizeComment(patched);
+    if (!safe) return jsonResp({ error: 'Invalid patched comment' }, 400);
+    list[idx] = safe;
+    await env.COMMENTS.put(key, JSON.stringify(list));
+    return jsonResp({ ok: true, comments: list });
+  }
+
   if (request.method === 'DELETE') {
     const id = url.searchParams.get('id');
     if (!id || !COMMENT_ID_RE.test(id)) {
@@ -2033,7 +2143,50 @@ function sanitizeComment(c) {
   const num = (v, def = 0) => (typeof v === 'number' && isFinite(v)) ? v : def;
   const str = (v, max = 200) => (typeof v === 'string') ? v.slice(0, max) : '';
 
-  return {
+  // 3D anchor（可選）— anchor.type = 'world' | 'mesh' | 'screen'
+  let anchor = null;
+  if (c.anchor && typeof c.anchor === 'object') {
+    const a = c.anchor;
+    if (a.type === 'world' && a.world && typeof a.world === 'object') {
+      anchor = {
+        type: 'world',
+        world: {
+          x: num(a.world.x, 0),
+          y: num(a.world.y, 0),
+          z: num(a.world.z, 0),
+        },
+      };
+    } else if (a.type === 'mesh' && typeof a.meshName === 'string') {
+      anchor = {
+        type: 'mesh',
+        meshName: str(a.meshName, 120),
+        offset: a.offset && typeof a.offset === 'object' ? {
+          x: num(a.offset.x, 0),
+          y: num(a.offset.y, 0),
+          z: num(a.offset.z, 0),
+        } : null,
+      };
+    } else if (a.type === 'screen') {
+      anchor = { type: 'screen' }; // 預設
+    }
+  }
+
+  // role 兼容：舊版只有 designer / director；新增 animator
+  const role = (c.role === 'designer' || c.role === 'director' || c.role === 'animator') ? c.role : 'director';
+
+  // resolved 狀態：'open' | 'resolved'（預設 open）
+  const status = (c.status === 'resolved' || c.status === 'open') ? c.status : 'open';
+
+  // @mentions：[{ userId, name }, ...]
+  let mentions = null;
+  if (Array.isArray(c.mentions)) {
+    mentions = c.mentions
+      .filter(m => m && typeof m === 'object' && typeof m.userId === 'string' && typeof m.name === 'string')
+      .slice(0, 20)
+      .map(m => ({ userId: str(m.userId, 64), name: str(m.name, 80) }));
+  }
+
+  const out = {
     id: c.id,
     time: num(c.time, 0),
     x: Math.max(0, Math.min(1, num(c.x, 0.5))),
@@ -2041,9 +2194,16 @@ function sanitizeComment(c) {
     text,
     author: str(c.author, 80) || '匿名',
     email: str(c.email, 200) || null,
-    role: (c.role === 'designer' || c.role === 'director') ? c.role : 'director',
+    role,
+    status,
     createdAt: str(c.createdAt, 40) || new Date().toISOString()
   };
+  if (anchor) out.anchor = anchor;
+  if (mentions && mentions.length > 0) out.mentions = mentions;
+  // 同樣 pass-through resolvedBy / resolvedAt 給 client 用
+  if (typeof c.resolvedBy === 'string') out.resolvedBy = str(c.resolvedBy, 80);
+  if (typeof c.resolvedAt === 'string') out.resolvedAt = str(c.resolvedAt, 40);
+  return out;
 }
 
 // ─────────────────────────────────────────────
@@ -2716,4 +2876,809 @@ function parseConfirmTokens(html) {
     uuid: inputs.uuid,
     at: inputs.at || ''
   };
+}
+
+// ─────────────────────────────────────────────
+// Google Drive integration（admin Phase 2 — Drive 來源）
+//
+// 設定：在 Cloudflare Workers 後台加 secret：
+//   GOOGLE_CLIENT_ID
+//   GOOGLE_CLIENT_SECRET
+//   GOOGLE_REDIRECT_URI（例：https://proxy.haimiaan.com/api/drive/oauth/callback）
+//
+// 流程：
+//   admin 點「連接 Google」→ /api/drive/oauth/start?return=/admin/drive-sources
+//     → 302 到 Google 同意頁
+//   用戶按同意 → Google 302 回 /api/drive/oauth/callback?code=...&state=...
+//     → 用 code 換 refresh_token + access_token，加密存 oauth_tokens
+//     → 302 回 admin 設定的 return url
+//
+// Drive API：用 fetch 直接打 https://www.googleapis.com/drive/v3/files
+// （比拉 googleapis npm 套件穩、Workers compatibility 好）
+// ─────────────────────────────────────────────
+
+const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token';
+const GOOGLE_SCOPES = 'https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile';
+const DRIVE_API = 'https://www.googleapis.com/drive/v3';
+const DRIVE_FILES_FETCH = 'https://www.googleapis.com/drive/v3/files';
+
+function googleConfigured(env) {
+  return !!(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET && env.GOOGLE_REDIRECT_URI);
+}
+
+// ── AES-GCM 加密／解密 helpers（key 從 AUTH_SECRET 衍生）──
+async function getEncKey(env) {
+  const enc = new TextEncoder();
+  const raw = enc.encode(getAuthSecret(env) + ':drive-enc');
+  // 取前 32 bytes 做 AES-256 key
+  const hash = await crypto.subtle.digest('SHA-256', raw);
+  return await crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+}
+
+async function encryptString(env, plaintext) {
+  const key = await getEncKey(env);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext));
+  // out = iv(12) || ciphertext+tag
+  const out = new Uint8Array(iv.length + ct.byteLength);
+  out.set(iv, 0);
+  out.set(new Uint8Array(ct), iv.length);
+  return bytesToBase64(out);
+}
+
+async function decryptString(env, b64) {
+  if (!b64) return null;
+  const key = await getEncKey(env);
+  const all = base64ToBytes(b64);
+  const iv = all.slice(0, 12);
+  const ct = all.slice(12);
+  try {
+    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    return new TextDecoder().decode(pt);
+  } catch {
+    return null;
+  }
+}
+
+function randHex(nBytes) {
+  const b = crypto.getRandomValues(new Uint8Array(nBytes));
+  let s = '';
+  for (const x of b) s += x.toString(16).padStart(2, '0');
+  return s;
+}
+
+// ── OAuth start ──
+async function driveOAuthStart(request, env, url) {
+  if (!googleConfigured(env)) return jsonResp({ error: 'Google OAuth 未設定。請聯絡平台管理員設定 GOOGLE_CLIENT_ID / SECRET / REDIRECT_URI' }, 503);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可連 Drive' }, 403);
+
+  const returnTo = url.searchParams.get('return') || '/admin/drive-sources';
+  const state = randHex(16);
+
+  await env.DB.prepare(
+    `INSERT INTO oauth_states (state, user_id, return_to) VALUES (?, ?, ?)`
+  ).bind(state, me.id, returnTo).run();
+
+  const params = new URLSearchParams({
+    client_id: env.GOOGLE_CLIENT_ID,
+    redirect_uri: env.GOOGLE_REDIRECT_URI,
+    response_type: 'code',
+    scope: GOOGLE_SCOPES,
+    access_type: 'offline',
+    prompt: 'consent',          // 強制每次拿 refresh_token
+    include_granted_scopes: 'true',
+    state,
+  });
+  const redirect = `${GOOGLE_AUTH_URL}?${params.toString()}`;
+  // POST → 回 JSON 給前端 location.href（避開 cookie cross-origin 限制）
+  if (request.method === 'POST') {
+    return jsonResp({ authUrl: redirect });
+  }
+  // GET → 直接 302（跟 cookie auth 走，dev / 同 origin 用）
+  return new Response(null, { status: 302, headers: { Location: redirect, ...corsHeaders() } });
+}
+
+// ── OAuth callback ──
+async function driveOAuthCallback(request, env, url) {
+  if (!googleConfigured(env)) return jsonResp({ error: 'Google OAuth 未設定' }, 503);
+
+  const code = url.searchParams.get('code');
+  const state = url.searchParams.get('state');
+  const oauthErr = url.searchParams.get('error');
+  if (oauthErr) return htmlPage(`<h1>連接失敗</h1><p>${escapeHtml(oauthErr)}</p><p><a href="/admin/drive-sources">返回</a></p>`);
+  if (!code || !state) return htmlPage(`<h1>連接失敗</h1><p>缺少 code 或 state 參數</p>`);
+
+  // 驗 state（5 分鐘內有效）
+  const st = await env.DB.prepare(
+    `SELECT user_id, return_to, created_at FROM oauth_states WHERE state = ? LIMIT 1`
+  ).bind(state).first();
+  if (!st) return htmlPage(`<h1>連接失敗</h1><p>state 無效或已過期</p>`);
+  // 用過就刪
+  await env.DB.prepare(`DELETE FROM oauth_states WHERE state = ?`).bind(state).run();
+  // 5 分鐘過期
+  const ageSec = (Date.now() - new Date(st.created_at + 'Z').getTime()) / 1000;
+  if (ageSec > 600) return htmlPage(`<h1>連接失敗</h1><p>授權已過期，請重新連接</p>`);
+
+  // 換 token
+  let tokenResp;
+  try {
+    const r = await fetch(GOOGLE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: env.GOOGLE_CLIENT_ID,
+        client_secret: env.GOOGLE_CLIENT_SECRET,
+        redirect_uri: env.GOOGLE_REDIRECT_URI,
+        grant_type: 'authorization_code',
+      }).toString(),
+    });
+    tokenResp = await r.json();
+    if (!r.ok || !tokenResp.access_token) {
+      return htmlPage(`<h1>連接失敗</h1><p>Google token 換取失敗：${escapeHtml(tokenResp.error_description || tokenResp.error || 'unknown')}</p>`);
+    }
+  } catch (e) {
+    return htmlPage(`<h1>連接失敗</h1><p>${escapeHtml(e.message)}</p>`);
+  }
+  if (!tokenResp.refresh_token) {
+    return htmlPage(`<h1>連接失敗</h1><p>沒拿到 refresh_token，可能是已經連過。請去 <a href="https://myaccount.google.com/permissions" target="_blank">Google 帳號權限</a> 撤銷後重試。</p>`);
+  }
+
+  // 取用戶 email + 名字
+  let emailLow = '';
+  let nameStr = '';
+  try {
+    const ui = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+      headers: { Authorization: `Bearer ${tokenResp.access_token}` },
+    }).then(r => r.json());
+    emailLow = (ui.email || '').toLowerCase();
+    nameStr = ui.name || ui.email || '';
+  } catch {}
+  if (!emailLow) return htmlPage(`<h1>連接失敗</h1><p>無法取得 Google 帳號 email</p>`);
+
+  const enc_refresh = await encryptString(env, tokenResp.refresh_token);
+  const expiresAt = new Date(Date.now() + (tokenResp.expires_in || 3600) * 1000).toISOString();
+  const enc_access = await encryptString(env, tokenResp.access_token);
+
+  // upsert（同 email 重連 → 更新 refresh token）
+  const existing = await env.DB.prepare(
+    `SELECT id FROM oauth_tokens WHERE provider='google' AND account_email=? LIMIT 1`
+  ).bind(emailLow).first();
+  let id;
+  if (existing) {
+    id = existing.id;
+    await env.DB.prepare(`
+      UPDATE oauth_tokens
+         SET account_name = ?, scopes = ?, encrypted_refresh_token = ?,
+             encrypted_access_token = ?, access_token_expires_at = ?, last_used_at = datetime('now')
+       WHERE id = ?
+    `).bind(nameStr, GOOGLE_SCOPES, enc_refresh, enc_access, expiresAt, id).run();
+  } else {
+    id = 'tok_' + randHex(8);
+    await env.DB.prepare(`
+      INSERT INTO oauth_tokens (id, provider, account_email, account_name, scopes,
+                                 encrypted_refresh_token, encrypted_access_token,
+                                 access_token_expires_at, created_by_user_id)
+      VALUES (?, 'google', ?, ?, ?, ?, ?, ?, ?)
+    `).bind(id, emailLow, nameStr, GOOGLE_SCOPES, enc_refresh, enc_access, expiresAt, st.user_id).run();
+  }
+
+  const ret = (st.return_to || '/admin/drive-sources').toString();
+  // 為了好看：用 HTML 自動跳轉而非 302（可顯示成功訊息）
+  return htmlPage(`
+    <h1>✅ 已連接 Google Drive</h1>
+    <p>帳號：<strong>${escapeHtml(nameStr)}</strong> &lt;${escapeHtml(emailLow)}&gt;</p>
+    <p>3 秒後跳回設定頁…</p>
+    <script>setTimeout(()=>{ window.location.href=${JSON.stringify(ret)}; }, 3000);</script>
+    <p><a href="${escapeHtml(ret)}">立即返回</a></p>
+  `);
+}
+
+// ── List Google accounts（admin only）──
+async function driveListAccounts(request, env) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  if (me.role !== 'admin') return jsonResp({ error: '只有 admin' }, 403);
+
+  const r = await env.DB.prepare(
+    `SELECT id, account_email, account_name, scopes, created_at, last_used_at
+       FROM oauth_tokens WHERE provider='google' ORDER BY created_at DESC`
+  ).all();
+  return jsonResp({
+    configured: googleConfigured(env),
+    accounts: (r.results || []).map(a => ({
+      id: a.id,
+      email: a.account_email,
+      name: a.account_name,
+      scopes: a.scopes,
+      createdAt: a.created_at,
+      lastUsedAt: a.last_used_at,
+    })),
+  });
+}
+
+async function driveDeleteAccount(request, env, accId) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  if (me.role !== 'admin') return jsonResp({ error: '只有 admin' }, 403);
+
+  // 把所有用此 token 的 project 的 drive_oauth_token_id 清空
+  await env.DB.prepare(
+    `UPDATE projects SET drive_oauth_token_id = NULL WHERE drive_oauth_token_id = ?`
+  ).bind(accId).run();
+  await env.DB.prepare(`DELETE FROM oauth_tokens WHERE id = ?`).bind(accId).run();
+  return jsonResp({ ok: true });
+}
+
+// ── 拿 access token（會自動 refresh）──
+async function driveGetAccessToken(env, tokenId) {
+  const row = await env.DB.prepare(
+    `SELECT encrypted_refresh_token, encrypted_access_token, access_token_expires_at
+       FROM oauth_tokens WHERE id = ? LIMIT 1`
+  ).bind(tokenId).first();
+  if (!row) throw new Error('OAuth token not found');
+
+  // 還有效就用 cache 的 access_token（提前 60s 過期才 refresh）
+  if (row.encrypted_access_token && row.access_token_expires_at) {
+    const exp = new Date(row.access_token_expires_at).getTime();
+    if (exp - 60_000 > Date.now()) {
+      const at = await decryptString(env, row.encrypted_access_token);
+      if (at) return at;
+    }
+  }
+
+  const refresh = await decryptString(env, row.encrypted_refresh_token);
+  if (!refresh) throw new Error('Refresh token decrypt failed');
+
+  const r = await fetch(GOOGLE_TOKEN_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      refresh_token: refresh,
+      grant_type: 'refresh_token',
+    }).toString(),
+  });
+  const tr = await r.json();
+  if (!r.ok || !tr.access_token) {
+    throw new Error('Token refresh failed: ' + (tr.error_description || tr.error || 'unknown'));
+  }
+
+  const enc_access = await encryptString(env, tr.access_token);
+  const expiresAt = new Date(Date.now() + (tr.expires_in || 3600) * 1000).toISOString();
+  await env.DB.prepare(`
+    UPDATE oauth_tokens
+       SET encrypted_access_token = ?, access_token_expires_at = ?, last_used_at = datetime('now')
+     WHERE id = ?
+  `).bind(enc_access, expiresAt, tokenId).run();
+
+  return tr.access_token;
+}
+
+// ── Drive API 包裝 ──
+async function driveApiGet(env, tokenId, path, query = {}) {
+  const at = await driveGetAccessToken(env, tokenId);
+  const params = new URLSearchParams(query).toString();
+  const r = await fetch(`${DRIVE_API}${path}${params ? '?' + params : ''}`, {
+    headers: { Authorization: `Bearer ${at}` },
+  });
+  const text = await r.text();
+  if (!r.ok) {
+    throw new Error(`Drive API ${path} → ${r.status}: ${text.slice(0, 200)}`);
+  }
+  try { return JSON.parse(text); } catch { return text; }
+}
+
+// ── 列 Drive 資料夾（admin 設定 project drive_folder_id 時挑 folder 用）──
+async function driveListFolders(request, env, url) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  if (me.role !== 'admin') return jsonResp({ error: '只有 admin' }, 403);
+
+  const tokenId = url.searchParams.get('account');
+  if (!tokenId) return jsonResp({ error: 'Missing account id' }, 400);
+
+  const parent = url.searchParams.get('parent') || 'root';
+  const q = `'${parent.replace(/'/g, "\\'")}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`;
+
+  try {
+    const data = await driveApiGet(env, tokenId, '/files', {
+      q,
+      pageSize: '100',
+      fields: 'files(id,name,parents,modifiedTime)',
+      orderBy: 'name',
+    });
+    return jsonResp({ folders: data.files || [] });
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+// ── 列某 project 已 cache 的 drive_files ──
+async function driveListProjectFiles(env, projectId) {
+  const r = await env.DB.prepare(`
+    SELECT df.*, s.name AS song_name
+      FROM drive_files df
+      LEFT JOIN songs s ON df.song_id = s.id
+     WHERE df.project_id = ?
+     ORDER BY COALESCE(df.modified_time, df.cached_at) DESC
+  `).bind(projectId).all();
+  return jsonResp({
+    files: (r.results || []).map(f => ({
+      id: f.id,
+      driveFileId: f.drive_file_id,
+      filename: f.filename,
+      mimeType: f.mime_type,
+      modifiedTime: f.modified_time,
+      sizeBytes: f.size_bytes,
+      thumbnailUrl: f.thumbnail_url,
+      viewUrl: f.view_url,
+      songId: f.song_id,
+      songName: f.song_name,
+      classifiedBy: f.classified_by,
+      cachedAt: f.cached_at,
+    })),
+  });
+}
+
+// ── 手動把檔案歸到某 song ──
+async function driveAssignFile(request, env, projectId, fid) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  let body = {};
+  try { body = await request.json(); } catch {}
+  const songId = body?.songId || null;
+  if (songId !== null && typeof songId !== 'string') return jsonResp({ error: 'Invalid songId' }, 400);
+  await env.DB.prepare(
+    `UPDATE drive_files SET song_id = ?, classified_by = 'manual'
+      WHERE id = ? AND project_id = ?`
+  ).bind(songId, fid, projectId).run();
+  await logActivity(request, env, projectId, 'update', 'drive_file', fid, { songId });
+  return jsonResp({ ok: true });
+}
+
+async function driveSyncLog(env, projectId) {
+  const r = await env.DB.prepare(
+    `SELECT * FROM drive_sync_log WHERE project_id = ? ORDER BY ran_at DESC LIMIT 30`
+  ).bind(projectId).all();
+  return jsonResp({
+    logs: (r.results || []).map(l => ({
+      id: l.id,
+      triggeredBy: l.triggered_by,
+      filesFound: l.files_found,
+      filesClassified: l.files_classified,
+      filesUnclassified: l.files_unclassified,
+      errorMessage: l.error_message,
+      durationMs: l.duration_ms,
+      ranAt: l.ran_at,
+    })),
+  });
+}
+
+// ── 觸發同步（手動）──
+async function driveSyncProject(request, env, projectId, triggeredBy) {
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  try {
+    const stats = await driveSyncProjectInternal(env, projectId, triggeredBy);
+    return jsonResp({ ok: true, ...stats });
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+// ── 同步邏輯（給手動 + cron 共用）──
+async function driveSyncProjectInternal(env, projectId, triggeredBy) {
+  const t0 = Date.now();
+  const proj = await env.DB.prepare(
+    `SELECT id, drive_folder_id, drive_filename_pattern, drive_oauth_token_id
+       FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+  ).bind(projectId).first();
+  if (!proj) throw new Error('Project not found');
+  if (!proj.drive_folder_id) throw new Error('Project has no drive_folder_id');
+  if (!proj.drive_oauth_token_id) throw new Error('Project has no drive_oauth_token_id');
+
+  const pattern = proj.drive_filename_pattern || '^S(\\d+)_';
+
+  let regex;
+  try { regex = new RegExp(pattern); }
+  catch (e) { throw new Error('Invalid filename pattern: ' + e.message); }
+
+  // 列 folder 內所有非 trashed 檔案（pageSize=1000，超過再分頁）
+  const q = `'${proj.drive_folder_id.replace(/'/g, "\\'")}' in parents and trashed = false`;
+  let pageToken = null;
+  const all = [];
+  let pages = 0;
+  do {
+    const data = await driveApiGet(env, proj.drive_oauth_token_id, '/files', {
+      q,
+      pageSize: '1000',
+      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime,size,thumbnailLink,webViewLink,webContentLink,iconLink)',
+      orderBy: 'modifiedTime desc',
+      ...(pageToken ? { pageToken } : {}),
+    });
+    for (const f of (data.files || [])) all.push(f);
+    pageToken = data.nextPageToken || null;
+    pages++;
+    if (pages > 5) break; // safety: 5000 檔上限
+  } while (pageToken);
+
+  // 列 project 的歌（依 order）→ 按 pattern.match 結果分發
+  const songsR = await env.DB.prepare(
+    `SELECT id, "order" FROM songs WHERE project_id = ? ORDER BY "order"`
+  ).bind(projectId).all();
+  const songsByOrder = new Map();
+  for (const s of (songsR.results || [])) songsByOrder.set(Number(s.order) + 1, s.id);
+  // 也支援 1-based song.order：很多人習慣 song.order 從 0 開始，但 S03 對應 order=2
+  // 為了相容兩者，下面分配時兩個都嘗試
+
+  // 既有的 drive_files（key 為 drive_file_id）→ 用來判斷新增/更新/移除
+  const existingR = await env.DB.prepare(
+    `SELECT id, drive_file_id, classified_by, song_id FROM drive_files WHERE project_id = ?`
+  ).bind(projectId).all();
+  const existingByDriveId = new Map();
+  for (const e of (existingR.results || [])) existingByDriveId.set(e.drive_file_id, e);
+
+  let classified = 0, unclassified = 0;
+  const seenDriveIds = new Set();
+  const stmts = [];
+
+  for (const f of all) {
+    seenDriveIds.add(f.id);
+    let songId = null;
+    const m = regex.exec(f.name);
+    if (m && m[1]) {
+      const num = parseInt(m[1], 10);
+      // 嘗試 1-based 然後 0-based
+      songId = songsByOrder.get(num) || songsByOrder.get(num + 1) || null;
+    }
+    if (songId) classified++;
+    else unclassified++;
+
+    const existing = existingByDriveId.get(f.id);
+    // 如果用戶手動 assign 過，保留他的 song_id（不要被 pattern 蓋掉）
+    if (existing && existing.classified_by === 'manual') {
+      songId = existing.song_id;
+    }
+
+    const thumbnail = f.thumbnailLink || null;
+    const viewUrl = f.webViewLink || null;
+    const streamUrl = f.webContentLink || null;
+    const sizeBytes = f.size ? parseInt(f.size, 10) : null;
+    const mimeType = f.mimeType || null;
+    const modifiedTime = f.modifiedTime || null;
+
+    if (existing) {
+      stmts.push(env.DB.prepare(`
+        UPDATE drive_files
+           SET song_id = ?, filename = ?, mime_type = ?, modified_time = ?,
+               size_bytes = ?, thumbnail_url = ?, view_url = ?, stream_url = ?,
+               classified_by = ?, cached_at = datetime('now')
+         WHERE id = ?
+      `).bind(songId, f.name, mimeType, modifiedTime, sizeBytes, thumbnail, viewUrl, streamUrl,
+              existing.classified_by === 'manual' ? 'manual' : 'pattern', existing.id));
+    } else {
+      const id = 'df_' + randHex(8);
+      stmts.push(env.DB.prepare(`
+        INSERT INTO drive_files (id, project_id, song_id, drive_file_id, filename,
+                                  mime_type, modified_time, size_bytes,
+                                  thumbnail_url, view_url, stream_url, classified_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pattern')
+      `).bind(id, projectId, songId, f.id, f.name, mimeType, modifiedTime, sizeBytes,
+              thumbnail, viewUrl, streamUrl));
+    }
+  }
+
+  // 移除不再存在於 Drive 的檔案
+  for (const [did, e] of existingByDriveId) {
+    if (!seenDriveIds.has(did)) {
+      stmts.push(env.DB.prepare(`DELETE FROM drive_files WHERE id = ?`).bind(e.id));
+    }
+  }
+
+  // 分批 batch（D1 batch 大小限制大概 100 statements）
+  const BATCH = 50;
+  for (let i = 0; i < stmts.length; i += BATCH) {
+    await env.DB.batch(stmts.slice(i, i + BATCH));
+  }
+
+  const dur = Date.now() - t0;
+  const logId = 'dsl_' + randHex(8);
+  await env.DB.prepare(`
+    INSERT INTO drive_sync_log (id, project_id, triggered_by, files_found,
+                                  files_classified, files_unclassified, duration_ms)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(logId, projectId, triggeredBy, all.length, classified, unclassified, dur).run();
+
+  return { filesFound: all.length, classified, unclassified, durationMs: dur };
+}
+
+// ── Stream proxy（給導演 video player 用）──
+// 設計：用 stream_url（webContentLink）會卡 Drive 的 100MB 確認頁，所以走 Drive API 的
+//   GET /drive/v3/files/{id}?alt=media（要 access token）
+//   Range header 直接 forward 給 Google
+async function driveStreamFile(request, env, fid) {
+  if (!fid) return jsonResp({ error: 'Missing file id' }, 400);
+
+  // 找這個 drive_file_id 屬於哪個 project（順便驗權）
+  const f = await env.DB.prepare(
+    `SELECT df.project_id, df.filename, df.mime_type, p.drive_oauth_token_id
+       FROM drive_files df
+       JOIN projects p ON df.project_id = p.id
+      WHERE df.drive_file_id = ?
+      LIMIT 1`
+  ).bind(fid).first();
+  if (!f) return jsonResp({ error: 'File not found' }, 404);
+
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  // 非 admin 要在 project_members
+  if (me.role !== 'admin') {
+    const m = await env.DB.prepare(
+      `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
+    ).bind(f.project_id, me.id).first();
+    if (!m) return jsonResp({ error: '沒有權限' }, 403);
+  }
+
+  if (!f.drive_oauth_token_id) return jsonResp({ error: 'Project missing OAuth token' }, 412);
+
+  let at;
+  try { at = await driveGetAccessToken(env, f.drive_oauth_token_id); }
+  catch (e) { return jsonResp({ error: 'Token refresh failed: ' + e.message }, 500); }
+
+  const range = request.headers.get('range');
+  const headers = { Authorization: `Bearer ${at}` };
+  if (range) headers['Range'] = range;
+
+  const upstream = await fetch(`${DRIVE_FILES_FETCH}/${encodeURIComponent(fid)}?alt=media`, {
+    method: request.method,
+    headers,
+  });
+
+  // 把上游 headers 透傳（Content-Type / Content-Range / Length / Accept-Ranges）
+  const passHeaders = new Headers();
+  for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'last-modified', 'etag']) {
+    const v = upstream.headers.get(k);
+    if (v) passHeaders.set(k, v);
+  }
+  if (!passHeaders.has('content-type') && f.mime_type) passHeaders.set('content-type', f.mime_type);
+  return new Response(upstream.body, { status: upstream.status, headers: passHeaders });
+}
+
+// ── HTML helper（OAuth callback 用）──
+function htmlPage(body) {
+  const html = `<!doctype html>
+<html lang="zh-TW"><head>
+<meta charset="utf-8"><title>Stage Previz · Drive</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #16181c; color: #e8eaed; padding: 40px; max-width: 600px; margin: 0 auto; }
+  h1 { color: #10c78a; }
+  a { color: #10c78a; }
+  strong { color: #fff; }
+</style>
+</head><body>${body}</body></html>`;
+  return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// ─────────────────────────────────────────────
+// 公開分享連結（share_links）
+//
+// admin / director 可建立 token → 寄給外部人；對方瀏覽器
+// 開 https://stage-previz.vercel.app/share/<token> 直接看 read-only preview
+// ─────────────────────────────────────────────
+
+async function handleProjectShareLinks(request, env, url) {
+  // /api/projects/:projectId/share-links               GET / POST
+  // /api/projects/:projectId/share-links/:token        DELETE
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
+  const segs = url.pathname.split('/').filter(Boolean);
+  // [api, projects, projectId, share-links, token?]
+  const projectId = segs[2];
+  const token = segs[4] || null;
+
+  // 權限：admin 或 project_members
+  if (me.role !== 'admin') {
+    const m = await env.DB.prepare(
+      `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
+    ).bind(projectId, me.id).first();
+    if (!m) return jsonResp({ error: '沒有權限' }, 403);
+  }
+
+  if (!token) {
+    if (request.method === 'GET') {
+      const r = await env.DB.prepare(
+        `SELECT token, project_id, song_id, password IS NOT NULL AS has_password,
+                expires_at, view_count, last_viewed_at, created_at
+           FROM share_links WHERE project_id = ? ORDER BY created_at DESC`
+      ).bind(projectId).all();
+      return jsonResp({
+        links: (r.results || []).map(l => ({
+          token: l.token,
+          projectId: l.project_id,
+          songId: l.song_id,
+          hasPassword: !!l.has_password,
+          expiresAt: l.expires_at,
+          viewCount: l.view_count,
+          lastViewedAt: l.last_viewed_at,
+          createdAt: l.created_at,
+        })),
+      });
+    }
+    if (request.method === 'POST') {
+      let body = {};
+      try { body = await request.json(); } catch {}
+      const songId = body?.songId && /^[a-zA-Z0-9_-]{1,64}$/.test(body.songId) ? body.songId : null;
+      const password = typeof body?.password === 'string' && body.password ? body.password.slice(0, 60) : null;
+      const expiresInDays = typeof body?.expiresInDays === 'number' && body.expiresInDays > 0 ? Math.min(body.expiresInDays, 365) : null;
+      const tk = randHex(16);
+      const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400_000).toISOString() : null;
+      await env.DB.prepare(`
+        INSERT INTO share_links (token, project_id, song_id, password, expires_at, created_by_user_id)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).bind(tk, projectId, songId, password, expiresAt, me.id).run();
+      return jsonResp({ token: tk, expiresAt }, 201);
+    }
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  }
+
+  if (request.method === 'DELETE') {
+    await env.DB.prepare(
+      `DELETE FROM share_links WHERE token = ? AND project_id = ?`
+    ).bind(token, projectId).run();
+    return jsonResp({ ok: true });
+  }
+  return jsonResp({ error: 'Method not allowed' }, 405);
+}
+
+// ── 公開存取（read-only，無需登入）──
+async function handleShareRouter(request, env, url, token) {
+  if (!token || !/^[a-zA-Z0-9_-]{1,64}$/.test(token)) return jsonResp({ error: 'Invalid token' }, 400);
+
+  const segs = url.pathname.split('/').filter(Boolean);
+  // [api, share, token, ...rest]
+  const sub = segs[3] || null;        // 'data' / 'cues' / 'states' / 'comments'
+
+  const link = await env.DB.prepare(
+    `SELECT token, project_id, song_id, password, expires_at FROM share_links WHERE token = ? LIMIT 1`
+  ).bind(token).first();
+  if (!link) return jsonResp({ error: 'Share link not found' }, 404);
+  if (link.expires_at && new Date(link.expires_at + 'Z').getTime() < Date.now()) {
+    return jsonResp({ error: 'Share link expired' }, 410);
+  }
+
+  // 密碼檢查（password via header X-Share-Password）
+  if (link.password) {
+    const provided = request.headers.get('x-share-password') || url.searchParams.get('p') || '';
+    if (provided !== link.password) {
+      return jsonResp({ error: 'Password required', requiresPassword: true }, 401);
+    }
+  }
+
+  // bump view counter（GET data 才算數，避免 stream 每幀 ++）
+  if (sub === 'data' && request.method === 'GET') {
+    await env.DB.prepare(
+      `UPDATE share_links SET view_count = view_count + 1, last_viewed_at = datetime('now') WHERE token = ?`
+    ).bind(token).run();
+  }
+
+  if (sub === 'data' && request.method === 'GET') {
+    // bundle 給 share viewer：project meta + songs + stage_objects + model
+    const proj = await env.DB.prepare(
+      `SELECT id, name, description, model_r2_key FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+    ).bind(link.project_id).first();
+    if (!proj) return jsonResp({ error: 'Project not found' }, 404);
+
+    const songsR = await env.DB.prepare(
+      `SELECT id, name, "order", status FROM songs WHERE project_id = ? ${link.song_id ? 'AND id = ?' : ''} ORDER BY "order"`
+    ).bind(...(link.song_id ? [link.project_id, link.song_id] : [link.project_id])).all();
+
+    const objsR = await env.DB.prepare(
+      `SELECT * FROM stage_objects WHERE project_id = ? ORDER BY "order"`
+    ).bind(link.project_id).all();
+
+    const safeJsonObj = (s, def = {}) => { try { const v = JSON.parse(s || ''); return v || def; } catch { return def; } };
+    const stageObjects = (objsR.results || []).map(o => ({
+      id: o.id,
+      meshName: o.mesh_name,
+      displayName: o.display_name,
+      category: o.category,
+      order: o.order,
+      defaultPosition: safeJsonObj(o.default_position, { x: 0, y: 0, z: 0 }),
+      defaultRotation: safeJsonObj(o.default_rotation, { pitch: 0, yaw: 0, roll: 0 }),
+      defaultScale: safeJsonObj(o.default_scale, { x: 1, y: 1, z: 1 }),
+      metadata: safeJsonObj(o.metadata, null),
+      createdAt: o.created_at,
+      locked: !!o.locked,
+      materialProps: safeJsonObj(o.material_props, null),
+      ledProps: safeJsonObj(o.led_props, null),
+    }));
+
+    return jsonResp({
+      project: { id: proj.id, name: proj.name, description: proj.description },
+      modelUrl: proj.model_r2_key ? `/r2/${proj.model_r2_key}` : null,
+      songs: (songsR.results || []).map(s => ({ id: s.id, name: s.name, order: s.order, status: s.status })),
+      stageObjects,
+      restrictedToSongId: link.song_id,
+    });
+  }
+
+  if (sub === 'songs' && request.method === 'GET') {
+    const songId = segs[4];
+    const cuesOnly = segs[5] === 'cues' && !segs[6];
+    const cueId = segs[5] === 'cues' && segs[6] ? segs[6] : null;
+    const wantStates = cueId && segs[7] === 'states';
+    if (!songId) return jsonResp({ error: 'Missing songId' }, 400);
+    // 驗證 song 屬於 project / 限制 song
+    if (link.song_id && link.song_id !== songId) return jsonResp({ error: 'Song not in scope' }, 403);
+    const song = await env.DB.prepare(
+      `SELECT id, project_id FROM songs WHERE id = ? LIMIT 1`
+    ).bind(songId).first();
+    if (!song || song.project_id !== link.project_id) return jsonResp({ error: 'Song not found' }, 404);
+
+    if (cuesOnly) {
+      const r = await env.DB.prepare(
+        `SELECT id, name, "order", crossfade_seconds, status FROM cues WHERE song_id = ? AND status = 'master' ORDER BY "order"`
+      ).bind(songId).all();
+      return jsonResp({
+        cues: (r.results || []).map(c => ({
+          id: c.id, name: c.name, order: c.order, crossfadeSeconds: c.crossfade_seconds, status: c.status,
+        })),
+      });
+    }
+    if (wantStates) {
+      // 套既有 listCueStates 邏輯（簡版：直接抓 cue_object_states + stage_objects join）
+      // 這裡用 inline 簡化：把 stage_objects + cue_object_states 合成 effective state
+      const objsR = await env.DB.prepare(
+        `SELECT * FROM stage_objects WHERE project_id = ? ORDER BY "order"`
+      ).bind(link.project_id).all();
+      const statesR = await env.DB.prepare(
+        `SELECT * FROM cue_object_states WHERE cue_id = ?`
+      ).bind(cueId).all();
+      const overrides = new Map();
+      for (const s of (statesR.results || [])) overrides.set(s.stage_object_id, s);
+      const safeJsonObj = (s, def = {}) => { try { const v = JSON.parse(s || ''); return v || def; } catch { return def; } };
+      const out = (objsR.results || []).map(o => {
+        const ov = overrides.get(o.id);
+        const def = {
+          position: safeJsonObj(o.default_position, { x: 0, y: 0, z: 0 }),
+          rotation: safeJsonObj(o.default_rotation, { pitch: 0, yaw: 0, roll: 0 }),
+          scale: safeJsonObj(o.default_scale, { x: 1, y: 1, z: 1 }),
+        };
+        const ovObj = ov ? {
+          position: ov.position ? safeJsonObj(ov.position, null) : null,
+          rotation: ov.rotation ? safeJsonObj(ov.rotation, null) : null,
+          scale: ov.scale ? safeJsonObj(ov.scale, null) : null,
+          visible: ov.visible !== null && ov.visible !== undefined ? !!ov.visible : null,
+          customProps: ov.custom_props ? safeJsonObj(ov.custom_props, null) : null,
+          updatedAt: ov.updated_at,
+        } : null;
+        const eff = {
+          position: ovObj?.position || def.position,
+          rotation: ovObj?.rotation || def.rotation,
+          scale: ovObj?.scale || def.scale,
+          visible: ovObj?.visible ?? true,
+        };
+        return {
+          objectId: o.id, meshName: o.mesh_name, displayName: o.display_name,
+          category: o.category, order: o.order, locked: !!o.locked,
+          default: def, override: ovObj, effective: eff,
+        };
+      });
+      return jsonResp({ states: out });
+    }
+    return jsonResp({ error: 'Bad share sub-path' }, 404);
+  }
+
+  return jsonResp({ error: 'Bad share request' }, 404);
 }

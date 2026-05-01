@@ -31,9 +31,11 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   const [filename, setFilename] = useState('');
   const [pickedFile, setPickedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState<string>('');
+  const [uploadPct, setUploadPct] = useState<number>(0); // 0~100
   const [sceneSize, setSceneSize] = useState(0);
   const [unitGuess, setUnitGuess] = useState<'normal' | 'too_big' | 'too_small'>('normal');
-  void uploadProgress;
+  const [urlInput, setUrlInput] = useState('');
+  const [fetchingUrl, setFetchingUrl] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -90,6 +92,28 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
     if (file) handleFile(file);
   }
 
+  async function fetchFromUrl() {
+    const url = urlInput.trim();
+    if (!url) return;
+    setFetchingUrl(true);
+    setError(null);
+    try {
+      const resp = await fetch(url, { mode: 'cors' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status} 抓不到檔案（CORS / 403？）`);
+      const blob = await resp.blob();
+      const guessName = url.split('/').pop()?.split('?')[0] || 'model.glb';
+      const safeName = /\.(glb|gltf)$/i.test(guessName) ? guessName : guessName + '.glb';
+      const file = new File([blob], safeName, { type: blob.type || 'model/gltf-binary' });
+      setUrlInput('');
+      await handleFile(file);
+    } catch (e) {
+      setError('從 URL 載入失敗：' + (e instanceof Error ? e.message : String(e)) + '\n（檢查 URL 是否公開、CORS 是否允許）');
+      setStage('error');
+    } finally {
+      setFetchingUrl(false);
+    }
+  }
+
   function patchMesh(idx: number, patch: Partial<ParsedMesh>) {
     setMeshes(prev => prev.map((m, i) => i === idx ? { ...m, ...patch } : m));
   }
@@ -100,8 +124,12 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
     try {
       // Step 1：把 .glb 真檔上傳到 R2（如果有 file）
       if (pickedFile) {
-        setUploadProgress(`上傳 ${(pickedFile.size / 1024 / 1024).toFixed(1)} MB 到 R2…`);
-        await api.uploadModel(projectId, pickedFile);
+        setUploadProgress(`上傳 ${(pickedFile.size / 1024 / 1024).toFixed(1)} MB 中…`);
+        setUploadPct(0);
+        await api.uploadModel(projectId, pickedFile, (loaded, total) => {
+          if (total > 0) setUploadPct(Math.min(100, Math.round((loaded / total) * 100)));
+        });
+        setUploadPct(100);
       }
 
       // Step 2：bulk insert stage_objects metadata
@@ -161,6 +189,24 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
                 }}
               />
             </div>
+            <div className="upload-url-row">
+              <input
+                type="url"
+                className="upload-url-input"
+                placeholder="或貼 .glb 檔案直連 URL（Sketchfab / GitHub raw / 公開 R2）"
+                value={urlInput}
+                onChange={e => setUrlInput(e.target.value)}
+                disabled={fetchingUrl}
+              />
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={fetchFromUrl}
+                disabled={fetchingUrl || !urlInput.trim()}
+              >
+                {fetchingUrl ? '載入中…' : '從 URL 載入'}
+              </button>
+            </div>
+
             <div className="upload-dialog__hint">
               <strong>命名規則</strong>（系統會自動分類）：
               <ul>
@@ -288,7 +334,18 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
 
         {stage === 'importing' && (
           <div className="upload-status">
-            <div className="spinner" /> 匯入中…
+            <div className="spinner" />
+            <div style={{ width: '100%', maxWidth: 400 }}>
+              <div style={{ marginBottom: 6, fontSize: 12.5 }}>{uploadProgress || '匯入中…'}</div>
+              {uploadPct > 0 && uploadPct < 100 && (
+                <>
+                  <div className="upload-progress-bar">
+                    <div className="upload-progress-bar__fill" style={{ width: `${uploadPct}%` }} />
+                  </div>
+                  <div className="upload-progress-text">{uploadPct}%</div>
+                </>
+              )}
+            </div>
           </div>
         )}
 
