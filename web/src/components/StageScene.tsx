@@ -1223,9 +1223,16 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         } else {
           // === 一般物件 / Quick mode 的 LED ===
           // 套 user materialProps；emissive 只在 selected 時 highlight
-          const baseColor = mat.color || (CATEGORY_COLORS[so?.category || 'other'] !== undefined
-            ? `#${CATEGORY_COLORS[so?.category || 'other'].toString(16).padStart(6, '0')}`
-            : '#cccccc');
+          // 注意：有貼圖（GLB 原本的 texture）或是 LED 時，不要用 category 顏色蓋掉
+          // 否則 LED 在 quick mode 會被染綠（品牌色 = 0x10c78a），喇叭等貼圖物件會被染對應色
+          const hasTexture = !!m.map;
+          const baseColor = mat.color
+            ? mat.color
+            : (hasTexture || isLed)
+              ? '#ffffff'   // 有貼圖或 LED → 用白色當乘數，保留原貼圖顏色
+              : (CATEGORY_COLORS[so?.category || 'other'] !== undefined
+                ? `#${CATEGORY_COLORS[so?.category || 'other'].toString(16).padStart(6, '0')}`
+                : '#cccccc');
           m.color.set(baseColor);
           m.metalness = typeof mat.metalness === 'number' ? mat.metalness : 0.1;
           m.roughness = typeof mat.roughness === 'number' ? mat.roughness : 0.6;
