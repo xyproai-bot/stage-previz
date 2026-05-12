@@ -888,6 +888,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const fromModel = modelMeshMapRef.current.get(s.meshName);
         if (fromModel) {
           obj = fromModel.clone(true);
+          const isLedPanel = s.category === 'led_panel';
           // 給每個子 mesh 標 objectId 讓 raycaster 抓得到
           obj.traverse((child) => {
             child.userData.objectId = s.objectId;
@@ -903,6 +904,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                 });
                 m.material = stdMat;
               }
+              // 雙面渲染：LED 面板維持單面（emissive 不該從背面看到），其他都雙面（喇叭等不會少一面）
+              const mat = m.material as THREE.MeshStandardMaterial;
+              mat.side = isLedPanel ? THREE.FrontSide : THREE.DoubleSide;
+              mat.needsUpdate = true;
             }
           });
         } else {
@@ -1175,6 +1180,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         if (!(c as THREE.Mesh).isMesh) return;
         const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
         if (!m || !('color' in m)) return;
+
+        // 雙面渲染：LED 永遠 FrontSide（emissive 不該從背面看到），其他物件 DoubleSide
+        const targetSide = isLed ? THREE.FrontSide : THREE.DoubleSide;
+        if (m.side !== targetSide) {
+          m.side = targetSide;
+          m.needsUpdate = true;
+        }
 
         if (isLed && isLit) {
           // === LED in realistic mode ===
