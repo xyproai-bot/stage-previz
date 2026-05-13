@@ -1,6 +1,6 @@
 [package]
 name = "stage-previz-ndi-helper"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2021"
 authors = ["phang <phang9111@gmail.com>"]
 description = "NDI receiver bridge — pulls frames from NDI sources and serves to web browser via local WebSocket"
@@ -23,9 +23,6 @@ turbojpeg = "1.1"
 
 # Per-pixel 處理平行化（rows 切多執行緒處理）
 rayon = "1"
-
-# Zero-copy 把 JPEG bytes 分送多 WS client（取代逐 client clone Vec）
-bytes = "1"
 
 # JSON for config + WebSocket protocol
 serde = { version = "1", features = ["derive"] }

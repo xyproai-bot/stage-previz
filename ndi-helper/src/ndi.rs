@@ -25,7 +25,6 @@
 
 use crate::HelperState;
 use crate::config::Config;
-use bytes::Bytes;
 use libloading::{Library, Symbol};
 use log::{debug, info, warn};
 use rayon::prelude::*;
@@ -179,7 +178,7 @@ fn find_ndi_dll() -> Result<std::path::PathBuf, NdiError> {
 // 改在 spawn_blocking 中跑、state 用 blocking_read/blocking_write 存取。
 pub fn run_receiver(
     cfg: &Config,
-    tx: &broadcast::Sender<Bytes>,
+    tx: &broadcast::Sender<Arc<Vec<u8>>>,
     state: &Arc<RwLock<HelperState>>,
 ) -> Result<(), NdiError> {
     let dll_path = find_ndi_dll()?;
@@ -329,9 +328,7 @@ pub fn run_receiver(
             // encode 完才 free（NDI buffer 池夠用，~10-30ms 沒問題）
             unsafe { recv_free_video(recv, &mut video_frame) };
             if let Some(jpeg) = payload {
-                // Bytes 取代 Arc<Vec<u8>>：cheap clone（refcounted）、
-                // WS server 端 broadcast 給多 client 不再每人 deep-copy 一份
-                let bytes = Bytes::from(jpeg);
+                let bytes = Arc::new(jpeg);
                 if tx.send(bytes).is_err() {
                     debug!("no ws clients, frame dropped");
                 }

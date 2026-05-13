@@ -24,7 +24,6 @@ mod tray;
 mod config;
 mod autostart;
 
-use bytes::Bytes;
 use log::{error, info};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -61,9 +60,8 @@ async fn main() {
     let state = Arc::new(RwLock::new(HelperState::default()));
 
     // broadcast channel: NDI receiver → ws clients
-    // 用 broadcast 讓多個瀏覽器 tab 都能接到同一份 frame。
-    // 載體用 Bytes（refcounted），ws_server 端 clone 是 cheap，不再深拷貝整張 JPEG。
-    let (tx, _rx) = broadcast::channel::<Bytes>(8);
+    // 用 broadcast 讓多個瀏覽器 tab 都能接到同一份 frame
+    let (tx, _rx) = broadcast::channel::<Arc<Vec<u8>>>(8);
 
     // Spawn WebSocket server
     {
