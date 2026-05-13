@@ -1195,12 +1195,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           //   base color 黑 → 環境光 × 黑 = 黑（LED 不被打亮）
           //   metalness 0、roughness 1、envMapIntensity 0 → 沒鏡面 / 沒環境反射
           //   emissive(Map) 是 LED 唯一的亮度來源
+          //   toneMapped = false → 跳過 ACES 壓縮，texture pixel 1:1 顯示
+          //   （不然螢光桃 / 亮黃會被壓成霧霧的淡色，跟 AE 對不上）
           m.color.setHex(0x000000);
           m.metalness = 0;
           m.roughness = 1;
           m.envMapIntensity = 0;
           m.opacity = 1;
           m.transparent = false;
+          if (m.toneMapped !== false) {
+            m.toneMapped = false;
+            m.needsUpdate = true;
+          }
 
           if (ledTexture) {
             if (m.emissiveMap !== ledTexture) {
@@ -1238,6 +1244,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           m.metalness = typeof mat.metalness === 'number' ? mat.metalness : 0.1;
           m.roughness = typeof mat.roughness === 'number' ? mat.roughness : 0.6;
           m.envMapIntensity = 1;
+          // 非 LED/realistic 路徑 → 還原 toneMapped（避免被 realistic 路徑切換時殘留 false）
+          if (m.toneMapped !== true) {
+            m.toneMapped = true;
+            m.needsUpdate = true;
+          }
           if (typeof mat.opacity === 'number') {
             m.opacity = mat.opacity;
             m.transparent = mat.opacity < 1;
