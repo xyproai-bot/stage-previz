@@ -67,7 +67,9 @@ pub struct NDIlibVideoFrameV2T {
 const NDILIB_FRAME_TYPE_NONE: c_int = 0;
 const NDILIB_FRAME_TYPE_VIDEO: c_int = 1;
 const NDILIB_RECV_BANDWIDTH_HIGHEST: c_int = 100;
-const NDILIB_RECV_COLOR_FORMAT_BGRX_BGRA: c_int = 2; // BGRA / BGRX
+// NDI SDK enum：0 = BGRX/BGRA，2 = RGBX/RGBA。之前寫 2 → SDK 給 RGBA、
+// 我們當 BGRA 讀 → R/B 對調（黃變藍 / 桃紅變綠等）。修回 0。
+const NDILIB_RECV_COLOR_FORMAT_BGRX_BGRA: c_int = 0; // BGRA / BGRX
 
 type NDIlib_initialize_t = unsafe extern "C" fn() -> bool;
 type NDIlib_find_create_v2_t = unsafe extern "C" fn(*const c_void) -> *mut c_void;
