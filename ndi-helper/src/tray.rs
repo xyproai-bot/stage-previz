@@ -15,7 +15,8 @@
 use crate::config::Config;
 use crate::HelperState;
 use log::{error, info};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tao::event_loop::{ControlFlow, EventLoopBuilder};
 use tokio::sync::RwLock;
 use tray_icon::menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem};
@@ -51,25 +52,40 @@ pub fn run(state: Arc<RwLock<HelperState>>, _cfg: Config) -> Result<(), Box<dyn 
     let id_open_config = item_open_config.id().clone();
     let id_quit = item_quit.id().clone();
 
-    // 用 thread 跑 menu/event 輪詢；event_loop.run 是 main thread
-    let state_for_status = state.clone();
-    std::thread::spawn(move || {
-        let runtime = tokio::runtime::Runtime::new().expect("runtime");
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(1));
-            let s = runtime.block_on(state_for_status.read());
-            let label = match (&s.source_name, s.last_error.as_deref()) {
-                (Some(name), None) => format!("● {} · {:.1} fps · {} 連線", trunc(name, 28), s.fps, s.clients),
-                (Some(name), Some(err)) => format!("⚠ {} · {}", trunc(name, 24), trunc(err, 30)),
-                (None, Some(err)) => format!("⚠ {}", trunc(err, 50)),
-                (None, None) => "等待 NDI source…".to_string(),
-            };
-            item_status.set_text(label);
-        }
-    });
+    // 用共享字串槽傳 label：polling thread 寫、event loop 讀後 set_text。
+    // 不能直接把 item_status 丟進 thread（tray-icon 內部 Rc 不是 Send）。
+    let label_slot = Arc::new(Mutex::new(String::from("等待 NDI source…")));
+    {
+        let label_slot = label_slot.clone();
+        let state_for_status = state.clone();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().expect("runtime");
+            loop {
+                std::thread::sleep(Duration::from_secs(1));
+                let s = runtime.block_on(state_for_status.read());
+                let label = match (&s.source_name, s.last_error.as_deref()) {
+                    (Some(name), None) => format!("● {} · {:.1} fps · {} 連線", trunc(name, 28), s.fps, s.clients),
+                    (Some(name), Some(err)) => format!("⚠ {} · {}", trunc(name, 24), trunc(err, 30)),
+                    (None, Some(err)) => format!("⚠ {}", trunc(err, 50)),
+                    (None, None) => "等待 NDI source…".to_string(),
+                };
+                if let Ok(mut g) = label_slot.lock() {
+                    *g = label;
+                }
+            }
+        });
+    }
 
+    let mut last_label = String::new();
     event_loop.run(move |_event, _, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        // 每 500ms 醒一次抓最新 label
+        *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(500));
+        if let Ok(g) = label_slot.lock() {
+            if *g != last_label {
+                item_status.set_text(g.as_str());
+                last_label = g.clone();
+            }
+        }
 
         // poll menu events
         if let Ok(ev) = menu_channel.try_recv() {

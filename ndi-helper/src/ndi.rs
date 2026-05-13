@@ -262,7 +262,7 @@ pub async fn run_receiver(
     info!("Connecting to NDI source: {chosen_name}");
     {
         let mut s = state.write().await;
-        s.source_name = Some(chosen_name);
+        s.source_name = Some(chosen_name.clone());
         s.last_error = None;
     }
 
