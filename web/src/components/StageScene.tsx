@@ -1168,11 +1168,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const ledTint = so?.ledProps?.tint ? new THREE.Color(so.ledProps.tint) : new THREE.Color(0xffffff);
       const ledBrightness = so?.ledProps?.brightness ?? 1.0;
 
-      // LED 貼圖（realistic / cinematic）priority：
+      // LED 貼圖 priority（不分 render mode，Quick 也要吃 NDI）：
       //   1. user imageUrl（admin 在物件設定的）
       //   2. NDI 真連線（ndi-helper 推 frames 進來）
-      //   3. NDI mock（程序動態貼圖，等 helper 連上前的預覽）
-      const ledImageUrl = (isLed && isLit && so?.ledProps?.imageUrl) || null;
+      //   3. NDI mock（程序動態貼圖，等 helper 連上前的預覽）— 只在 isLit 開
+      const ledImageUrl = (isLed && so?.ledProps?.imageUrl) || null;
       let ledTexture: THREE.Texture | null = null;
       if (ledImageUrl) {
         const cache = ledTextureCacheRef.current;
@@ -1186,11 +1186,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           cache.set(ledImageUrl, tex);
         }
         ledTexture = cache.get(ledImageUrl) || null;
-      } else if (isLed && isLit && ndiActive && ndiLiveTextureRef.current) {
-        // NDI 連上了 → 用真實 NDI frame texture
+      } else if (isLed && ndiActive && ndiLiveTextureRef.current) {
+        // NDI 連上了 → 用真實 NDI frame texture（Quick 模式也要）
         ledTexture = ndiLiveTextureRef.current.texture;
       } else if (isLed && isLit && ndiMockTextureRef.current) {
-        // 沒 NDI / 沒 imageUrl → mock 動態貼圖
+        // mock 動態貼圖只在 isLit 用（Quick 模式時不打擾）
         ledTexture = ndiMockTextureRef.current.texture;
       }
 
@@ -1244,8 +1244,39 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             m.emissive.copy(accentGreen);
             m.emissiveIntensity = 0.3;
           }
+        } else if (isLed && ledTexture) {
+          // === LED in Quick mode（有 NDI 或 imageUrl）===
+          // Quick mode 的設計目標：pixel-accurate LED 預覽（給動畫師對顏色用）
+          // 不打燈、不 tone map、不 bloom、不 PBR 計算 — texture 直接顯示。
+          //   m.map = NDI / imageUrl texture
+          //   color 白 = 不染色
+          //   metalness 0、roughness 1、envMapIntensity 0 = 不反射不被環境光打亮
+          //   toneMapped false = 跳過 ACES，texture pixel 1:1
+          //   emissive 黑 = 不疊加自發光（已經是 map 直接顯示了）
+          if (m.map !== ledTexture) {
+            m.map = ledTexture;
+            m.needsUpdate = true;
+          }
+          m.color.setHex(0xffffff);
+          m.metalness = 0;
+          m.roughness = 1;
+          m.envMapIntensity = 0;
+          m.opacity = 1;
+          m.transparent = false;
+          if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
+          m.emissive.copy(black);
+          m.emissiveIntensity = 0;
+          if (m.toneMapped !== false) {
+            m.toneMapped = false;
+            m.needsUpdate = true;
+          }
+          if (isSelected) {
+            // selected hint：稍微加自發光綠色框感，不洗白本來的內容
+            m.emissive.copy(accentGreen);
+            m.emissiveIntensity = 0.15;
+          }
         } else {
-          // === 一般物件 / Quick mode 的 LED ===
+          // === 一般物件 / Quick mode 的 LED（沒貼圖時）===
           // 套 user materialProps；emissive 只在 selected 時 highlight
           // 注意：有貼圖（GLB 原本的 texture）或是 LED 時，不要用 category 顏色蓋掉
           // 否則 LED 在 quick mode 會被染綠（品牌色 = 0x10c78a），喇叭等貼圖物件會被染對應色
@@ -1271,6 +1302,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             m.transparent = mat.opacity < 1;
           }
           if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
+          // 切回沒貼圖的 LED → 清掉殘留的 NDI map（避免上次切去 Quick 留下的）
+          if (isLed && m.map) { m.map = null; m.needsUpdate = true; }
           if (isSelected) {
             m.emissive.copy(accentGreen);
             m.emissiveIntensity = 0.4;
