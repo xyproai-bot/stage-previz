@@ -67,9 +67,10 @@ pub struct NDIlibVideoFrameV2T {
 const NDILIB_FRAME_TYPE_NONE: c_int = 0;
 const NDILIB_FRAME_TYPE_VIDEO: c_int = 1;
 const NDILIB_RECV_BANDWIDTH_HIGHEST: c_int = 100;
-// NDI SDK enum：0 = BGRX/BGRA，2 = RGBX/RGBA。之前寫 2 → SDK 給 RGBA、
-// 我們當 BGRA 讀 → R/B 對調（黃變藍 / 桃紅變綠等）。修回 0。
-const NDILIB_RECV_COLOR_FORMAT_BGRX_BGRA: c_int = 0; // BGRA / BGRX
+// 注意：常數名雖然叫 BGRX_BGRA，但實際值 2 是 SDK 上「實際會收到 frame」
+// 的 format（enum=0 在這個 SDK 版本收不到 frame）。實際 byte 順序是 RGBA，
+// 不是 BGRA — 所以 encode_frame 那邊讀取時要把 R/B 對調回來。
+const NDILIB_RECV_COLOR_FORMAT_BGRX_BGRA: c_int = 2;
 
 type NDIlib_initialize_t = unsafe extern "C" fn() -> bool;
 type NDIlib_find_create_v2_t = unsafe extern "C" fn(*const c_void) -> *mut c_void;
@@ -384,14 +385,14 @@ fn encode_frame(
             for x in 0..dw {
                 let sx = x * 2;
                 let sy = y * 2;
-                // 平均 4 個 source pixel（BGRA → RGB）
+                // 平均 4 個 source pixel（SDK 實際給 RGBA → 輸出 RGB）
                 let mut b: u32 = 0; let mut g: u32 = 0; let mut r: u32 = 0;
                 for dy in 0..2 {
                     for dx in 0..2 {
                         let off = (sy + dy) * stride + (sx + dx) * 4;
-                        b += raw[off] as u32;
-                        g += raw[off + 1] as u32;
-                        r += raw[off + 2] as u32;
+                        r += raw[off] as u32;        // byte 0 = R
+                        g += raw[off + 1] as u32;    // byte 1 = G
+                        b += raw[off + 2] as u32;    // byte 2 = B
                     }
                 }
                 let mut rr = (r >> 2) as u8;
@@ -410,14 +411,14 @@ fn encode_frame(
         }
         (buf, dw, dh)
     } else {
-        // 直送 BGRA -> RGB，不 downsample
+        // 直送 RGBA -> RGB，不 downsample
         let mut buf = vec![0u8; w * h * 3];
         for y in 0..h {
             for x in 0..w {
                 let off = y * stride + x * 4;
-                let mut b = raw[off];
-                let mut g = raw[off + 1];
-                let mut r = raw[off + 2];
+                let mut r = raw[off];        // byte 0 = R
+                let mut g = raw[off + 1];    // byte 1 = G
+                let mut b = raw[off + 2];    // byte 2 = B
                 if cfg.limited_to_full {
                     b = limited_to_full(b);
                     g = limited_to_full(g);
