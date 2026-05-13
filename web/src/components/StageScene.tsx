@@ -376,7 +376,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.minFilter = THREE.LinearFilter;
         tex.magFilter = THREE.LinearFilter;
-        tex.flipY = true;
+        // 模型 UV 是 baked 過的（top-left origin），跟 Electron 版一致 → flipY = false
+        tex.flipY = false;
         ndiLiveTextureRef.current = { texture: tex, canvas: c, ctx: cctx };
       }
     } catch (e) {
