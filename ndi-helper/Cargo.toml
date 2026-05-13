@@ -1,6 +1,6 @@
 [package]
 name = "stage-previz-ndi-helper"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["phang <phang9111@gmail.com>"]
 description = "NDI receiver bridge — pulls frames from NDI sources and serves to web browser via local WebSocket"

@@ -186,7 +186,9 @@ pub async fn run_receiver(
     macro_rules! sym {
         ($name:literal, $ty:ty) => {{
             let s: Symbol<$ty> = unsafe { lib.get($name) }
-                .map_err(|_| NdiError::SymbolMissing($name.to_string()))?;
+                .map_err(|_| NdiError::SymbolMissing(
+                    String::from_utf8_lossy($name).trim_end_matches('\0').to_string()
+                ))?;
             *s
         }};
     }
