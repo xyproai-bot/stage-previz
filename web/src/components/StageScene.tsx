@@ -178,6 +178,23 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const measureLineRef = useRef<THREE.Line | null>(null);
   const [measureDistance, setMeasureDistance] = useState<number | null>(null);
 
+  // 模型 → 真實單位的換算倍率（per project，存 localStorage）
+  // 自動偵測的縮放可能猜錯（例：GLB 是公分 / 毫米 / 英吋）→ 提供校準工具
+  const scaleKey = `scale-correction:${bookmarkScope || 'global'}`;
+  const [scaleCorrection, setScaleCorrection] = useState<number>(() => {
+    try {
+      const v = parseFloat(localStorage.getItem(scaleKey) || '1');
+      return isFinite(v) && v > 0 ? v : 1;
+    } catch { return 1; }
+  });
+  const saveScaleCorrection = (n: number) => {
+    setScaleCorrection(n);
+    try { localStorage.setItem(scaleKey, String(n)); } catch {}
+  };
+  // 校準對話框：開著時 = 等使用者輸入「這兩點實際多少公尺」
+  const [calibratePromptOpen, setCalibratePromptOpen] = useState(false);
+  const [calibrateInput, setCalibrateInput] = useState('');
+
   // Walk mode（FPV / WASD）
   const [walkMode, setWalkMode] = useState(false);
   const walkKeysRef = useRef<{ [k: string]: boolean }>({});
@@ -1606,8 +1623,90 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           <strong>📏 測距模式</strong>
           {measureDistance === null
             ? <span> · 點兩個點測距離（點地板或物件表面）</span>
-            : <span> · <strong className="measure-dist">{measureDistance.toFixed(2)} m</strong>（再點下一點重開）</span>
+            : (
+              <>
+                <span> · <strong className="measure-dist">{(measureDistance * scaleCorrection).toFixed(2)} m</strong>（再點下一點重開）</span>
+                <button
+                  className="btn btn--ghost btn--sm"
+                  style={{ marginLeft: 12 }}
+                  onClick={() => { setCalibrateInput(''); setCalibratePromptOpen(true); }}
+                  title="把剛剛量到的距離設為已知值 → 之後測距都會用這個倍率校準"
+                >🎯 設為已知距離</button>
+              </>
+            )
           }
+          {scaleCorrection !== 1 && (
+            <span style={{ marginLeft: 12, opacity: 0.7, fontSize: 12 }}>
+              （目前校準倍率 ×{scaleCorrection.toFixed(2)}{' '}
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => saveScaleCorrection(1)}
+                title="清除校準、回到模型原始尺寸"
+              >重設</button>
+              ）
+            </span>
+          )}
+        </div>
+      )}
+      {/* 校準輸入對話框 — inline styles 避免依賴尚未定義的 .modal class */}
+      {calibratePromptOpen && measureDistance !== null && measureDistance > 0 && (
+        <div
+          onClick={() => setCalibratePromptOpen(false)}
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999,
+          }}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: '#1a1a1a', color: '#eee', padding: 20, borderRadius: 8,
+              maxWidth: 420, width: '90%', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>校準尺寸</h3>
+            <p style={{ fontSize: 14, opacity: 0.8, marginTop: 0 }}>
+              剛剛量到的距離是 <strong>{(measureDistance * scaleCorrection).toFixed(3)} m</strong>。
+              它實際應該是幾公尺？輸入後之後所有測距都會用這個倍率換算。
+            </p>
+            <input
+              type="number"
+              step="0.01"
+              placeholder="例：3"
+              value={calibrateInput}
+              autoFocus
+              onChange={e => setCalibrateInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') {
+                  const real = parseFloat(calibrateInput);
+                  if (isFinite(real) && real > 0 && measureDistance > 0) {
+                    saveScaleCorrection(real / measureDistance);
+                    setCalibratePromptOpen(false);
+                  }
+                } else if (e.key === 'Escape') {
+                  setCalibratePromptOpen(false);
+                }
+              }}
+              style={{
+                width: '100%', padding: 8, fontSize: 16, marginBottom: 12,
+                background: '#222', color: '#eee', border: '1px solid #444', borderRadius: 4,
+                boxSizing: 'border-box',
+              }}
+            />
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+              <button className="btn btn--ghost" onClick={() => setCalibratePromptOpen(false)}>取消</button>
+              <button
+                className="btn"
+                onClick={() => {
+                  const real = parseFloat(calibrateInput);
+                  if (isFinite(real) && real > 0 && measureDistance > 0) {
+                    saveScaleCorrection(real / measureDistance);
+                    setCalibratePromptOpen(false);
+                  }
+                }}
+              >套用</button>
+            </div>
+          </div>
         </div>
       )}
       {/* Help overlay */}

@@ -808,6 +808,7 @@ export default function ProjectEditor() {
               cueName={selectedCue ? selectedCue.name : '(default — 改的是物件預設位置)'}
               modelUrl={modelUrl}
               enableNdi
+              bookmarkScope={projectId}
             />
           )}
         </section>
