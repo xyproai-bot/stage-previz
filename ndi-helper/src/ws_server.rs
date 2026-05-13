@@ -7,6 +7,7 @@
 //   - Heartbeat：tungstenite 自動 ping/pong
 
 use crate::HelperState;
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use log::{info, warn};
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub async fn run(
     port: u16,
-    tx: broadcast::Sender<Arc<Vec<u8>>>,
+    tx: broadcast::Sender<Bytes>,
     state: Arc<RwLock<HelperState>>,
 ) -> std::io::Result<()> {
     let addr = format!("127.0.0.1:{port}");
@@ -38,7 +39,7 @@ pub async fn run(
 async fn handle_client(
     stream: TcpStream,
     peer: std::net::SocketAddr,
-    tx: broadcast::Sender<Arc<Vec<u8>>>,
+    tx: broadcast::Sender<Bytes>,
     state: Arc<RwLock<HelperState>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ws = tokio_tungstenite::accept_async(stream).await?;
@@ -67,8 +68,8 @@ async fn handle_client(
             r = rx.recv() => {
                 match r {
                     Ok(bytes) => {
-                        // 失敗（client 滿了 / 斷線）就退出
-                        if let Err(e) = sink.send(Message::Binary((*bytes).clone().into())).await {
+                        // Bytes 是 refcounted、clone cheap。失敗（client 滿了 / 斷線）就退出
+                        if let Err(e) = sink.send(Message::Binary(bytes.clone())).await {
                             break Err(e.into());
                         }
                     }

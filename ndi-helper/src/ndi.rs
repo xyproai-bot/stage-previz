@@ -25,8 +25,10 @@
 
 use crate::HelperState;
 use crate::config::Config;
+use bytes::Bytes;
 use libloading::{Library, Symbol};
 use log::{debug, info, warn};
+use rayon::prelude::*;
 use std::ffi::{c_int, c_void, CStr};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
@@ -177,7 +179,7 @@ fn find_ndi_dll() -> Result<std::path::PathBuf, NdiError> {
 // 改在 spawn_blocking 中跑、state 用 blocking_read/blocking_write 存取。
 pub fn run_receiver(
     cfg: &Config,
-    tx: &broadcast::Sender<Arc<Vec<u8>>>,
+    tx: &broadcast::Sender<Bytes>,
     state: &Arc<RwLock<HelperState>>,
 ) -> Result<(), NdiError> {
     let dll_path = find_ndi_dll()?;
@@ -317,17 +319,19 @@ pub fn run_receiver(
             let w = video_frame.xres as usize;
             let h = video_frame.yres as usize;
             let stride = video_frame.line_stride_in_bytes as usize;
-            // BGRA = 4 bytes per pixel
+            // SDK 給的是 RGBA bytes（雖然 enum 叫 BGRX_BGRA，實測是 RGBA）
             let raw = unsafe {
                 std::slice::from_raw_parts(video_frame.p_data, stride * h)
             };
-            let raw_owned = raw.to_vec(); // copy 出來，馬上 free 給 NDI
+            // encode_frame 平行處理 + JPEG encode（不再先 to_vec()，
+            // 直接從 NDI buffer 讀 → 節省 ~10-50ms 的 memcpy）
+            let payload = encode_frame(raw, w, h, stride, cfg, &mut compressor);
+            // encode 完才 free（NDI buffer 池夠用，~10-30ms 沒問題）
             unsafe { recv_free_video(recv, &mut video_frame) };
-
-            // 處理 + encode
-            let payload = encode_frame(&raw_owned, w, h, stride, cfg, &mut compressor);
             if let Some(jpeg) = payload {
-                let bytes = Arc::new(jpeg);
+                // Bytes 取代 Arc<Vec<u8>>：cheap clone（refcounted）、
+                // WS server 端 broadcast 給多 client 不再每人 deep-copy 一份
+                let bytes = Bytes::from(jpeg);
                 if tx.send(bytes).is_err() {
                     debug!("no ws clients, frame dropped");
                 }
@@ -375,61 +379,67 @@ fn encode_frame(
     cfg: &Config,
     compressor: &mut turbojpeg::Compressor,
 ) -> Option<Vec<u8>> {
-    // 路徑 A：不 downsample, 不 range — 直接 encode raw BGRA
-    // 路徑 B：downsample 2x（box filter），輸出 RGBA 給 turbojpeg
+    // rayon 平行化：每 output row 一個 task，跨 CPU 核心同時跑。
+    // 大張 LED canvas（10912×2024）source 約 22M pixel；單執行緒約 200-400ms，
+    // 8 核 ~30-60ms。
+    let lut = limited_lut();         // O(1) 查表代替 limited_to_full() 的乘除
+    let do_limited = cfg.limited_to_full;
+
     let (out_buf, out_w, out_h) = if cfg.downsample {
         let dw = w / 2;
         let dh = h / 2;
-        let mut buf = vec![0u8; dw * dh * 3]; // 我們直接出 RGB 給 turbojpeg（省 alpha）
-        for y in 0..dh {
+        let mut buf = vec![0u8; dw * dh * 3];
+        // 平均 4 source pixel（box filter）+ RGBA→RGB
+        buf.par_chunks_exact_mut(dw * 3).enumerate().for_each(|(y, row)| {
+            let sy = y * 2;
             for x in 0..dw {
                 let sx = x * 2;
-                let sy = y * 2;
-                // 平均 4 個 source pixel（SDK 實際給 RGBA → 輸出 RGB）
-                let mut b: u32 = 0; let mut g: u32 = 0; let mut r: u32 = 0;
+                let mut r: u32 = 0; let mut g: u32 = 0; let mut b: u32 = 0;
                 for dy in 0..2 {
+                    let row_off = (sy + dy) * stride;
                     for dx in 0..2 {
-                        let off = (sy + dy) * stride + (sx + dx) * 4;
-                        r += raw[off] as u32;        // byte 0 = R
-                        g += raw[off + 1] as u32;    // byte 1 = G
-                        b += raw[off + 2] as u32;    // byte 2 = B
+                        let off = row_off + (sx + dx) * 4;
+                        r += raw[off] as u32;
+                        g += raw[off + 1] as u32;
+                        b += raw[off + 2] as u32;
                     }
                 }
                 let mut rr = (r >> 2) as u8;
                 let mut gg = (g >> 2) as u8;
                 let mut bb = (b >> 2) as u8;
-                if cfg.limited_to_full {
-                    rr = limited_to_full(rr);
-                    gg = limited_to_full(gg);
-                    bb = limited_to_full(bb);
+                if do_limited {
+                    rr = lut[rr as usize];
+                    gg = lut[gg as usize];
+                    bb = lut[bb as usize];
                 }
-                let dst = (y * dw + x) * 3;
-                buf[dst    ] = rr;
-                buf[dst + 1] = gg;
-                buf[dst + 2] = bb;
+                let dst = x * 3;
+                row[dst    ] = rr;
+                row[dst + 1] = gg;
+                row[dst + 2] = bb;
             }
-        }
+        });
         (buf, dw, dh)
     } else {
-        // 直送 RGBA -> RGB，不 downsample
+        // 不 downsample：直送 RGBA→RGB
         let mut buf = vec![0u8; w * h * 3];
-        for y in 0..h {
+        buf.par_chunks_exact_mut(w * 3).enumerate().for_each(|(y, row)| {
+            let row_off = y * stride;
             for x in 0..w {
-                let off = y * stride + x * 4;
-                let mut r = raw[off];        // byte 0 = R
-                let mut g = raw[off + 1];    // byte 1 = G
-                let mut b = raw[off + 2];    // byte 2 = B
-                if cfg.limited_to_full {
-                    b = limited_to_full(b);
-                    g = limited_to_full(g);
-                    r = limited_to_full(r);
+                let off = row_off + x * 4;
+                let mut r = raw[off];
+                let mut g = raw[off + 1];
+                let mut b = raw[off + 2];
+                if do_limited {
+                    r = lut[r as usize];
+                    g = lut[g as usize];
+                    b = lut[b as usize];
                 }
-                let dst = (y * w + x) * 3;
-                buf[dst    ] = r;
-                buf[dst + 1] = g;
-                buf[dst + 2] = b;
+                let dst = x * 3;
+                row[dst    ] = r;
+                row[dst + 1] = g;
+                row[dst + 2] = b;
             }
-        }
+        });
         (buf, w, h)
     };
 
@@ -455,4 +465,20 @@ fn limited_to_full(v: u8) -> u8 {
     // BT.709 limited range: [16, 235] → full [0, 255]
     let f = (v as i32 - 16).max(0).min(219);
     ((f * 255 + 110) / 219).min(255) as u8
+}
+
+/// 256-entry LUT for limited→full（per-pixel 跑時用查表代替 i32 乘除）。
+/// First call 算一次後永遠 cached（OnceLock）。
+fn limited_lut() -> &'static [u8; 256] {
+    use std::sync::OnceLock;
+    static LUT: OnceLock<[u8; 256]> = OnceLock::new();
+    LUT.get_or_init(|| {
+        let mut a = [0u8; 256];
+        let mut i = 0usize;
+        while i < 256 {
+            a[i] = limited_to_full(i as u8);
+            i += 1;
+        }
+        a
+    })
 }
