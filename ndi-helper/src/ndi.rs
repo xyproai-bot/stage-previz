@@ -170,7 +170,9 @@ fn find_ndi_dll() -> Result<std::path::PathBuf, NdiError> {
     ))
 }
 
-pub async fn run_receiver(
+// 同步函式：NDI C API 用 raw pointer 跨 await 不滿足 Send，
+// 改在 spawn_blocking 中跑、state 用 blocking_read/blocking_write 存取。
+pub fn run_receiver(
     cfg: &Config,
     tx: &broadcast::Sender<Arc<Vec<u8>>>,
     state: &Arc<RwLock<HelperState>>,
@@ -212,9 +214,9 @@ pub async fn run_receiver(
         return Err(NdiError::InitFailed);
     }
 
-    // 等 5 秒讓 finder 找到 sources
-    info!("Searching for NDI sources (5s)...");
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // 等 2 秒讓 finder 找到 sources
+    info!("Searching for NDI sources (2s)...");
+    std::thread::sleep(std::time::Duration::from_secs(2));
 
     let mut count: u32 = 0;
     let sources_ptr = unsafe { find_get(finder, &mut count) };
@@ -228,7 +230,7 @@ pub async fn run_receiver(
     let mut chosen_name = String::new();
     let mut all_names: Vec<String> = Vec::with_capacity(count as usize);
     // 用戶透過 WS 指定的 source 優先
-    let requested = state.read().await.requested_source.clone();
+    let requested = state.blocking_read().requested_source.clone();
     let preferred = requested.as_ref().or(cfg.source_name.as_ref()).cloned();
 
     for s in sources {
@@ -249,7 +251,7 @@ pub async fn run_receiver(
         }
     }
     {
-        let mut s = state.write().await;
+        let mut s = state.blocking_write();
         s.available_sources = all_names;
     }
     let chosen = match chosen {
@@ -261,7 +263,7 @@ pub async fn run_receiver(
     };
     info!("Connecting to NDI source: {chosen_name}");
     {
-        let mut s = state.write().await;
+        let mut s = state.blocking_write();
         s.source_name = Some(chosen_name.clone());
         s.last_error = None;
     }
@@ -334,7 +336,7 @@ pub async fn run_receiver(
             let now = std::time::Instant::now();
             if now.duration_since(last_fps_t).as_secs_f32() >= 1.0 {
                 let fps = fps_frames as f32 / now.duration_since(last_fps_t).as_secs_f32();
-                let mut s = state.write().await;
+                let mut s = state.blocking_write();
                 s.frame_count = frame_count;
                 s.fps = fps;
                 last_fps_t = now;
@@ -342,7 +344,7 @@ pub async fn run_receiver(
             }
         } else if frame_type == NDILIB_FRAME_TYPE_NONE {
             // 檢查瀏覽器有沒有要求換 source；有就退出（main 會 5s 後重啟 receiver）
-            let want = state.read().await.requested_source.clone();
+            let want = state.blocking_read().requested_source.clone();
             if let Some(want_name) = want {
                 if want_name != connected_to {
                     info!("Source change requested: {connected_to} → {want_name}; restarting receiver");
@@ -350,7 +352,7 @@ pub async fn run_receiver(
                     return Ok(());
                 }
             }
-            tokio::task::yield_now().await;
+            std::thread::yield_now();
         }
     }
 

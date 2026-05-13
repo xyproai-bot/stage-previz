@@ -75,23 +75,24 @@ async fn main() {
         });
     }
 
-    // Spawn NDI receiver
+    // Spawn NDI receiver — 用 spawn_blocking 因為 NDI C API 帶 raw pointer
+    // 跨 await 不滿足 Send，整個 receiver 改成同步函式跑在 blocking pool。
     {
         let tx = tx.clone();
         let state = state.clone();
         let cfg = cfg.clone();
-        tokio::spawn(async move {
+        tokio::task::spawn_blocking(move || {
             // 重試迴圈（NDI source 不在線時退出但每 5s 重試）
             loop {
-                match ndi::run_receiver(&cfg, &tx, &state).await {
+                match ndi::run_receiver(&cfg, &tx, &state) {
                     Ok(_) => info!("NDI receiver exited cleanly"),
                     Err(e) => {
                         error!("NDI receiver error: {e}");
-                        let mut s = state.write().await;
+                        let mut s = state.blocking_write();
                         s.last_error = Some(e.to_string());
                     }
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                std::thread::sleep(std::time::Duration::from_secs(5));
             }
         });
     }
