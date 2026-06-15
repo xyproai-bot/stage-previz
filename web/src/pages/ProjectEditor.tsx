@@ -4,6 +4,7 @@ import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler, MaterialProps, LedProps } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
+import MechanismPanel from '../components/MechanismPanel';
 import UploadModelDialog from '../components/UploadModelDialog';
 import ModelVersionsDialog from '../components/ModelVersionsDialog';
 import AssetPickerDialog from '../components/AssetPickerDialog';
@@ -78,6 +79,29 @@ export default function ProjectEditor() {
   const toggleSelected = useCallback((id: string) => {
     setSelectedObjectIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }, []);
+
+  // 機關 offset（per LED panel，公尺）— localStorage 存，per project
+  const mechanismKey = `mechanism-offsets:${projectId || 'global'}`;
+  const [mechanismOffsets, setMechanismOffsets] = useState<Record<string, { x: number; y: number }>>(() => {
+    try {
+      const raw = localStorage.getItem(mechanismKey);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      return typeof parsed === 'object' && parsed !== null ? parsed : {};
+    } catch { return {}; }
+  });
+  const updateMechanismOffset = useCallback((objId: string, axis: 'x' | 'y', value: number) => {
+    setMechanismOffsets(prev => {
+      const cur = prev[objId] || { x: 0, y: 0 };
+      const next = { ...prev, [objId]: { ...cur, [axis]: value } };
+      try { localStorage.setItem(mechanismKey, JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, [mechanismKey]);
+  const resetAllMechanismOffsets = useCallback(() => {
+    setMechanismOffsets({});
+    try { localStorage.removeItem(mechanismKey); } catch {}
+  }, [mechanismKey]);
 
   const [rightTab, setRightTab] = useState<RightTab>('cues');
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -809,8 +833,15 @@ export default function ProjectEditor() {
               modelUrl={modelUrl}
               enableNdi
               bookmarkScope={projectId}
+              mechanismOffsets={mechanismOffsets}
             />
           )}
+          <MechanismPanel
+            stageObjects={stageObjects}
+            offsets={mechanismOffsets}
+            onChange={updateMechanismOffset}
+            onResetAll={resetAllMechanismOffsets}
+          />
         </section>
 
         {/* Right — Cue panel */}

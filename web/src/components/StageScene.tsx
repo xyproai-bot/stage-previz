@@ -70,13 +70,15 @@ interface Props {
   onAddAnchoredComment?: (anchor: import('../lib/api').CommentAnchor) => void;
   /** Camera bookmarks 儲存範圍 — 用 projectId 當 localStorage key 前綴；不傳則停用功能 */
   bookmarkScope?: string;
+  /** 機關 offset：per-objectId 的 X/Y 偏移量，單位「真實公尺」。純視覺加總，不寫回 cue。 */
+  mechanismOffsets?: Record<string, { x: number; y: number }>;
 }
 
 type RenderMode = 'quick' | 'realistic' | 'cinematic';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -169,6 +171,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   // Wireframe / X-ray 模式（debug 看穿模型結構）
   const [wireframe, setWireframe] = useState(false);
+
+  // 比例尺輔助（人形剪影 + 1m 網格）— 給動畫師看實體大小
+  const [showScaleRef, setShowScaleRef] = useState(false);
+  const scaleRefGroupRef = useRef<THREE.Group | null>(null);
 
   // 測距工具：點兩個點 → 畫線 + 距離（m）
   const [measureMode, setMeasureMode] = useState(false);
@@ -957,8 +963,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       obj.userData.locked = !!s.locked;
       obj.userData.objectId = s.objectId;
 
-      const p = s.effective.position;
+      const rawP = s.effective.position;
       const r = s.effective.rotation;
+      // 機關 offset：純視覺加總（公尺 → scene units），不寫回 cue。
+      // 對 led_panel 才套用 — 其他類別不該被機關 slider 動到。
+      const moff = (s.category === 'led_panel') ? mechanismOffsets?.[s.objectId] : undefined;
+      const moffSceneX = moff ? moff.x / scaleCorrection : 0;
+      const moffSceneY = moff ? moff.y / scaleCorrection : 0;
+      const p = { x: rawP.x + moffSceneX, y: rawP.y + moffSceneY, z: rawP.z };
       const worldQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
         THREE.MathUtils.degToRad(r.pitch),
         THREE.MathUtils.degToRad(r.yaw),
@@ -1010,7 +1022,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         lbl.classList.toggle('has-override', !!s.override);
       }
     }
-  }, [states, selectedObjectIds]);
+  }, [states, selectedObjectIds, mechanismOffsets, scaleCorrection]);
 
   // ── Attach gizmo：單選 attach mesh、多選建 pivot 把 mesh reparent 進去 ──
   useEffect(() => {
@@ -1362,6 +1374,93 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     });
   }, [wireframe, states, stageObjects]);
 
+  // ── 比例尺輔助：人形剪影 + 每格 1 公尺的網格 ──
+  // 用 scaleCorrection 把真實公尺換算成 scene units，所以校準後尺寸就會對得起來。
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    // 拆掉舊的
+    if (scaleRefGroupRef.current) {
+      scene.remove(scaleRefGroupRef.current);
+      scaleRefGroupRef.current.traverse((c) => {
+        const m = c as THREE.Mesh;
+        if (m.isMesh) {
+          m.geometry?.dispose?.();
+          const mat = m.material as THREE.Material | THREE.Material[];
+          if (Array.isArray(mat)) mat.forEach(x => x?.dispose?.());
+          else mat?.dispose?.();
+        }
+      });
+      scaleRefGroupRef.current = null;
+    }
+
+    if (!showScaleRef) return;
+
+    const group = new THREE.Group();
+    group.name = 'scale-reference';
+
+    // 1 公尺對應幾個 scene unit
+    const unitsPerMeter = 1 / scaleCorrection;
+
+    // 網格：20m × 20m，每格 1m
+    const gridSize = 20 * unitsPerMeter;
+    const gridDiv = 20;
+    const grid = new THREE.GridHelper(gridSize, gridDiv, 0x10c78a, 0x2a5d4a);
+    (grid.material as THREE.LineBasicMaterial).transparent = true;
+    (grid.material as THREE.LineBasicMaterial).opacity = 0.55;
+    grid.position.y = 0.001 * unitsPerMeter; // 比地板高一咪咪避免 z-fighting
+    group.add(grid);
+
+    // 人形剪影 — 用 canvas 畫一個簡單的火柴人 silhouette，做成 sprite billboard
+    const makePerson = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 64;
+      canvas.height = 160;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#1a1a1a';
+        // 頭
+        ctx.beginPath();
+        ctx.arc(32, 18, 12, 0, Math.PI * 2);
+        ctx.fill();
+        // 身 + 腿（梯形 → 兩腿）
+        ctx.beginPath();
+        ctx.moveTo(22, 30);
+        ctx.lineTo(42, 30);
+        ctx.lineTo(48, 90);
+        ctx.lineTo(36, 90);
+        ctx.lineTo(34, 158);
+        ctx.lineTo(28, 158);
+        ctx.lineTo(30, 90);
+        ctx.lineTo(16, 90);
+        ctx.closePath();
+        ctx.fill();
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.75, depthTest: true, depthWrite: false });
+      const sprite = new THREE.Sprite(mat);
+      // 高 1.7m，寬比例 64/160
+      const heightUnits = 1.7 * unitsPerMeter;
+      sprite.scale.set(heightUnits * (64 / 160), heightUnits, 1);
+      // sprite 的 anchor 是中心，要把腳移到 y=0
+      sprite.center.set(0.5, 0); // 0=底, 1=頂
+      return sprite;
+    };
+
+    // 放兩個人形（左前 / 右前），距離 ~3m
+    const p1 = makePerson();
+    p1.position.set(-3 * unitsPerMeter, 0, 1 * unitsPerMeter);
+    group.add(p1);
+    const p2 = makePerson();
+    p2.position.set(3 * unitsPerMeter, 0, 1 * unitsPerMeter);
+    group.add(p2);
+
+    scene.add(group);
+    scaleRefGroupRef.current = group;
+  }, [showScaleRef, scaleCorrection]);
+
   // ── Walk mode：pointer lock + WASD keys ──
   useEffect(() => {
     const renderer = rendererRef.current;
@@ -1506,6 +1605,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           onClick={() => setWireframe(w => !w)}
           title={wireframe ? '切回實心 (X)' : 'Wireframe / X-ray 模式（看穿模型）(X)'}
         >🔳 Wire</button>
+        <button
+          className={'tool ' + (showScaleRef ? 'is-active' : '')}
+          onClick={() => setShowScaleRef(s => !s)}
+          title={showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格'}
+        >👤 比例尺</button>
         <button
           className={'tool ' + (showLabels ? 'is-active' : '')}
           onClick={() => setShowLabels(s => !s)}
