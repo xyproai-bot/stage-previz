@@ -33,7 +33,7 @@ import {
   projectRoleOf, canEditProjectContent, songStatusDecision,
   describeProjectRoute, roleMeetsNeed, needDeniedMessage, PROJECT_GLOBAL_ADMIN_FIELDS, SONG_CONTENT_FIELDS,
   parseCommentSession, commentSessionFor, commentAuthorRole, canModifyComment,
-  scrubActivityPayload,
+  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow,
 } from './access.mjs';
 // 每個 cue 時物件在哪裡（管理頁和分享連結共用同一份計算）
 import { buildCueStates } from './cueStates.mjs';
@@ -47,20 +47,35 @@ import {
   sanitizeComment, commentToRow, rowToComment, commentPatch,
   MAX_COMMENTS_PER_SONG, COMMENT_ID_RE,
 } from './comments.mjs';
+// 歌曲影片版本（純判斷：代號對歌、版本號、連結、權限、播放通行證）
+import {
+  normalizeSongCodeInput, nextSongCode, fillMissingSongCodes, songCodeTakenBy, matchSongByFilename,
+  videoMimeFor, extForMime, isDriveVideoFile, driveSourceRev, unsupportedFormatMessage, planDriveVersions, driveVersionKey,
+  planParts, expectedPartSize, missingParts, nextCopyPart, UPLOAD_PART_SIZE, copyPartSize, MIB,
+  versionLabel, videoMaxBytes, formatBytes, VIDEO_TITLE_MAX, VIDEO_NOTE_MAX,
+  videoUploadDecision, videoModifyDecision,
+  classifyVideoLink, interpretProbe,
+  signVideoPass, verifyVideoPass, parseRangeHeader,
+} from './videos.mjs';
 
 const MAX_COMMENTS_PER_SESSION = 500;
 const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
+    if (ctx) execCtxByRequest.set(request, ctx);
     const response = await routeRequest(request, env);
     return applyCorsToResponse(response, request);
   },
 
-  // Cron Trigger（每 5 分鐘掃所有有 drive_folder_id 的 project 同步檔案）
+  // Cron Trigger（每 5 分鐘）：
+  //   1. 掃所有有 drive_folder_id 的 project 同步檔案（新的 / 改過的影片會排進複製）
+  //   2. 接著複製等著的影片（貼連結 / Drive）到 R2
+  //   3. 清掉上傳到一半就放著不管的
   async scheduled(_event, env, ctx) {
     if (!env.DB) return;
+    const syncs = [];
     try {
       const r = await env.DB.prepare(
         `SELECT id FROM projects
@@ -70,16 +85,33 @@ export default {
             AND drive_oauth_token_id IS NOT NULL`
       ).all();
       for (const row of (r.results || [])) {
-        // 用 ctx.waitUntil 讓多個 sync 並行（每個 5s 上限避免拖太久）
-        ctx.waitUntil(driveSyncProjectInternal(env, row.id, 'cron').catch(e => {
+        // 多個 sync 並行
+        syncs.push(driveSyncProjectInternal(env, row.id, 'cron').catch(e => {
           console.error('[cron sync]', row.id, e?.message || e);
         }));
       }
     } catch (e) {
       console.error('[cron]', e?.message || e);
     }
+    ctx.waitUntil((async () => {
+      await Promise.allSettled(syncs);
+      // Drive 同步也用掉幾次對外請求 → 複製能用的次數扣掉一些
+      const step = { ...VIDEO_CRON_STEP, maxFetches: Math.max(5, VIDEO_CRON_STEP.maxFetches - syncs.length * 4) };
+      await runVideoCopyJobs(env, step).catch(e => console.error('[cron video copy]', e?.message || e));
+      await cleanupStaleVideoUploads(env).catch(e => console.error('[cron video cleanup]', e?.message || e));
+    })());
   }
 };
+
+// 這個請求的 ExecutionContext（回應送出後還要做的事用 waitUntil，例如影片複製）
+const execCtxByRequest = new WeakMap();
+
+/** 回應送出後繼續做（最多 30 秒）；本機測試沒有 ctx 時就直接在背景跑 */
+function runInBackground(request, promise) {
+  const p = Promise.resolve(promise).catch(e => console.error('[background]', e?.message || e));
+  const c = request && execCtxByRequest.get(request);
+  if (c?.waitUntil) c.waitUntil(p);
+}
 
 // 把 response 的 CORS header 依「從哪個網站來」調整：
 // - 自己的網站（origins.mjs 的清單：previz.haimiaan.com、test.previz…、stage-previz.vercel.app、Vercel 預覽、本機）
@@ -176,6 +208,12 @@ async function routeRequest(request, env) {
     const tid = url.pathname.replace('/api/cue-templates/', '');
     return deleteCueTemplate(request, env, tid);
   }
+  // 歌曲影片播放（成員）：/api/videos/:videoId/stream?pass=<通行證>
+  if (url.pathname.startsWith('/api/videos/') && (request.method === 'GET' || request.method === 'HEAD')) {
+    const parts = url.pathname.split('/').filter(Boolean);  // [api, videos, id, stream]
+    if (parts.length === 4 && parts[3] === 'stream') return handleMemberVideoStream(request, env, url, parts[2]);
+    return jsonResp({ error: 'Not found' }, 404);
+  }
   if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
     return handleProjectsRouter(request, env, url);
   }
@@ -208,6 +246,7 @@ async function routeRequest(request, env) {
 //   /api/projects/:id/stage-objects[/:objId|seed-defaults|bulk]
 //   /api/projects/:id/model[/use-asset|/versions[/activate|/:ts.glb]]
 //   /api/projects/:id/songs[/reorder|/:songId[/import-cues|/cues[/reorder|/:cueId[/reset|/states[/:objId]]]]]
+//   /api/projects/:id/songs/:songId/videos[/uploads|/link|/:videoId[/parts/:n|/complete|/abort|/retry|/stream]]
 //   /api/projects/:id/activity | duplicate | restore | export | cue-templates | drive/... | share-links[/:token]
 async function handleProjectsRouter(request, env, url) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
@@ -231,7 +270,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -249,6 +288,7 @@ async function handleProjectsRouter(request, env, url) {
     if (route.songId && !ctx.song) return jsonResp({ error: '這個專案裡找不到這首歌' }, 404);
     if (route.cueId && !ctx.cueFound) return jsonResp({ error: '這首歌裡找不到這個 cue' }, 404);
     if (route.objId && !ctx.objFound) return jsonResp({ error: '這個專案裡找不到這個物件' }, 404);
+    if (route.videoId && !ctx.video) return jsonResp({ error: '這首歌裡找不到這一版影片' }, 404);
 
     return await dispatchProjectRoute(request, env, url, ctx, route, segs);
   } catch (e) {
@@ -270,8 +310,16 @@ async function loadProjectContext(env, me, projectId, route) {
   if (route.songId) {
     at.song = stmts.length;
     stmts.push(env.DB.prepare(
-      `SELECT id, name, status, animator_user_id FROM songs WHERE id = ? AND project_id = ? LIMIT 1`
+      `SELECT id, name, status, animator_user_id, code FROM songs WHERE id = ? AND project_id = ? LIMIT 1`
     ).bind(route.songId, projectId));
+  }
+  if (route.videoId) {
+    at.video = stmts.length;
+    stmts.push(env.DB.prepare(
+      `SELECT v.*, u.name AS created_by_name
+         FROM song_videos v LEFT JOIN users u ON u.id = v.created_by
+        WHERE v.id = ? AND v.song_id = ? AND v.project_id = ? AND v.deleted_at IS NULL LIMIT 1`
+    ).bind(route.videoId, route.songId, projectId));
   }
   if (route.cueId) {
     at.cue = stmts.length;
@@ -298,6 +346,7 @@ async function loadProjectContext(env, me, projectId, route) {
     song: first(at.song),
     cueFound: !!first(at.cue),
     objFound: !!first(at.obj),
+    video: first(at.video),
   };
 }
 
@@ -328,6 +377,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'model.deleteVersion':   return deleteModelVersion(request, env, projectId, segs[5]);
 
     case 'activity':              return listActivity(env, projectId, url.searchParams.get('limit') || '50');
+    case 'comments.summary':      return commentsSummary(env, ctx);
     case 'duplicate':             return duplicateProject(request, env, projectId);
     case 'restore':               return restoreProject(request, env, projectId);
     case 'export':                return exportProject(request, env, projectId);
@@ -346,6 +396,21 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'songs.patch':           return updateSong(request, env, ctx, songId);
     case 'songs.delete':          return deleteSong(request, env, projectId, songId);
     case 'songs.importCues':      return importCuesFromSong(request, env, projectId, songId);
+
+    case 'videos.list':           return listSongVideos(request, env, ctx);
+    case 'videos.get':            return getSongVideo(request, env, ctx);
+    case 'videos.createUpload':   return createVideoUpload(request, env, ctx);
+    case 'videos.link':           return createVideoFromLink(request, env, ctx);
+    case 'videos.part':           return uploadVideoPart(request, env, ctx, route.partNumber);
+    case 'videos.complete':       return completeVideoUpload(request, env, ctx);
+    case 'videos.abort':          return abortSongVideo(request, env, ctx);
+    case 'videos.retry':          return retrySongVideo(request, env, ctx);
+    case 'videos.patch':          return patchSongVideo(request, env, ctx);
+    case 'videos.delete':         return deleteSongVideo(request, env, ctx);
+    case 'videos.stream':
+      return ctx.video.status === 'ready'
+        ? serveR2Video(request, env, ctx.video)
+        : jsonResp({ error: '這一版還不能播（還在上傳 / 複製，或失敗了）' }, 404);
 
     case 'cues.list':             return listCues(env, songId);
     case 'cues.create':           return createCue(request, env, projectId, songId);
@@ -800,9 +865,9 @@ async function duplicateProject(request, env, projectId) {
     const newSongId = 's_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + songStmts.length;
     songIdMap.set(s.id, newSongId);
     songStmts.push(env.DB.prepare(`
-      INSERT INTO songs (id, project_id, name, "order", animator_user_id, drive_folder_id, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(newSongId, newId, s.name, s.order, s.animator_user_id, s.drive_folder_id, s.status));
+      INSERT INTO songs (id, project_id, name, "order", animator_user_id, drive_folder_id, status, code)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(newSongId, newId, s.name, s.order, s.animator_user_id, s.drive_folder_id, s.status, s.code ?? null));
   }
   if (songStmts.length > 0) await env.DB.batch(songStmts);
 
@@ -1102,15 +1167,23 @@ async function importProject(request, env) {
   // songs
   const songIdMap = new Map();
   const songStmts = [];
+  const importedCodes = [];
   for (const s of (body.songs || [])) {
     const newSongId = 's_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + songStmts.length;
     songIdMap.set(s.id, newSongId);
+    // 代號：匯出檔有、格式對、這次匯入裡沒重複才用；其他的匯入完再補
+    let code = null;
+    if (s.code) {
+      const c = normalizeSongCodeInput(s.code);
+      if (!c.error && !songCodeTakenBy(c.code, importedCodes)) { code = c.code; importedCodes.push({ id: newSongId, code }); }
+    }
     songStmts.push(env.DB.prepare(`
-      INSERT INTO songs (id, project_id, name, "order", animator_user_id, drive_folder_id, status)
-      VALUES (?, ?, ?, ?, NULL, ?, ?)
-    `).bind(newSongId, newId, s.name, s.order, s.drive_folder_id, s.status || 'todo'));
+      INSERT INTO songs (id, project_id, name, "order", animator_user_id, drive_folder_id, status, code)
+      VALUES (?, ?, ?, ?, NULL, ?, ?, ?)
+    `).bind(newSongId, newId, s.name, s.order, s.drive_folder_id, s.status || 'todo', code));
   }
   if (songStmts.length > 0) await env.DB.batch(songStmts);
+  if (songStmts.length > 0) await ensureSongCodes(env, newId);
 
   // cues
   const cueIdMap = new Map();
@@ -1321,20 +1394,31 @@ async function deleteShow(env, showId) {
 const SONG_NAME_MAX = 80;
 
 async function listSongs(env, projectId) {
-  const r = await env.DB.prepare(`
-    SELECT s.id, s.name, s."order", s.animator_user_id, s.status, s.created_at,
+  const query = () => env.DB.prepare(`
+    SELECT s.id, s.name, s."order", s.animator_user_id, s.status, s.created_at, s.code,
       (SELECT COUNT(*) FROM cues c WHERE c.song_id = s.id AND c.status = 'master') AS cue_count,
       (SELECT COUNT(*) FROM cues c WHERE c.song_id = s.id AND c.status = 'proposal') AS proposal_count
     FROM songs s
     WHERE s.project_id = ?
     ORDER BY s."order" ASC, s.created_at ASC
   `).bind(projectId).all();
+  let r = await query();
+  // 舊版建的 / 匯入的歌沒有代號 → 補上
+  if ((r.results || []).some(s => !s.code)) {
+    await ensureSongCodes(env, projectId);
+    r = await query();
+  }
+  const latest = await latestReadyVideos(env, projectId);
 
   return jsonResp({ songs: (r.results || []).map(s => ({
     id: s.id, name: s.name, order: s.order,
+    code: s.code || null,
     animatorUserId: s.animator_user_id, status: s.status,
     createdAt: s.created_at,
     cueCount: s.cue_count, proposalCount: s.proposal_count,
+    // 最新可以播的影片版本（沒有 = null）；版本清單：GET /songs/:id/videos
+    latestVideoId: latest.get(s.id)?.id || null,
+    latestVideoVersion: latest.get(s.id)?.version ?? null,
   })) });
 }
 
@@ -1344,6 +1428,14 @@ async function createSong(request, env, projectId) {
   const name = (body?.name || '').toString().trim().slice(0, SONG_NAME_MAX);
   if (!name) return jsonResp({ error: 'name is required' }, 400);
 
+  // 歌曲代號（Drive 檔名開頭用它對歌）：有給就檢查，沒給就接在最大的 S 號碼後面
+  let wantCode = null;
+  if (body?.code !== undefined && body?.code !== null && body?.code !== '') {
+    const c = normalizeSongCodeInput(body.code);
+    if (c.error) return jsonResp({ error: c.error }, 400);
+    wantCode = c.code;
+  }
+
   // 找最大 order + 1
   const maxRow = await env.DB.prepare(
     `SELECT COALESCE(MAX("order"), -1) AS max_order FROM songs WHERE project_id = ?`
@@ -1351,14 +1443,31 @@ async function createSong(request, env, projectId) {
   const order = (maxRow?.max_order ?? -1) + 1;
 
   const id = 's_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  await env.DB.prepare(
-    `INSERT INTO songs (id, project_id, name, "order") VALUES (?, ?, ?, ?)`
-  ).bind(id, projectId, name, order).run();
+  let code = null;
+  for (let attempt = 0; attempt < 3 && !code; attempt++) {
+    const existing = (await env.DB.prepare(`SELECT id, name, code FROM songs WHERE project_id = ?`).bind(projectId).all()).results || [];
+    if (wantCode) {
+      const taken = songCodeTakenBy(wantCode, existing);
+      if (taken) return jsonResp({ error: `代號 ${wantCode} 已經是「${taken.name}」在用了`, codeTaken: true }, 409);
+    }
+    const tryCode = wantCode || nextSongCode(existing.map(s => s.code));
+    try {
+      await env.DB.prepare(
+        `INSERT INTO songs (id, project_id, name, "order", code) VALUES (?, ?, ?, ?, ?)`
+      ).bind(id, projectId, name, order, tryCode).run();
+      code = tryCode;
+    } catch (e) {
+      // 同時有人建歌搶到同一個代號 → 再挑一次
+      if (!isUniqueError(e)) throw e;
+      if (wantCode) return jsonResp({ error: `代號 ${wantCode} 已經被用了`, codeTaken: true }, 409);
+    }
+  }
+  if (!code) return jsonResp({ error: '建立歌曲失敗（代號一直撞到），請再試一次' }, 409);
 
   // touch project updated_at
   await env.DB.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).bind(projectId).run();
-  await logActivity(request, env, projectId, 'create', 'song', id, { name });
-  return jsonResp({ ok: true, id, order }, 201);
+  await logActivity(request, env, projectId, 'create', 'song', id, { name, code });
+  return jsonResp({ ok: true, id, order, code }, 201);
 }
 
 async function getSong(env, projectId, songId) {
@@ -1381,7 +1490,7 @@ async function updateSong(request, env, ctx, songId) {
 
   const touchesContent = SONG_CONTENT_FIELDS.some(k => k in body);
   if (touchesContent && !canEditProjectContent(role)) {
-    return jsonResp({ error: '只有 admin 可以改歌名、順序、指派或 Drive 資料夾' }, 403);
+    return jsonResp({ error: '只有 admin 可以改歌名、代號、順序、指派或 Drive 資料夾' }, 403);
   }
 
   const sets = [], values = [];
@@ -1396,14 +1505,29 @@ async function updateSong(request, env, ctx, songId) {
     sets.push('"order" = ?'); values.push(n);
   }
   if ('animator_user_id' in body) {
+    // 只能指派「這個專案的動畫師」（不然可以把別的專案、甚至不相干的人指派進來）
     const uid = body.animator_user_id;
-    if (uid === null || uid === '') { sets.push('animator_user_id = ?'); values.push(null); }
-    else {
-      if (typeof uid !== 'string' || !ID_RE.test(uid)) return jsonResp({ error: '指派的動畫師不合法' }, 400);
-      const u = await env.DB.prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`).bind(uid).first();
-      if (!u) return jsonResp({ error: '找不到這位動畫師' }, 400);
-      sets.push('animator_user_id = ?'); values.push(uid);
+    let memberRole = null;
+    if (typeof uid === 'string' && uid && ID_RE.test(uid)) {
+      const m = await env.DB.prepare(
+        `SELECT role FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
+      ).bind(projectId, uid).first();
+      memberRole = m?.role ?? null;
     }
+    const d = animatorAssignmentDecision(uid, memberRole);
+    if (!d.ok) return jsonResp({ error: d.error }, d.status);
+    sets.push('animator_user_id = ?'); values.push(d.clear ? null : uid);
+  }
+  if ('code' in body) {
+    // 歌曲代號：Drive 資料夾裡檔名開頭是這個代號的影片會對到這首歌（S1 和 S01 算同一個）
+    const c = normalizeSongCodeInput(body.code);
+    if (c.error) return jsonResp({ error: c.error }, 400);
+    const others = (await env.DB.prepare(
+      `SELECT id, name, code FROM songs WHERE project_id = ? AND id != ?`
+    ).bind(projectId, songId).all()).results || [];
+    const taken = songCodeTakenBy(c.code, others);
+    if (taken) return jsonResp({ error: `代號 ${c.code} 已經是「${taken.name}」在用了`, codeTaken: true }, 409);
+    sets.push('code = ?'); values.push(c.code);
   }
   if ('drive_folder_id' in body) {
     const f = body.drive_folder_id;
@@ -1437,7 +1561,13 @@ async function updateSong(request, env, ctx, songId) {
   const where = statusChange ? 'id = ? AND project_id = ? AND status = ?' : 'id = ? AND project_id = ?';
   values.push(songId, projectId);
   if (statusChange) values.push(statusChange.from);
-  const result = await env.DB.prepare(`UPDATE songs SET ${sets.join(', ')} WHERE ${where}`).bind(...values).run();
+  let result;
+  try {
+    result = await env.DB.prepare(`UPDATE songs SET ${sets.join(', ')} WHERE ${where}`).bind(...values).run();
+  } catch (e) {
+    if (isUniqueError(e)) return jsonResp({ error: '這個代號剛剛被別首歌用了，請換一個', codeTaken: true }, 409);
+    throw e;
+  }
   if (!result.meta.changes) {
     if (statusChange) {
       const now = await env.DB.prepare(`SELECT status FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
@@ -1459,8 +1589,13 @@ async function updateSong(request, env, ctx, songId) {
 
 async function deleteSong(request, env, projectId, songId) {
   const before = await env.DB.prepare(`SELECT name FROM songs WHERE id = ? AND project_id = ? LIMIT 1`).bind(songId, projectId).first();
+  const videoFiles = (await env.DB.prepare(
+    `SELECT r2_key, upload_id FROM song_videos WHERE song_id = ? AND project_id = ?`
+  ).bind(songId, projectId).all()).results || [];
   const result = await env.DB.prepare(`DELETE FROM songs WHERE id = ? AND project_id = ?`).bind(songId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  // 歌的影片版本跟著歌一起刪（資料庫那邊 ON DELETE CASCADE），R2 的檔案也清掉
+  if (videoFiles.length) runInBackground(request, cleanupSongVideoFiles(env, videoFiles));
   await logActivity(request, env, projectId, 'delete', 'song', songId, { name: before?.name });
   return jsonResp({ ok: true });
 }
@@ -2483,6 +2618,27 @@ async function resolveCommentThread(env, me, session) {
     archived: pick.project_status === 'archived',
     role: projectRoleOf(me.role, pick.member_role),
   };
+}
+
+// GET /api/projects/:id/comments/summary — 每首歌幾則留言、最新一則（工作站一次拿全部算未讀，不用一首一首抓）
+//   沒有留言的歌也列（count 0）；「別人留的」= 不是我留的（舊資料沒記作者 id 的也算別人）
+async function commentsSummary(env, ctx) {
+  const r = await env.DB.prepare(`
+    SELECT s.id AS song_id,
+           COUNT(c.id) AS count,
+           SUM(CASE WHEN c.status = 'open' THEN 1 ELSE 0 END) AS open_count,
+           MAX(c.created_at) AS latest_at,
+           (SELECT c2.id FROM comments c2 WHERE c2.song_id = s.id
+             ORDER BY c2.created_at DESC, c2.rowid DESC LIMIT 1) AS latest_id,
+           SUM(CASE WHEN c.id IS NOT NULL AND (c.author_user_id IS NULL OR c.author_user_id != ?) THEN 1 ELSE 0 END) AS others_count,
+           MAX(CASE WHEN c.author_user_id IS NULL OR c.author_user_id != ? THEN c.created_at END) AS others_latest_at
+      FROM songs s
+      LEFT JOIN comments c ON c.song_id = s.id
+     WHERE s.project_id = ?
+     GROUP BY s.id
+     ORDER BY s."order", s.created_at
+  `).bind(ctx.me.id, ctx.me.id, ctx.projectId).all();
+  return jsonResp({ songs: (r.results || []).map(commentSummaryRow), generatedAt: new Date().toISOString() });
 }
 
 async function listThreadComments(env, songId) {
@@ -3742,6 +3898,8 @@ async function driveSyncProject(request, env, projectId, triggeredBy) {
   if (!me) return jsonResp({ error: '未登入' }, 401);
   try {
     const stats = await driveSyncProjectInternal(env, projectId, triggeredBy);
+    // 有新的影片要複製 → 這個請求做完後順便做一輪（其他的排程 / 畫面查進度時接著做）
+    if (stats.versionsQueued) runInBackground(request, runVideoCopyJobs(env, { projectId, ...videoRequestStep(env) }));
     return jsonResp({ ok: true, ...stats });
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
@@ -3759,12 +3917,6 @@ async function driveSyncProjectInternal(env, projectId, triggeredBy) {
   if (!proj.drive_folder_id) throw new Error('Project has no drive_folder_id');
   if (!proj.drive_oauth_token_id) throw new Error('Project has no drive_oauth_token_id');
 
-  const pattern = proj.drive_filename_pattern || '^S(\\d+)_';
-
-  let regex;
-  try { regex = new RegExp(pattern); }
-  catch (e) { throw new Error('Invalid filename pattern: ' + e.message); }
-
   // 列 folder 內所有非 trashed 檔案（pageSize=1000，超過再分頁）
   const q = `'${proj.drive_folder_id.replace(/'/g, "\\'")}' in parents and trashed = false`;
   let pageToken = null;
@@ -3774,24 +3926,20 @@ async function driveSyncProjectInternal(env, projectId, triggeredBy) {
     const data = await driveApiGet(env, proj.drive_oauth_token_id, '/files', {
       q,
       pageSize: '1000',
-      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime,size,thumbnailLink,webViewLink,webContentLink,iconLink)',
+      fields: 'nextPageToken, files(id,name,mimeType,modifiedTime,size,md5Checksum,videoMediaMetadata,thumbnailLink,webViewLink,webContentLink,iconLink)',
       orderBy: 'modifiedTime desc',
       ...(pageToken ? { pageToken } : {}),
     });
-    for (const f of (data.files || [])) all.push(f);
+    // 只收影片檔（圖片、文件、資料夾不列）
+    for (const f of (data.files || [])) if (isDriveVideoFile(f)) all.push(f);
     pageToken = data.nextPageToken || null;
     pages++;
     if (pages > 5) break; // safety: 5000 檔上限
   } while (pageToken);
 
-  // 列 project 的歌（依 order）→ 按 pattern.match 結果分發
-  const songsR = await env.DB.prepare(
-    `SELECT id, "order" FROM songs WHERE project_id = ? ORDER BY "order"`
-  ).bind(projectId).all();
-  const songsByOrder = new Map();
-  for (const s of (songsR.results || [])) songsByOrder.set(Number(s.order) + 1, s.id);
-  // 也支援 1-based song.order：很多人習慣 song.order 從 0 開始，但 S03 對應 order=2
-  // 為了相容兩者，下面分配時兩個都嘗試
+  // 用歌曲固定代號對歌：檔名開頭 S01_ / S01- / S01 空白 → 代號 S01 的歌（不再看歌單第幾首，歌換順序不會對錯）
+  // 舊專案的代號是照當時的順序補的（S03 = 第 3 首），所以已經同步過的檔案還是對到同一首
+  const songs = await ensureSongCodes(env, projectId);
 
   // 既有的 drive_files（key 為 drive_file_id）→ 用來判斷新增/更新/移除
   const existingR = await env.DB.prepare(
@@ -3803,24 +3951,21 @@ async function driveSyncProjectInternal(env, projectId, triggeredBy) {
   let classified = 0, unclassified = 0;
   const seenDriveIds = new Set();
   const stmts = [];
+  const filesForVersions = [];  // [{ file, songId }] → 新的 / 改過的會建一版影片
 
   for (const f of all) {
     seenDriveIds.add(f.id);
-    let songId = null;
-    const m = regex.exec(f.name);
-    if (m && m[1]) {
-      const num = parseInt(m[1], 10);
-      // 嘗試 1-based 然後 0-based
-      songId = songsByOrder.get(num) || songsByOrder.get(num + 1) || null;
-    }
-    if (songId) classified++;
-    else unclassified++;
+    let songId = matchSongByFilename(f.name, songs);
 
     const existing = existingByDriveId.get(f.id);
-    // 如果用戶手動 assign 過，保留他的 song_id（不要被 pattern 蓋掉）
+    // 如果用戶手動 assign 過，保留他的 song_id（不要被代號蓋掉）
     if (existing && existing.classified_by === 'manual') {
       songId = existing.song_id;
     }
+    // 對不到的留在「未分類」（song_id = NULL），不掛到任何一首歌
+    if (songId) classified++;
+    else unclassified++;
+    filesForVersions.push({ file: f, songId });
 
     const thumbnail = f.thumbnailLink || null;
     const viewUrl = f.webViewLink || null;
@@ -3863,6 +4008,14 @@ async function driveSyncProjectInternal(env, projectId, triggeredBy) {
     await env.DB.batch(stmts.slice(i, i + BATCH));
   }
 
+  // 新的 / 內容改過的影片 → 建一版、複製到 R2（之後播放走 R2，不經過 Google）
+  let versionsQueued = 0;
+  try {
+    versionsQueued = await queueDriveVideoVersions(env, proj, filesForVersions);
+  } catch (e) {
+    console.error('[drive sync versions]', projectId, e?.message || e);
+  }
+
   const dur = Date.now() - t0;
   const logId = 'dsl_' + randHex(8);
   await env.DB.prepare(`
@@ -3871,7 +4024,7 @@ async function driveSyncProjectInternal(env, projectId, triggeredBy) {
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).bind(logId, projectId, triggeredBy, all.length, classified, unclassified, dur).run();
 
-  return { filesFound: all.length, classified, unclassified, durationMs: dur };
+  return { filesFound: all.length, classified, unclassified, versionsQueued, durationMs: dur };
 }
 
 // ── Stream proxy（給導演 video player 用）──
@@ -3927,6 +4080,911 @@ async function driveStreamFile(request, env, fid) {
   }
   if (!passHeaders.has('content-type') && f.mime_type) passHeaders.set('content-type', f.mime_type);
   return new Response(upstream.body, { status: upstream.status, headers: passHeaders });
+}
+
+// ─────────────────────────────────────────────
+// 歌曲影片版本（V1、V2…，檔案一律放我們的 R2，播放不經過 Google）
+//   API 文件：docs/videos-api.md；純判斷（版本號、連結、代號對歌、權限）在 videos.mjs
+//
+//   上傳：瀏覽器分段（每段 16 MiB）→ 後台一段一段轉給 R2 分段上傳 → 完成時給版本號
+//   貼連結 / Drive 同步：後台一段一段（每段 32 MiB）從來源抓、放進 R2。一輪最多做十幾秒，
+//     接著做的時機：貼連結的那個請求做完之後、畫面查進度（GET 清單 / 單一版本）時、排程每 5 分鐘
+//     （Cloudflare 一個請求做完後最多再跑 30 秒、免費方案一次最多 50 個對外請求 → 不能一次複製完大檔）
+//   播放：/api/videos/:id/stream?pass=<通行證>（<video src> 帶不了登入 header），支援 Range
+// ─────────────────────────────────────────────
+
+const VIDEO_COPY_LEASE_EXTRA_MS = 30_000;
+const VIDEO_COPY_MAX_STALLS = 8;
+const VIDEO_STALE_UPLOAD_MS = 2 * 86400_000;
+// 請求順便複製一輪（waitUntil 最多 30 秒）；VIDEO_COPY_STEP_FETCHES 可以改一輪抓幾段（測試用）
+const VIDEO_REQUEST_STEP = { budgetMs: 15_000, maxFetches: 10 };
+function videoRequestStep(env) {
+  const n = Number(env?.VIDEO_COPY_STEP_FETCHES);
+  return { ...VIDEO_REQUEST_STEP, ...(Number.isInteger(n) && n >= 1 && n <= 40 ? { maxFetches: n } : {}) };
+}
+// 排程每 5 分鐘一次：做 3 分多鐘、最多 40 次對外請求（免費方案一次最多 50；每個 Drive 同步再扣 4 次）
+const VIDEO_CRON_STEP = { budgetMs: 200_000, maxFetches: 40, allowLongSingle: true };
+// 不能分段的來源：請求裡最多一次抓 150 MB，再大的交給排程（排程最多可以跑 15 分鐘）
+const VIDEO_SINGLE_IN_REQUEST_MAX = 150 * MIB;
+const VIDEO_FETCH_UA = 'Mozilla/5.0 (compatible; StagePrevizVideoCopy/1.0)';
+const VIDEO_SELF_HOSTS = ['proxy.haimiaan.com'];
+
+const nowIso = () => new Date().toISOString();
+
+class VideoCopyFatal extends Error {}
+
+function videoR2Key(projectId, songId, videoId, mime) {
+  return `videos/${projectId}/${songId}/${videoId}.${extForMime(mime)}`;
+}
+function cleanVideoText(v, max) { return typeof v === 'string' ? v.trim().slice(0, max) : ''; }
+function cleanVideoDim(v) { const n = Number(v); return Number.isInteger(n) && n > 0 && n <= 20000 ? n : null; }
+function cleanVideoDuration(v) { const n = Number(v); return Number.isFinite(n) && n > 0 && n <= 86400 ? Math.round(n * 1000) / 1000 : null; }
+function titleFromFilename(name) { return String(name || '').replace(/\.[A-Za-z0-9]{1,8}$/, '').trim().slice(0, VIDEO_TITLE_MAX); }
+function isUniqueError(e) { return /UNIQUE constraint failed/i.test(String(e?.message || e)); }
+
+async function memberVideoStreamUrl(env, videoId, userId) {
+  const pass = await signVideoPass(getAuthSecret(env), { videoId, userId });
+  return `/api/videos/${encodeURIComponent(videoId)}/stream?pass=${encodeURIComponent(pass)}`;
+}
+
+function videoUploadInfo(v, partNumbers) {
+  const partCount = Math.max(1, Math.ceil((v.size_bytes || 0) / (v.part_size || UPLOAD_PART_SIZE)));
+  return {
+    partSize: v.part_size,
+    partCount,
+    uploadedParts: [...partNumbers].map(Number).sort((a, b) => a - b),
+    maxConcurrency: 3,
+  };
+}
+
+// 成員看到的一版影片
+function videoToApi(v, { streamUrl = null, latestId = null, upload = null } = {}) {
+  const inFlight = v.status === 'uploading' || v.status === 'processing';
+  return {
+    id: v.id,
+    projectId: v.project_id,
+    songId: v.song_id,
+    version: v.version ?? null,
+    label: versionLabel(v.version),
+    title: v.title || '',
+    note: v.note || '',
+    source: v.source,
+    originalUrl: v.original_url || null,
+    driveFileId: v.drive_file_id || null,
+    mime: v.mime,
+    sizeBytes: v.size_bytes ?? null,
+    width: v.width ?? null,
+    height: v.height ?? null,
+    durationSec: v.duration_sec ?? null,
+    status: v.status,
+    error: v.error || null,
+    progress: inFlight ? { bytesDone: v.bytes_done || 0, totalBytes: v.size_bytes ?? null } : null,
+    createdBy: v.created_by ? { id: v.created_by, name: v.created_by_name || null } : null,
+    createdAt: v.created_at,
+    updatedAt: v.updated_at,
+    readyAt: v.ready_at || null,
+    isLatest: !!latestId && v.id === latestId,
+    streamUrl: v.status === 'ready' ? streamUrl : null,
+    ...(upload ? { upload } : {}),
+  };
+}
+
+// 分享連結看到的一版影片（不給說明、誰交的、原始連結）
+function videoToShareApi(v, streamUrl) {
+  return {
+    id: v.id,
+    songId: v.song_id,
+    version: v.version,
+    label: versionLabel(v.version),
+    title: v.title || '',
+    mime: v.mime,
+    sizeBytes: v.size_bytes ?? null,
+    width: v.width ?? null,
+    height: v.height ?? null,
+    durationSec: v.duration_sec ?? null,
+    createdAt: v.created_at,
+    readyAt: v.ready_at || null,
+    streamUrl,
+  };
+}
+
+// 每首歌最新的可播版本：Map(songId → row)
+async function latestReadyVideos(env, projectId) {
+  const r = await env.DB.prepare(`
+    SELECT v.* FROM song_videos v
+     WHERE v.project_id = ? AND v.status = 'ready' AND v.deleted_at IS NULL
+       AND v.version = (SELECT MAX(v2.version) FROM song_videos v2
+                         WHERE v2.song_id = v.song_id AND v2.status = 'ready' AND v2.deleted_at IS NULL)
+  `).bind(projectId).all();
+  const map = new Map();
+  for (const row of (r.results || [])) map.set(row.song_id, row);
+  return map;
+}
+
+// 沒有代號的歌依順序補上（新專案 / 匯入的 / 舊版建的歌），回傳 [{ id, name, code }]（依歌單順序）
+async function ensureSongCodes(env, projectId) {
+  const q = () => env.DB.prepare(
+    `SELECT id, name, code FROM songs WHERE project_id = ? ORDER BY "order", created_at, id`
+  ).bind(projectId).all();
+  const songs = (await q()).results || [];
+  const fill = fillMissingSongCodes(songs);
+  if (!fill.length) return songs;
+  try {
+    await env.DB.batch(fill.map(f => env.DB.prepare(
+      `UPDATE songs SET code = ? WHERE id = ? AND project_id = ? AND code IS NULL`
+    ).bind(f.code, f.id, projectId)));
+  } catch (e) {
+    // 同時有別的請求在補 → 撞號整批取消，下次再補
+    console.warn('[ensureSongCodes]', e?.message || e);
+  }
+  return (await q()).results || [];
+}
+
+// 畫面在看的歌如果有閒著的複製工作 → 這個請求做完後順便做一輪
+function nudgeVideoCopies(request, env, rows, filter = {}) {
+  const now = Date.now();
+  const idle = (rows || []).some(v => v.status === 'processing' && !v.deleted_at
+    && (!v.lease_until || v.lease_until < now)
+    && !(v.copy_mode === 'single' && (v.size_bytes || 0) > VIDEO_SINGLE_IN_REQUEST_MAX));
+  if (idle) runInBackground(request, runVideoCopyJobs(env, { ...filter, ...videoRequestStep(env) }));
+}
+
+// ── 清單 / 單一版本 ──
+
+async function listSongVideos(request, env, ctx) {
+  const { projectId, song, me } = ctx;
+  const r = await env.DB.prepare(`
+    SELECT v.*, u.name AS created_by_name
+      FROM song_videos v LEFT JOIN users u ON u.id = v.created_by
+     WHERE v.project_id = ? AND v.song_id = ? AND v.deleted_at IS NULL
+     ORDER BY (v.version IS NULL) DESC, v.version DESC, v.created_at DESC
+  `).bind(projectId, song.id).all();
+  const rows = r.results || [];
+  const latest = rows.filter(v => v.status === 'ready').sort((a, b) => b.version - a.version)[0] || null;
+  const videos = [];
+  for (const v of rows) {
+    const streamUrl = v.status === 'ready' ? await memberVideoStreamUrl(env, v.id, me.id) : null;
+    videos.push(videoToApi(v, { streamUrl, latestId: latest?.id }));
+  }
+  nudgeVideoCopies(request, env, rows, { songId: song.id });
+  return jsonResp({ videos, latestVideoId: latest?.id || null, songCode: song.code || null });
+}
+
+async function songVideoResponse(env, ctx, v, status = 200, extra = {}) {
+  const fresh = await env.DB.prepare(
+    `SELECT v.*, u.name AS created_by_name FROM song_videos v LEFT JOIN users u ON u.id = v.created_by WHERE v.id = ? LIMIT 1`
+  ).bind(v.id).first();
+  const row = fresh || v;
+  let upload = null;
+  if (row.status === 'uploading') {
+    const pr = await env.DB.prepare(`SELECT part_number FROM song_video_parts WHERE video_id = ?`).bind(row.id).all();
+    upload = videoUploadInfo(row, (pr.results || []).map(p => p.part_number));
+  }
+  let latestId = null;
+  if (row.status === 'ready') {
+    const l = await env.DB.prepare(
+      `SELECT id FROM song_videos WHERE song_id = ? AND status = 'ready' AND deleted_at IS NULL ORDER BY version DESC LIMIT 1`
+    ).bind(row.song_id).first();
+    latestId = l?.id || null;
+  }
+  const streamUrl = row.status === 'ready' ? await memberVideoStreamUrl(env, row.id, ctx.me.id) : null;
+  return jsonResp({ video: videoToApi(row, { streamUrl, latestId, upload }), ...extra }, status);
+}
+
+async function getSongVideo(request, env, ctx) {
+  nudgeVideoCopies(request, env, [ctx.video], { videoId: ctx.video.id });
+  return songVideoResponse(env, ctx, ctx.video);
+}
+
+// ── 上傳（分段）──
+
+async function createVideoUpload(request, env, ctx) {
+  const { me, projectId, song, role } = ctx;
+  const d = videoUploadDecision({ role, userId: me.id, song });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const filename = cleanVideoText(body?.filename, 255);
+  const size = Number(body?.sizeBytes);
+  const maxBytes = videoMaxBytes(env);
+  if (!Number.isInteger(size) || size <= 0) return jsonResp({ error: '檔案大小不正確' }, 400);
+  if (size > maxBytes) {
+    return jsonResp({ error: `檔案太大（${formatBytes(size)}），上限是 ${formatBytes(maxBytes)}`, maxBytes }, 413);
+  }
+  const mime = videoMimeFor({ mime: body?.mime, filename });
+  if (!mime) return jsonResp({ error: unsupportedFormatMessage(filename, body?.mime) }, 415);
+  const plan = planParts(size, UPLOAD_PART_SIZE);
+  if (!plan.ok) return jsonResp({ error: plan.error }, 400);
+
+  const id = 'sv_' + randHex(8);
+  const key = videoR2Key(projectId, song.id, id, mime);
+  const mpu = await env.MODELS.createMultipartUpload(key, {
+    httpMetadata: { contentType: mime },
+    customMetadata: { videoId: id, songId: song.id, projectId },
+  });
+  const t = nowIso();
+  await env.DB.prepare(`
+    INSERT INTO song_videos (id, project_id, song_id, title, note, source, r2_key, mime, size_bytes,
+                             width, height, duration_sec, status, upload_id, part_size, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'upload', ?, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?, ?, ?)
+  `).bind(
+    id, projectId, song.id,
+    cleanVideoText(body?.title, VIDEO_TITLE_MAX) || titleFromFilename(filename),
+    cleanVideoText(body?.note, VIDEO_NOTE_MAX),
+    key, mime, size,
+    cleanVideoDim(body?.width), cleanVideoDim(body?.height), cleanVideoDuration(body?.durationSec),
+    mpu.uploadId, plan.partSize, me.id, t, t,
+  ).run();
+  return songVideoResponse(env, ctx, { id }, 201);
+}
+
+async function uploadVideoPart(request, env, ctx, partNumberRaw) {
+  const { me, song, role, video: v } = ctx;
+  const d = videoModifyDecision({ role, userId: me.id, song, video: v });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  if (v.status !== 'uploading' || !v.upload_id) {
+    return jsonResp({ error: '這一版已經不在上傳中（可能已經完成或取消了）', status: v.status }, 409);
+  }
+  const plan = planParts(v.size_bytes, v.part_size);
+  const n = Number(partNumberRaw);
+  if (!Number.isInteger(n) || n < 1 || n > plan.partCount) {
+    return jsonResp({ error: `段數不對（這個檔案是第 1 到第 ${plan.partCount} 段）` }, 400);
+  }
+  const expected = expectedPartSize(v.size_bytes, v.part_size, n);
+  const lenHeader = request.headers.get('content-length');
+  const len = lenHeader === null ? NaN : Number(lenHeader);
+  if (len !== expected || !request.body) {
+    return jsonResp({ error: `第 ${n} 段應該是 ${expected} bytes，收到 ${Number.isFinite(len) ? len : '不知道多少'} bytes`, expectedBytes: expected }, 400);
+  }
+  const mpu = env.MODELS.resumeMultipartUpload(v.r2_key, v.upload_id);
+  let part;
+  try {
+    part = await mpu.uploadPart(n, request.body);
+  } catch (e) {
+    return jsonResp({ error: `第 ${n} 段沒有傳成功，請重傳這一段（${String(e?.message || e).slice(0, 120)}）` }, 502);
+  }
+  const t = nowIso();
+  const results = await env.DB.batch([
+    env.DB.prepare(
+      `INSERT OR REPLACE INTO song_video_parts (video_id, part_number, etag, size_bytes) VALUES (?, ?, ?, ?)`
+    ).bind(v.id, n, part.etag, expected),
+    env.DB.prepare(
+      `UPDATE song_videos SET bytes_done = (SELECT COALESCE(SUM(size_bytes), 0) FROM song_video_parts WHERE video_id = ?), updated_at = ?
+        WHERE id = ? AND status = 'uploading'`
+    ).bind(v.id, t, v.id),
+    env.DB.prepare(`SELECT bytes_done FROM song_videos WHERE id = ?`).bind(v.id),
+  ]);
+  const bytesDone = results[2]?.results?.[0]?.bytes_done ?? null;
+  return jsonResp({ ok: true, partNumber: n, etag: part.etag, bytesDone, totalBytes: v.size_bytes });
+}
+
+// 所有段都好了 → R2 合併 → 檢查大小 → 給版本號（上傳完成和後台複製完成共用）
+async function completeVideoMultipart(env, v, request = null, meta = {}) {
+  const pr = await env.DB.prepare(
+    `SELECT part_number, etag, size_bytes FROM song_video_parts WHERE video_id = ? ORDER BY part_number`
+  ).bind(v.id).all();
+  const parts = pr.results || [];
+  const plan = planParts(v.size_bytes, v.part_size);
+  const missing = missingParts(plan.partCount, parts.map(p => p.part_number));
+  if (missing.length) return { ok: false, status: 409, error: `還有 ${missing.length} 段沒傳完`, missingParts: missing.slice(0, 100) };
+  for (const p of parts) {
+    if (p.size_bytes !== expectedPartSize(v.size_bytes, v.part_size, p.part_number)) {
+      return { ok: false, status: 409, error: `第 ${p.part_number} 段大小不對，請重傳這一段`, missingParts: [p.part_number] };
+    }
+  }
+  const mpu = env.MODELS.resumeMultipartUpload(v.r2_key, v.upload_id);
+  let obj;
+  try {
+    obj = await mpu.complete(parts.map(p => ({ partNumber: p.part_number, etag: p.etag })));
+  } catch (e) {
+    // 同時按了兩次完成：另一個已經合併好了
+    const now = await env.DB.prepare(`SELECT status, version FROM song_videos WHERE id = ? LIMIT 1`).bind(v.id).first();
+    if (now?.status === 'ready') return { ok: true, version: now.version };
+    return { ok: false, status: 502, error: `合併檔案失敗，請再按一次完成（${String(e?.message || e).slice(0, 120)}）` };
+  }
+  if (obj?.size !== v.size_bytes) {
+    try { await env.MODELS.delete(v.r2_key); } catch { /* ignore */ }
+    await failSongVideo(env, v, `合併後的檔案大小不對（應該 ${v.size_bytes}，結果 ${obj?.size}），請重新交一次`);
+    return { ok: false, status: 500, error: '合併後的檔案大小不對，請重新交一次' };
+  }
+  const row = await finalizeVideoReady(env, v, request, meta);
+  return { ok: true, version: row?.version ?? null };
+}
+
+// 給版本號 + 標成可以播（同一個交易：歌的計數 +1、這一版拿到號碼；號碼只增不減，刪掉的也不會再用）
+async function finalizeVideoReady(env, v, request = null, meta = {}) {
+  const t = nowIso();
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE songs
+         SET video_version_seq = MAX(video_version_seq, (SELECT COALESCE(MAX(version), 0) FROM song_videos WHERE song_id = ?)) + 1
+       WHERE id = ? AND EXISTS (SELECT 1 FROM song_videos WHERE id = ? AND version IS NULL
+                                  AND status IN ('uploading', 'processing') AND deleted_at IS NULL)
+    `).bind(v.song_id, v.song_id, v.id),
+    env.DB.prepare(`
+      UPDATE song_videos
+         SET version = (SELECT video_version_seq FROM songs WHERE id = ?), status = 'ready', ready_at = ?, updated_at = ?,
+             error = NULL, upload_id = NULL, lease_until = NULL, stall_count = 0, bytes_done = COALESCE(size_bytes, bytes_done),
+             copy_url = CASE WHEN copy_kind = 'url' THEN NULL ELSE copy_url END,
+             width = COALESCE(?, width), height = COALESCE(?, height), duration_sec = COALESCE(?, duration_sec)
+       WHERE id = ? AND version IS NULL AND status IN ('uploading', 'processing') AND deleted_at IS NULL
+    `).bind(v.song_id, t, t, meta.width ?? null, meta.height ?? null, meta.durationSec ?? null, v.id),
+    env.DB.prepare(`DELETE FROM song_video_parts WHERE video_id = ?`).bind(v.id),
+    env.DB.prepare(`UPDATE projects SET updated_at = datetime('now') WHERE id = ?`).bind(v.project_id),
+  ]);
+  const row = await env.DB.prepare(`SELECT version, status FROM song_videos WHERE id = ? LIMIT 1`).bind(v.id).first();
+  if (row?.status === 'ready') {
+    await logActivity(request, env, v.project_id, 'create', 'song_video', v.id, {
+      songId: v.song_id, version: row.version, label: versionLabel(row.version), source: v.source, title: v.title,
+      createdBy: v.created_by || null,
+    });
+  }
+  return row;
+}
+
+async function failSongVideo(env, v, message) {
+  // 重新讀 upload_id（這一輪中途才開的分段上傳也要取消）
+  const cur = await env.DB.prepare(`SELECT r2_key, upload_id FROM song_videos WHERE id = ? LIMIT 1`).bind(v.id).first();
+  if (cur?.upload_id) {
+    try { await env.MODELS.resumeMultipartUpload(cur.r2_key, cur.upload_id).abort(); } catch { /* 已經沒了 */ }
+  }
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE song_videos SET status = 'failed', error = ?, upload_id = NULL, lease_until = NULL, updated_at = ?
+       WHERE id = ? AND status IN ('uploading', 'processing')
+    `).bind(String(message).slice(0, 500), nowIso(), v.id),
+    env.DB.prepare(`DELETE FROM song_video_parts WHERE video_id = ?`).bind(v.id),
+  ]);
+}
+
+async function completeVideoUpload(request, env, ctx) {
+  const { me, song, role, video: v } = ctx;
+  const d = videoModifyDecision({ role, userId: me.id, song, video: v });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  if (v.status === 'ready') return songVideoResponse(env, ctx, v);  // 按了兩次
+  if (v.status !== 'uploading' || !v.upload_id) return jsonResp({ error: '這一版不在上傳中', status: v.status }, 409);
+  let body = {};
+  try { body = await request.json(); } catch { /* 沒帶也可以 */ }
+  const r = await completeVideoMultipart(env, v, request, {
+    width: cleanVideoDim(body?.width), height: cleanVideoDim(body?.height), durationSec: cleanVideoDuration(body?.durationSec),
+  });
+  if (!r.ok) return jsonResp({ error: r.error, ...(r.missingParts ? { missingParts: r.missingParts } : {}) }, r.status);
+  return songVideoResponse(env, ctx, v);
+}
+
+// 取消上傳 / 複製（還沒好的才能取消；好了的請用刪除）
+async function abortSongVideo(request, env, ctx) {
+  const { me, song, role, video: v } = ctx;
+  const d = videoModifyDecision({ role, userId: me.id, song, video: v });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  if (v.status !== 'uploading' && v.status !== 'processing') {
+    return jsonResp({ error: v.status === 'ready' ? '這一版已經好了；不要的話請用「刪除」' : '這一版已經停了', status: v.status }, 409);
+  }
+  await cancelAndHideVideo(env, v, '已取消');
+  return jsonResp({ ok: true });
+}
+
+async function cancelAndHideVideo(env, v, reason) {
+  if (v.upload_id) {
+    try { await env.MODELS.resumeMultipartUpload(v.r2_key, v.upload_id).abort(); } catch { /* ignore */ }
+  }
+  const t = nowIso();
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE song_videos
+         SET deleted_at = ?, updated_at = ?, lease_until = NULL, upload_id = NULL,
+             status = CASE WHEN status IN ('uploading', 'processing') THEN 'failed' ELSE status END,
+             error = CASE WHEN status IN ('uploading', 'processing') THEN ? ELSE error END
+       WHERE id = ? AND deleted_at IS NULL
+    `).bind(t, t, reason, v.id),
+    env.DB.prepare(`DELETE FROM song_video_parts WHERE video_id = ?`).bind(v.id),
+  ]);
+}
+
+async function patchSongVideo(request, env, ctx) {
+  const { me, song, role, video: v } = ctx;
+  const d = videoModifyDecision({ role, userId: me.id, song, video: v });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
+  const sets = [], values = [];
+  if ('title' in body) { sets.push('title = ?'); values.push(cleanVideoText(body.title, VIDEO_TITLE_MAX)); }
+  if ('note' in body) { sets.push('note = ?'); values.push(cleanVideoText(body.note, VIDEO_NOTE_MAX)); }
+  if ('width' in body) { sets.push('width = ?'); values.push(cleanVideoDim(body.width)); }
+  if ('height' in body) { sets.push('height = ?'); values.push(cleanVideoDim(body.height)); }
+  if ('durationSec' in body) { sets.push('duration_sec = ?'); values.push(cleanVideoDuration(body.durationSec)); }
+  if (!sets.length) return jsonResp({ error: '沒有可以改的欄位（title / note / width / height / durationSec）' }, 400);
+  sets.push('updated_at = ?'); values.push(nowIso());
+  await env.DB.prepare(`UPDATE song_videos SET ${sets.join(', ')} WHERE id = ? AND deleted_at IS NULL`).bind(...values, v.id).run();
+  return songVideoResponse(env, ctx, v);
+}
+
+// 刪掉一版：從清單拿掉（R2 的檔案留著，之後可以救回來）；號碼不會再用。還沒好的會順便取消
+async function deleteSongVideo(request, env, ctx) {
+  const { me, song, role, video: v } = ctx;
+  const d = videoModifyDecision({ role, userId: me.id, song, video: v });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  await cancelAndHideVideo(env, v, '已取消');
+  await logActivity(request, env, ctx.projectId, 'delete', 'song_video', v.id, {
+    songId: v.song_id, version: v.version, label: versionLabel(v.version), title: v.title,
+  });
+  return jsonResp({ ok: true });
+}
+
+// 複製失敗 → 重試（格式不支援 / 太大的不能重試）
+async function retrySongVideo(request, env, ctx) {
+  const { me, song, role, video: v } = ctx;
+  const d = videoModifyDecision({ role, userId: me.id, song, video: v });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  if (v.status !== 'failed' || !v.copy_kind || !v.r2_key) {
+    return jsonResp({ error: v.status === 'failed' ? '這一版沒辦法重試（格式不支援或檔案太大），請換一個檔案' : '這一版沒有失敗，不用重試', status: v.status }, 409);
+  }
+  await env.DB.batch([
+    env.DB.prepare(`
+      UPDATE song_videos SET status = 'processing', error = NULL, stall_count = 0, bytes_done = 0, lease_until = NULL,
+                             upload_id = NULL, updated_at = ?,
+                             copy_token_id = CASE WHEN copy_kind = 'drive_api' THEN COALESCE(
+                               (SELECT id FROM oauth_tokens WHERE id = song_videos.copy_token_id),
+                               (SELECT drive_oauth_token_id FROM projects WHERE id = song_videos.project_id),
+                               copy_token_id) ELSE copy_token_id END
+       WHERE id = ? AND status = 'failed' AND deleted_at IS NULL
+    `).bind(nowIso(), v.id),
+    env.DB.prepare(`DELETE FROM song_video_parts WHERE video_id = ?`).bind(v.id),
+  ]);
+  runInBackground(request, runVideoCopyJobs(env, { videoId: v.id, ...videoRequestStep(env) }));
+  return songVideoResponse(env, ctx, v, 202);
+}
+
+// ── 貼連結 ──
+
+async function driveFileMeta(env, tokenId, fileId, resourceKey) {
+  const at = await driveGetAccessToken(env, tokenId);
+  const headers = { Authorization: `Bearer ${at}` };
+  if (resourceKey) headers['X-Goog-Drive-Resource-Keys'] = `${fileId}/${resourceKey}`;
+  const params = new URLSearchParams({
+    fields: 'id,name,mimeType,size,md5Checksum,modifiedTime,videoMediaMetadata,parents,ownedByMe',
+    supportsAllDrives: 'true',
+  });
+  const r = await fetch(`${DRIVE_FILES_FETCH}/${encodeURIComponent(fileId)}?${params}`, { headers });
+  let data = null;
+  try { data = await r.json(); } catch { /* ignore */ }
+  return { ok: r.ok, status: r.status, data };
+}
+
+async function probeVideoUrl(downloadUrl, kind, filenameHint, maxBytes, extra = {}) {
+  let resp;
+  try {
+    resp = await fetch(downloadUrl, { headers: { Range: 'bytes=0-0', 'User-Agent': VIDEO_FETCH_UA }, redirect: 'follow' });
+  } catch (e) {
+    console.warn('[video probe]', String(e?.message || e).slice(0, 200));
+    return { ok: false, error: '連不到來源網站，請確認連結打得開，或稍後再試' };
+  }
+  const headers = {};
+  for (const k of ['content-type', 'content-range', 'content-length', 'content-disposition']) headers[k] = resp.headers.get(k);
+  try { await resp.body?.cancel(); } catch { /* ignore */ }
+  let hint = filenameHint;
+  if (!hint) { try { hint = decodeURIComponent(new URL(resp.url || downloadUrl).pathname.split('/').pop() || ''); } catch { hint = ''; } }
+  const p = interpretProbe({ status: resp.status, headers, kind, filenameHint: hint, maxBytes });
+  if (!p.ok) return p;
+  return { ok: true, copyKind: 'url', copyUrl: downloadUrl, mime: p.mime, size: p.size, rangeSupported: p.rangeSupported, filename: p.filename, ...extra };
+}
+
+// 貼的連結 → 實際去哪裡抓、多大、什麼格式（先試抓一下，不行就馬上回清楚的錯誤）
+async function resolveVideoLinkSource(env, ctx, cls) {
+  const maxBytes = videoMaxBytes(env);
+  if (cls.kind !== 'drive') return probeVideoUrl(cls.downloadUrl, cls.kind, cls.filenameHint, maxBytes);
+
+  const proj = await env.DB.prepare(
+    `SELECT drive_folder_id, drive_oauth_token_id FROM projects WHERE id = ? LIMIT 1`
+  ).bind(ctx.projectId).first();
+  // 連接的 Google 帳號：專案綁的那個優先，沒有就用最近用過的
+  const tok = await env.DB.prepare(
+    `SELECT id FROM oauth_tokens WHERE provider = 'google' ORDER BY (id = ?) DESC, last_used_at DESC LIMIT 1`
+  ).bind(proj?.drive_oauth_token_id || '').first();
+  if (tok) {
+    let meta = null;
+    try { meta = await driveFileMeta(env, tok.id, cls.fileId, cls.resourceKey); } catch (e) { console.warn('[drive meta]', e?.message || e); }
+    if (meta?.ok && meta.data) {
+      const f = meta.data;
+      if (String(f.mimeType || '').startsWith('application/vnd.google-apps.')) {
+        return { ok: false, error: '這是 Google 文件 / 資料夾，不是影片檔' };
+      }
+      // 連接的帳號自己的檔案（不在這個專案的 Drive 資料夾裡）只有 admin 能拿 → 不讓別人用連結把 admin 的私人影片抓出來
+      const inProjectFolder = !!proj?.drive_folder_id && (f.parents || []).includes(proj.drive_folder_id);
+      if (ctx.role === 'admin' || !f.ownedByMe || inProjectFolder) {
+        const p = interpretProbe({
+          status: 206, kind: 'drive', filenameHint: f.name, knownMime: f.mimeType, maxBytes,
+          headers: { 'content-type': f.mimeType || null, 'content-range': f.size ? `bytes 0-0/${f.size}` : null },
+        });
+        if (!p.ok) return p;
+        const vm = f.videoMediaMetadata || {};
+        return {
+          ok: true, copyKind: 'drive_api', copyTokenId: tok.id, copyUrl: cls.resourceKey || null, driveFileId: f.id,
+          mime: p.mime, size: p.size, rangeSupported: true, filename: f.name || '',
+          width: cleanVideoDim(vm.width), height: cleanVideoDim(vm.height),
+          durationSec: vm.durationMillis ? cleanVideoDuration(Number(vm.durationMillis) / 1000) : null,
+          sourceRev: driveSourceRev(f),
+        };
+      }
+    }
+  }
+  // 公開檔案（「知道連結的使用者都能查看」）→ 直接下載
+  const pub = `https://drive.usercontent.google.com/download?id=${encodeURIComponent(cls.fileId)}&export=download&confirm=t`
+    + (cls.resourceKey ? `&resourcekey=${encodeURIComponent(cls.resourceKey)}` : '');
+  return probeVideoUrl(pub, 'drive', '', maxBytes, { driveFileId: cls.fileId });
+}
+
+async function createVideoFromLink(request, env, ctx) {
+  const { me, projectId, song, role } = ctx;
+  const d = videoUploadDecision({ role, userId: me.id, song });
+  if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const cls = classifyVideoLink(body?.url, { selfHosts: [...VIDEO_SELF_HOSTS, new URL(request.url).hostname] });
+  if (!cls.ok) return jsonResp({ error: cls.error }, 400);
+
+  // 同一個連結剛剛貼過、還在複製 → 回那一版（按兩次不會變兩版）
+  const dup = await env.DB.prepare(
+    `SELECT id FROM song_videos WHERE song_id = ? AND original_url = ? AND status = 'processing' AND deleted_at IS NULL LIMIT 1`
+  ).bind(song.id, cls.url).first();
+  if (dup) return songVideoResponse(env, ctx, dup, 200, { duplicate: true });
+
+  const src = await resolveVideoLinkSource(env, ctx, cls);
+  if (!src.ok) return jsonResp({ error: src.error }, src.status || 422);
+
+  const id = 'sv_' + randHex(8);
+  const key = videoR2Key(projectId, song.id, id, src.mime);
+  const plan = planParts(src.size, copyPartSize(env));
+  const t = nowIso();
+  await env.DB.prepare(`
+    INSERT INTO song_videos (id, project_id, song_id, title, note, source, original_url, drive_file_id, source_rev,
+                             r2_key, mime, size_bytes, width, height, duration_sec, status, part_size,
+                             copy_kind, copy_url, copy_token_id, copy_mode, created_by, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'link', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'processing', ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    id, projectId, song.id,
+    cleanVideoText(body?.title, VIDEO_TITLE_MAX) || titleFromFilename(src.filename),
+    cleanVideoText(body?.note, VIDEO_NOTE_MAX),
+    cls.url, src.driveFileId || null, src.sourceRev || null,
+    key, src.mime, src.size, src.width ?? null, src.height ?? null, src.durationSec ?? null,
+    plan.partSize, src.copyKind, src.copyUrl ?? null, src.copyTokenId ?? null, src.rangeSupported ? 'range' : 'single',
+    me.id, t, t,
+  ).run();
+  runInBackground(request, runVideoCopyJobs(env, { videoId: id, ...videoRequestStep(env) }));
+  return songVideoResponse(env, ctx, { id }, 202);
+}
+
+// ── 後台複製（貼連結 / Drive 同步）──
+
+async function fetchVideoSource(env, v, range = null) {
+  const headers = {};
+  if (range) headers.Range = `bytes=${range.start}-${range.end}`;
+  if (v.copy_kind === 'drive_api') {
+    let at;
+    try {
+      at = await driveGetAccessToken(env, v.copy_token_id);
+    } catch (e) {
+      if (/OAuth token not found/i.test(String(e?.message))) {
+        throw new VideoCopyFatal('連接的 Google 帳號被移除了：請 admin 重新連接 Google 帳號後按「重試」');
+      }
+      throw e;
+    }
+    headers.Authorization = `Bearer ${at}`;
+    if (v.copy_url) headers['X-Goog-Drive-Resource-Keys'] = `${v.drive_file_id}/${v.copy_url}`;
+    return fetch(`${DRIVE_FILES_FETCH}/${encodeURIComponent(v.drive_file_id)}?alt=media&supportsAllDrives=true`, { headers });
+  }
+  headers['User-Agent'] = VIDEO_FETCH_UA;
+  return fetch(v.copy_url, { headers, redirect: 'follow' });
+}
+
+function sourceFailure(v, status, fetches) {
+  const kind = v.copy_kind === 'drive_api' ? 'drive' : 'direct';
+  if ([401, 403, 404, 410].includes(status)) {
+    const p = interpretProbe({ status, headers: {}, kind });
+    return Object.assign(new VideoCopyFatal(`來源檔案打不開了：${p.error}`), { fetches });
+  }
+  return Object.assign(new Error(`來源網站回應 HTTP ${status}`), { fetches });
+}
+
+async function copyVideoRanges(env, v, { t0, budgetMs, maxFetches }) {
+  let uploadId = v.upload_id;
+  if (!uploadId) {
+    const mpu = await env.MODELS.createMultipartUpload(v.r2_key, {
+      httpMetadata: { contentType: v.mime },
+      customMetadata: { videoId: v.id, songId: v.song_id, projectId: v.project_id },
+    });
+    uploadId = mpu.uploadId;
+    await env.DB.prepare(`UPDATE song_videos SET upload_id = ? WHERE id = ?`).bind(uploadId, v.id).run();
+    v = { ...v, upload_id: uploadId };
+  }
+  const mpu = env.MODELS.resumeMultipartUpload(v.r2_key, uploadId);
+  const pr = await env.DB.prepare(`SELECT part_number FROM song_video_parts WHERE video_id = ?`).bind(v.id).all();
+  const done = new Set((pr.results || []).map(p => p.part_number));
+  let fetches = 0;
+  for (;;) {
+    const next = nextCopyPart({ size: v.size_bytes, partSize: v.part_size, doneParts: done });
+    if (!next) break;
+    if (fetches >= maxFetches || Date.now() - t0 > budgetMs) break;
+    fetches++;
+    const resp = await fetchVideoSource(env, v, next);
+    if (resp.status !== 206) {
+      try { await resp.body?.cancel(); } catch { /* ignore */ }
+      if (resp.status === 200) {
+        // 來源不給分段了 → 改成一次複製（下一輪做）
+        try { await mpu.abort(); } catch { /* ignore */ }
+        await env.DB.batch([
+          env.DB.prepare(`UPDATE song_videos SET copy_mode = 'single', upload_id = NULL, bytes_done = 0, lease_until = NULL WHERE id = ?`).bind(v.id),
+          env.DB.prepare(`DELETE FROM song_video_parts WHERE video_id = ?`).bind(v.id),
+        ]);
+        return { fetches };
+      }
+      throw sourceFailure(v, resp.status, fetches);
+    }
+    const cr = resp.headers.get('content-range') || '';
+    const m = /^bytes (\d+)-(\d+)\//.exec(cr);
+    if (!m || Number(m[1]) !== next.start || Number(m[2]) !== next.end) {
+      try { await resp.body?.cancel(); } catch { /* ignore */ }
+      throw Object.assign(new Error(`來源給的範圍不對（要 ${next.start}-${next.end}，給 ${cr || '沒寫'}）`), { fetches });
+    }
+    const len = Number(resp.headers.get('content-length'));
+    let payload = resp.body;
+    if (len !== next.length) {
+      payload = await resp.arrayBuffer();
+      if (payload.byteLength !== next.length) throw Object.assign(new Error('這一段的大小不對'), { fetches });
+    }
+    const part = await mpu.uploadPart(next.partNumber, payload);
+    done.add(next.partNumber);
+    const results = await env.DB.batch([
+      env.DB.prepare(
+        `INSERT OR REPLACE INTO song_video_parts (video_id, part_number, etag, size_bytes) VALUES (?, ?, ?, ?)`
+      ).bind(v.id, next.partNumber, part.etag, next.length),
+      env.DB.prepare(`
+        UPDATE song_videos
+           SET bytes_done = (SELECT COALESCE(SUM(size_bytes), 0) FROM song_video_parts WHERE video_id = ?),
+               stall_count = 0, error = NULL, lease_until = ?, updated_at = ?
+         WHERE id = ? AND status = 'processing' AND deleted_at IS NULL
+      `).bind(v.id, Date.now() + budgetMs + VIDEO_COPY_LEASE_EXTRA_MS, nowIso(), v.id),
+    ]);
+    if (!results[1]?.meta?.changes) return { fetches, cancelled: true };  // 中途被取消 / 刪掉
+  }
+  if (!nextCopyPart({ size: v.size_bytes, partSize: v.part_size, doneParts: done })) {
+    const r = await completeVideoMultipart(env, v);
+    if (!r.ok) throw Object.assign(new Error(r.error), { fetches });
+    return { fetches, ready: true };
+  }
+  await env.DB.prepare(`UPDATE song_videos SET lease_until = NULL WHERE id = ? AND status = 'processing'`).bind(v.id).run();
+  return { fetches };
+}
+
+async function copyVideoSingle(env, v) {
+  const resp = await fetchVideoSource(env, v, null);
+  if (!resp.ok) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    throw sourceFailure(v, resp.status, 1);
+  }
+  const lenHeader = resp.headers.get('content-length');
+  const len = lenHeader === null ? null : Number(lenHeader);
+  if (len !== null && len !== v.size_bytes) {
+    try { await resp.body?.cancel(); } catch { /* ignore */ }
+    throw Object.assign(new VideoCopyFatal(`來源檔案大小變了（原本 ${formatBytes(v.size_bytes)}，現在 ${formatBytes(len)}），請重新貼一次連結`), { fetches: 1 });
+  }
+  let payload = resp.body;
+  if (len === null) {
+    // 來源沒說多大 → 用貼連結時量到的大小，不對就失敗
+    const { readable, writable } = new FixedLengthStream(v.size_bytes);
+    resp.body.pipeTo(writable).catch(() => { /* put 會失敗 */ });
+    payload = readable;
+  }
+  const obj = await env.MODELS.put(v.r2_key, payload, { httpMetadata: { contentType: v.mime } });
+  if (obj?.size !== v.size_bytes) throw Object.assign(new Error('複製後的大小不對'), { fetches: 1 });
+  await finalizeVideoReady(env, v);
+  return { fetches: 1, ready: true };
+}
+
+// 複製一輪：先搶到「這一輪我在做」（lease），做到時間 / 次數用完就放手，下次接著做
+async function runVideoCopyStep(env, videoId, { budgetMs, maxFetches, allowLongSingle = false }) {
+  const t0 = Date.now();
+  const head = await env.DB.prepare(
+    `SELECT copy_mode, size_bytes FROM song_videos WHERE id = ? AND status = 'processing' AND deleted_at IS NULL LIMIT 1`
+  ).bind(videoId).first();
+  if (!head) return { fetches: 0, skipped: true };
+  const single = head.copy_mode === 'single';
+  if (single && !allowLongSingle && (head.size_bytes || 0) > VIDEO_SINGLE_IN_REQUEST_MAX) return { fetches: 0, skipped: true };
+  const leaseMs = single ? (allowLongSingle ? 16 * 60_000 : 45_000) : budgetMs + VIDEO_COPY_LEASE_EXTRA_MS;
+  const got = await env.DB.prepare(`
+    UPDATE song_videos SET lease_until = ?, stall_count = stall_count + 1
+     WHERE id = ? AND status = 'processing' AND deleted_at IS NULL AND (lease_until IS NULL OR lease_until < ?)
+  `).bind(t0 + leaseMs, videoId, t0).run();
+  if (!got.meta?.changes) return { fetches: 0, skipped: true };
+  const v = await env.DB.prepare(`SELECT * FROM song_videos WHERE id = ? LIMIT 1`).bind(videoId).first();
+  if (!v) return { fetches: 0, skipped: true };
+  if (v.stall_count > VIDEO_COPY_MAX_STALLS) {
+    await failSongVideo(env, v, `複製一直沒有進度（試了 ${VIDEO_COPY_MAX_STALLS} 次），來源網站可能太慢或擋住了；請稍後按「重試」，或下載後用「上傳」交`);
+    return { fetches: 0, failed: true };
+  }
+  try {
+    return single ? await copyVideoSingle(env, v) : await copyVideoRanges(env, v, { t0, budgetMs, maxFetches });
+  } catch (e) {
+    const msg = String(e?.message || e).slice(0, 300);
+    if (e instanceof VideoCopyFatal) {
+      await failSongVideo(env, v, msg);
+    } else {
+      // 這一輪對外請求次數用完（Cloudflare 的限制）不算「沒進度」
+      const limitHit = /too many subrequests/i.test(msg) ? 1 : 0;
+      await env.DB.prepare(
+        `UPDATE song_videos SET lease_until = NULL, error = ?, updated_at = ?,
+                stall_count = CASE WHEN ? = 1 THEN MAX(stall_count - 1, 0) ELSE stall_count END
+          WHERE id = ? AND status = 'processing'`
+      ).bind(limitHit ? null : `上次複製出錯（會自動重試）：${msg}`, nowIso(), limitHit, v.id).run();
+    }
+    console.warn('[video copy]', v.id, msg);
+    return { fetches: e?.fetches ?? 1, error: msg };
+  }
+}
+
+/**
+ * 做幾個等著複製的工作（照建立時間，一個做完再做下一個 → 版本號照時間排）
+ * filter：{ videoId } / { songId } / { projectId }，都沒給 = 全部
+ */
+async function runVideoCopyJobs(env, { videoId = null, songId = null, projectId = null, budgetMs, maxFetches, allowLongSingle = false } = {}) {
+  if (!env.DB || !env.MODELS) return;
+  const t0 = Date.now();
+  let fetchesLeft = maxFetches;
+  const where = ['status = \'processing\'', 'deleted_at IS NULL', '(lease_until IS NULL OR lease_until < ?)'];
+  const binds = [t0];
+  if (videoId) { where.push('id = ?'); binds.push(videoId); }
+  if (songId) { where.push('song_id = ?'); binds.push(songId); }
+  if (projectId) { where.push('project_id = ?'); binds.push(projectId); }
+  const r = await env.DB.prepare(
+    `SELECT id FROM song_videos WHERE ${where.join(' AND ')} ORDER BY created_at LIMIT 20`
+  ).bind(...binds).all();
+  for (const row of (r.results || [])) {
+    const left = budgetMs - (Date.now() - t0);
+    if (left < 3000 || fetchesLeft <= 0) break;
+    const res = await runVideoCopyStep(env, row.id, { budgetMs: left, maxFetches: fetchesLeft, allowLongSingle });
+    fetchesLeft -= res?.fetches || 0;
+  }
+}
+
+// 上傳到一半就沒再動的（超過 2 天）→ 取消，R2 的半成品清掉
+async function cleanupStaleVideoUploads(env) {
+  if (!env.DB || !env.MODELS) return;
+  const cutoff = new Date(Date.now() - VIDEO_STALE_UPLOAD_MS).toISOString();
+  const r = await env.DB.prepare(
+    `SELECT * FROM song_videos WHERE status = 'uploading' AND deleted_at IS NULL AND updated_at < ? LIMIT 20`
+  ).bind(cutoff).all();
+  for (const v of (r.results || [])) await cancelAndHideVideo(env, v, '上傳中斷超過 2 天，已自動取消');
+}
+
+// Drive 同步：新的 / 內容改過的影片 → 建一版、排進複製（不支援的格式 / 太大的也建一筆「失敗」讓人知道原因）
+// 哪些要建在 videos.mjs 的 planDriveVersions（有測試）
+async function queueDriveVideoVersions(env, proj, pairs) {
+  if (!pairs.some(p => p.songId)) return 0;
+  // 刪掉的版本也算看過（不然刪了下次同步又冒出來）；貼 Drive 連結交過的同一個檔案、同一個內容也算
+  const seenR = await env.DB.prepare(
+    `SELECT song_id, drive_file_id, source_rev FROM song_videos WHERE project_id = ? AND drive_file_id IS NOT NULL AND source_rev IS NOT NULL`
+  ).bind(proj.id).all();
+  const seen = new Set((seenR.results || []).map(r => driveVersionKey(r.song_id, r.drive_file_id, r.source_rev)));
+  const plan = planDriveVersions({ pairs, seen, maxBytes: videoMaxBytes(env) });
+  if (!plan.length) return 0;
+  const base = Date.now();
+  const partSize = copyPartSize(env);
+  const stmts = plan.map((p, i) => {
+    const id = 'sv_' + randHex(8);
+    const created = new Date(base + i).toISOString();  // 一批裡也照 Drive 時間排
+    const ok = p.status === 'processing';
+    return env.DB.prepare(`
+      INSERT INTO song_videos (id, project_id, song_id, title, source, drive_file_id, source_rev, r2_key, mime, size_bytes,
+                               width, height, duration_sec, status, error, part_size, copy_kind, copy_token_id, copy_mode,
+                               created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'drive', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'range', ?, ?)
+    `).bind(
+      id, proj.id, p.songId, titleFromFilename(p.file.name), p.file.id, p.rev,
+      p.mime ? videoR2Key(proj.id, p.songId, id, p.mime) : '',
+      p.mime || cleanVideoText(p.file.mimeType, 100) || 'application/octet-stream', p.size,
+      p.width, p.height, p.durationSec, p.status, p.error,
+      p.size ? planParts(p.size, partSize).partSize : null,
+      ok ? 'drive_api' : null, proj.drive_oauth_token_id, created, created,
+    );
+  });
+  for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  return plan.filter(p => p.status === 'processing').length;
+}
+
+// ── 播放（R2，支援 Range）──
+
+async function serveR2Video(request, env, v) {
+  if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
+  const isHead = request.method === 'HEAD';
+  const size = Number(v.size_bytes);
+  // Range 自己解析（大小資料庫有），本機和正式的 R2 行為才會一樣
+  const range = isHead ? null : parseRangeHeader(request.headers.get('range'), size);
+  if (range === 'unsatisfiable') {
+    return new Response(null, { status: 416, headers: { ...corsHeaders(), 'Content-Range': `bytes */${size}`, 'Accept-Ranges': 'bytes' } });
+  }
+  const opts = { onlyIf: request.headers };
+  if (range) opts.range = { offset: range.start, length: range.end - range.start + 1 };
+  let obj;
+  try {
+    obj = isHead ? await env.MODELS.head(v.r2_key) : await env.MODELS.get(v.r2_key, opts);
+  } catch (e) {
+    console.warn('[video stream]', v.id, String(e?.message || e).slice(0, 200));
+    return jsonResp({ error: '讀影片檔失敗，請再試一次' }, 502);
+  }
+  if (!obj) return jsonResp({ error: '找不到這個影片檔' }, 404);
+  const headers = new Headers(corsHeaders());
+  headers.set('Content-Type', v.mime || obj.httpMetadata?.contentType || 'video/mp4');
+  headers.set('Accept-Ranges', 'bytes');
+  headers.set('ETag', obj.httpEtag);
+  headers.set('Last-Modified', obj.uploaded.toUTCString());
+  // 每一版一個網址、內容永遠不變 → 瀏覽器可以一直快取（要登入才看得到 → private，CDN 不存）
+  headers.set('Cache-Control', 'private, max-age=31536000, immutable');
+  headers.set('Content-Disposition', 'inline');
+  headers.set('X-Content-Type-Options', 'nosniff');
+  if (isHead) {
+    headers.set('Content-Length', String(obj.size));
+    return new Response(null, { status: 200, headers });
+  }
+  if (!('body' in obj) || !obj.body) {
+    // If-None-Match / If-Modified-Since 對上 → 304；If-Match 對不上 → 412
+    const notModified = request.headers.has('if-none-match') || request.headers.has('if-modified-since');
+    return new Response(null, { status: notModified ? 304 : 412, headers });
+  }
+  if (range) {
+    headers.set('Content-Range', `bytes ${range.start}-${range.end}/${obj.size}`);
+    headers.set('Content-Length', String(range.end - range.start + 1));
+    return new Response(obj.body, { status: 206, headers });
+  }
+  headers.set('Content-Length', String(obj.size));
+  return new Response(obj.body, { status: 200, headers });
+}
+
+// /api/videos/:videoId/stream?pass=<通行證>（清單回的 streamUrl）；沒帶通行證也可以用登入身分
+async function handleMemberVideoStream(request, env, url, videoId) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  if (!ID_RE.test(videoId || '')) return jsonResp({ error: '找不到這一版影片' }, 404);
+  const pass = url.searchParams.get('pass');
+  let userId = pass ? await verifyVideoPass(getAuthSecret(env), pass, { videoId }) : null;
+  if (!userId) {
+    const me = await getCurrentUser(request, env);
+    userId = me?.id || null;
+  }
+  if (!userId) {
+    return jsonResp(pass
+      ? { error: '播放網址過期了，請重新整理頁面', passExpired: true }
+      : { error: '未登入' }, 401);
+  }
+  const row = await env.DB.prepare(`
+    SELECT v.id, v.r2_key, v.mime, v.size_bytes, v.status, v.deleted_at,
+           p.status AS project_status, u.role AS user_role, u.deactivated, pm.role AS member_role
+      FROM song_videos v
+      JOIN projects p ON p.id = v.project_id
+      LEFT JOIN users u ON u.id = ?
+      LEFT JOIN project_members pm ON pm.project_id = v.project_id AND pm.user_id = ?
+     WHERE v.id = ? LIMIT 1
+  `).bind(userId, userId, videoId).first();
+  if (!row || row.status !== 'ready' || row.deleted_at) return jsonResp({ error: '找不到這一版影片' }, 404);
+  if (!row.user_role || row.deactivated) return jsonResp({ error: '未登入' }, 401);
+  const role = projectRoleOf(row.user_role, row.member_role);
+  if (!role) return jsonResp({ error: '沒有權限存取此專案' }, 403);
+  if (row.project_status === 'archived' && row.user_role !== 'admin') return jsonResp({ error: '找不到這一版影片' }, 404);
+  return serveR2Video(request, env, row);
+}
+
+// 刪歌時：那首歌的影片（R2 檔案、還沒傳完的分段）一起清掉
+async function cleanupSongVideoFiles(env, rows) {
+  if (!env.MODELS) return;
+  const keys = [];
+  for (const v of rows || []) {
+    if (v.upload_id) { try { await env.MODELS.resumeMultipartUpload(v.r2_key, v.upload_id).abort(); } catch { /* ignore */ } }
+    if (v.r2_key) keys.push(v.r2_key);
+  }
+  for (let i = 0; i < keys.length; i += 500) {
+    try { await env.MODELS.delete(keys.slice(i, i + 500)); } catch (e) { console.warn('[song video cleanup]', e?.message || e); }
+  }
 }
 
 // ── HTML helper（OAuth callback 用）──
@@ -4120,10 +5178,10 @@ async function handleShareRouter(request, env, url, ref) {
 
   const segs = url.pathname.split('/').filter(Boolean);
   // [api, share|s, token|slug, ...rest]
-  const sub = segs[3] || null;        // 'data' / 'songs' / 'videos'
+  const sub = segs[3] || null;        // 'data' / 'songs' / 'videos' / 'song-videos'
   // 回給前端的影片網址用同一種開頭（用好讀網址開的人，看不到連結碼）
   const shareBase = bySlug ? `/api/s/${key}` : `/api/share/${key}`;
-  const isStream = sub === 'videos' && !!segs[4] && segs[5] === 'stream';
+  const isStream = (sub === 'videos' || sub === 'song-videos') && !!segs[4] && segs[5] === 'stream' && !segs[6];
 
   // 密碼只收 header；通行證收 header，影片串流才收網址上的 ?access=
   const provided = request.headers.get('x-share-password') || '';
@@ -4241,8 +5299,10 @@ async function handleShareRouter(request, env, url, ref) {
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
     const songsR = await env.DB.prepare(
-      `SELECT id, name, "order", status FROM songs WHERE project_id = ? ${link.song_id ? 'AND id = ?' : ''} ORDER BY "order"`
+      `SELECT id, name, "order", status, code FROM songs WHERE project_id = ? ${link.song_id ? 'AND id = ?' : ''} ORDER BY "order"`
     ).bind(...(link.song_id ? [link.project_id, link.song_id] : [link.project_id])).all();
+    // 每首歌最新的可播版本（R2）
+    const latestVideos = await latestReadyVideos(env, link.project_id);
 
     const objsR = await env.DB.prepare(
       `SELECT * FROM stage_objects WHERE project_id = ? ORDER BY "order"`
@@ -4268,7 +5328,14 @@ async function handleShareRouter(request, env, url, ref) {
     return jsonResp({
       project: { id: proj.id, name: proj.name, description: proj.description },
       modelUrl: proj.model_r2_key ? `/r2/${proj.model_r2_key}` : null,
-      songs: (songsR.results || []).map(s => ({ id: s.id, name: s.name, order: s.order, status: s.status })),
+      songs: (songsR.results || []).map(s => {
+        const lv = latestVideos.get(s.id);
+        return {
+          id: s.id, name: s.name, order: s.order, status: s.status, code: s.code || null,
+          // 最新可以播的影片版本（R2；沒有 = null）。streamUrl 已經接好通行證
+          latestVideo: lv ? videoToShareApi(lv, withAccess(`${shareBase}/song-videos/${lv.id}/stream`)) : null,
+        };
+      }),
       stageObjects,
       restrictedToSongId: link.song_id,
       scaleCorrection: proj.scale_correction ?? 1,
@@ -4288,6 +5355,7 @@ async function handleShareRouter(request, env, url, ref) {
     const cueId = segs[5] === 'cues' && segs[6] ? segs[6] : null;
     const wantStates = cueId && segs[7] === 'states' && !segs[8];
     const wantVideos = segs[5] === 'videos' && !segs[6];
+    const wantVersions = segs[5] === 'versions' && !segs[6];
     if (!songId || !/^[a-zA-Z0-9_-]{1,64}$/.test(songId)) return jsonResp({ error: 'Missing songId' }, 400);
     // 驗證 song 屬於 project / 限制 song
     if (link.song_id && link.song_id !== songId) return jsonResp({ error: 'Song not in scope' }, 403);
@@ -4329,6 +5397,15 @@ async function handleShareRouter(request, env, url, ref) {
         })),
       });
     }
+    if (wantVersions) {
+      // 分享連結只看得到最新的可播版本（R2）
+      const v = await env.DB.prepare(
+        `SELECT * FROM song_videos WHERE song_id = ? AND project_id = ? AND status = 'ready' AND deleted_at IS NULL
+          ORDER BY version DESC LIMIT 1`
+      ).bind(songId, link.project_id).first();
+      const videos = v ? [videoToShareApi(v, withAccess(`${shareBase}/song-videos/${v.id}/stream`))] : [];
+      return jsonResp({ videos, latestVideoId: v?.id || null });
+    }
     if (wantStates) {
       // 跟管理頁 / 導演頁同一份計算（loadCueStates）→ 沒改的物件一樣沿用前面 cue 的位置
       if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cueId)) return jsonResp({ error: 'Invalid cue id' }, 400);
@@ -4341,8 +5418,21 @@ async function handleShareRouter(request, env, url, ref) {
     return jsonResp({ error: 'Bad share sub-path' }, 404);
   }
 
-  // /api/share/:token/videos/:driveFileId/stream — 公開存取串流
-  if (isStream && (request.method === 'GET' || request.method === 'HEAD')) {
+  // /api/share/:token/song-videos/:videoId/stream — 歌曲影片版本（R2）
+  if (isStream && sub === 'song-videos' && (request.method === 'GET' || request.method === 'HEAD')) {
+    const videoId = segs[4];
+    if (!ID_RE.test(videoId)) return jsonResp({ error: 'Video not found' }, 404);
+    const v = await env.DB.prepare(
+      `SELECT id, project_id, song_id, r2_key, mime, size_bytes FROM song_videos
+        WHERE id = ? AND status = 'ready' AND deleted_at IS NULL LIMIT 1`
+    ).bind(videoId).first();
+    if (!v || v.project_id !== link.project_id) return jsonResp({ error: 'Video not found' }, 404);
+    if (link.song_id && link.song_id !== v.song_id) return jsonResp({ error: '不在分享範圍' }, 403);
+    return serveR2Video(request, env, v);
+  }
+
+  // /api/share/:token/videos/:driveFileId/stream — 公開存取串流（舊的 Drive 直播，之後改用 song-videos）
+  if (isStream && sub === 'videos' && (request.method === 'GET' || request.method === 'HEAD')) {
     const driveFileId = segs[4];
     if (!/^[a-zA-Z0-9_-]{1,200}$/.test(driveFileId)) return jsonResp({ error: 'Video not found' }, 404);
     // 驗 driveFileId 屬於這個分享範圍（同 project，且如有限制 song 的話也對）

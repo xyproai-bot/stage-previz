@@ -26,9 +26,16 @@ migrations_dir = "migrations"
 binding = "MODELS"
 bucket_name = "stage-previz-models"
 
-# Cron Trigger — 每 5 分鐘掃所有有 drive_folder_id 的 project 同步檔案
+# Cron Trigger — 每 5 分鐘掃所有有 drive_folder_id 的 project 同步檔案，
+#                 接著把等著的影片（貼連結 / Drive）複製到 R2、清掉放著不管的上傳
 [triggers]
 crons = ["*/5 * * * *"]
+
+# 歌曲影片版本（docs/videos-api.md）
+#   VIDEO_MAX_BYTES        單一影片上限（bytes），4 GB
+#   VIDEO_COPY_PART_BYTES  後台複製每段多大（可不填，預設 32 MiB；5 MiB～95 MiB）
+[vars]
+VIDEO_MAX_BYTES = "4294967296"
 
 # ─────────────────────────────────────────────────────────────
 # 必要 secrets（用 wrangler secret put 設，不放 toml）：

@@ -5,7 +5,7 @@ import {
   projectRoleOf, canEditProjectContent, canManageShareLinks,
   songStatusDecision, describeProjectRoute, roleMeetsNeed,
   commentSessionFor, parseCommentSession, commentAuthorRole, canModifyComment,
-  scrubActivityPayload,
+  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow,
 } from './access.mjs';
 
 const segs = (path) => path.split('/').filter(Boolean);
@@ -133,8 +133,32 @@ test('路由：分享連結 = shareManager；沒有的路徑 null；方法不對
   assert.equal(route('PUT', '/api/projects/p1/activity').methodNotAllowed, true);
 });
 
+test('路由：歌曲影片（看 = 成員；交 / 改 = videoUploader；網址上的 id 都要檢查）', () => {
+  const base = '/api/projects/p1/songs/s1/videos';
+  assert.deepEqual(route('GET', base), { kind: 'videos.list', need: 'member', songId: 's1' });
+  assert.equal(route('POST', base).methodNotAllowed, true);
+  assert.deepEqual(route('POST', `${base}/uploads`), { kind: 'videos.createUpload', need: 'videoUploader', songId: 's1' });
+  assert.equal(route('GET', `${base}/uploads`).methodNotAllowed, true);
+  assert.equal(route('POST', `${base}/link`).need, 'videoUploader');
+  assert.deepEqual(route('GET', `${base}/sv_1`), { kind: 'videos.get', need: 'member', songId: 's1', videoId: 'sv_1' });
+  assert.equal(route('PATCH', `${base}/sv_1`).kind, 'videos.patch');
+  assert.equal(route('DELETE', `${base}/sv_1`).need, 'videoUploader');
+  assert.deepEqual(route('PUT', `${base}/sv_1/parts/3`), { kind: 'videos.part', need: 'videoUploader', songId: 's1', videoId: 'sv_1', partNumber: '3' });
+  assert.equal(route('POST', `${base}/sv_1/parts/3`).methodNotAllowed, true);
+  assert.equal(route('POST', `${base}/sv_1/complete`).kind, 'videos.complete');
+  assert.equal(route('POST', `${base}/sv_1/abort`).kind, 'videos.abort');
+  assert.equal(route('POST', `${base}/sv_1/retry`).kind, 'videos.retry');
+  assert.equal(route('GET', `${base}/sv_1/complete`).methodNotAllowed, true);
+  assert.deepEqual(route('HEAD', `${base}/sv_1/stream`), { kind: 'videos.stream', need: 'member', songId: 's1', videoId: 'sv_1' });
+  assert.equal(route('GET', `${base}/sv_1/nope`), null);
+  assert.equal(route('GET', `${base}/sv_1/parts`), null);
+});
+
 test('角色 vs 需要的權限', () => {
   const as = (role, globalRole = role) => ({ role, globalRole });
+  assert.equal(roleMeetsNeed('videoUploader', as('animator')), true);
+  assert.equal(roleMeetsNeed('videoUploader', as('admin', 'director')), true);
+  assert.equal(roleMeetsNeed('videoUploader', as('director')), false);
   assert.equal(roleMeetsNeed('member', as('animator')), true);
   assert.equal(roleMeetsNeed('editor', as('animator')), false);
   assert.equal(roleMeetsNeed('editor', as('director')), false);
@@ -179,4 +203,36 @@ test('活動紀錄遮掉號碼 / 密碼', () => {
     changes: { access_code: '[已隱藏]', password: '[已隱藏]', nested: [{ refresh_token: '[已隱藏]' }], keep: 1 },
   });
   assert.equal(scrubActivityPayload(null), null);
+});
+
+test('指派動畫師：只能指派這個專案的動畫師；null / 空 = 取消指派', () => {
+  assert.deepEqual(animatorAssignmentDecision(null, null), { ok: true, clear: true });
+  assert.deepEqual(animatorAssignmentDecision('', null), { ok: true, clear: true });
+  assert.deepEqual(animatorAssignmentDecision('u_a', 'animator'), { ok: true });
+  const outsider = animatorAssignmentDecision('u_x', null);
+  assert.equal(outsider.ok, false);
+  assert.equal(outsider.status, 400);
+  assert.match(outsider.error, /不是這個專案的成員/);
+  const director = animatorAssignmentDecision('u_d', 'director');
+  assert.equal(director.status, 400);
+  assert.match(director.error, /不是動畫師/);
+  assert.equal(animatorAssignmentDecision('u_adm', 'admin').ok, false, '專案 admin 也不是動畫師');
+  assert.equal(animatorAssignmentDecision('bad id!', 'animator').status, 400);
+  assert.equal(animatorAssignmentDecision(123, 'animator').ok, false);
+});
+
+test('路由：留言摘要 = 成員都可以看；只收 GET', () => {
+  assert.deepEqual(route('GET', '/api/projects/p1/comments/summary'), { kind: 'comments.summary', need: 'member' });
+  assert.equal(route('POST', '/api/projects/p1/comments/summary').methodNotAllowed, true);
+  assert.equal(route('GET', '/api/projects/p1/comments'), null);
+  assert.equal(route('GET', '/api/projects/p1/comments/summary/x'), null);
+});
+
+test('留言摘要一列的格式', () => {
+  assert.deepEqual(commentSummaryRow({ song_id: 's1', count: 3, open_count: 2, latest_at: '2026-10-01T00:00:00Z', latest_id: 'c3', others_count: 1, others_latest_at: '2026-09-30T00:00:00Z' }), {
+    songId: 's1', count: 3, openCount: 2, latestAt: '2026-10-01T00:00:00Z', latestId: 'c3', fromOthersCount: 1, latestFromOthersAt: '2026-09-30T00:00:00Z',
+  });
+  assert.deepEqual(commentSummaryRow({ song_id: 's2', count: 0, open_count: null, latest_at: null, latest_id: null, others_count: null, others_latest_at: null }), {
+    songId: 's2', count: 0, openCount: 0, latestAt: null, latestId: null, fromOthersCount: 0, latestFromOthersAt: null,
+  });
 });

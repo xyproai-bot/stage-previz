@@ -12,7 +12,11 @@
 //   歌曲狀態                                                                  見 songStatusDecision
 //   留言：看、發、標已解決 / 重新打開                                          所有成員
 //   留言：改文字、刪除                                                         留言的人自己，或 admin
+//   留言：每首歌幾則 / 最新一則（comments/summary）                            所有成員
 //   分享連結：看清單、建立、改網址、刪除                                       admin、導演
+//   歌曲影片：看版本、播放                                                     所有成員
+//   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
+//   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
 //   只有全站 admin：建立 / 匯入 / 複製 / 封存 / 還原專案、Drive 帳號和資料夾綁定、
 //                   3D 檢視設定、專案狀態、Show 管理、用戶管理
 
@@ -131,10 +135,11 @@ export function songStatusDecision({ role, userId, song, to, expected }) {
  *   'shareManager' admin 或導演（canManageShareLinks）
  *   'songPatch'    改歌：只改狀態看 songStatusDecision，改其他欄位要 editor（handler 裡判斷）
  *   'projectPatch' 改專案：一般欄位 editor，Drive / 狀態 / 3D 檢視設定要全站 admin（handler 裡判斷）
+ *   'videoUploader' 交影片：admin 或動畫師先放行，handler 裡再看這首歌指派給誰 / 這一版是誰交的（videos.mjs）
  *
  * @param {string} method
  * @param {string[]} segs  url.pathname.split('/').filter(Boolean)
- * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, allowArchived?: boolean} | null}
+ * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, videoId?: string, partNumber?: string, allowArchived?: boolean} | null}
  *          null = 沒有這個路徑（404）或方法不對（405，見 methodNotAllowed）
  */
 export function describeProjectRoute(method, segs) {
@@ -188,6 +193,10 @@ export function describeProjectRoute(method, segs) {
 
     case 'activity':
       return read ? r('activity', 'member') : bad('activity');
+    case 'comments':
+      // 每首歌的留言數 / 最新一則（工作站一次拿全部，不用一首一首抓）
+      if (a === 'summary' && !b) return read ? r('comments.summary', 'member') : bad('comments.summary');
+      return null;
     case 'duplicate':
       return m === 'POST' ? r('duplicate', 'globalAdmin') : bad('duplicate');
     case 'restore':
@@ -222,6 +231,7 @@ export function describeProjectRoute(method, segs) {
         return bad('songs.item');
       }
       if (b === 'import-cues' && !c) return m === 'POST' ? r('songs.importCues', 'editor', { songId }) : bad('songs.importCues');
+      if (b === 'videos') return describeVideoRoute(m, read, songId, c, d, e);
       if (b !== 'cues') return null;
       if (!c) {
         if (read) return r('cues.list', 'member', { songId });
@@ -249,7 +259,40 @@ export function describeProjectRoute(method, segs) {
   }
 }
 
-/** 角色夠不夠 need（songPatch / projectPatch 先放行，handler 裡再細分） */
+// /api/projects/:id/songs/:songId/videos[...]（歌曲影片版本，API 文件在 docs/videos-api.md）
+//   GET    videos                       版本清單                 成員
+//   POST   videos/uploads               開始上傳（分段）          交影片的人
+//   POST   videos/link                  貼連結（後台複製到 R2）  交影片的人
+//   GET    videos/:videoId              單一版本（含上傳 / 複製進度） 成員
+//   PATCH  videos/:videoId              改標題 / 說明 / 長寬秒數    admin 或交這一版的人
+//   DELETE videos/:videoId              刪掉這一版（號碼不再用）    admin 或交這一版的人
+//   PUT    videos/:videoId/parts/:n     傳第 n 段                admin 或交這一版的人
+//   POST   videos/:videoId/complete     上傳完成                 admin 或交這一版的人
+//   POST   videos/:videoId/abort        取消上傳                 admin 或交這一版的人
+//   POST   videos/:videoId/retry        複製失敗重試             admin 或交這一版的人
+//   GET    videos/:videoId/stream       播放（也可以用 /api/videos/:videoId/stream?pass=） 成員
+function describeVideoRoute(m, read, songId, c, d, e) {
+  const r = (kind, need, extra = {}) => ({ kind, need, songId, ...extra });
+  const bad = (kind) => ({ kind, need: null, methodNotAllowed: true });
+  if (!c) return read ? r('videos.list', 'member') : bad('videos.list');
+  if (c === 'uploads' && !d) return m === 'POST' ? r('videos.createUpload', 'videoUploader') : bad('videos.createUpload');
+  if (c === 'link' && !d) return m === 'POST' ? r('videos.link', 'videoUploader') : bad('videos.link');
+  const videoId = c;
+  if (!d) {
+    if (read) return r('videos.get', 'member', { videoId });
+    if (m === 'PATCH') return r('videos.patch', 'videoUploader', { videoId });
+    if (m === 'DELETE') return r('videos.delete', 'videoUploader', { videoId });
+    return bad('videos.item');
+  }
+  if (d === 'parts' && e) return m === 'PUT' ? r('videos.part', 'videoUploader', { videoId, partNumber: e }) : bad('videos.part');
+  if ((d === 'complete' || d === 'abort' || d === 'retry') && !e) {
+    return m === 'POST' ? r('videos.' + d, 'videoUploader', { videoId }) : bad('videos.' + d);
+  }
+  if (d === 'stream' && !e) return read ? r('videos.stream', 'member', { videoId }) : bad('videos.stream');
+  return null;
+}
+
+/** 角色夠不夠 need（songPatch / projectPatch / videoUploader 先放行，handler 裡再細分） */
 export function roleMeetsNeed(need, { role, globalRole }) {
   if (!role) return false;
   switch (need) {
@@ -261,6 +304,8 @@ export function roleMeetsNeed(need, { role, globalRole }) {
       return canEditProjectContent(role);
     case 'shareManager':
       return canManageShareLinks(role);
+    case 'videoUploader':
+      return role === 'admin' || role === 'animator';
     case 'globalAdmin':
       return globalRole === 'admin';
     default:
@@ -276,6 +321,8 @@ export function needDeniedMessage(need) {
       return '只有 admin 可以修改專案內容';
     case 'shareManager':
       return '只有 admin 或導演可以管理分享連結';
+    case 'videoUploader':
+      return '導演可以看影片；交影片請找負責的動畫師或 admin';
     case 'globalAdmin':
       return '只有 admin 可以做這件事';
     default:
@@ -291,9 +338,25 @@ export const PROJECT_GLOBAL_ADMIN_FIELDS = [
 ];
 
 /**
+ * 指派動畫師（PATCH songs/:id 的 animator_user_id）：只能指派「這個專案的動畫師」
+ * @param {unknown} uid             body 裡的 animator_user_id（null / '' = 取消指派）
+ * @param {string|null} memberRole  這個人在這個專案的角色（project_members.role；不是成員 = null）
+ * @returns {{ok: true, clear?: boolean} | {ok: false, status: number, error: string}}
+ */
+export function animatorAssignmentDecision(uid, memberRole) {
+  if (uid === null || uid === undefined || uid === '') return { ok: true, clear: true };
+  if (typeof uid !== 'string' || !ID_RE.test(uid)) return { ok: false, status: 400, error: '指派的動畫師不合法' };
+  if (memberRole === 'animator') return { ok: true };
+  if (!memberRole) {
+    return { ok: false, status: 400, error: '這個人不是這個專案的成員，不能指派。請先把他加進專案、設成動畫師' };
+  }
+  return { ok: false, status: 400, error: '這個人在這個專案不是動畫師，不能指派。請先在成員設定把他改成動畫師' };
+}
+
+/**
  * 改歌（PATCH songs/:id）的 body 裡，除了狀態以外的欄位 → 需要 editor
  */
-export const SONG_CONTENT_FIELDS = ['name', 'order', 'animator_user_id', 'drive_folder_id'];
+export const SONG_CONTENT_FIELDS = ['name', 'order', 'animator_user_id', 'drive_folder_id', 'code'];
 
 // ─────────────────────────────────────────────
 // 留言
@@ -318,6 +381,24 @@ export function parseCommentSession(session) {
   if (!p || !s || p.length >= 28 || s.length >= 28) return null;
   if (!ID_RE.test(p) || !ID_RE.test(s)) return null;
   return { projectId: p, songId: s };
+}
+
+/**
+ * 留言摘要（GET /api/projects/:id/comments/summary）的一列 → API 格式
+ * @param {object} row  SQL 的結果（song_id, count, open_count, latest_at, latest_id, others_count, others_latest_at）
+ */
+export function commentSummaryRow(row) {
+  const n = (v) => Number(v) || 0;
+  return {
+    songId: row.song_id,
+    count: n(row.count),
+    openCount: n(row.open_count),
+    latestAt: row.latest_at || null,
+    latestId: row.latest_id || null,
+    // 別人留的（自己的留言不算未讀）
+    fromOthersCount: n(row.others_count),
+    latestFromOthersAt: row.others_latest_at || null,
+  };
 }
 
 /** 留言上顯示的身分（跟前端一樣：導演 / 動畫師 / 其他人顯示成 designer） */
