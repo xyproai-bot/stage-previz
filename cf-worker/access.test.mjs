@@ -255,3 +255,35 @@ test('留言摘要一列的格式', () => {
     songId: 's2', count: 0, openCount: 0, latestAt: null, latestId: null, fromOthersCount: 0, latestFromOthersAt: null,
   });
 });
+
+test('路由：機關（看 = 成員；新增 / 改 / 刪 / 排序 / 每個 cue 的位置 / 總表 = editor；網址上的 id 都要檢查）', () => {
+  const p = '/api/projects/p1';
+  assert.deepEqual(route('GET', `${p}/mechanisms`), { kind: 'mechanisms.list', need: 'member' });
+  assert.deepEqual(route('POST', `${p}/mechanisms`), { kind: 'mechanisms.create', need: 'editor' });
+  assert.equal(route('PUT', `${p}/mechanisms`).methodNotAllowed, true);
+  assert.deepEqual(route('POST', `${p}/mechanisms/reorder`), { kind: 'mechanisms.reorder', need: 'editor' });
+  assert.equal(route('GET', `${p}/mechanisms/reorder`).methodNotAllowed, true);
+  assert.deepEqual(route('PATCH', `${p}/mechanisms/m1`), { kind: 'mechanisms.item', need: 'editor', mechId: 'm1' });
+  assert.deepEqual(route('DELETE', `${p}/mechanisms/m1`), { kind: 'mechanisms.item', need: 'editor', mechId: 'm1' });
+  assert.equal(route('GET', `${p}/mechanisms/m1`).methodNotAllowed, true);
+  assert.deepEqual(route('POST', `${p}/mechanisms/m1/convert-cue-positions`), { kind: 'mechanisms.convert', need: 'editor', mechId: 'm1' });
+  assert.equal(route('GET', `${p}/mechanisms/m1/convert-cue-positions`).methodNotAllowed, true);
+  assert.equal(route('GET', `${p}/mechanisms/m1/nope`), null);
+  assert.deepEqual(route('GET', `${p}/mechanism-sheet`), { kind: 'mechanisms.sheet', need: 'editor' });
+  assert.equal(route('POST', `${p}/mechanism-sheet`).methodNotAllowed, true);
+  assert.equal(route('GET', `${p}/mechanism-sheet/x`), null);
+  assert.deepEqual(route('GET', `${p}/songs/s1/mechanism-positions`), { kind: 'mechPositions.list', need: 'member', songId: 's1' });
+  assert.equal(route('POST', `${p}/songs/s1/mechanism-positions`).methodNotAllowed, true);
+  assert.equal(route('GET', `${p}/songs/s1/mechanism-positions/x`), null);
+  assert.deepEqual(route('PUT', `${p}/songs/s1/cues/c1/mechanisms/m1`),
+    { kind: 'mechPositions.item', need: 'editor', songId: 's1', cueId: 'c1', mechId: 'm1' });
+  assert.deepEqual(route('DELETE', `${p}/songs/s1/cues/c1/mechanisms/m1`),
+    { kind: 'mechPositions.item', need: 'editor', songId: 's1', cueId: 'c1', mechId: 'm1' });
+  assert.equal(route('GET', `${p}/songs/s1/cues/c1/mechanisms/m1`).methodNotAllowed, true);
+  assert.equal(route('GET', `${p}/songs/s1/cues/c1/mechanisms`), null);
+  // 導演 / 動畫師看得到、改不了（403）
+  const as = (role) => ({ role, globalRole: role });
+  assert.equal(roleMeetsNeed('editor', as('director')), false);
+  assert.equal(roleMeetsNeed('editor', as('animator')), false);
+  assert.equal(roleMeetsNeed('member', as('director')), true);
+});

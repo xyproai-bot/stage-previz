@@ -22,6 +22,8 @@
 //   歌曲影片：看版本、播放                                                     所有成員
 //   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
+//   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
+//   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
 //   只有全站 admin：建立 / 匯入 / 複製 / 封存 / 還原專案、Drive 帳號和資料夾綁定、
 //                   3D 檢視設定、專案狀態、Show 管理、用戶管理、邀請連結（建立 / 清單 / 撤銷）
 //   共用模型庫（/api/assets）：看清單 = 全站 admin 或某個專案的 admin（canBrowseSharedAssets）；改 = 全站 admin
@@ -145,7 +147,7 @@ export function songStatusDecision({ role, userId, song, to, expected }) {
  *
  * @param {string} method
  * @param {string[]} segs  url.pathname.split('/').filter(Boolean)
- * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, videoId?: string, partNumber?: string, allowArchived?: boolean} | null}
+ * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, videoId?: string, partNumber?: string, mechId?: string, allowArchived?: boolean} | null}
  *          null = 沒有這個路徑（404）或方法不對（405，見 methodNotAllowed）
  */
 export function describeProjectRoute(method, segs) {
@@ -219,6 +221,27 @@ export function describeProjectRoute(method, segs) {
       return m === 'POST' ? r('restore', 'globalAdmin', { allowArchived: true }) : bad('restore');
     case 'export':
       return read ? r('export', 'editor') : bad('export');
+    // 機關（設計：docs/superpowers/specs/2026-10-14-mechanism-system-design.md；API：docs/mechanisms-api.md）
+    case 'mechanisms':
+      if (!a) {
+        if (read) return r('mechanisms.list', 'member');
+        if (m === 'POST') return r('mechanisms.create', 'editor');
+        return bad('mechanisms');
+      }
+      if (a === 'reorder' && !b) return m === 'POST' ? r('mechanisms.reorder', 'editor') : bad('mechanisms.reorder');
+      if (!b) {
+        if (m === 'PATCH' || m === 'DELETE') return r('mechanisms.item', 'editor', { mechId: a });
+        return bad('mechanisms.item');
+      }
+      // 把現有 cue 裡物件的位置轉成這個機關的位置（一次全部）
+      if (b === 'convert-cue-positions' && !c) {
+        return m === 'POST' ? r('mechanisms.convert', 'editor', { mechId: a }) : bad('mechanisms.convert');
+      }
+      return null;
+    case 'mechanism-sheet':
+      if (a) return null;
+      return read ? r('mechanisms.sheet', 'editor') : bad('mechanisms.sheet');
+
     case 'cue-templates':
       if (read) return r('cueTemplates.list', 'member');
       if (m === 'POST') return r('cueTemplates.create', 'editor');
@@ -250,6 +273,9 @@ export function describeProjectRoute(method, segs) {
       if (b === 'videos') return describeVideoRoute(m, read, songId, c, d, e);
       // 審片紀錄（V2 需修改、V3 已通過…），新的在前
       if (b === 'reviews' && !c) return read ? r('reviews.list', 'member', { songId }) : bad('reviews.list');
+      if (b === 'mechanism-positions' && !c) {
+        return read ? r('mechPositions.list', 'member', { songId }) : bad('mechPositions.list');
+      }
       if (b !== 'cues') return null;
       if (!c) {
         if (read) return r('cues.list', 'member', { songId });
@@ -269,6 +295,11 @@ export function describeProjectRoute(method, segs) {
         if (!e) return read ? r('states.list', 'member', { songId, cueId }) : bad('states.list');
         if (m === 'PUT' || m === 'DELETE') return r('states.item', 'editor', { songId, cueId, objId: e });
         return bad('states.item');
+      }
+      if (d === 'mechanisms') {
+        if (!e) return null;
+        if (m === 'PUT' || m === 'DELETE') return r('mechPositions.item', 'editor', { songId, cueId, mechId: e });
+        return bad('mechPositions.item');
       }
       return null;
     }
