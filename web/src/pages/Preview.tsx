@@ -130,6 +130,8 @@ function PreviewInner({ projectId }: { projectId: string }) {
   const { user, logout } = useAuth();
 
   const [projectName, setProjectName] = useState<string>('');
+  // 專案名讀不到時不能一直停在「…」，要顯示讀取失敗 + 重試
+  const [nameStatus, setNameStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [projectMembers, setProjectMembers] = useState<{ id: string; name: string }[]>([]);
   const [songs, setSongs] = useState<Song[]>([]);
   const [songsLoading, setSongsLoading] = useState(true);
@@ -151,6 +153,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
   const refresh = useCallback(async () => {
     setSongsLoading(true);
     setError(null);
+    setNameStatus('loading');
     try {
       const [list, objs, model, meta] = await Promise.all([
         api.listSongs(projectId),
@@ -163,8 +166,10 @@ function PreviewInner({ projectId }: { projectId: string }) {
       setModelUrl(model ? api.modelDownloadUrl(model.key) : null);
       setProjectName(meta?.name || '');
       setProjectMembers(meta?.members?.map(m => ({ id: m.id, name: m.name })) || []);
+      setNameStatus(meta?.name ? 'ready' : 'error');
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setNameStatus('error');
     } finally {
       setSongsLoading(false);
     }
@@ -314,7 +319,14 @@ function PreviewInner({ projectId }: { projectId: string }) {
       <header className="preview-top">
         <button className="preview-top__back" onClick={() => navigate('/preview')} title="所有專案">←</button>
         <span className="preview-top__role">🎬 DIRECTOR</span>
-        <span className="preview-top__project">{projectName || '…'}</span>
+        <span className="preview-top__project">
+          {projectName || (nameStatus === 'error' ? (
+            <>
+              {projectId}（讀取失敗）
+              <button className="btn btn--ghost btn--sm" onClick={() => refresh()} style={{ marginLeft: 8 }}>重試</button>
+            </>
+          ) : '…')}
+        </span>
         <div className="preview-top__progress">
           <div className="preview-top__progress-bar">
             <span style={{ width: `${overallPct}%` }} />

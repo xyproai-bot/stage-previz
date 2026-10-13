@@ -118,6 +118,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   const personalLook = usePersonalLook(projectId, view.lookSettings);
 
   const [projectName, setProjectName] = useState<string>('');
+  // 專案名讀不到時不能一直停在「…」，要顯示讀取失敗 + 重試
+  const [nameStatus, setNameStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [songs, setSongs] = useState<Song[]>([]);
   const [songsLoading, setSongsLoading] = useState(true);
   const [songsError, setSongsError] = useState<string | null>(null);
@@ -145,6 +147,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   const refreshAll = useCallback(async () => {
     setSongsLoading(true);
     setSongsError(null);
+    setNameStatus('loading');
     try {
       const [list, objs, model, meta] = await Promise.all([
         api.listSongs(projectId),
@@ -156,9 +159,11 @@ function StudioInner({ projectId }: { projectId: string }) {
       setStageObjects(objs);
       setModelUrl(model ? api.modelDownloadUrl(model.key) : null);
       setProjectName(meta?.name || '');
+      setNameStatus(meta?.name ? 'ready' : 'error');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       setSongsError(msg);
+      setNameStatus('error');
     } finally {
       setSongsLoading(false);
     }
@@ -386,7 +391,14 @@ function StudioInner({ projectId }: { projectId: string }) {
       <header className="studio-top">
         <button className="studio-top__back" onClick={() => navigate('/studio')} title="所有專案">←</button>
         <span className="studio-top__role">🎨 ANIMATOR</span>
-        <span className="studio-top__project">{projectName || '…'}</span>
+        <span className="studio-top__project">
+          {projectName || (nameStatus === 'error' ? (
+            <>
+              {projectId}（讀取失敗）
+              <button className="btn btn--ghost" onClick={() => refreshAll()} style={{ marginLeft: 8, padding: '3px 10px', fontSize: 12 }}>重試</button>
+            </>
+          ) : '…')}
+        </span>
         <span className="grow" />
         {user && (
           <span className="studio-top__user">
