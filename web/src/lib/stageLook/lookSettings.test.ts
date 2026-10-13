@@ -27,8 +27,19 @@ describe('normalizeLookSettings', () => {
     expect(s.ledViewFalloff).toBe(DEFAULT_LOOK_SETTINGS.ledViewFalloff);
   });
 
-  it('地板倒影預設 0.5、超出夾回 1', () => {
-    expect(normalizeLookSettings({}).floorReflection).toBe(0.5);
+  it('預設值是 admin 調好的那組（2026-10-13 用戶截圖）', () => {
+    expect(DEFAULT_LOOK_SETTINGS).toEqual({
+      houseLight: 0.11,
+      exposure: 0.95,
+      ledLightStrength: 0,
+      bloomStrength: 0,
+      floorReflection: 0.9,
+      reflectionSharpness: 0.95,
+      ledViewFalloff: 0,
+    });
+  });
+
+  it('地板倒影超出夾回 1', () => {
     expect(normalizeLookSettings({ floorReflection: 7 }).floorReflection).toBe(1);
   });
 

@@ -28,14 +28,15 @@ export const LOOK_SETTING_RANGES: Record<keyof LookSettings, [number, number]> =
   ledViewFalloff: [0, 1],
 };
 
+// 預設 = admin 實際調好想要的樣子（2026-10-13）：暗場、LED 不打光不暈、地板強烈清楚的倒影
 export const DEFAULT_LOOK_SETTINGS: LookSettings = {
-  houseLight: 0.15,
-  exposure: 1,
-  ledLightStrength: 1,
-  bloomStrength: 0.6,
-  floorReflection: 0.5,
-  reflectionSharpness: 0.6,
-  ledViewFalloff: 0.3,
+  houseLight: 0.11,
+  exposure: 0.95,
+  ledLightStrength: 0,
+  bloomStrength: 0,
+  floorReflection: 0.9,
+  reflectionSharpness: 0.95,
+  ledViewFalloff: 0,
 };
 
 export function normalizeLookSettings(raw: unknown): LookSettings {
