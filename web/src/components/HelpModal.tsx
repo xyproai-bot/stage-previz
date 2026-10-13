@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import Icon from './Icon';
+import { helpUrl } from '../lib/helpLinks';
 import './HelpModal.css';
 
 export default function HelpModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -107,7 +108,7 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
             <ul>
               <li>動畫師的電腦開著 NDI 小程序，3D 舞台的 LED 就會即時顯示 AE 的畫面</li>
               <li>3D 畫面上方的 NDI 標示：綠色實心點 = 正在播、空心點 = 等待中；點一下可以看狀態、選來源、重新連線</li>
-              <li>還沒接上 AE 時，LED 會顯示彩色的示意畫面（不會全黑）</li>
+              <li>LED 沒有畫面（沒有影片、AE 即時、本地檔案）時會顯示測試圖：每塊 LED 的名字、位置、格線</li>
             </ul>
           </section>
 
@@ -204,7 +205,9 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
           </section>
         </div>
         <footer className="help-modal__foot">
-          <span className="muted small">有需求或發現問題，請直接跟我們說</span>
+          <span className="muted small">
+            <a href={helpUrl()} target="_blank" rel="noopener">完整的圖文使用說明（每個角色、每個功能）</a> · 有需求或發現問題，請直接跟我們說
+          </span>
           <button className="btn btn--primary" onClick={onClose}>知道了</button>
         </footer>
       </div>

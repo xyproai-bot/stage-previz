@@ -67,7 +67,7 @@
   padding: 28px 12px 40px 20px;
   font-size: 13.5px;
 }
-.help-toc__chapter {
+.help-toc__heading {
   margin: 0 0 10px 10px;
   color: var(--text-muted);
   font-size: 11px;
@@ -75,6 +75,15 @@
 }
 .help-toc ul { list-style: none; margin: 0; padding: 0; }
 .help-toc ul ul { padding-left: 14px; }
+.help-toc__chapter-item + .help-toc__chapter-item { margin-top: 10px; }
+.help-toc a.help-toc__chapter-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text);
+  font-weight: 700;
+}
+.help-toc__empty { margin: 8px 10px; color: var(--text-muted); font-size: 13px; }
 .help-toc a {
   display: block;
   padding: 5px 10px;
@@ -123,15 +132,110 @@
 }
 .help-muted { color: var(--text-dim); font-size: 0.93em; }
 
-.help-chapter { margin-bottom: 8px; }
+.help [hidden] { display: none !important; }
+
+/* ─── 最上面：標題、選角色、搜尋 ─── */
+.help-hero { margin-bottom: 8px; }
+.help-hero h1 { margin: 4px 0 10px; font-size: 32px; line-height: 1.3; }
 .help-chapter__kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: 12px;
   letter-spacing: 0.12em;
 }
-.help-chapter h1 { margin: 4px 0 10px; font-size: 32px; line-height: 1.3; }
 .help-lead { color: var(--text-dim); font-size: 16px; }
+
+.help-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0 6px;
+}
+.help-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.help-chip:hover { border-color: var(--text-muted); }
+.help-chip.is-on { background: var(--accent); border-color: var(--accent); color: #000; }
+.help-filter__hint { margin: 6px 0 0; color: var(--text-dim); font-size: 13.5px; }
+
+.help-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 520px;
+  margin: 14px 0 4px;
+  padding: 0 6px 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-1);
+  color: var(--text-muted);
+}
+.help-search:focus-within { border-color: var(--accent); }
+.help-search input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+}
+.help-search input::-webkit-search-cancel-button { display: none; }
+.help-search__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.help-search__clear:hover { background: var(--surface-2); color: var(--text); }
+
+.help-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 40px 0;
+  padding: 28px 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  color: var(--text-dim);
+  text-align: center;
+}
+.help-empty p { margin: 0; }
+
+/* ─── 一章 ─── */
+.help-chapter { margin-top: 64px; scroll-margin-top: 60px; }
+.help-chapter__head {
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  background: var(--surface-1);
+}
+.help-chapter__title { position: relative; margin: 4px 0 6px; font-size: 28px; line-height: 1.3; }
+.help-chapter__title:hover .help-section__anchor { opacity: 1; text-decoration: none; }
+.help-chapter__head .help-lead { margin: 0; font-size: 15px; }
 
 /* ─── 段落 ─── */
 .help-section {
@@ -232,6 +336,103 @@
   color: var(--accent);
   font-weight: 700;
 }
+/* 一排步驟（只有字） */
+.help-flow--steps { gap: 8px 26px; }
+.help-flow--steps li { min-width: 0; padding: 7px 12px; }
+.help-flow--steps li strong { font-size: 13.5px; white-space: nowrap; }
+.help-flow--steps li:first-child { border-color: var(--border-strong); }
+
+/* 兩張圖並排 */
+.help-fig-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0 20px;
+}
+.help-fig-row > .help-fig { flex: 1 1 260px; min-width: 0; }
+.help-fig--phone { margin-left: auto; margin-right: auto; }
+.help-fig-row > .help-fig--phone { flex: 0 1 280px; margin-left: 0; margin-right: 0; }
+.help-fig--phone .help-fig__frame { border-radius: 14px; }
+
+/* cue 跟著影片時間走（示意圖） */
+.help-timeline { max-width: 680px; }
+.help-timeline__frame {
+  position: relative;
+  padding: 34px 18px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-1);
+}
+.help-timeline__track {
+  position: relative;
+  height: 64px;
+  margin: 8px 6px 34px;
+  border-bottom: 2px solid var(--border-strong);
+}
+.help-timeline__tick {
+  position: absolute;
+  bottom: -8px;
+  width: 0;
+  height: 10px;
+  border-left: 1px solid var(--text-muted);
+}
+.help-timeline__tick span {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  transform: translateX(-50%);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.help-timeline__move {
+  position: absolute;
+  bottom: 6px;
+  height: 22px;
+  border-radius: 4px;
+  background: rgba(16, 199, 138, 0.28);
+  border: 1px solid var(--accent);
+  overflow: hidden;
+}
+.help-timeline__move span {
+  display: block;
+  padding: 0 6px;
+  color: var(--text);
+  font-size: 11.5px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+.help-timeline__move.is-example { background: rgba(16, 199, 138, 0.45); }
+.help-timeline__cue {
+  position: absolute;
+  top: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+.help-timeline__cue::after {
+  content: '';
+  position: absolute;
+  top: 22px;
+  left: 50%;
+  height: 40px;
+  border-left: 1px dashed var(--text-muted);
+}
+.help-timeline__cue.is-example { background: var(--accent); border-color: var(--accent); color: #000; }
+.help-timeline__legend { margin: 0; padding-left: 0; list-style: none; font-size: 13.5px; line-height: 1.7; }
+.help-timeline__legend li strong { margin-right: 6px; }
+.help-timeline__legend li.is-example { color: var(--accent); }
+.help-timeline .help-mock__tag { position: absolute; top: 8px; right: 8px; }
 
 /* 要準備什麼 */
 .help-checklist {
@@ -338,12 +539,17 @@
   font-size: 13px;
   text-align: left;
 }
-.help-table td {
+.help-table td,
+.help-table th {
   padding: 7px 12px;
   border: 1px solid var(--border);
   vertical-align: top;
+  text-align: left;
 }
+.help-table th { background: var(--surface-1); color: var(--text-dim); font-size: 13px; font-weight: 600; }
 .help-table td:first-child { white-space: nowrap; font-weight: 600; }
+.help-table--wide { width: 100%; }
+.help-table--wide td:first-child { white-space: normal; min-width: 5.5em; }
 .help-dot {
   display: inline-block;
   width: 10px;
@@ -355,6 +561,11 @@
 .help-dot--green { background: #2ecc71; }
 .help-dot--gray { background: #9a9a9a; }
 .help-dot--orange { background: #ff9f2e; }
+/* 歌的狀態（跟站內的狀態點同色） */
+.help-dot--todo { background: #8a8f98; }
+.help-dot--review { background: #ffaa44; }
+.help-dot--changes { background: #ff5470; }
+.help-dot--approved { background: #10c78a; }
 
 /* ─── 圖 ─── */
 .help-fig {
@@ -520,7 +731,15 @@
     background: rgba(0, 0, 0, 0.5);
   }
   .help-main { padding: 24px 16px 96px; font-size: 15px; }
-  .help-chapter h1 { font-size: 26px; }
+  .help-hero h1 { font-size: 26px; }
+  .help-chapter { margin-top: 48px; }
+  .help-chapter__head { padding: 14px 14px; }
+  .help-chapter__title { font-size: 23px; }
+  .help-filter { gap: 6px; }
+  .help-chip { padding: 6px 12px; font-size: 13.5px; }
+  .help-search { max-width: none; }
+  .help-timeline__move span { display: none; }
+  .help-fig-row > .help-fig--phone { flex-basis: 100%; max-width: 300px; margin-left: auto; margin-right: auto; }
   .help-section--h2 { margin-top: 40px; }
   .help-section--h2 > .help-section__title { font-size: 21px; }
   .help-section__anchor { display: none; }

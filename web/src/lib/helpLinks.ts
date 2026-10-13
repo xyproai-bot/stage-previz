@@ -1,12 +1,59 @@
-// 線上使用說明（/help）的段落位置：分享頁、檢查清單卡片、設定頁、工作站都從這裡拿連結。
-// 段落 id 不要隨便改（別的頁面、傳出去的連結會直接跳到這些位置）。
+// 線上使用說明（/help）的段落位置：分享頁、檢查清單卡片、設定頁、工作站、各個「?」都從這裡拿連結。
+// 段落 id 不要隨便改（別的頁面、傳出去的連結會直接跳到這些位置）。只能加新的。
 
 import type { NdiStep } from './ndiSteps';
 
 export const HELP_PATH = '/help';
 
-/** 「AE 即時預覽」這一章的段落 */
 export const HELP_ANCHORS = {
+  // ─── 開始使用 ───
+  start: 'start',
+  roles: 'roles',
+  loginInvite: 'login-invite',
+  loginCode: 'login-code',
+  landing: 'landing',
+  notifications: 'notifications',
+
+  // ─── 製作 ───
+  producer: 'producer',
+  prodProject: 'prod-project',
+  prodModel: 'prod-model',
+  prodNaming: 'prod-naming',
+  prodCalibrate: 'prod-calibrate',
+  prodSongs: 'prod-songs',
+  prodDrive: 'prod-drive',
+  prodAssign: 'prod-assign',
+  prodCues: 'prod-cues',
+  prodCueTiming: 'prod-cue-timing',
+  prodTemplates: 'prod-templates',
+  prodUndo: 'prod-undo',
+  prodMechanisms: 'prod-mechanisms',
+  prodMechSetup: 'prod-mech-setup',
+  prodMechCue: 'prod-mech-cue',
+  prodMechSpeed: 'prod-mech-speed',
+  prodMechSheet: 'prod-mech-sheet',
+  prodMechConvert: 'prod-mech-convert',
+  prodLedCanvas: 'prod-led-canvas',
+  prodView: 'prod-view',
+  prodShare: 'prod-share',
+  prodInvite: 'prod-invite',
+  prodLoginCodes: 'prod-login-codes',
+  prodSystem: 'prod-system',
+  prodArchive: 'prod-archive',
+
+  // ─── 動畫師 ───
+  animator: 'animator',
+  animStudio: 'anim-studio',
+  animSource: 'anim-source',
+  animAddVideo: 'anim-add-video',
+  animVersions: 'anim-versions',
+  animSubmit: 'anim-submit',
+  animFeedback: 'anim-feedback',
+  animCompare: 'anim-compare',
+  animLedMap: 'anim-led-map',
+  animTestPattern: 'anim-test-pattern',
+
+  // ─── AE 即時預覽（動畫師；這一章的 id 很多頁面直接連，不能改）───
   aeLive: 'ae-live',
   whatYouNeed: 'what-you-need',
   setup: 'setup',
@@ -29,6 +76,31 @@ export const HELP_ANCHORS = {
   faqOutdated: 'faq-outdated',
   faqNoNdiTools: 'faq-no-ndi-tools',
   faqAutostart: 'faq-autostart',
+
+  // ─── 導演 ───
+  director: 'director',
+  dirBoard: 'dir-board',
+  dirPlay: 'dir-play',
+  dirComment: 'dir-comment',
+  dirDecide: 'dir-decide',
+  dirHistory: 'dir-history',
+  dirCompare: 'dir-compare',
+
+  // ─── 客戶（分享連結）───
+  client: 'client',
+  clientOpen: 'client-open',
+  clientCamera: 'client-camera',
+  clientPlay: 'client-play',
+  clientLocal: 'client-local',
+  clientMobile: 'client-mobile',
+
+  // ─── 常見問題 ───
+  questions: 'questions',
+  qPermission: 'q-permission',
+  qVideo: 'q-video',
+  qUpload: 'q-upload',
+  qChina: 'q-china',
+  qBrowsers: 'q-browsers',
 } as const;
 
 export type HelpAnchor = (typeof HELP_ANCHORS)[keyof typeof HELP_ANCHORS];
