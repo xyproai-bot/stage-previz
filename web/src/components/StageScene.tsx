@@ -21,7 +21,9 @@ import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { QUALITY, detectQualityProfile } from '../lib/stageLook/quality';
 import { LED_SURFACE, NDI_PIXEL_DENSITY, applyLedSurface, updateLedSurface } from '../lib/stageLook/ledSurface';
-import { FloorReflection, applyFloorReflection } from '../lib/stageLook/floorReflection';
+import { FloorReflection, applyFloorReflection, setFloorReflectionFor } from '../lib/stageLook/floorReflection';
+import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOverride, type MaterialOverrides, type ModelMaterialInfo } from '../lib/stageLook/materialOverrides';
+import MaterialPanel from './MaterialPanel';
 import { detectFloorPlane } from '../lib/stageLook/floorPlane';
 import './StageScene.css';
 
@@ -94,6 +96,10 @@ interface Props {
   lookSettings?: LookSettings;
   /** 有傳才顯示「🎚 設定」面板 — 只有 admin */
   onLookSettingsChange?: (patch: Partial<LookSettings>) => void;
+  /** 依 C4D 材質名稱的覆寫（存在專案上全員共用） */
+  materialOverrides?: MaterialOverrides;
+  /** 有傳才顯示「🎨 材質」面板 — 只有 admin；patch = null → 回到 C4D 原本 */
+  onMaterialOverrideChange?: (name: string, patch: Partial<MaterialOverride> | null) => void;
 }
 
 // ⚡ quick：像素 1:1 對顏色；🎤 live：暗場 + LED 照明 + 光暈（取代舊的 realistic / cinematic）
@@ -101,7 +107,7 @@ type RenderMode = 'quick' | 'live';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, materialOverrides, onMaterialOverrideChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -130,6 +136,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     defaultRenderMode && defaultRenderMode !== 'quick' ? 'live' : 'quick',
   );
   const [lookPanelOpen, setLookPanelOpen] = useState(false);
+  const [materialPanelOpen, setMaterialPanelOpen] = useState(false);
+  // 材質面板用：模型裡的材質（依名稱分組）
+  const [modelMaterials, setModelMaterials] = useState<ModelMaterialInfo[]>([]);
   const [, setModelLoading] = useState(false);
   // 每次 GLB 載入完 +1，讓依賴 meshesRef 的 effect 重建 / 重套材質
   const [modelVersion, setModelVersion] = useState(0);
@@ -1032,6 +1041,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                   roughness: 0.6,
                   metalness: 0.1,
                 });
+                stdMat.name = old.name; // 材質面板依名稱調整
                 m.material = stdMat;
               }
               // 雙面渲染：LED 面板維持單面（emissive 不該從背面看到），其他都雙面（喇叭等不會少一面）
@@ -1289,6 +1299,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const black = new THREE.Color(0x000000);
     const ledIds = new Set<string>();
     const ledMaterials = new Set<THREE.MeshStandardMaterial>();
+    const mirrorFlagged = hasMirrorFloor(materialOverrides || {});
 
     meshes.forEach((obj, id) => {
       const so = stageObjMap.get(id);
@@ -1332,6 +1343,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         if (isLed) c.layers.enable(LED_LAYER);
         const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
         if (!m || !('color' in m)) return;
+        // 任何分支改材質之前先記下 C4D 原值（材質面板 / 回到原本 用）
+        if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) captureOriginal(m);
 
         // 雙面渲染：LED 永遠 FrontSide（emissive 不該從背面看到），其他物件 DoubleSide
         const targetSide = isLed ? THREE.FrontSide : THREE.DoubleSide;
@@ -1412,32 +1425,24 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           }
         } else {
           // === 一般物件 / Quick mode 的 LED（沒貼圖時）===
-          // 套 user materialProps；emissive 只在 selected 時 highlight
-          // 注意：有貼圖（GLB 原本的 texture）或是 LED 時，不要用 category 顏色蓋掉
-          // 否則 LED 在 quick mode 會被染綠（品牌色 = 0x10c78a），喇叭等貼圖物件會被染對應色
+          // 材質 = C4D 匯出的原值 → 材質面板依名稱的覆寫 → 單一物件 materialProps（舊功能，最優先）
+          // （以前會用 category 顏色 + 固定 roughness 0.6 / metalness 0.1 蓋掉，C4D 的材質全被洗成同一種塑膠）
+          // 沒模型時的方塊替身：建立時就是 category 顏色，所以「原值」本身就是 category 顏色
+          // emissive 只在 selected 時 highlight
           updateLedSurface(m, { on: false });
+          applyMaterialSettings(m, materialOverrides?.[m.name], {
+            color: mat.color, roughness: mat.roughness, metalness: mat.metalness, opacity: mat.opacity,
+          });
           // 地板倒影：非 LED 材質都掛上（shader 只在「落在反射平面上、朝上」的地方才取樣倒影）
-          if (!isLed && floorReflRef.current) applyFloorReflection(m, floorReflRef.current.uniforms);
-          const hasTexture = !!m.map;
-          const baseColor = mat.color
-            ? mat.color
-            : (hasTexture || isLed)
-              ? '#ffffff'   // 有貼圖或 LED → 用白色當乘數，保留原貼圖顏色
-              : (CATEGORY_COLORS[so?.category || 'other'] !== undefined
-                ? `#${CATEGORY_COLORS[so?.category || 'other'].toString(16).padStart(6, '0')}`
-                : '#cccccc');
-          m.color.set(baseColor);
-          m.metalness = typeof mat.metalness === 'number' ? mat.metalness : 0.1;
-          m.roughness = typeof mat.roughness === 'number' ? mat.roughness : 0.6;
-          m.envMapIntensity = 1;
+          // 有材質勾了「鏡面地板」→ 只有勾的材質反光；都沒勾 → 全部（自動找地板）
+          if (!isLed && floorReflRef.current) {
+            applyFloorReflection(m, floorReflRef.current.uniforms);
+            setFloorReflectionFor(m, mirrorFlagged ? !!materialOverrides?.[m.name]?.mirrorFloor : true);
+          }
           // 非 LED/realistic 路徑 → 還原 toneMapped（避免被 realistic 路徑切換時殘留 false）
           if (m.toneMapped !== true) {
             m.toneMapped = true;
             m.needsUpdate = true;
-          }
-          if (typeof mat.opacity === 'number') {
-            m.opacity = mat.opacity;
-            m.transparent = mat.opacity < 1;
           }
           if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
           // 切回沒貼圖的 LED → 清掉殘留的 NDI map（避免上次切去 Quick 留下的）
@@ -1477,19 +1482,42 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides]);
 
-  // ── 地板倒影：找最大的朝上水平面當反射平面（換模型 / 物件移動後重算）──
+  // ── 地板倒影的反射平面 + 材質面板的材質清單（換模型 / 物件移動 / 改材質後重算）──
   useEffect(() => {
-    const refl = floorReflRef.current;
-    if (!refl) return;
     const roots: THREE.Object3D[] = [];
     meshesRef.current.forEach((obj, id) => {
       if (stageObjMap.get(id)?.category !== 'led_panel') roots.push(obj);
     });
-    const plane = detectFloorPlane(roots);
-    refl.setPlane(plane ? plane.y : null, Math.max(stageBoundsRef.current.radius * 0.002, 1e-4));
-  }, [states, modelVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // 有材質勾「鏡面地板」→ 只從那些材質找地板；都沒勾 → 自動找最大的朝上水平面
+    const refl = floorReflRef.current;
+    if (refl) {
+      const flagged = new Set(Object.entries(materialOverrides || {}).filter(([, v]) => v.mirrorFloor).map(([k]) => k));
+      const plane = flagged.size > 0
+        ? detectFloorPlane(roots, { meshFilter: (m) => flagged.has((m.material as THREE.Material).name) })
+        : detectFloorPlane(roots);
+      refl.setPlane(plane ? plane.y : null, Math.max(stageBoundsRef.current.radius * 0.002, 1e-4));
+    }
+
+    // 材質清單：非 LED 物件的材質依名稱分組（用到幾個物件 + C4D 原值）
+    const byName = new Map<string, { objects: Set<THREE.Object3D>; original: ModelMaterialInfo['original'] }>();
+    for (const root of roots) {
+      root.traverse((c) => {
+        const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
+        if (!(c as THREE.Mesh).isMesh || !m?.isMeshStandardMaterial) return;
+        const entry = byName.get(m.name) || { objects: new Set(), original: captureOriginal(m) };
+        entry.objects.add(root);
+        byName.set(m.name, entry);
+      });
+    }
+    const list: ModelMaterialInfo[] = [...byName.entries()].map(([name, e]) => ({ name, count: e.objects.size, original: e.original }));
+    setModelMaterials(prev => {
+      const key = (l: ModelMaterialInfo[]) => l.map(x => `${x.name}:${x.count}`).join('|');
+      return key(prev) === key(list) ? prev : list;
+    });
+  }, [states, modelVersion, materialOverrides]); // eslint-disable-line react-hooks/exhaustive-deps
 
   void RectAreaLightHelper; // keep import in case we want helper toggle later
 
@@ -1737,9 +1765,16 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         {renderMode === 'live' && onLookSettingsChange && (
           <button
             className={'tool ' + (lookPanelOpen ? 'is-active' : '')}
-            onClick={() => setLookPanelOpen(o => !o)}
+            onClick={() => { setLookPanelOpen(o => !o); setMaterialPanelOpen(false); }}
             title="現場設定：底光 / 曝光 / LED 照明 / 光暈（所有人共用）"
           >🎚 設定</button>
+        )}
+        {onMaterialOverrideChange && (
+          <button
+            className={'tool ' + (materialPanelOpen ? 'is-active' : '')}
+            onClick={() => { setMaterialPanelOpen(o => !o); setLookPanelOpen(false); }}
+            title="材質：依 C4D 材質名稱調顏色 / 亮霧面 / 金屬感 / 反射 / 透明度，指定鏡面地板（所有人共用）"
+          >🎨 材質</button>
         )}
         <button
           className={'tool ' + (wireframe ? 'is-active' : '')}
@@ -1897,6 +1932,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       </div>
       {lookPanelOpen && renderMode === 'live' && onLookSettingsChange && (
         <LookSettingsPanel settings={lookSettings} onChange={onLookSettingsChange} onClose={() => setLookPanelOpen(false)} />
+      )}
+      {materialPanelOpen && onMaterialOverrideChange && (
+        <MaterialPanel
+          materials={modelMaterials}
+          overrides={materialOverrides || {}}
+          onChange={onMaterialOverrideChange}
+          onClose={() => setMaterialPanelOpen(false)}
+        />
       )}
       {/* Measure result overlay */}
       {measureMode && (

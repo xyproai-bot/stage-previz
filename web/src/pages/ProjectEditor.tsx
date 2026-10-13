@@ -819,6 +819,8 @@ export default function ProjectEditor() {
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
               lookSettings={view.lookSettings}
               onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
+              materialOverrides={view.materialOverrides}
+              onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
             />
           )}
           {view.canEdit && (
@@ -1015,6 +1017,7 @@ export default function ProjectEditor() {
                 scaleCorrection={view.scaleCorrection}
                 mechanismOffsets={view.mechanismOffsets}
                 lookSettings={view.lookSettings}
+                materialOverrides={view.materialOverrides}
               />
             </div>
           </div>

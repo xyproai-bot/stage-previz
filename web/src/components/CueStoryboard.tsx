@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api';
 import type { Cue, CueState, MechanismOffsets, StageObject } from '../lib/api';
 import type { LookSettings } from '../lib/stageLook/lookSettings';
+import type { MaterialOverrides } from '../lib/stageLook/materialOverrides';
 import StageScene from './StageScene';
 import { toast } from '../lib/toast';
 import { exportSongStoryboardAsPdf, loadCueThumbs } from '../lib/exportPdf';
@@ -24,6 +25,7 @@ interface Props {
   scaleCorrection?: number;
   mechanismOffsets?: MechanismOffsets;
   lookSettings?: LookSettings;
+  materialOverrides?: MaterialOverrides;
 }
 
 const STORAGE_PREFIX = 'sp-cue-thumb:';   // localStorage key prefix（小張縮圖夠存）
@@ -37,7 +39,7 @@ const STORAGE_PREFIX = 'sp-cue-thumb:';   // localStorage key prefix（小張縮
  */
 export default function CueStoryboard({
   projectId, songId, cues, stageObjects, modelUrl, selectedCueId, onSelectCue, onReordered,
-  projectName, songName, scaleCorrection, mechanismOffsets, lookSettings,
+  projectName, songName, scaleCorrection, mechanismOffsets, lookSettings, materialOverrides,
 }: Props) {
   const [orderedCues, setOrderedCues] = useState<Cue[]>(cues);
   useEffect(() => { setOrderedCues(cues); }, [cues]);
@@ -265,6 +267,7 @@ export default function CueStoryboard({
             scaleCorrection={scaleCorrection}
             mechanismOffsets={mechanismOffsets}
             lookSettings={lookSettings}
+            materialOverrides={materialOverrides}
           />
         </div>
       )}

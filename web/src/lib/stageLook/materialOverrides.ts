@@ -87,6 +87,13 @@ export function applyMaterialSettings(
   if (m.transparent !== transparent) { m.transparent = transparent; m.needsUpdate = true; }
 }
 
+/** 材質面板用：模型裡的一種材質（依名稱）、用到幾個物件、C4D 原值 */
+export interface ModelMaterialInfo {
+  name: string;
+  count: number;
+  original: MaterialOriginal;
+}
+
 export function hasMirrorFloor(o: MaterialOverrides): boolean {
   return Object.values(o).some(v => v.mirrorFloor);
 }

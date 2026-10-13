@@ -618,6 +618,8 @@ function SongDetail({
                 mechanismOffsets={view.mechanismOffsets}
                 lookSettings={view.lookSettings}
                 onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
+                materialOverrides={view.materialOverrides}
+                onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                 onAddAnchoredComment={(anchor) => {
                   // 上層存暫存的 anchor，留言區會接著用
                   pendingAnchorRef.current = anchor;

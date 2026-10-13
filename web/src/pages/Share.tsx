@@ -4,6 +4,7 @@ import * as api from '../lib/api';
 import type { Cue, CueState, SharePublicData, ShareVideo } from '../lib/api';
 import StageScene from '../components/StageScene';
 import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
+import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import './Share.css';
 
 /**
@@ -189,6 +190,7 @@ export default function Share() {
               scaleCorrection={data.scaleCorrection ?? 1}
               mechanismOffsets={data.mechanismOffsets}
               lookSettings={normalizeLookSettings(data.lookSettings)}
+              materialOverrides={normalizeMaterialOverrides(data.materialOverrides)}
             />
           ) : (
             <div className="share-empty">這個專案沒有可預覽的內容</div>

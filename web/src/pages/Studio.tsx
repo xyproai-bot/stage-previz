@@ -478,6 +478,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                   mechanismOffsets={view.mechanismOffsets}
                   lookSettings={view.lookSettings}
                   onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
+                  materialOverrides={view.materialOverrides}
+                  onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                 />
               </div>
               {masterCues.length > 0 && (
