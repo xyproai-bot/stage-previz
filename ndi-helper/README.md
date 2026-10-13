@@ -207,7 +207,9 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 - `max_fps`：送給網頁的最高 fps（AE 送 60 也只編 30 張）
 - `autostart`：開機自動啟動（預設開；右鍵選單切換）。從 0.1.8 以前升級上來會自動打開一次
 - 開機自動啟動的實作：Windows = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\StagePrevizNdiHelper`；
-  macOS = `~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist`。
+  macOS = `~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist`（0.1.12 起直接執行 App 裡的執行檔並標明
+  `AssociatedBundleIdentifiers`，「系統設定 → 一般 → 登入項目與延伸功能」和「App 背景活動」通知才會顯示 Stage Previz NDI Helper，
+  不再顯示成「open」；App 在「下載」裡直接打開（暫存位置）時才用 `open -g -b <bundle id>`）。
   `autostart` 是 true 時每次啟動都會確保有登記、而且指到目前的執行檔（Windows 的值是加引號的 exe 路徑；
   寫完讀回確認），之後 15 秒、1 分鐘、然後每 10 分鐘再檢查一次（被別的程式刪掉會補回去並寫進 log）。
   結果在 status 的 `autostart` 欄位跟系統列選單。
@@ -238,7 +240,7 @@ cargo build --release
 
 - Windows：Visual Studio C++ Build Tools（含 CMake）、NASM；安裝檔：`cargo install cargo-wix` → `cargo wix --no-build`
   （範本在 `wix/main.wxs`，已客製：開始選單捷徑、裝完自動啟動、升級前自動關掉舊版、不用 Restart Manager 也不建系統還原點（更新幾秒就好）、移除時清掉開機啟動。**不要**再跑 `cargo wix init --force`）
-- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.11 dist`
+- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.12 dist`
   （ad-hoc 簽章，使用者第一次打開會被擋；要發給別人用一定要再做下面的公證）
 - macOS 公證（要在鑰匙圈裡有 Developer ID Application 憑證的 Mac 上做）：
   `bash macos/notarize.sh <make-app 做的 .app 或 Release 上的 zip> <輸出資料夾>` →

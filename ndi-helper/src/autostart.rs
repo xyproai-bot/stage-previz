@@ -1,7 +1,8 @@
 // 開機（登入）自動啟動
 //
 // Windows：HKCU\Software\Microsoft\Windows\CurrentVersion\Run\StagePrevizNdiHelper = "\"<exe 路徑>\""（不用 admin）
-// macOS：  ~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist（RunAtLoad）
+// macOS：  ~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist（RunAtLoad；直接執行 App 裡的執行檔，
+//          「登入項目」才會顯示 App 名稱而不是「open」）
 // Linux：  還沒做（no-op）
 //
 // config.autostart = true 時，每次啟動都會「確保」登記的是目前這個執行檔（換安裝位置 / 升級也不會指到舊檔），
@@ -126,33 +127,41 @@ mod imp {
         }
     }
 
-    fn program_arguments() -> io::Result<Vec<String>> {
-        let exe = std::env::current_exe()?;
+    fn program_arguments(exe: &Path) -> Vec<String> {
         let exe_s = exe.to_string_lossy().into_owned();
-        Ok(match app_bundle(&exe) {
+        match app_bundle(exe) {
             // 從「下載」直接打開沒拖進「應用程式」時，macOS 會把 app 搬到隨機的暫存路徑
             // （AppTranslocation），重開機後就不在了 → 改用 bundle id 讓系統自己找 app。
             Some(_) if exe_s.contains("/AppTranslocation/") => {
                 vec!["/usr/bin/open".into(), "-g".into(), "-b".into(), BUNDLE_ID.into()]
             }
-            Some(bundle) => vec!["/usr/bin/open".into(), "-g".into(), bundle.to_string_lossy().into_owned()],
-            None => vec![exe_s],
-        })
+            // 直接執行 App 裡的執行檔（0.1.11 以前是 /usr/bin/open -g <App>）：macOS 會把背景項目算在
+            // 「執行檔是誰簽的」頭上 → 用 open 時「登入項目」和「App 背景活動」通知都顯示成「open」，
+            // 使用者很可能以為是不明程式而關掉；直接執行才會顯示「Stage Previz NDI Helper」
+            _ => vec![exe_s],
+        }
     }
 
-    fn expected_plist() -> io::Result<String> {
-        let args: String = program_arguments()?
+    /// LaunchAgent 的內容（exe = 目前的執行檔）
+    pub fn plist_for(exe: &Path) -> String {
+        let args: String = program_arguments(exe)
             .iter()
             .map(|a| format!("    <string>{}</string>\n", xml_escape(a)))
             .collect();
-        Ok(format!(
+        // 在 .app 裡 → 跟「登入項目」說這個背景項目屬於哪個 App（macOS 13 起）
+        let associated = if app_bundle(exe).is_some() {
+            format!("  <key>AssociatedBundleIdentifiers</key>\n  <array>\n    <string>{BUNDLE_ID}</string>\n  </array>\n")
+        } else {
+            String::new()
+        };
+        format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
   <string>{LABEL}</string>
-  <key>ProgramArguments</key>
+{associated}  <key>ProgramArguments</key>
   <array>
 {args}  </array>
   <key>RunAtLoad</key>
@@ -162,7 +171,11 @@ mod imp {
 </dict>
 </plist>
 "#
-        ))
+        )
+    }
+
+    fn expected_plist() -> io::Result<String> {
+        Ok(plist_for(&std::env::current_exe()?))
     }
 
     /// 回傳有沒有寫（內容一樣就不重寫，避免每次開都跳「已加入背景項目」通知）
@@ -331,6 +344,38 @@ mod tests {
         // 指到舊位置 / 開發版 → 重寫
         assert_eq!(decide(Some(r#""C:\Users\me\Desktop\stage-previz-ndi-helper.exe""#), want), RunValueAction::Write);
         assert_eq!(decide(Some(""), want), RunValueAction::Write);
+    }
+
+    /// LaunchAgent 內容：一般位置直接執行 App 裡的執行檔 + 標明屬於哪個 App；暫存位置用 bundle id；開發版直接跑
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn launch_agent_plist() {
+        use std::path::Path;
+        let app = imp::plist_for(Path::new(
+            "/Applications/Stage Previz NDI Helper.app/Contents/MacOS/stage-previz-ndi-helper",
+        ));
+        assert!(app.contains(
+            "<string>/Applications/Stage Previz NDI Helper.app/Contents/MacOS/stage-previz-ndi-helper</string>"
+        ));
+        assert!(!app.contains("/usr/bin/open"), "{app}");
+        assert!(app.contains("<key>AssociatedBundleIdentifiers</key>"));
+        assert!(app.contains("<string>com.xyproai.stage-previz-ndi-helper</string>"));
+
+        let moved = imp::plist_for(Path::new(
+            "/Users/me/Desktop/R&D <test>/Stage Previz NDI Helper.app/Contents/MacOS/stage-previz-ndi-helper",
+        ));
+        assert!(moved.contains("R&amp;D &lt;test&gt;"), "{moved}");
+
+        let translocated = imp::plist_for(Path::new(
+            "/private/var/folders/x/T/AppTranslocation/ABC/d/Stage Previz NDI Helper.app/Contents/MacOS/stage-previz-ndi-helper",
+        ));
+        assert!(translocated.contains("<string>/usr/bin/open</string>"));
+        assert!(translocated.contains("<string>-b</string>"));
+        assert!(!translocated.contains("AppTranslocation"), "{translocated}");
+
+        let dev = imp::plist_for(Path::new("/Users/me/stage-previz/ndi-helper/target/release/stage-previz-ndi-helper"));
+        assert!(dev.contains("<string>/Users/me/stage-previz/ndi-helper/target/release/stage-previz-ndi-helper</string>"));
+        assert!(!dev.contains("AssociatedBundleIdentifiers"));
     }
 
     /// 真的寫 registry，但只寫在測試用的暫時機碼（HKCU\Software\xyproai-ndi-helper-test-<pid>），跑完刪掉
