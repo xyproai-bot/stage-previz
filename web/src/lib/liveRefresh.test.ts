@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createLiveRefresher } from './liveRefresh';
+import { STOP_LIVE_REFRESH, createLiveRefresher, isProjectGoneError, liveRefreshWanted } from './liveRefresh';
 
 function setup(visible = true) {
   let t = 1_000_000;
@@ -70,5 +70,58 @@ describe('createLiveRefresher', () => {
     t += 30_000;
     expect(await r.trigger()).toBe(true);
     expect(n).toBe(2);
+  });
+});
+
+describe('專案看不到了就不再自動更新', () => {
+  it('run 回 STOP_LIVE_REFRESH → 之後計時器到、切回分頁都不打', async () => {
+    let t = 0;
+    let n = 0;
+    let gone = false;
+    const r = createLiveRefresher(() => { n++; return gone ? STOP_LIVE_REFRESH : undefined; }, { now: () => t });
+    t += 30_000;
+    expect(await r.trigger()).toBe(true);
+    expect(r.stopped).toBe(false);
+    gone = true;  // 專案在這中間被封存了
+    t += 30_000;
+    expect(await r.trigger()).toBe(true);
+    expect(r.stopped).toBe(true);
+    for (let i = 0; i < 5; i++) {
+      t += 30_000;
+      expect(await r.trigger()).toBe(false);
+    }
+    expect(n).toBe(2);
+  });
+
+  it('stop() 之後不打；一般的失敗（網路 / 500）不會停', async () => {
+    let t = 0;
+    let n = 0;
+    const r = createLiveRefresher(() => { n++; throw Object.assign(new Error('HTTP 500'), { status: 500 }); }, { now: () => t });
+    t += 30_000;
+    await r.trigger();
+    t += 30_000;
+    await r.trigger();
+    expect(r.stopped).toBe(false);
+    expect(n).toBe(2);
+    r.stop();
+    t += 30_000;
+    expect(await r.trigger()).toBe(false);
+    expect(n).toBe(2);
+  });
+
+  it('404（封存 / 刪除）、403（被移出專案）才算看不到了', () => {
+    expect(isProjectGoneError(Object.assign(new Error('x'), { status: 404 }))).toBe(true);
+    expect(isProjectGoneError(Object.assign(new Error('x'), { status: 403 }))).toBe(true);
+    expect(isProjectGoneError(Object.assign(new Error('x'), { status: 500 }))).toBe(false);
+    expect(isProjectGoneError(Object.assign(new Error('x'), { status: 401 }))).toBe(false);
+    expect(isProjectGoneError(new Error('Failed to fetch'))).toBe(false);
+    expect(isProjectGoneError(null)).toBe(false);
+  });
+
+  it('頁面要不要開自動更新：看不到了 / 已封存 / 還在第一次讀 → 不開', () => {
+    expect(liveRefreshWanted({ gone: false })).toBe(true);
+    expect(liveRefreshWanted({ gone: true })).toBe(false);
+    expect(liveRefreshWanted({ gone: false, archived: true })).toBe(false);
+    expect(liveRefreshWanted({ gone: false, loading: true })).toBe(false);
   });
 });

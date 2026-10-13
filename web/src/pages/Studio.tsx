@@ -36,7 +36,7 @@ import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import HelpLink from '../components/HelpLink';
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
-import { useLiveRefresh } from '../lib/liveRefresh';
+import { STOP_LIVE_REFRESH, liveRefreshWanted, useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions } from '../lib/mentions';
 import { formatRelativeTime } from '../lib/serverTime';
 import { describeActivity } from '../lib/activityText';
@@ -300,17 +300,24 @@ function StudioInner({ projectId }: { projectId: string }) {
       return list;
     } catch (e) {
       const gone = projectGoneMessage(e);
-      if (gone) setGoneMessage(gone);
+      if (gone) {
+        goneRef.current = true;  // 馬上算數：同一輪後面的留言就不用問了
+        setGoneMessage(gone);
+      }
       return null;
     }
   }, [projectId, applySongs]);
 
+  // 專案被封存 / 刪除、被移出專案 → 不再自動更新（以前會一直每 25 秒拿一次 404）；
+  // 已封存（製作打開來看）也不用更新：封存的專案沒有人能改
+  const live = liveRefreshWanted({ gone: !!goneMessage, archived: projectArchived });
   useLiveRefresh(async () => {
-    if (goneRef.current) return;
+    if (goneRef.current) return STOP_LIVE_REFRESH;
     await reloadSongs();
     // 歌單這次沒讀到（網路一時不穩）也照樣更新留言；專案不見了就不用了
-    if (!goneRef.current) await refreshComments(true);
-  }, { enabled: !goneMessage && !songsLoading });
+    if (goneRef.current) return STOP_LIVE_REFRESH;
+    await refreshComments(true);
+  }, { enabled: live && !songsLoading });
 
   // 審查分頁開著時，看到的留言算已讀（在 cue 分頁時新留言要留著未讀數字）
   const [, setSeenRev] = useState(0);
@@ -450,8 +457,9 @@ function StudioInner({ projectId }: { projectId: string }) {
     [viewerId, projectId],
   );
   // 歌單上的最新版本換了（交了新版、有人刪了）→ 重抓這首歌的版本
+  // 專案看不到了 → 不抓（複製中的那一版也不再每 5 秒問）
   const versions = useSongVersions({
-    songId: selectedSongId, fetcher: fetchVersions, storageKey: versionStorageKey, reloadKey: selectedSong?.latestVideoId ?? null,
+    songId: goneMessage ? null : selectedSongId, fetcher: fetchVersions, storageKey: versionStorageKey, reloadKey: selectedSong?.latestVideoId ?? null,
   });
   const selectedVersion = source === 'version' ? versions.selected : null;
   const { loadUrl, getSrcKey, pause: pausePlayer, clear: clearPlayer } = player;
@@ -555,7 +563,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   });
   // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
   const mech = useStageMechanisms({
-    projectId, songId: selectedSongId, cues: cuesFor === selectedSongId ? masterCues : EMPTY_CUES, selectedCueId, video: player.video,
+    projectId, songId: selectedSongId, cues: cuesFor === selectedSongId ? masterCues : EMPTY_CUES, selectedCueId, video: player.video, live,
   });
   /** 點 cue（cue 列、右邊清單、Shift+J/K）：有在放影片的話影片跳到那個 cue 的時間 */
   const selectCueById = useCallback((id: string) => {

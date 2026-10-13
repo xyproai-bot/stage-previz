@@ -33,7 +33,7 @@ import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestio
 import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
-import { useLiveRefresh } from '../lib/liveRefresh';
+import { STOP_LIVE_REFRESH, liveRefreshWanted, useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions, mentionCandidates } from '../lib/mentions';
 import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
@@ -209,14 +209,22 @@ function PreviewInner({ projectId }: { projectId: string }) {
       return list;
     } catch (e) {
       const gone = projectGoneMessage(e);
-      if (gone) setGoneMessage(gone);
+      if (gone) {
+        goneRef.current = true;
+        setGoneMessage(gone);
+      }
       return null;
     }
   }, [projectId, applySongs]);
 
+  // 專案被封存 / 刪除、被移出專案 → 不再自動更新（以前會一直每 25 秒拿一次 404）；
+  // 已封存（製作打開來看）也不用更新：封存的專案沒有人能改
+  const live = liveRefreshWanted({ gone: !!goneMessage, archived: projectArchived });
   useLiveRefresh(async () => {
-    if (!goneRef.current) await reloadSongs();
-  }, { enabled: !goneMessage && !songsLoading });
+    if (goneRef.current) return STOP_LIVE_REFRESH;
+    await reloadSongs();
+    if (goneRef.current) return STOP_LIVE_REFRESH;
+  }, { enabled: live && !songsLoading });
 
   useEffect(() => {
     // 切歌時馬上清掉上一首的 cue / 位置，不然載入期間會閃一下上一首的 cue
@@ -530,6 +538,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
           members={projectMembers}
           target={target && target.songId === selectedSongId ? target : null}
           onTargetDone={() => setTarget(null)}
+          live={live}
         />
       ) : (
         <StatusBoard
@@ -542,7 +551,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
       )}
 
       <ActivityDrawer
-        open={activityOpen}
+        open={activityOpen && !goneMessage}
         projectId={projectId}
         onClose={() => setActivityOpen(false)}
       />
@@ -664,7 +673,7 @@ function StatusBoard({
 function SongDetail({
   projectId, song, cues, cuesReady, selectedCueId, onSelectCue, autoStep, onToggleAutoStep,
   stageObjects, viewportStates, modelUrl, cueName, user, projectRole, onChangeStatus, onClose, onPickSong, songs, members,
-  target, onTargetDone, projectName,
+  target, onTargetDone, projectName, live,
 }: {
   projectId: string;
   song: Song;
@@ -692,6 +701,8 @@ function SongDetail({
   /** 通知點進來：要選的版本、要捲到的留言 */
   target: (DeepLink & { nonce: number }) | null;
   onTargetDone: () => void;
+  /** 自動更新（留言、機關）要不要開：專案已封存 → false */
+  live: boolean;
 }) {
   const actions = songStatusActions({ role: projectRole, userId: user?.id, song, flow: 'director' });
   const actionsHint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user?.id, song, flow: 'director' }) : null;
@@ -751,8 +762,9 @@ function SongDetail({
     void loadCommentsRef.current(false);
   }, [projectId, song.id]);
 
-  // 自動更新留言：每 25 秒 + 切回分頁時；有別人的新留言就跳提示
-  useLiveRefresh(() => loadComments(true));
+  // 自動更新留言：每 25 秒 + 切回分頁時；有別人的新留言就跳提示。已封存 → 不再問
+  //（專案看不到了的話，上面的歌單更新會發現、整個歌曲頁收掉）
+  useLiveRefresh(() => loadComments(true), { enabled: live });
 
   // 自己留言 / 刪除 / 標已解決後拿到的最新整串
   const handleCommentsChange = useCallback((list: SongComment[]) => {
@@ -843,7 +855,7 @@ function SongDetail({
   });
   // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
   const mech = useStageMechanisms({
-    projectId, songId: song.id, cues: cuesReady ? cues : EMPTY_CUES, selectedCueId, video: player.video,
+    projectId, songId: song.id, cues: cuesReady ? cues : EMPTY_CUES, selectedCueId, video: player.video, live,
   });
 
   // 鍵盤：Shift+J/K 切 cue（有在放影片的話影片跟著跳到那個 cue 的時間）

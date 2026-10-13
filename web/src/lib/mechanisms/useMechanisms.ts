@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ShareRef } from '../api';
 import type { HistoryStep } from '../editHistory';
 import { historyScope } from '../editHistory';
-import { useLiveRefresh } from '../liveRefresh';
+import { STOP_LIVE_REFRESH, isProjectGoneError, useLiveRefresh } from '../liveRefresh';
 import { toast } from '../toast';
 import { clampValue, type CueMechanismPosition, type Mechanism, type MechanismValues } from './model';
 import { defaultRow, ownValuesByCue, resolveSongMechanisms, valuesOf, type ResolvedRow } from './track';
@@ -79,19 +79,24 @@ export function useStageMechanisms(o: {
   selectedCueId: string | null;
   /** 播影片時的 <video>（跟著影片時間）；沒有就只照點 cue 走 */
   video?: HTMLVideoElement | null;
+  /** 要不要自動更新（專案看不到了 / 已封存 → false）；預設 true */
+  live?: boolean;
 }) {
-  const { projectId, songId } = o;
+  const { projectId, songId, live = true } = o;
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
   const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[] } | null>(null);
   const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
-  const loadDefs = useCallback(async () => {
-    if (!projectId) return;
+  /** 回 true = 專案看不到了（404 / 403），自動更新可以停了 */
+  const loadDefs = useCallback(async (): Promise<boolean> => {
+    if (!projectId) return false;
     try {
       const list = await mapi.listMechanisms(projectId);
       setMechanisms(prev => (prev && sameJson(prev, list) ? prev : list));
-    } catch {
+      return false;
+    } catch (e) {
       setMechanisms(prev => prev ?? []);  // 讀不到（舊後台 / 網路）→ 沒有機關，畫面照舊
+      return isProjectGoneError(e);
     }
   }, [projectId]);
   const loadPositions = useCallback(async () => {
@@ -104,8 +109,12 @@ export function useStageMechanisms(o: {
 
   useEffect(() => { setMechanisms(null); void loadDefs(); }, [loadDefs]);
   useEffect(() => { void loadPositions(); }, [loadPositions]);
-  // 製作改了機關 → 30 秒內跟上（跟位置、留言一樣）
-  useLiveRefresh(async () => { await Promise.all([loadDefs(), loadPositions()]); });
+  // 製作改了機關 → 30 秒內跟上（跟位置、留言一樣）；專案被封存 / 刪除了就不再問
+  //（只看機關清單：位置是這首歌的，歌被刪了不代表專案不見）
+  useLiveRefresh(async () => {
+    const [gone] = await Promise.all([loadDefs(), loadPositions()]);
+    if (gone) return STOP_LIVE_REFRESH;
+  }, { enabled: live });
 
   const list = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
   const pb = usePlayback(mechanisms, list, o.cues, o.selectedCueId, o.video);
