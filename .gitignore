@@ -7,3 +7,4 @@ dist/
 test-video.mp4
 cf-worker/.wrangler/
 .claude/settings.local.json
+.claude/worktrees/
