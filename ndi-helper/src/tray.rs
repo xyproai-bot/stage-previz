@@ -5,7 +5,7 @@
 //   - 狀態（不能點）
 //   - 打開 Stage Previz 平台
 //   - 下載 NDI Tools（只有沒裝 NDI 時能點）
-//   - 開機時自動啟動（勾選）
+//   - 開機時自動啟動（勾選；沒登記成功會標 ⚠，提示文字也會寫）
 //   - 開啟設定資料夾
 //   - 離開
 //
@@ -42,6 +42,10 @@ fn describe(s: &HelperState, clients: usize, want_frames: bool) -> (String, Ligh
             (format!("⚠ {}", trunc(msg, 40)), Light::Warn)
         }
         NdiRuntime::Ready => match &s.source {
+            // 網路上只有別台電腦的來源：不自動接（網頁可以手動選）
+            None if s.error.as_ref().map_or(false, |e| e.code == "no_local_source") => {
+                ("等待這台電腦的 AE（別台的不會自動接）".into(), Light::Warn)
+            }
             None => ("等待 AE 的 NDI 輸出…".into(), Light::Warn),
             Some(name) if !want_frames => (
                 format!("待機中 · {} · 網頁沒開", trunc(name, 28)),
@@ -98,6 +102,7 @@ pub fn run(shared: Arc<Shared>) -> Result<(), Box<dyn std::error::Error>> {
     let mut menu_slot: Option<Menu> = Some(menu);
     let mut last_label = String::new();
     let mut last_light: Option<Light> = None;
+    let mut last_autostart: Option<(bool, Option<String>)> = None;
 
     event_loop.run(move |event, _, control_flow| {
         // 每 500ms 醒一次更新狀態文字
@@ -118,20 +123,32 @@ pub fn run(shared: Arc<Shared>) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // 狀態文字 / 圖示顏色
-        let (label, light) = {
+        let (label, light, autostart) = {
             let clients = shared.clients();
             let want = shared.frame_clients() > 0;
             let s = shared.state();
             let (l, light) = describe(&s, clients, want);
             item_get_ndi.set_enabled(s.ndi == NdiRuntime::Missing);
-            (l, light)
+            (l, light, (s.autostart.wanted, s.autostart.error.clone()))
         };
-        if label != last_label {
+        // 開機自動啟動：沒登記成功 → 選單項目跟提示文字都標 ⚠（詳細原因在 helper.log / status.autostart）
+        let autostart_changed = last_autostart.as_ref() != Some(&autostart);
+        if autostart_changed {
+            item_autostart.set_checked(autostart.0);
+            item_autostart.set_text(if autostart.1.is_some() {
+                "開機時自動啟動（⚠ 沒設定成功，見 helper.log）"
+            } else {
+                "開機時自動啟動"
+            });
+        }
+        if label != last_label || autostart_changed {
             item_status.set_text(&label);
             if let Some(t) = &tray {
-                let _ = t.set_tooltip(Some(format!("Stage Previz NDI Helper\n{label}")));
+                let warn = if autostart.1.is_some() { "\n⚠ 開機自動啟動沒設定成功" } else { "" };
+                let _ = t.set_tooltip(Some(format!("Stage Previz NDI Helper\n{label}{warn}")));
             }
             last_label = label;
+            last_autostart = Some(autostart);
         }
         if last_light != Some(light) {
             if let Some(t) = &tray {
@@ -146,17 +163,20 @@ pub fn run(shared: Arc<Shared>) -> Result<(), Box<dyn std::error::Error>> {
             } else if ev.id() == &id_get_ndi {
                 let _ = open::that(NDI_TOOLS_URL);
             } else if ev.id() == &id_autostart {
-                let want = !shared.cfg().autostart;
-                let actual = crate::autostart::set(want);
-                {
+                // config 記用戶的意思；實際有沒有登記成功放在 state（失敗會標 ⚠，背景也會再試）
+                // （先改 config 再動登記，背景檢查才不會把剛關掉的又補回去）
+                let want = {
                     let mut c = shared.cfg();
-                    c.autostart = actual;
+                    c.autostart = !c.autostart;
                     if let Err(e) = crate::config::save(&c) {
                         error!("save config failed: {e}");
                     }
-                }
-                item_autostart.set_checked(actual);
-                info!("autostart → {actual}");
+                    c.autostart
+                };
+                let st = crate::autostart::set(want);
+                item_autostart.set_checked(want);
+                info!("autostart → {want} (registered = {}, error = {:?})", st.registered, st.error);
+                crate::autostart::publish(&shared, st);
             } else if ev.id() == &id_open_config {
                 let _ = open::that(crate::config::config_dir());
             } else if ev.id() == &id_quit {

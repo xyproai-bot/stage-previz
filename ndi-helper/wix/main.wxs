@@ -9,6 +9,7 @@
       (on first launch the helper registers itself to start at login)
     - Closes a running helper before installing / upgrading / uninstalling
       (no "files in use" prompt when updating)
+    - No Restart Manager check and no System Restore point (updates take seconds)
     - Uninstall also removes the start-at-login entry
     - No PATH entry (it is a tray app, not a command line tool)
 
@@ -105,7 +106,25 @@
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
         <Property Id='ARPHELPLINK' Value='https://stage-previz.vercel.app/'/>
 
-        <!-- Close a running helper first (it is a tray app: no window to close, so just end it) -->
+        <!--
+          Fast, prompt-free upgrades.
+          The 0.1.7 -> 0.1.9 upgrade sat at "Validating install" for ~4 minutes: the event log shows
+          the installer opening its Restart Manager session (InstallValidate files-in-use check) right
+          after our taskkill, then no installer activity for ~230 s. This package has one exe and
+          kills it itself, so Restart Manager's files-in-use detection buys nothing here:
+            - MSIRESTARTMANAGERCONTROL=Disable: no Restart Manager session / RmGetList in InstallValidate
+            - MSIFASTINSTALL=1: no System Restore point (saves the VSS snapshot on every update)
+        -->
+        <Property Id='MSIRESTARTMANAGERCONTROL' Value='Disable'/>
+        <Property Id='MSIFASTINSTALL' Value='1'/>
+
+        <!--
+          Close a running helper first (it is a tray app: no window to close, so just end it).
+          Immediate, before InstallValidate, as the installing user: the helper is gone before the
+          files-in-use check, so there is no prompt and nothing waits on it. "Not running" is ignored.
+          (A deferred kill cannot go here: with afterInstallInitialize nothing that generates script
+          may come before RemoveExistingProducts.)
+        -->
         <SetProperty Id='WixQuietExec64CmdLine' Before='CloseRunningHelper' Sequence='execute'
             Value='"[System64Folder]taskkill.exe" /F /IM stage-previz-ndi-helper.exe'/>
         <CustomAction Id='CloseRunningHelper' BinaryKey='WixCA' DllEntry='WixQuietExec64' Execute='immediate' Return='ignore'/>

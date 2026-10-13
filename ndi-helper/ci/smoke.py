@@ -91,11 +91,25 @@ def main():
     assert hello["type"] == "hello" and hello["protocol"] >= 2, hello
     assert status["type"] == "status", status
     assert status["ndi"] in ("starting", "missing", "ready", "error"), status
-    for k in ("state", "sources", "availableSources", "source", "fps", "maxFps", "receiving", "error"):
+    for k in ("state", "sources", "availableSources", "source", "fps", "maxFps", "receiving", "error", "autostart"):
         assert k in status, "status missing %s" % k
     # CI 機器沒裝 NDI → 應該回報 missing（讓網頁顯示「請先安裝 NDI Tools」）
     if status["ndi"] == "missing":
         assert status["state"] == "ndi_missing" and status["error"]["code"] == "ndi_missing", status
+    # 開機自動啟動的實際狀況（CI 設了 STAGE_PREVIZ_NDI_NO_AUTOSTART → 不寫，也不會有錯誤）
+    auto = status["autostart"]
+    assert set(auto) >= {"wanted", "registered", "error"}, auto
+    if os.environ.get("STAGE_PREVIZ_NDI_NO_AUTOSTART"):
+        assert auto["error"] is None, auto
+
+    # log 也要寫進設定資料夾的 helper.log（Release 版沒有主控台，不然出錯看不到）
+    cfg_dir = os.environ.get("STAGE_PREVIZ_NDI_CONFIG_DIR")
+    if cfg_dir:
+        log_path = os.path.join(cfg_dir, "helper.log")
+        with open(log_path, encoding="utf-8", errors="replace") as f:
+            log_text = f.read()
+        assert "Stage Previz NDI Helper v" in log_text, log_text[:500]
+        print("helper.log OK (%d bytes)" % len(log_text))
 
     s, status_line, _ = connect(port, origin="https://evil.example.com")
     s.close()

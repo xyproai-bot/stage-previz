@@ -175,6 +175,11 @@ pub fn status_message(shared: &Shared, frames_paused: bool) -> String {
         "frameCount": s.frame_count,
         "clients": clients,
         "framesPaused": frames_paused,
+        "autostart": {
+            "wanted": s.autostart.wanted,
+            "registered": s.autostart.registered,
+            "error": s.autostart.error,
+        },
     })
     .to_string()
 }

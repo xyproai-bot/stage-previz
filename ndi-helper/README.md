@@ -16,7 +16,7 @@
 4. 右下角系統列（時鐘旁邊，可能收在 ^ 裡）出現一個圓點就成功了。
    **以後開機會自動啟動**；不想要的話：對圓點按右鍵 → 取消「開機時自動啟動」。
 
-更新版本：直接下載新的安裝檔再裝一次就好（會自動關掉舊的、裝完自動開新的）。
+更新版本：直接下載新的安裝檔再裝一次就好（會自動關掉舊的、裝完自動開新的，幾秒鐘就裝完）。
 
 ## 安裝（Mac）
 
@@ -43,8 +43,10 @@
 3. 第一次連線時瀏覽器會問「**允許存取這台裝置上的應用程式和服務**」→ 按「**允許**」
 4. LED 就會顯示 AE 的畫面
 
-**會自動挑對的 AE**：網路上有好幾台電腦在送 NDI 時，小程序優先接「這台電腦」的 After Effects；
-這台沒有才接別台。想看別台的畫面，可以在網頁上選來源（選過會記住；選「自動」回到預設）。
+**只會自動接「這台電腦」的 AE**：網路上有好幾台電腦在送 NDI 時，小程序只自動接這台電腦的
+After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電腦的畫面不會自動出現**——
+這台的 AE 沒在送時就等著（網頁會說找不到這台電腦的 AE）。
+真的想看別台的畫面，要在網頁上手動選那個來源（選過會記住；選「自動」回到預設）。
 
 ### 圓點顏色
 
@@ -52,10 +54,10 @@
 |---|---|
 | 綠 | 網頁正在收 AE 畫面 |
 | 灰 | 待機（沒有網頁在看，幾乎不吃電腦資源） |
-| 橘 | 要處理：沒裝 NDI Tools、找不到 AE 的 NDI 輸出、或已經開了另一個小程序 |
+| 橘 | 要處理：沒裝 NDI Tools、找不到這台電腦 AE 的 NDI 輸出、或已經開了另一個小程序 |
 
 右鍵（Mac 點一下）圓點的選單：狀態、打開 Stage Previz 平台、下載 NDI Tools（沒裝時才能點）、
-開機時自動啟動（勾選）、開啟設定資料夾、離開。
+開機時自動啟動（勾選；沒設定成功會標「⚠ 沒設定成功」，原因寫在 `helper.log`）、開啟設定資料夾、離開。
 
 ---
 
@@ -74,7 +76,7 @@
 **1. `hello`**：連上後第一則，只送一次。
 
 ```json
-{ "type": "hello", "version": "0.1.9", "protocol": 2, "platform": "windows", "port": 7777,
+{ "type": "hello", "version": "0.1.10", "protocol": 2, "platform": "windows", "port": 7777,
   "source": "ULTRA9-285K (Adobe After Effects)" }
 ```
 
@@ -88,7 +90,7 @@
 ```json
 {
   "type": "status",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "state": "live",
   "ndi": "ready",
   "error": null,
@@ -111,18 +113,19 @@
   "outWidth": 960, "outHeight": 540,
   "frameCount": 1234,
   "clients": 1,
-  "framesPaused": false
+  "framesPaused": false,
+  "autostart": { "wanted": true, "registered": true, "error": null }
 }
 ```
 
 | 欄位 | 說明 |
 |---|---|
-| `state` | **網頁直接 switch 這個就好**：`"starting"` 啟動中 / `"ndi_missing"` 沒裝 NDI → 顯示「請先安裝 NDI Tools」/ `"ndi_error"` NDI 初始化失敗 / `"searching"` 找不到任何 NDI 來源（AE 沒開 NDI 輸出）/ `"standby"` 有來源但沒有任何連線要畫面 / `"connecting"` 已連上來源、還沒收到畫面（或超過 2 秒沒畫面，例如 AE 停住）/ `"live"` 畫面正在送 |
+| `state` | **網頁直接 switch 這個就好**：`"starting"` 啟動中 / `"ndi_missing"` 沒裝 NDI → 顯示「請先安裝 NDI Tools」/ `"ndi_error"` NDI 初始化失敗 / `"searching"` 沒有可以自動接的來源：一個 NDI 來源都沒有（`error.code` = `no_source`），或只有別台電腦的（`error.code` = `no_local_source`，`sources` 照樣列出來給網頁手動選）/ `"standby"` 有來源但沒有任何連線要畫面 / `"connecting"` 已連上來源、還沒收到畫面（或超過 2 秒沒畫面，例如 AE 停住）/ `"live"` 畫面正在送 |
 | `ndi` | NDI 函式庫狀態：`"starting"` / `"missing"` / `"ready"` / `"error"` |
-| `error` | `null` 或 `{ "code", "message" }`。`code`：`ndi_missing`、`ndi_init_failed`、`no_source`、`recv_failed`、`encoder_failed`。`message` 是可以直接顯示的中文 |
+| `error` | `null` 或 `{ "code", "message" }`。`code`：`ndi_missing`、`ndi_init_failed`、`no_source`（一個 NDI 來源都沒有）、`no_local_source`（0.1.10 起：只有別台電腦的來源，不會自動接；`state` = `"searching"`）、`recv_failed`、`encoder_failed`。`message` 是可以直接顯示的中文 |
 | `lastError` | = `error.message`（舊版相容） |
 | `mode` | `"auto"`（自動挑）或 `"manual"`（用戶選過，記在 config） |
-| `preferred` | 手動選的來源名稱；自動時 `null`。手動選的來源不在線時會先照自動規則接別的，等它上線再切回去 |
+| `preferred` | 手動選的來源名稱；自動時 `null`。手動選的來源不在線時會先照自動規則接（一樣只接這台電腦的），等它上線再切回去 |
 | `source` | 目前要接 / 正在接的來源；沒有時 `null` |
 | `sources` | 網路上看得到的所有 NDI 來源。`local` = 這台電腦送的；`afterEffects` = 名稱含 "After Effects" |
 | `availableSources` | 只有名稱的陣列（舊版相容） |
@@ -133,6 +136,7 @@
 | `width`/`height` | NDI 原始尺寸；`outWidth`/`outHeight` = 送出的 JPEG 尺寸（預設縮一半）。還沒收到畫面時是 0 |
 | `clients` | 目前連著的網頁數 |
 | `framesPaused` | **這條連線**有沒有暫停收畫面 |
+| `autostart` | 0.1.10 起：開機自動啟動的實際狀況。`wanted` = 設定要開；`registered` = 真的有登記、而且指到目前這個執行檔（Windows Run 機碼 / macOS LaunchAgent）；`error` = 上次登記失敗的原因（中文，成功是 `null`） |
 
 **3. 二進位訊息**：每一則 = 一張完整 JPEG（`createImageBitmap(new Blob([data], {type:'image/jpeg'}))`）。
 只有在至少一條連線要畫面時才會送；最多每秒 `maxFps`（預設 30）張。網頁解碼太慢時 helper 會跳過舊的幀，不會越積越多。
@@ -167,13 +171,16 @@
 
 ### 自動挑來源的規則
 
-1. 手動選過（`preferred`）而且在線 → 用它
-2. 這台電腦的 After Effects（NDI 名稱「機器名 (程式名)」的機器名 = 本機名稱，不分大小寫；或來源 IP 是本機）
+1. 手動選過（`preferred`）而且在線 → 用它（可以是別台電腦；**只有這種情況**才會接別台）
+2. 這台電腦的 After Effects（NDI 名稱「機器名 (程式名)」的機器名 = 本機名稱，不分大小寫；
+   Windows 也比對 `COMPUTERNAME`；或來源 IP 是本機）
 3. 這台電腦的其他 NDI 來源
-4. 別台電腦的 After Effects
-5. 清單第一個
+4. 都沒有 → **不接**：`state` = `"searching"`、`source` = `null`、`error.code` = `no_local_source`
+   （網路上一個來源都沒有時是 `no_source`）。別台電腦的來源照樣列在 `sources`（`local: false`），
+   網頁要接就送 `select_source`
 
 挑選結果會跟著來源上線 / 下線自動更新（例如 AE 晚一點才開，開了就自動切過去）。
+從手動（別台）切回自動時，正在接的別台畫面會馬上斷開。
 
 ---
 
@@ -201,7 +208,13 @@
 - `max_fps`：送給網頁的最高 fps（AE 送 60 也只編 30 張）
 - `autostart`：開機自動啟動（預設開；右鍵選單切換）。從 0.1.8 以前升級上來會自動打開一次
 - 開機自動啟動的實作：Windows = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\StagePrevizNdiHelper`；
-  macOS = `~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist`
+  macOS = `~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist`。
+  `autostart` 是 true 時每次啟動都會確保有登記、而且指到目前的執行檔（Windows 的值是加引號的 exe 路徑；
+  寫完讀回確認），之後 15 秒、1 分鐘、然後每 10 分鐘再檢查一次（被別的程式刪掉會補回去並寫進 log）。
+  結果在 status 的 `autostart` 欄位跟系統列選單。
+
+同一個資料夾裡的 `helper.log` 是小程序的紀錄（Release 版沒有主控台視窗，出錯都寫在這裡；
+超過 2 MB 會改名成 `helper.log.old` 再重新開始）。
 
 開發 / 測試用環境變數：
 
@@ -225,8 +238,8 @@ cargo build --release
 使用者電腦不用另外裝任何東西；Apple Silicon 不需要 NASM）。
 
 - Windows：Visual Studio C++ Build Tools（含 CMake）、NASM；安裝檔：`cargo install cargo-wix` → `cargo wix --no-build`
-  （範本在 `wix/main.wxs`，已客製：開始選單捷徑、裝完自動啟動、升級前自動關掉舊版、移除時清掉開機啟動。**不要**再跑 `cargo wix init --force`）
-- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.9 dist`
+  （範本在 `wix/main.wxs`，已客製：開始選單捷徑、裝完自動啟動、升級前自動關掉舊版、不用 Restart Manager 也不建系統還原點（更新幾秒就好）、移除時清掉開機啟動。**不要**再跑 `cargo wix init --force`）
+- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.10 dist`
 
 發佈：推 tag `ndi-helper-vX.Y.Z` → GitHub Actions（`.github/workflows/ndi-helper-release.yml`）會編 Windows MSI +
 Mac universal zip、跑冒煙測試、建 Release。網站固定連：

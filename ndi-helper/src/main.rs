@@ -9,7 +9,8 @@
 //        → state.rs：broadcast 給每個網頁連線
 //        → ws_server.rs：hello / status / JPEG frames；收 select_source / pause / resume
 //   tray.rs：系統列圖示（主執行緒；macOS 規定）
-//   autostart.rs：開機自動啟動（預設開，tray 可關）
+//   autostart.rs：開機自動啟動（預設開，tray 可關；啟動時確保有登記 + 背景定期檢查）
+//   logfile.rs：log 也寫進設定資料夾的 helper.log（Release 版沒有主控台）
 //
 // 開發 / 測試用環境變數：
 //   STAGE_PREVIZ_NDI_PORT=7790          換 port（不寫回 config）
@@ -22,6 +23,7 @@
 
 mod autostart;
 mod config;
+mod logfile;
 mod ndi;
 mod state;
 mod tray;
@@ -35,8 +37,12 @@ fn env_flag(name: &str) -> bool {
 }
 
 fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
-    info!("Stage Previz NDI Helper v{}", env!("CARGO_PKG_VERSION"));
+    logfile::init();
+    info!(
+        "Stage Previz NDI Helper v{} ({})",
+        env!("CARGO_PKG_VERSION"),
+        std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
+    );
 
     let cfg = config::load_or_default();
     let port = config::effective_port(&cfg);
@@ -68,10 +74,18 @@ fn main() {
         }
     };
 
-    // 開機自動啟動：預設開，指到目前這個執行檔
-    autostart::sync(cfg.autostart);
-
     let shared = Arc::new(state::Shared::new(cfg, port));
+
+    // 開機自動啟動：預設開，確保登記的是目前這個執行檔（寫完讀回確認）；
+    // 之後背景再檢查（被別的程式刪掉會補回去）。結果在 status.autostart + 系統列
+    autostart::startup(&shared);
+    {
+        let shared = shared.clone();
+        std::thread::Builder::new()
+            .name("autostart".into())
+            .spawn(move || autostart::watch(shared))
+            .expect("spawn autostart thread");
+    }
 
     // WebSocket server（tokio，兩條 worker 就夠）
     let runtime = tokio::runtime::Builder::new_multi_thread()

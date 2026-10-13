@@ -8,7 +8,8 @@
 //
 //   載入 NDI 函式庫（找不到 → 狀態 missing，每 5 秒再找一次）
 //     → NDIlib_initialize + 一直開著的 finder（每秒更新來源清單）
-//     → 挑來源：手動指定（config.source_name）> 本機 AE > 本機其他 > 別台 AE > 第一個
+//     → 挑來源：手動指定（config.source_name，可以是別台）> 本機 AE > 本機其他；
+//       自動模式「絕不」接別台電腦（不會自動顯示同事的畫面）→ 這台沒有就等（no_local_source）
 //     → 只有在至少一個網頁要畫面時才建 receiver（沒人看就斷開，不解碼、不編碼）
 //     → 每幀：限速 max_fps（預設 30）→ 2x 縮小 + limited→full → turbojpeg → 廣播給網頁
 
@@ -299,9 +300,10 @@ struct Src {
     after_effects: bool,
 }
 
-/// 「這台電腦」的身分：hostname + 對外 IP，用來判斷哪個 NDI 來源是本機送的
+/// 「這台電腦」的身分：電腦名稱 + 對外 IP，用來判斷哪個 NDI 來源是本機送的
 struct LocalIdentity {
-    host: String,
+    /// 小寫、去掉網域（hostname；Windows 另外加 COMPUTERNAME，名稱超過 15 字時兩個會不一樣）
+    hosts: Vec<String>,
     ips: Vec<IpAddr>,
 }
 
@@ -312,7 +314,13 @@ fn short_host(s: &str) -> String {
 
 impl LocalIdentity {
     fn detect() -> Self {
-        let host = short_host(&gethostname::gethostname().to_string_lossy());
+        let mut hosts = vec![short_host(&gethostname::gethostname().to_string_lossy())];
+        #[cfg(windows)]
+        if let Ok(n) = std::env::var("COMPUTERNAME") {
+            hosts.push(short_host(&n));
+        }
+        hosts.retain(|h| !h.is_empty());
+        hosts.dedup();
         let mut ips = Vec::new();
         // UDP connect 不會真的送封包，只是讓系統挑出「預設對外網卡」的 IP
         if let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") {
@@ -322,14 +330,14 @@ impl LocalIdentity {
                 }
             }
         }
-        Self { host, ips }
+        Self { hosts, ips }
     }
 
-    /// NDI 名稱格式 "機器名 (程式名)"：機器名 = 本機 hostname（不分大小寫）就算本機；
+    /// NDI 名稱格式 "機器名 (程式名)"：機器名 = 本機名稱（不分大小寫）就算本機；
     /// 或 URL 的 IP 是 loopback / 本機 IP 也算。
     fn is_local(&self, name: &str, url: Option<&str>) -> bool {
-        let machine = name.split(" (").next().unwrap_or(name);
-        if !self.host.is_empty() && short_host(machine) == self.host {
+        let machine = short_host(name.split(" (").next().unwrap_or(name));
+        if !machine.is_empty() && self.hosts.iter().any(|h| *h == machine) {
             return true;
         }
         if let Some(url) = url {
@@ -347,29 +355,80 @@ fn is_after_effects(name: &str) -> bool {
     name.to_lowercase().contains("after effects")
 }
 
-/// 挑來源：手動指定且在線 > 本機 AE > 本機其他 > 別台 AE > 清單第一個
-fn pick_source(sources: &[Src], preferred: Option<&str>) -> Option<usize> {
-    if let Some(p) = preferred.filter(|p| !p.is_empty()) {
+/// 挑來源的結果
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Pick {
+    /// 接 sources[i]
+    Source(usize),
+    /// 網路上有來源，但都是別台電腦的 → 不自動接（網頁可以手動選）
+    NoLocal,
+    /// 一個來源都沒有
+    NoSource,
+}
+
+impl Pick {
+    fn index(self) -> Option<usize> {
+        match self {
+            Pick::Source(i) => Some(i),
+            _ => None,
+        }
+    }
+}
+
+/// 名稱一樣（先比完全一樣，再比不分大小寫）
+fn same_name(a: &str, b: &str) -> bool {
+    a == b || a.eq_ignore_ascii_case(b)
+}
+
+/// 挑來源：
+///   1. 手動指定（網頁送 select_source）而且在線 → 用它（可以是別台電腦）
+///   2. 這台電腦的 After Effects
+///   3. 這台電腦的其他 NDI 來源
+///   別台電腦的來源**不會自動接**（不要自動顯示同事的畫面）→ NoLocal，等這台的 AE 上線或網頁手動選
+fn pick_source(sources: &[Src], preferred: Option<&str>) -> Pick {
+    if let Some(p) = preferred.filter(|p| !p.trim().is_empty()) {
         if let Some(i) = sources.iter().position(|s| s.name == p) {
-            return Some(i);
+            return Pick::Source(i);
         }
-        if let Some(i) = sources.iter().position(|s| s.name.eq_ignore_ascii_case(p)) {
-            return Some(i);
-        }
-    }
-    let mut best: Option<(usize, u8)> = None;
-    for (i, s) in sources.iter().enumerate() {
-        let score = match (s.local, s.after_effects) {
-            (true, true) => 3,
-            (true, false) => 2,
-            (false, true) => 1,
-            (false, false) => 0,
-        };
-        if best.map_or(true, |(_, b)| score > b) {
-            best = Some((i, score));
+        if let Some(i) = sources.iter().position(|s| same_name(&s.name, p)) {
+            return Pick::Source(i);
         }
     }
-    best.map(|(i, _)| i)
+    if let Some(i) = sources.iter().position(|s| s.local && s.after_effects) {
+        return Pick::Source(i);
+    }
+    if let Some(i) = sources.iter().position(|s| s.local) {
+        return Pick::Source(i);
+    }
+    if sources.is_empty() {
+        Pick::NoSource
+    } else {
+        Pick::NoLocal
+    }
+}
+
+/// 沒挑到新來源時，正在接的還能不能留著（AE 暫時從清單消失時 NDI 會自己重連，不用斷）：
+/// 只有「手動指定的那個」或「這台電腦的」可以留；別台電腦的（例如剛從手動切回自動）要斷開。
+fn may_keep_receiver(recv_name: &str, recv_local: bool, preferred: Option<&str>) -> bool {
+    recv_local || preferred.map_or(false, |p| same_name(recv_name, p.trim()))
+}
+
+/// 沒有可以接的來源時回報給網頁的錯誤
+fn no_source_error(pick: Pick, sources: &[Src]) -> Option<HelperError> {
+    match pick {
+        Pick::Source(_) => None,
+        Pick::NoSource => Some(HelperError {
+            code: "no_source",
+            message: "找不到 NDI 來源（AE 有開 NDI 輸出嗎？）".into(),
+        }),
+        Pick::NoLocal => Some(HelperError {
+            code: "no_local_source",
+            message: format!(
+                "這台電腦的 AE 沒有在送 NDI（網路上有 {} 個別台電腦的來源，不會自動接；要看請在網頁上選）",
+                sources.len()
+            ),
+        }),
+    }
 }
 
 // ── RAII：finder / receiver ────────────────────────────────────────
@@ -389,6 +448,8 @@ struct Receiver<'a> {
     lib: &'a NdiLib,
     ptr: *mut c_void,
     name: String,
+    /// 這台電腦的來源（自動模式只能留著本機的）
+    local: bool,
 }
 
 impl Drop for Receiver<'_> {
@@ -414,7 +475,7 @@ impl<'a> Receiver<'a> {
         if ptr.is_null() {
             None
         } else {
-            Some(Self { lib, ptr, name: src.name.clone() })
+            Some(Self { lib, ptr, name: src.name.clone(), local: src.local })
         }
     }
 }
@@ -532,7 +593,7 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
 
     let mut sources: Vec<Src> = Vec::new();
     let mut identity = LocalIdentity::detect();
-    info!("Local host = {:?}, ips = {:?}", identity.host, identity.ips);
+    info!("Local names = {:?}, ips = {:?}", identity.hosts, identity.ips);
     let mut last_refresh: Option<Instant> = None;
     let mut seen_gen = u64::MAX;
     let mut recv: Option<Receiver> = None;
@@ -575,28 +636,62 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
         seen_gen = gen;
 
         let cfg: Config = shared.cfg().clone();
-        let target = pick_source(&sources, cfg.source_name.as_deref());
-        // 目前來源：挑到的；都沒有就維持正在接的（AE 暫時從清單消失，NDI 會自己重連）
+        let pick = pick_source(&sources, cfg.source_name.as_deref());
+        let target = pick.index();
+        // 沒挑到：正在接的如果還能留（手動指定的那個 / 這台電腦的）就留著
+        // （AE 暫時從清單消失，NDI 會自己重連）；別台電腦的要斷開（例如剛從手動切回自動）
+        if target.is_none() {
+            let must_drop = recv
+                .as_ref()
+                .map_or(false, |r| !may_keep_receiver(&r.name, r.local, cfg.source_name.as_deref()));
+            if must_drop {
+                if let Some(old) = recv.take() {
+                    info!("Auto mode never shows another computer's source → disconnected {}", old.name);
+                }
+                pacer.next_due = None;
+                last_frame_at = None;
+                shared.update(|s| {
+                    s.connected = false;
+                    s.receiving = false;
+                    s.fps = 0.0;
+                    s.ndi_fps = 0.0;
+                    (s.width, s.height, s.out_width, s.out_height) = (0, 0, 0, 0);
+                    true
+                });
+            }
+        }
+        // 目前來源：挑到的；都沒有就維持正在接的（上面已經把不能留的斷開了）
         let target_name = target
             .map(|i| sources[i].name.clone())
             .or_else(|| recv.as_ref().map(|r| r.name.clone()));
+        // 真的沒東西可接才報 no_source / no_local_source
+        let want_err = if target_name.is_none() { no_source_error(pick, &sources) } else { None };
         shared.update(|s| {
             let mut changed = false;
             if s.source != target_name {
                 s.source = target_name.clone();
                 changed = true;
             }
-            let no_source = target_name.is_none();
-            let has_no_source_err = s.error.as_ref().map(|e| e.code == "no_source").unwrap_or(false);
-            if no_source && s.error.is_none() {
-                s.error = Some(HelperError {
-                    code: "no_source",
-                    message: "找不到 NDI 來源（AE 有開 NDI 輸出嗎？）".into(),
-                });
-                changed = true;
-            } else if !no_source && has_no_source_err {
-                s.error = None;
-                changed = true;
+            let is_ours = s
+                .error
+                .as_ref()
+                .map_or(false, |e| e.code == "no_source" || e.code == "no_local_source");
+            match want_err {
+                // 不蓋掉 NDI 本身的錯誤；no_source ↔ no_local_source 會切換、來源數會更新；
+                // 舊來源的 recv_failed 已經沒意義（沒有要接的來源了）→ 換成這個
+                Some(e) => {
+                    let replaceable = is_ours || s.error.as_ref().map_or(true, |x| x.code == "recv_failed");
+                    if replaceable && s.error.as_ref() != Some(&e) {
+                        s.error = Some(e);
+                        changed = true;
+                    }
+                }
+                None => {
+                    if is_ours {
+                        s.error = None;
+                        changed = true;
+                    }
+                }
             }
             changed
         });
@@ -895,36 +990,84 @@ mod tests {
             src("ULTRA9-285K (Test Pattern)", true),
             src("ULTRA9-285K (Adobe After Effects)", true),
         ];
-        assert_eq!(pick_source(&list, None), Some(2));
+        assert_eq!(pick_source(&list, None), Pick::Source(2));
     }
 
     #[test]
-    fn local_beats_remote_ae_and_fallbacks() {
+    fn local_other_source_beats_remote_after_effects() {
         let list = vec![src("A (x)", false), src("B (Adobe After Effects)", false), src("ME (y)", true)];
-        assert_eq!(pick_source(&list, None), Some(2));
-        let list = vec![src("A (x)", false), src("B (Adobe After Effects)", false)];
-        assert_eq!(pick_source(&list, None), Some(1));
-        let list = vec![src("A (x)", false), src("B (y)", false)];
-        assert_eq!(pick_source(&list, None), Some(0));
-        assert_eq!(pick_source(&[], None), None);
+        assert_eq!(pick_source(&list, None), Pick::Source(2));
     }
 
     #[test]
-    fn explicit_choice_wins_when_online() {
+    fn auto_never_picks_another_computer() {
+        // 辦公室：自己的 AE 沒在送，網路上只有同事的 AE → 不接，等（no_local_source）
+        let list = vec![src("TERRYGRACOMPANY (Adobe After Effects)", false)];
+        assert_eq!(pick_source(&list, None), Pick::NoLocal);
+        let list = vec![src("A (x)", false), src("B (Adobe After Effects)", false)];
+        assert_eq!(pick_source(&list, None), Pick::NoLocal);
+        assert_eq!(pick_source(&list, Some("")), Pick::NoLocal);
+        assert_eq!(pick_source(&[], None), Pick::NoSource);
+    }
+
+    #[test]
+    fn manual_choice_can_be_another_computer() {
         let list = vec![src("ME (Adobe After Effects)", true), src("B (y)", false)];
-        assert_eq!(pick_source(&list, Some("B (y)")), Some(1));
-        // 不在線 → 照自動規則
-        assert_eq!(pick_source(&list, Some("GONE (z)")), Some(0));
+        assert_eq!(pick_source(&list, Some("B (y)")), Pick::Source(1));
+        assert_eq!(pick_source(&list, Some("b (Y)")), Pick::Source(1));
+        let list = vec![src("TERRYGRACOMPANY (Adobe After Effects)", false)];
+        assert_eq!(pick_source(&list, Some("TERRYGRACOMPANY (Adobe After Effects)")), Pick::Source(0));
+    }
+
+    #[test]
+    fn manual_choice_offline_falls_back_to_local_only() {
+        // 手動選的（自己的 AE）不在線 → 照自動規則，但一樣只接這台電腦的
+        let list = vec![src("TERRYGRACOMPANY (Adobe After Effects)", false)];
+        assert_eq!(pick_source(&list, Some("ULTRA9-285K (Adobe After Effects)")), Pick::NoLocal);
+        let list = vec![src("OTHER (Adobe After Effects)", false), src("ME (Test Pattern)", true)];
+        assert_eq!(pick_source(&list, Some("GONE (z)")), Pick::Source(1));
+        assert_eq!(pick_source(&[], Some("GONE (z)")), Pick::NoSource);
+    }
+
+    #[test]
+    fn keeps_receiver_only_if_local_or_chosen() {
+        // AE 暫時從清單消失：本機的 / 手動選的留著（NDI 會自己重連）
+        assert!(may_keep_receiver("ME (Adobe After Effects)", true, None));
+        assert!(may_keep_receiver("B (Adobe After Effects)", false, Some("B (Adobe After Effects)")));
+        assert!(may_keep_receiver("B (Adobe After Effects)", false, Some("b (adobe after effects) ")));
+        // 別台電腦的、沒有手動選它（例如剛切回自動）→ 斷開
+        assert!(!may_keep_receiver("B (Adobe After Effects)", false, None));
+        assert!(!may_keep_receiver("B (Adobe After Effects)", false, Some("ME (Adobe After Effects)")));
+    }
+
+    #[test]
+    fn error_codes_for_no_source() {
+        let remote = vec![src("A (Adobe After Effects)", false), src("B (y)", false)];
+        let e = no_source_error(pick_source(&remote, None), &remote).unwrap();
+        assert_eq!(e.code, "no_local_source");
+        assert!(e.message.contains('2'), "{}", e.message);
+        let e = no_source_error(pick_source(&[], None), &[]).unwrap();
+        assert_eq!(e.code, "no_source");
+        let local = vec![src("ME (Adobe After Effects)", true)];
+        assert_eq!(no_source_error(pick_source(&local, None), &local), None);
     }
 
     #[test]
     fn local_detection() {
-        let id = LocalIdentity { host: "ultra9-285k".into(), ips: vec!["192.168.1.5".parse().unwrap()] };
+        let id = LocalIdentity { hosts: vec!["ultra9-285k".into()], ips: vec!["192.168.1.5".parse().unwrap()] };
         assert!(id.is_local("ULTRA9-285K (Adobe After Effects)", None));
         assert!(id.is_local("Ultra9-285K.local (x)", None));
+        assert!(!id.is_local("TERRYGRACOMPANY (Adobe After Effects)", None));
         assert!(!id.is_local("OTHER (Adobe After Effects)", Some("192.168.1.9:5961")));
         assert!(id.is_local("OTHER (x)", Some("192.168.1.5:5961")));
         assert!(id.is_local("OTHER (x)", Some("127.0.0.1:5961")));
+        // Windows 電腦名稱超過 15 字：hostname 跟 COMPUTERNAME 不一樣，兩個都算
+        let id = LocalIdentity { hosts: vec!["studio-workstation-01".into(), "studio-workstat".into()], ips: vec![] };
+        assert!(id.is_local("STUDIO-WORKSTAT (Adobe After Effects)", None));
+        assert!(id.is_local("STUDIO-WORKSTATION-01 (Adobe After Effects)", None));
+        // 沒有名稱也不會把空字串當成本機
+        let id = LocalIdentity { hosts: vec![], ips: vec![] };
+        assert!(!id.is_local(" (x)", None));
     }
 
     #[test]

@@ -44,6 +44,17 @@ pub struct SourceInfo {
     pub after_effects: bool,
 }
 
+/// 開機自動啟動的實際狀況（給網頁 status.autostart / 系統列顯示）
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AutostartStatus {
+    /// config 要不要開機自動啟動
+    pub wanted: bool,
+    /// 真的有登記、而且指到目前這個執行檔（Windows Run 機碼 / macOS LaunchAgent）
+    pub registered: bool,
+    /// 上一次登記 / 取消失敗的原因（中文，可以直接顯示）；成功 = None
+    pub error: Option<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HelperError {
     pub code: &'static str,
@@ -79,6 +90,8 @@ pub struct HelperState {
     pub error: Option<HelperError>,
     /// WebSocket port 開不起來（多半是已經有另一個小程序在跑）
     pub port_error: Option<String>,
+    /// 開機自動啟動（啟動時 + 背景定期檢查）
+    pub autostart: AutostartStatus,
 }
 
 impl Default for HelperState {
@@ -100,6 +113,7 @@ impl Default for HelperState {
             frame_count: 0,
             error: None,
             port_error: None,
+            autostart: AutostartStatus::default(),
         }
     }
 }
