@@ -1,6 +1,6 @@
 # Mechanism system (機關系統) — design
 
-Date: 2026-10-14. Status: design for review. Roadmap: `docs/ROADMAP.md` section 3.
+Date: 2026-10-14. Status: implemented on `feat/live-stage-look` (see section 15 for what changed during implementation). Roadmap: `docs/ROADMAP.md` section 3.
 Branch at time of writing: `feat/live-stage-look`. Migration number: **0023**. 0022 belongs to the invite-links work, and the two have no dependency on each other.
 
 Language: this spec is in English. Every string that appears in the UI is quoted in Traditional Chinese, exactly as it should ship. The UI uses no emoji, only the `Icon` component (`web/src/components/Icon.tsx`, lucide-react). `web/src/test/noEmojiInUi.test.ts` enforces this.
@@ -637,19 +637,19 @@ S03 夜曲,3,副歌,1:00.0,1:05.0,5,中央升降台,Axis 3,3.500,3.500,m,全開,
 S03 夜曲,3,副歌,1:00.0,1:05.0,5,旋轉舞台,Revolve,0.0,90.0,°,側面,90.0,5.0,15.0,18.0,6,太快：轉場要 15 秒
 S03 夜曲,3,副歌,1:00.0,1:05.0,5,左側 LED 滑軌,Axis 7,0.000,4.000,m,全開,4.000,5.0,8.0,0.800,0.5,太快：轉場要 8 秒
 S03 夜曲,4,間奏,1:05.0,1:12.0,10,中央升降台,Axis 3,3.500,0.000,m,收起,3.500,7.0,14.0,0.500,0.25,太快：跟上一個 cue 只隔 7 秒
-S03 夜曲,4,間奏,1:05.0,1:12.0,10,旋轉舞台,Revolve,90.0,90.0,°,側面,0.0,,,,6,不動
+S03 夜曲,4,間奏,1:05.0,1:12.0,10,旋轉舞台,Revolve,90.0,90.0,°,側面,0.0,,,,6,會晚 3 秒到位
 S03 夜曲,4,間奏,1:05.0,1:12.0,10,左側 LED 滑軌,Axis 7,4.000,4.000,m,全開,0.000,,,,0.5,不動
 S03 夜曲,5,尾奏,,,8,中央升降台,Axis 3,0.000,0.000,m,收起,0.000,,,,0.25,不動
 S03 夜曲,5,尾奏,,,8,旋轉舞台,Revolve,90.0,0.0,°,正面,90.0,8.0,15.0,11.3,6,太快：轉場要 15 秒
 S03 夜曲,5,尾奏,,,8,左側 LED 滑軌,Axis 7,4.000,0.000,m,收起,4.000,8.0,8.0,0.500,0.5,OK
 
 # 機關說明 Axes
-# 中央升降台（Axis 3）：直線，0 = 舞台面，正的數字往上；行程 0 ~ 3.5 m；最高 0.25 m/秒；常用位置 收起 0 / 半開 1.75 / 全開 3.5
-# 旋轉舞台（Revolve）：旋轉，0 = 模型原本的方向，正的角度從上面看順時針；行程 -180° ~ 180°；最高 6°/秒；常用位置 正面 0 / 側面 90 / 背面 180
-# 左側 LED 滑軌（Axis 7）：直線，0 = 收起，正的數字往左（觀眾看過去）；行程 0 ~ 4 m；最高 0.5 m/秒
+# 中央升降台（Axis 3）：直線，0 = cue 裡原本的位置，正的數字往上；行程 0 m ~ 3.5 m；最高 0.25 m/秒；常用位置 收起 0 / 半開 1.75 / 全開 3.5
+# 旋轉舞台（Revolve）：旋轉（水平轉（像轉台）），0 = 模型原本的方向，正的角度從上面看順時針；行程 -180° ~ 180°；最高 6°/秒；常用位置 正面 0 / 側面 90 / 背面 180
+# 左側 LED 滑軌（Axis 7）：直線，0 = cue 裡原本的位置，正的數字往左（觀眾看過去）；行程 0 m ~ 4 m；最高 0.5 m/秒；常用位置 收起 0 / 全開 4
 # 註：需要秒數 = 行程 ÷ 最高速度，以等速計算、沒有算加減速，實際會再久一點。GO 時間 = 到位時間 − 可用秒數；沒有影片時間的 cue 由現場叫 GO。
 ```
-Cue 4 shows the gap case. 轉場 is 10 s, but the move cannot start before cue 3 arrives at 1:05, so only 7 s are available. The fix is to move the cue's video time, not to change 轉場. These exact rows are the golden fixture for the `cueSheet.ts` test.
+Cue 4 shows the gap case. 轉場 is 10 s, but the move cannot start before cue 3 arrives at 1:05, so only 7 s are available. The fix is to move the cue's video time, not to change 轉場. Cue 4's revolve row shows the late chain: cue 3's revolve starts at 1:00 and needs 15 s, so at 1:05 it is only at 30° and reaches 90° at 1:15, 3 s after cue 4's 1:12. (The first draft of this sample said 「不動」 there, which contradicted the late-chain rule in 6.5.) These exact rows are the golden fixture for the `cueSheet.ts` test. The slide's 常用位置 are 收起 0 / 全開 4.
 
 ---
 
@@ -782,3 +782,43 @@ Only one question changes what gets built. The rest is decided above.
    - **Recommended default: yes, build it.** It only runs when the admin clicks it, shows what it changed and what it skipped, and can be tried on a copy of the project (複製專案) first. Without it, the speed check and the export say nothing useful for those projects until someone re-enters every cue by hand.
 
 Plain-words version for the owner: 「你現在的專案裡，升降台 / 轉台是一個 cue 一個 cue 手動擺高度、角度的嗎？如果是，我做一個按鈕，一鍵把它們變成機關的位置，之後就能檢查速度、匯出總表。我建議做。」
+
+---
+
+## 15. Implementation notes and deviations (2026-10-14)
+
+Everything in sections 1–12 is built except Task 21 (cleanup after master), which waits for the production release. These are the places where the build differs from the text above, and why.
+
+**Validation (4.3)**
+- Names longer than 40 characters, preset names longer than 20 and console labels longer than 40 are shortened instead of rejected (the inputs have `maxLength`, so this only affects API callers). Travel limits outside ±1000 m / ±36000° are clamped to the limit.
+- Extra messages: 「行程要填數字」 (travel not a number), 「一個機關最多帶 200 個物件」, 「找不到要裝上去的機關」 (parent id not in the project).
+- Preset rows with an empty name or a non-numeric value are dropped silently (an unfinished row in the form should not block saving).
+- The parent depth check counts the ancestors plus the height of the mechanism's own subtree, so re-parenting a mechanism that already has children cannot exceed 4 levels.
+
+**Motion (6.4, 6.5)**
+- `MechanismTweener.retarget` leaves a mechanism alone when its target did not change. Without this, editing one mechanism inside a cue (an instant jump) would also snap every other mechanism that was still moving after a cue change.
+- The sheet's 檢查 column also shows 「會晚 N 秒到位」 (late chain on an OK or 不動 row) and 「沒填最高速度」 (moving, no speed set). The panel shows the late chain with 「上一段還沒走完，會晚 {late} 秒到位」 as specified.
+- The too-fast warning says 「這段要轉 90°」 for rotary and 「這段要走 3.5 m」 for linear (7.2 mock-up and 7.4 text combined).
+
+**Export (9)**
+- The legend is generated from the data: 「0 = cue 裡原本的位置」 for linear, 「0 = 模型原本的方向」 for rotary, the direction and positive-angle words from the form's options, then travel, speed (or 「沒填最高速度（不檢查）」) and presets. The sample's hand-written zero descriptions (「0 = 舞台面」) cannot be derived.
+- `GET /mechanism-sheet` also returns `mechanisms`, so the export is one request.
+- The 歌曲 column is `{code} {name}`.
+
+**API and backend (5)**
+- Task 20 is `POST /mechanisms/:mechId/convert-cue-positions` with `{ dryRun?: true }`. It only runs for a mechanism that has no per-cue values yet (409 「這個機關已經有 cue 設了位置，只有還沒在 cue 裡設過位置的機關可以轉」), because existing values would make the inheritance chains ambiguous.
+- The conversion algorithm is generalized so that **every cue looks exactly the same afterwards** (verified by a randomized unit test and an E2E pass on a duplicated project): it walks each song in object-inheritance order, measures the reference object's component in every cue (own or inherited), converts consistent cues, and for cues it cannot convert it writes the mechanism value explicitly (default) and, where an object inherits an already-converted row, materializes that row in the cue. Skipped cues are reported with a reason: `inconsistent` (「{n} 個 cue 的物件動法不一致，沒有轉：…」) or `range` (「{n} 個 cue 轉出來會超出行程，沒有轉：…」). Mechanism values are only written where they differ from what inheritance would give. The count of converted cues only includes cues where the reference object has its own row.
+- Legacy mirroring only touches LEDs whose offsets changed in that PATCH (old vs new value). A legacy mechanism deleted in the new UI therefore stays deleted unless someone moves that slider again on the old site. When an axis goes back to 0 the unedited legacy mechanism for that axis is removed (same result as running 0023 on the new data).
+- Moving objects out of another mechanism (`moveObjects: true`) marks that mechanism as edited, so the old slider cannot put the LED back.
+- Duplicate project also copies `mechanism_offsets` (remapped to the new object ids) and keeps legacy mechanisms as `mlx_`/`mly_` + the new object id with their `edited_at`, so the copy behaves the same on both sites. Import keeps legacy ids the same way.
+- Cue templates store the source cue's own mechanism values (`mechanismPositions`).
+- The 403 text is now 「只有製作可以修改專案內容」 (changed by the accounts work).
+
+**Frontend (7, 8)**
+- The 機關 tab header has a 「換 cue」 select, so the admin can move through cues without leaving the tab. Clicking an object in 3D and Shift+J/K no longer switch away from the 機關 tab (they still switch from the other tabs to 物件狀態), so the setup form stays open while building a selection.
+- Pages keep passing `mechanismOffsets` next to `{...mech.sceneProps}`. While the mechanisms are loading (`mechanisms === null`) StageScene uses the legacy conversion, so the LEDs do not jump on first load; once loaded, `mechanisms` wins.
+- The object hint in 物件狀態 is provided through a React context (`MechanismHintProvider`), so `ObjectStateEditor` / `ObjectAttributePanel` gained one line instead of new props.
+- The travel line (13b) is drawn at the first object of the mechanism (the lift / revolve itself), not the centre of all objects, which can be far apart.
+- 「從目前 3D 狀態建立 cue」 sends `snapshotMechanisms` with the selected cue's resolved values through a small `withMechanismSnapshot` helper, because `api.ts`'s `createCue` type is not touched until cleanup.
+- The setup form scrolls itself into view when it opens.
+

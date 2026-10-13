@@ -1,5 +1,5 @@
 // 設定一個機關（新增 / 編輯）：直接展開在機關分頁裡（不是跳出視窗 → 3D 畫面照樣可以轉、可以 Shift 點物件）
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bookmark, Crosshair, Gauge, Layers, MoveVertical, Plus, RotateCw, Ruler, Search, Trash2, Wand2,
 } from 'lucide-react';
@@ -89,6 +89,9 @@ export default function MechanismSetupForm({
   const [moveConfirmed, setMoveConfirmed] = useState<Set<string>>(new Set());
   const set = (patch: Partial<Draft>) => setD(prev => ({ ...prev, ...patch }));
   const unit = unitOf(d.kind);
+  // 打開時捲到看得到的地方（編輯清單下面的機關時，表單在畫面外）
+  const formRef = useRef<HTMLFormElement>(null);
+  useEffect(() => { formRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, []);
 
   // 物件已經直接放在別的機關（不算自己）
   const ownerOf = useMemo(() => {
@@ -194,7 +197,7 @@ export default function MechanismSetupForm({
   const rotAxis = ROTARY_AXES.find(a => a.key === d.rotAxis)!;
 
   return (
-    <form className="mech-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
+    <form ref={formRef} className="mech-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
       <div className="mech-form__row">
         <label htmlFor="mech-name">名稱</label>
         <input id="mech-name" type="text" value={d.name} maxLength={MECH_LIMITS.nameMax} placeholder="例：中央升降台" autoFocus={!editing}

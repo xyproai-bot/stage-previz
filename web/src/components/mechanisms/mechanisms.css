@@ -187,15 +187,16 @@
 }
 .mech-form__convert .btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; }
 
-/* 分頁標籤上的小橘點（有 cue 來不及到位） */
+/* 分頁標籤上的小橘點（有 cue 來不及到位）：放在字的右上角，不會把標籤撐成兩行 */
+.editor-cues__tabs .tab:has(.mech-tab-dot) { position: relative; }
 .mech-tab-dot {
-  display: inline-block;
+  position: absolute;
+  top: 7px;
+  right: 3px;
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--warn);
-  margin-left: 5px;
-  vertical-align: middle;
 }
 
 /* 物件狀態分頁：這個物件在機關上 */

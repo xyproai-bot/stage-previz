@@ -1604,13 +1604,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (!scene) return;
     const m = focusedMechanismId ? rig.byId.get(focusedMechanismId) : undefined;
     if (!m) return;
-    // 中心：直接帶的物件（沒有 → 裝在它上面的機關帶的物件）
-    let ids = [...rig.chains].filter(([, chain]) => chain[0] === m).map(([id]) => id);
+    // 畫在哪：機關帶的第一個物件（通常就是升降台 / 轉台本身）；沒有 → 裝在它上面的機關帶的物件
+    const def = (mechanisms || []).find(x => x.id === m.id);
+    let ids = def?.objectIds.filter(id => rig.chains.get(id)?.[0] === m).slice(0, 1) ?? [];
     if (ids.length === 0) ids = [...rig.chains].filter(([, chain]) => chain.includes(m)).map(([id]) => id);
     const box = baseBox(ids);
     const center = box.isEmpty() ? m.pivot.clone() : box.getCenter(new THREE.Vector3());
     const size = box.isEmpty() ? 1 : Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 0.2);
-    const presets = (mechanisms || []).find(x => x.id === m.id)?.presets.map(p => p.value) || [];
+    const presets = def?.presets.map(p => p.value) || [];
     const g = travelGeometry(m, center, size, presets);
     const color = new THREE.Color(0xffaa44);
     const lineMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
