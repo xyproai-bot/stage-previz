@@ -244,6 +244,31 @@ test('連續失敗 5 次 → 放棄今天的、明天再做', async () => {
   assert.equal(backupDue((await loadOpsState(db, BACKUP_STATE_KEY)).value, T_0500 + DAY).due, true);
 });
 
+test('每次跑到一半就被中斷（連錯誤都沒記到）→ 第 6 次就放棄今天的，不會每 5 分鐘一直重來', async () => {
+  const db = await seededDb();
+  const r2 = memoryR2();
+  const env = { DB: db, MODELS: r2 };
+  const opts = { pageRows: 10, maxRowsPerRun: 15, maxQueriesPerRun: 2 };
+  assert.equal((await runBackupStep(env, { now: T_0500, opts })).action, 'progress');
+  // 假裝接下來 5 輪都是「拿到租約之後就被中斷」：attempts 一直加、租約過期
+  for (let i = 1; i <= 5; i++) {
+    const l = await loadOpsState(db, BACKUP_STATE_KEY);
+    await saveOpsState(db, BACKUP_STATE_KEY, { ...l.value, job: { ...l.value.job, attempts: i, leaseUntil: 0 } }, l.version, T_0500 + i);
+  }
+  const r = await runBackupStep(env, { now: T_0500 + HOUR, opts });
+  assert.equal(r.action, 'failed');
+  const st = (await loadOpsState(db, BACKUP_STATE_KEY)).value;
+  assert.equal(st.job, null);
+  assert.equal(st.failedDay, '2026-10-14');
+  assert.ok(!r2.keys().some(k => k.startsWith(BACKUP_PARTS_PREFIX)), '留下的段落清掉');
+  // 有往前的話會重新算
+  const db2 = await seededDb();
+  const env2 = { DB: db2, MODELS: memoryR2() };
+  let now = T_0500, last;
+  for (let i = 0; i < 20; i++) { last = await runBackupStep(env2, { now, opts }); if (last.action === 'done') break; now += 5 * 60_000; }
+  assert.equal(last.action, 'done', '分很多輪做也不會被當成失敗');
+});
+
 test('做完會刪掉超過保留期限的舊備份（不認得的檔不動）', async () => {
   const db = await seededDb();
   const r2 = memoryR2();

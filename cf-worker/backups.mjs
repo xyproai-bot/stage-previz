@@ -367,6 +367,16 @@ export async function runBackupStep(env, { now = Date.now(), opts = {}, clock = 
     job = newJob(backupDay(now), now, await listBackupTables(db));
   }
 
+  // 連續幾輪沒有往前（出錯，或跑到一半被中斷、連錯誤都沒記到）→ 超過上限就放棄今天的
+  job.attempts = (job.attempts || 0) + 1;
+  if (job.attempts > o.maxAttempts) {
+    const leftovers = await listAll(bucket, BACKUP_PARTS_PREFIX).catch(() => []);
+    await deleteKeys(bucket, leftovers.map(x => x.key)).catch(() => {});
+    const message = job.error || '備份一直做不完（可能每次都被中斷）';
+    const lastError = { day: job.day, at: now, message };
+    await saveOpsState(db, BACKUP_STATE_KEY, { ...state, job: null, failedDay: job.day, lastError }, loaded.version, now);
+    return { action: 'failed', day: job.day, error: message };
+  }
   // 租約：別的排程看到就不做
   job.leaseUntil = now + o.leaseMs;
   let version = await saveOpsState(db, BACKUP_STATE_KEY, { ...state, job }, loaded.version, now);
@@ -443,6 +453,7 @@ export async function runBackupStep(env, { now = Date.now(), opts = {}, clock = 
     if (!finished) {
       job.leaseUntil = 0;
       job.error = null;
+      job.attempts = 0;  // 這一輪有往前 → 重新算
       await saveOpsState(db, BACKUP_STATE_KEY, { ...state, job }, version, clock());
       return { action: 'progress', day: job.day, rows: job.rows, parts: job.parts.length };
     }
@@ -458,7 +469,8 @@ export async function runBackupStep(env, { now = Date.now(), opts = {}, clock = 
   } catch (e) {
     gz.abort();
     const message = String(e?.message || e).slice(0, 300);
-    const failedJob = { ...atStart, attempts: (atStart.attempts || 0) + 1, error: message, leaseUntil: 0 };
+    // atStart 的 attempts 已經在開始這一輪時加過 1
+    const failedJob = { ...atStart, error: message, leaseUntil: 0 };
     const lastError = { day: failedJob.day, at: clock(), message };
     if (failedJob.attempts >= o.maxAttempts) {
       const leftovers = await listAll(bucket, BACKUP_PARTS_PREFIX).catch(() => []);
