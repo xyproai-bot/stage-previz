@@ -199,3 +199,109 @@
   .share-songs ul { flex-direction: row; overflow-x: auto; }
   .share-songs__item { white-space: nowrap; }
 }
+
+/* ── LED 畫面來源（AE 即時 / 本地影片）── */
+.share-source {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  flex-shrink: 0;
+}
+.share-source .grow { flex: 1; }
+.share-source__switch {
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.share-source__switch button {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 5px 12px;
+  font-size: 12.5px;
+}
+.share-source__switch button + button { border-left: 1px solid var(--border-strong); }
+.share-source__switch button.is-active {
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+.share-source__status {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* 拖檔 / 安裝步驟 / 提示：蓋在 3D 畫面中間 */
+.share-overlay {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 30;
+  width: min(440px, calc(100% - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  background: rgba(16, 17, 20, 0.92);
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  pointer-events: auto;
+}
+.share-overlay ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 6px; }
+.share-overlay a { color: var(--accent); }
+.share-overlay a.btn { color: inherit; margin-left: 4px; }
+.share-overlay__hint { color: var(--text-muted); font-size: 12px; }
+.share-overlay--drop {
+  border: 2px dashed var(--accent);
+  text-align: center;
+  font-weight: 600;
+  pointer-events: none;
+}
+.share-overlay--error { border-color: var(--danger); color: var(--danger); }
+
+/* 本地影片播放列 */
+.share-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: var(--surface-1);
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.share-player__btn {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  min-width: 32px;
+  height: 28px;
+  font-size: 13px;
+}
+.share-player__btn.is-active { border-color: var(--accent); background: var(--accent-dim); }
+.share-player__time { font-family: var(--font-mono); color: var(--text-dim); white-space: nowrap; }
+.share-player__seek { flex: 1; min-width: 80px; }
+.share-player__name {
+  max-width: 220px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (max-width: 640px) {
+  .share-source { flex-wrap: wrap; }
+  .share-player__name { display: none; }
+}
