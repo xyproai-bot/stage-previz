@@ -30,7 +30,9 @@ import { useAbCompare } from '../lib/useAbCompare';
 import { useNewVersionHint } from '../lib/newVersionHint';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
-import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
+import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, videoJobs, type VideoJob } from '../lib/videoJobs';
+import { resumeFileProblem, trackedVideoIds, useStalledUploads } from '../lib/stalledUploads';
+import { songTitle } from '../lib/songCode';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { crossfadeLabel, cueTransitionSeconds } from '../lib/cueTiming';
 import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
@@ -625,6 +627,22 @@ function StudioInner({ projectId }: { projectId: string }) {
     try { await deleteSongVideo(projectId, selectedSong.id, v.id); await versions.reload(); }
     catch (e) { toast.error('沒有成功：' + friendlyError(e)); }
   }
+  // 上傳停住的那一版（傳的分頁關掉了）：每一段都傳上來了 → 有權限的人打開就自動完成；還有段沒傳 → 選同一個檔案接著傳
+  const trackedIds = useMemo(() => trackedVideoIds(songJobs), [songJobs]);
+  const stalled = useStalledUploads({
+    projectId, songId: goneMessage ? null : selectedSongId, pending: versions.pending, trackedIds, canModify: canModifyPending,
+    onFinished: (video) => {
+      if (video) toast.success(`「${video.title || (selectedSong ? songTitle(selectedSong) : '影片')}」上傳完成，變成 ${video.label || '新的一版'}`);
+      void reloadVersions();
+      void reloadSongs();
+    },
+  });
+  function handleResumePending(v: SongVideo, file: File) {
+    if (!selectedSong) return;
+    const problem = resumeFileProblem(v, file);
+    if (problem) { toast.warn(problem); return; }
+    videoJobs.startUpload({ projectId, songId: selectedSong.id, songLabel: songTitle(selectedSong), file, note: v.note || undefined, resumeVideoId: v.id });
+  }
 
   // ── Actions ──
 
@@ -966,6 +984,9 @@ function StudioInner({ projectId }: { projectId: string }) {
                 canModifyPending={canModifyPending}
                 onRetryPending={handleRetryPending}
                 onRemovePending={handleRemovePending}
+                stalled={stalled.views}
+                onResumePending={handleResumePending}
+                onRetryFinish={stalled.retryFinish}
                 emptyText={canAdd ? '還沒有影片，按右邊「加影片」交第一版給導演看' : '這首歌還沒有影片'}
                 newVersion={source === 'version' ? newVersion : null}
               />

@@ -1,9 +1,11 @@
-import { CircleAlert, Film, LoaderCircle, Plus, RotateCcw, Trash2 } from 'lucide-react';
+import { useRef } from 'react';
+import { CircleAlert, Film, LoaderCircle, Plus, RotateCcw, Trash2, Upload } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
 import { formatDateTime, formatRelativeTime } from '../lib/serverTime';
-import { videoProgressPercent, videoStatusLabel, type SongVideo } from '../lib/videoApi';
-import { isJobActive, type VideoJob } from '../lib/videoJobs';
+import { VIDEO_ACCEPT, videoProgressPercent, videoStatusLabel, type SongVideo } from '../lib/videoApi';
+import { pendingUploadText, trackedVideoIds, type StalledView } from '../lib/stalledUploads';
+import type { VideoJob } from '../lib/videoJobs';
 import type { VersionItem } from '../lib/songVersions';
 import './SongVersionBar.css';
 
@@ -32,6 +34,12 @@ interface Props {
   extra?: React.ReactNode;
   /** 看的時候有人交了新版（lib/newVersionHint.ts）→ 版本旁邊「有新版 V3 · 切換」 */
   newVersion?: { label: string; onSwitch: () => void } | null;
+  /** 不是這個分頁在傳的「上傳中」那幾版現在的情況（lib/stalledUploads.ts） */
+  stalled?: ReadonlyMap<string, StalledView>;
+  /** 「繼續上傳（選同一個檔案）」選好檔案了 */
+  onResumePending?: (v: SongVideo, file: File) => void;
+  /** 整理成一個檔案沒成功 →「再試一次」 */
+  onRetryFinish?: (v: SongVideo) => void;
 }
 
 /** 誰交的 · 什麼時候（伺服器時間 → 本地時間） */
@@ -56,10 +64,14 @@ function versionTooltip(it: VersionItem): string {
 export default function SongVersionBar({
   status, error, items, selectedKey, onSelect, pending, jobs, onRetryLoad, onAdd,
   canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
+  stalled, onResumePending, onRetryFinish,
 }: Props) {
+  // 「繼續上傳（選同一個檔案）」：一個藏起來的選檔案，記得是哪一版要接著傳
+  const fileRef = useRef<HTMLInputElement>(null);
+  const resumeRef = useRef<SongVideo | null>(null);
   const selected = items.find(it => it.key === selectedKey) ?? null;
   // 這個分頁正在交的那幾版不要重複列（後台清單也看得到）
-  const tracked = new Set(jobs.filter(j => j.videoId && (isJobActive(j) || j.phase === 'failed')).map(j => j.videoId));
+  const tracked = trackedVideoIds(jobs);
   const others = pending.filter(v => !tracked.has(v.id));
   const shownJobs = jobs.filter(j => j.phase !== 'canceled');
 
@@ -136,8 +148,11 @@ export default function SongVersionBar({
           {others.map(v => {
             const pct = videoProgressPercent(v);
             const can = canModifyPending?.(v) ?? false;
+            const view = v.status === 'uploading' ? stalled?.get(v.id) : undefined;
+            const up = v.status === 'uploading' ? pendingUploadText(pct, view, can) : null;
+            const finishing = view?.kind === 'finishing' || (view?.kind === 'finish' && can);
             return (
-              <div key={v.id} className={`vjob vjob--compact vjob--${v.status === 'failed' ? 'failed' : 'copying'}`}>
+              <div key={v.id} className={`vjob vjob--compact vjob--${v.status === 'failed' || up?.error ? 'failed' : 'copying'}`}>
                 <div className="vjob__top">
                   <span className="vjob__name" title={v.title || v.originalUrl || ''}>{v.title || v.originalUrl || '影片'}</span>
                   <span className="vjob__grow" />
@@ -146,27 +161,57 @@ export default function SongVersionBar({
                       <Icon icon={RotateCcw} size="sm" /> 重試
                     </button>
                   )}
-                  {can && onRemovePending && (
+                  {can && view?.kind === 'finishFailed' && onRetryFinish && (
+                    <button type="button" className="vjob__btn" onClick={() => onRetryFinish(v)}>
+                      <Icon icon={RotateCcw} size="sm" /> 再試一次
+                    </button>
+                  )}
+                  {can && view?.kind === 'resume' && onResumePending && (
+                    <button
+                      type="button"
+                      className="vjob__btn"
+                      onClick={() => { resumeRef.current = v; fileRef.current?.click(); }}
+                      title="選當初傳的那個檔案，會從停下來的地方接著傳"
+                    >
+                      <Icon icon={Upload} size="sm" /> 繼續上傳（選同一個檔案）
+                    </button>
+                  )}
+                  {can && onRemovePending && !finishing && (
                     <button type="button" className="vjob__btn" onClick={() => onRemovePending(v)}>
-                      {v.status === 'failed' ? '拿掉' : '取消'}
+                      {v.status === 'failed' ? '拿掉' : v.status === 'uploading' ? '取消這次上傳' : '取消'}
                     </button>
                   )}
                 </div>
                 {v.status !== 'failed' && (
-                  <div className={'vjob__bar' + (pct == null ? ' is-indeterminate' : '')}>
-                    <span style={pct != null ? { width: `${pct}%` } : undefined} />
+                  <div className={'vjob__bar' + (pct == null || finishing ? ' is-indeterminate' : '')}>
+                    <span style={pct != null && !finishing ? { width: `${pct}%` } : undefined} />
                   </div>
                 )}
-                <div className={'vjob__status' + (v.status === 'failed' ? ' is-error' : '')}>
+                <div className={'vjob__status' + (v.status === 'failed' || up?.error ? ' is-error' : '')}>
                   {v.status === 'failed'
                     ? (v.error || '失敗了')
-                    : v.status === 'uploading'
-                    ? `上傳中${pct != null ? ` ${pct}%` : ''}（沒有在這個分頁傳；是你傳的話，按「加影片」選同一個檔案就會接著傳）`
+                    : up
+                    ? up.text
                     : `${videoStatusLabel(v)}${pct != null ? ` ${pct}%` : '…'}`}
                 </div>
               </div>
             );
           })}
+          {onResumePending && (
+            <input
+              ref={fileRef}
+              type="file"
+              accept={VIDEO_ACCEPT}
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                const v = resumeRef.current;
+                e.target.value = '';
+                resumeRef.current = null;
+                if (f && v) onResumePending(v, f);
+              }}
+            />
+          )}
         </div>
       )}
     </div>

@@ -171,6 +171,15 @@ describe('createVideoJobStore：上傳', () => {
     expect((deps.upload as ReturnType<typeof vi.fn>).mock.calls[0][3].resumeVideoId).toBe('sv_old');
   });
 
+  it('「繼續上傳（選同一個檔案）」：指定那一版 → 一開始就算這個分頁在傳、帶著那一版 id 續傳（別台電腦開始傳的也行）', async () => {
+    const { deps } = fakeDeps({ upload: vi.fn(() => new Promise<SongVideo>(() => {})) });
+    const s = createVideoJobStore(deps);
+    s.startUpload({ projectId: 'p1', songId: 's1', songLabel: 'S01', file: file(), resumeVideoId: 'sv_stuck' });
+    expect(s.getSnapshot()[0]).toMatchObject({ phase: 'starting', videoId: 'sv_stuck' });
+    await flush();
+    expect((deps.upload as ReturnType<typeof vi.fn>).mock.calls[0][3].resumeVideoId).toBe('sv_stuck');
+  });
+
   it('失敗顯示中文原因；重試 → 續傳同一版', async () => {
     const calls: UploadSongVideoOptions[] = [];
     const { deps } = fakeDeps({

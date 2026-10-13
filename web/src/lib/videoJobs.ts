@@ -169,6 +169,8 @@ export interface StartUploadInput {
   songLabel: string;
   file: File;
   note?: string;
+  /** 接著傳停住的那一版（「繼續上傳（選同一個檔案）」；別台電腦開始傳的也可以） */
+  resumeVideoId?: string;
 }
 
 export interface AddLinkInput {
@@ -358,7 +360,7 @@ export function createVideoJobStore(deps: VideoJobDeps): VideoJobStore {
     onDone(cb) { doneListeners.add(cb); return () => { doneListeners.delete(cb); }; },
 
     startUpload(input) {
-      const job = baseJob('upload', input, input.file.name, input.file.size);
+      const job = { ...baseJob('upload', input, input.file.name, input.file.size), videoId: input.resumeVideoId ?? null };
       files.set(job.id, input.file);
       add(job);
       void runUpload(job.id);

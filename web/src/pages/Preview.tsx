@@ -32,7 +32,9 @@ import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
-import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
+import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, videoJobs, type VideoJob } from '../lib/videoJobs';
+import { resumeFileProblem, trackedVideoIds, useStalledUploads } from '../lib/stalledUploads';
+import { songTitle } from '../lib/songCode';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { STOP_LIVE_REFRESH, liveRefreshWanted, useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions, mentionCandidates } from '../lib/mentions';
@@ -937,6 +939,20 @@ function SongDetail({
     try { await deleteSongVideo(projectId, song.id, v.id); await versions.reload(); }
     catch (e) { toast.error('沒有成功：' + friendlyError(e)); }
   }
+  // 上傳停住的那一版（傳的分頁關掉了）：每一段都傳上來了 → 有權限的人打開就自動完成；還有段沒傳 → 選同一個檔案接著傳
+  const trackedIds = useMemo(() => trackedVideoIds(songJobs), [songJobs]);
+  const stalled = useStalledUploads({
+    projectId, songId: song.id, pending: versions.pending, trackedIds, canModify: canModifyPending,
+    onFinished: (video) => {
+      if (video) toast.success(`「${video.title || songTitle(song)}」上傳完成，變成 ${video.label || '新的一版'}`);
+      void reloadVersions();
+    },
+  });
+  function handleResumePending(v: SongVideo, file: File) {
+    const problem = resumeFileProblem(v, file);
+    if (problem) { toast.warn(problem); return; }
+    videoJobs.startUpload({ projectId, songId: song.id, songLabel: songTitle(song), file, note: v.note || undefined, resumeVideoId: v.id });
+  }
 
   return (
     <div className="song-detail">
@@ -986,6 +1002,9 @@ function SongDetail({
             canModifyPending={canModifyPending}
             onRetryPending={handleRetryPending}
             onRemovePending={handleRemovePending}
+            stalled={stalled.views}
+            onResumePending={handleResumePending}
+            onRetryFinish={stalled.retryFinish}
             emptyText={canAdd ? '這首歌還沒有影片，按右邊「加影片」交第一版' : '這首歌還沒有影片（動畫師交了之後會自動出現）'}
             newVersion={newVersion}
           />
