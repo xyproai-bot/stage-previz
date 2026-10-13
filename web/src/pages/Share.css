@@ -23,6 +23,11 @@
   display: flex;
   gap: 8px;
 }
+.share-pwd__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: 13px;
+}
 .share-pwd input {
   background: var(--surface-1);
   border: 1px solid var(--border-strong);

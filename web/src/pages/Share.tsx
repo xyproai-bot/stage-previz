@@ -46,6 +46,8 @@ export default function Share() {
   const [requiresPassword, setRequiresPassword] = useState(false);
   const [password, setPassword] = useState('');
   const [submittedPwd, setSubmittedPwd] = useState<string | null>(null);
+  /** 密碼框下面的提示（密碼不對 / 錯太多次被擋） */
+  const [pwdError, setPwdError] = useState<string | null>(null);
 
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
@@ -123,13 +125,20 @@ export default function Share() {
       const d = await api.getSharePublicData(token, pwd);
       setData(d);
       setRequiresPassword(false);
+      setPwdError(null);
       const firstSong = d.songs[0];
       if (firstSong) setSelectedSongId(firstSong.id);
     } catch (e) {
       const status = (e as { status?: number }).status;
       const reqPwd = (e as { requiresPassword?: boolean }).requiresPassword;
       if (status === 401 && reqPwd) {
+        // 第一次打開（還沒輸入）不算錯；輸入了還是 401 = 密碼不對
         setRequiresPassword(true);
+        setPwdError(pwd ? '密碼不對，再試一次' : null);
+      } else if (status === 429) {
+        // 密碼錯太多次被擋一陣子：留在密碼畫面說明（不是連結壞了）
+        setRequiresPassword(true);
+        setPwdError(e instanceof Error && e.message && !e.message.startsWith('HTTP ') ? e.message : '錯太多次了，請稍後再試');
       } else {
         setError(e instanceof Error ? e.message : String(e));
       }
@@ -296,6 +305,7 @@ export default function Share() {
           />
           <button type="submit" className="btn btn--primary">解鎖</button>
         </form>
+        {pwdError && <p className="share-pwd__error" role="alert">{pwdError}</p>}
       </div>
     );
   }
