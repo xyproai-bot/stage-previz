@@ -43,10 +43,11 @@ uniform float uReflEps;
 uniform float uReflStrength;
 uniform float uReflSharpness;
 uniform float uReflMaxLod;
+uniform float uReflMaterialOn;
 `;
 
 const FRAG_CODE = /* glsl */`
-if ( uReflOn > 0.5 ) {
+if ( uReflOn > 0.5 && uReflMaterialOn > 0.5 ) {
   vec3 reflWorldN = inverseTransformDirection( normal, viewMatrix );
   if ( reflWorldN.y > 0.95 && abs( vReflWorldPos.y - uReflPlaneY ) < uReflEps ) {
     vec4 reflUv = uReflTexMatrix * vec4( vReflWorldPos, 1.0 );
@@ -63,8 +64,11 @@ if ( uReflOn > 0.5 ) {
 export function patchFloorShader(
   shader: { uniforms: Record<string, { value: unknown }>; vertexShader: string; fragmentShader: string },
   uniforms: FloorReflectionUniforms,
+  materialOn: { value: number } = { value: 1 },
 ) {
   Object.assign(shader.uniforms, uniforms);
+  // 每個材質自己的開關（材質面板勾了「鏡面地板」時，沒勾的材質不反光）
+  shader.uniforms.uReflMaterialOn = materialOn;
   shader.vertexShader = VERT_DECL + shader.vertexShader.replace(
     '#include <worldpos_vertex>', '#include <worldpos_vertex>' + VERT_CODE,
   );
@@ -76,9 +80,17 @@ export function patchFloorShader(
 export function applyFloorReflection(material: THREE.MeshStandardMaterial, uniforms: FloorReflectionUniforms) {
   if (material.userData.floorReflection) return;
   material.userData.floorReflection = true;
-  material.onBeforeCompile = (shader) => patchFloorShader(shader, uniforms);
+  const materialOn = { value: 1 };
+  material.userData.reflMaterialOn = materialOn;
+  material.onBeforeCompile = (shader) => patchFloorShader(shader, uniforms, materialOn);
   material.customProgramCacheKey = () => 'floor-refl-v1';
   material.needsUpdate = true;
+}
+
+/** 這個材質要不要反光（沒套過倒影的材質會略過） */
+export function setFloorReflectionFor(material: THREE.Material, on: boolean) {
+  const u = material.userData.reflMaterialOn as { value: number } | undefined;
+  if (u) u.value = on ? 1 : 0;
 }
 
 const _planeNormal = new THREE.Vector3(0, 1, 0);

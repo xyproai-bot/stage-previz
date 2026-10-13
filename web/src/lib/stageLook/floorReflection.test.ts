@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { applyFloorReflection, computeMirrorCamera, createFloorReflectionUniforms, patchFloorShader } from './floorReflection';
+import { applyFloorReflection, computeMirrorCamera, createFloorReflectionUniforms, patchFloorShader, setFloorReflectionFor } from './floorReflection';
 
 describe('patchFloorShader', () => {
   it('vertex 加世界座標 varying、fragment 在 aomap 前加倒影', () => {
@@ -19,6 +19,22 @@ describe('patchFloorShader', () => {
 });
 
 describe('applyFloorReflection', () => {
+  it('每個材質有自己的倒影開關', () => {
+    const m = new THREE.MeshStandardMaterial();
+    applyFloorReflection(m, createFloorReflectionUniforms());
+    expect(m.userData.reflMaterialOn.value).toBe(1);
+    setFloorReflectionFor(m, false);
+    expect(m.userData.reflMaterialOn.value).toBe(0);
+    const shader = {
+      uniforms: {} as Record<string, { value: unknown }>,
+      vertexShader: '#include <worldpos_vertex>',
+      fragmentShader: '#include <aomap_fragment>',
+    };
+    m.onBeforeCompile(shader as never, null as never);
+    expect(shader.fragmentShader).toContain('uReflMaterialOn > 0.5');
+    expect(shader.uniforms.uReflMaterialOn).toBe(m.userData.reflMaterialOn);
+  });
+
   it('冪等、cache key 固定', () => {
     const m = new THREE.MeshStandardMaterial();
     const u = createFloorReflectionUniforms();

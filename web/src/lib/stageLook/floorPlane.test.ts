@@ -23,6 +23,13 @@ describe('detectFloorPlane', () => {
     expect(p!.y).toBeCloseTo(0);
   });
 
+  it('meshFilter：只看指定的 mesh（例如勾了鏡面地板的材質）', () => {
+    const big = floor(10, 10, 0);
+    const small = floor(2, 2, 1);
+    const p = detectFloorPlane([big, small], { meshFilter: m => m === small });
+    expect(p!.y).toBeCloseTo(1);
+  });
+
   it('只有牆 / 朝下的天花板 → null', () => {
     const wall = new THREE.Mesh(new THREE.PlaneGeometry(4, 4), new THREE.MeshStandardMaterial());
     const ceiling = floor(4, 4, 3);

@@ -1,10 +1,11 @@
 // 找舞台地板：世界座標裡面積最大的「朝上水平面」高度 → 地板倒影的反射平面
-// （第四段材質面板做好後，改成優先用使用者勾選「鏡面地板」的材質）
+// 有材質勾了「鏡面地板」時，用 meshFilter 只看那些材質的 mesh
 
 import * as THREE from 'three';
 
 export function detectFloorPlane(
-  roots: THREE.Object3D[], opts: { minUpDot?: number; binSize?: number } = {},
+  roots: THREE.Object3D[],
+  opts: { minUpDot?: number; binSize?: number; meshFilter?: (mesh: THREE.Mesh) => boolean } = {},
 ): { y: number; area: number } | null {
   const minUpDot = opts.minUpDot ?? 0.95;
   const tris: { y: number; area: number }[] = [];
@@ -16,6 +17,7 @@ export function detectFloorPlane(
     root.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh || !mesh.geometry || !mesh.visible) return;
+      if (opts.meshFilter && !opts.meshFilter(mesh)) return;
       const geo = mesh.geometry as THREE.BufferGeometry;
       const pos = geo.getAttribute('position');
       if (!pos) return;
