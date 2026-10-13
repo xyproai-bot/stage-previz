@@ -216,8 +216,9 @@ export default function Share() {
             </div>
             <span className="share-source__status">
               {source === 'ndi'
+                // 「已連上」= 小程序有回應；有沒有畫面進來看 3D 工具列的 NDI 標示（LIVE / 等待中）
                 ? (ndiStatus.kind === 'connected'
-                  ? `● LIVE · ${ndiStatus.source || 'NDI'}`
+                  ? `已連上 NDI 小程序${ndiStatus.source ? ` · 來源：${ndiStatus.source}` : '（還沒選來源）'}`
                   : ndiStatus.kind === 'connecting' ? '連線 NDI 小程序中…' : '沒偵測到 NDI 小程序')
                 : (local.fileName ? `${local.playing ? '▶' : '⏸'} ${local.fileName}` : '還沒選影片')}
             </span>

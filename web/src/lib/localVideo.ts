@@ -116,6 +116,7 @@ export function useLocalVideo(): LocalVideoState {
     setError(null);
     setReady(false);
     setTime(0);
+    setDuration(0); // 新影片的長度等 loadedmetadata 再填（不然壞檔會顯示上一支的長度）
     setFileName(file.name);
     video.src = urlRef.current;
     video.play().catch(() => { /* 自動播放被擋就等使用者按播放 */ });

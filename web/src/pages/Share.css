@@ -64,8 +64,10 @@
   grid-template-columns: 220px 1fr;
   min-height: 0;
 }
-.share-body:has(.share-songs:empty),
-.share-body > .share-stage:only-child {
+/* 只有一首歌（沒有左邊歌單）→ 舞台吃滿整個寬度
+   （之前寫成 .share-stage:only-child 是設在舞台本身，沒作用 → 舞台被擠在 220px 那一欄） */
+.share-body:not(:has(> .share-songs)),
+.share-body:has(.share-songs:empty) {
   grid-template-columns: 1fr;
 }
 
