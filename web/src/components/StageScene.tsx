@@ -20,6 +20,7 @@ import { LedLightRig, type LedLightProps } from '../lib/stageLook/ledLightRig';
 import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { QUALITY, detectQualityProfile } from '../lib/stageLook/quality';
+import { LED_SURFACE, NDI_PIXEL_DENSITY, applyLedSurface, updateLedSurface } from '../lib/stageLook/ledSurface';
 import './StageScene.css';
 
 // RectAreaLight 必須先 init uniforms（Three.js 內建）
@@ -164,6 +165,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // objectId → 目前 LED 用的貼圖（取色用）/ 燈的參數
   const ledSourcesRef = useRef<Map<string, LedColorSource | null>>(new Map());
   const ledLightPropsRef = useRef<Map<string, LedLightProps>>(new Map());
+  // 現場模式的 LED 材質（每 100ms 更新像素格 / 側看衰減）
+  const ledMaterialsRef = useRef<Set<THREE.MeshStandardMaterial>>(new Set());
   const helpersRef = useRef<{ grid: THREE.GridHelper; axes: THREE.AxesHelper } | null>(null);
   // 舞台中心 / 大小（環境光 CubeCamera 放這裡）
   const stageBoundsRef = useRef<{ center: THREE.Vector3; radius: number }>({ center: new THREE.Vector3(0, 1, 0), radius: 10 });
@@ -734,6 +737,20 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             (id) => props.get(id) || fallback,
             lookRef.current.ledLightStrength,
           );
+          // LED 表面：像素格密度跟著貼圖解析度、側看衰減跟著現場設定
+          const liveTexture = ndiLiveTextureRef.current?.texture;
+          const mockTexture = ndiMockTextureRef.current?.texture;
+          for (const mat of ledMaterialsRef.current) {
+            const tex = mat.emissiveMap;
+            const img = tex?.image as { width?: number; height?: number } | undefined;
+            const density = tex && tex === liveTexture ? NDI_PIXEL_DENSITY : 1;
+            updateLedSurface(mat, {
+              on: !!tex,
+              texels: [(img?.width || 1) * density, (img?.height || 1) * density],
+              gridStrength: tex && tex !== mockTexture ? 1 : 0,
+              viewFalloff: lookRef.current.ledViewFalloff,
+            });
+          }
         }
         // 環境光（反射 / 染色）：依畫質檔定時更新
         const env = ledEnvRef.current;
@@ -1246,6 +1263,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       bloom.threshold = 0.75;
     }
     ledRigRef.current?.setEnabled(live);
+    if (!live) for (const mat of ledMaterialsRef.current) updateLedSurface(mat, { on: false });
   }, [renderMode, lookSettings]);
 
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
@@ -1256,6 +1274,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const accentGreen = new THREE.Color(0x10c78a);
     const black = new THREE.Color(0x000000);
     const ledIds = new Set<string>();
+    const ledMaterials = new Set<THREE.MeshStandardMaterial>();
 
     meshes.forEach((obj, id) => {
       const so = stageObjMap.get(id);
@@ -1308,17 +1327,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         }
 
         if (isLed && isLit) {
-          // === LED in realistic mode ===
-          // 物理：自發光、不反射、不被環境光打亮
-          //   base color 黑 → 環境光 × 黑 = 黑（LED 不被打亮）
-          //   metalness 0、roughness 1、envMapIntensity 0 → 沒鏡面 / 沒環境反射
-          //   emissive(Map) 是 LED 唯一的亮度來源
-          //   toneMapped = false → 跳過 ACES 壓縮，texture pixel 1:1 顯示
-          //   （不然螢光桃 / 亮黃會被壓成霧霧的淡色，跟 AE 對不上）
-          m.color.setHex(0x000000);
+          // === LED in 現場模式 ===
+          // 像真的 LED 牆：
+          //   底色接近黑、roughness 0.3 → 畫面暗的地方是黑亮面，會映出其他 LED（反射來自 LED 環境光）
+          //   emissive(Map) 是亮度來源；像素顆粒 / 側看變暗由 ledSurface shader 處理
+          //   toneMapped = false → 不在材質裡壓色（現場模式統一由 OutputPass 做 Neutral tone mapping）
+          m.color.setHex(LED_SURFACE.baseColor);
           m.metalness = 0;
-          m.roughness = 1;
-          m.envMapIntensity = 0;
+          m.roughness = LED_SURFACE.roughness;
+          m.envMapIntensity = LED_SURFACE.envMapIntensity;
+          applyLedSurface(m);
+          ledMaterials.add(m);
           m.opacity = 1;
           m.transparent = false;
           if (m.toneMapped !== false) {
@@ -1354,6 +1373,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           //   metalness 0、roughness 1、envMapIntensity 0 = 不反射不被環境光打亮
           //   toneMapped false = 跳過 ACES，texture pixel 1:1
           //   emissive 黑 = 不疊加自發光（已經是 map 直接顯示了）
+          updateLedSurface(m, { on: false });
           if (m.map !== ledTexture) {
             m.map = ledTexture;
             m.needsUpdate = true;
@@ -1381,6 +1401,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // 套 user materialProps；emissive 只在 selected 時 highlight
           // 注意：有貼圖（GLB 原本的 texture）或是 LED 時，不要用 category 顏色蓋掉
           // 否則 LED 在 quick mode 會被染綠（品牌色 = 0x10c78a），喇叭等貼圖物件會被染對應色
+          updateLedSurface(m, { on: false });
           const hasTexture = !!m.map;
           const baseColor = mat.color
             ? mat.color
@@ -1435,6 +1456,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       }
     });
 
+    ledMaterialsRef.current = ledMaterials;
     ledRigRef.current?.retainObjects(ledIds);
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }

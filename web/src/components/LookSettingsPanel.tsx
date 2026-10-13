@@ -11,6 +11,7 @@ const ROWS: { key: keyof LookSettings; label: string; hint: string; step: number
   { key: 'exposure', label: '曝光', hint: '整體亮暗，像相機', step: 0.05 },
   { key: 'ledLightStrength', label: 'LED 照明', hint: 'LED 照到舞台的強度', step: 0.05 },
   { key: 'bloomStrength', label: '光暈', hint: '亮的 LED 周圍暈開多少', step: 0.05 },
+  { key: 'ledViewFalloff', label: 'LED 側看變暗', hint: '從側邊看 LED 會暗多少（真的 LED 牆側看會變暗）', step: 0.05 },
 ];
 
 /** 現場模式設定（admin 才看得到；改了全專案共用） */
