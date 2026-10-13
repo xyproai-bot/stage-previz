@@ -71,3 +71,12 @@ export function loginClientKey(rawIp) {
   }
   return groups.slice(0, 4).map((g) => g.replace(/^0+(?=.)/, '')).join(':') + '::/64';
 }
+
+/**
+ * 分享連結密碼也用同一套防猜（同一張 login_attempts 表，同樣 15 分鐘錯 10 次鎖 15 分鐘）。
+ * 記錄用的 key = 連結 token + 來源 IP，猜某一條連結不會鎖到別的連結，也不會鎖到登入。
+ * 登入的 key 是純 IP（loginClientKey），不會以 'share:' 開頭，所以兩邊的紀錄不會混在一起。
+ */
+export function shareAttemptKey(token, ipKey) {
+  return `share:${String(token || '').slice(0, 64)}|${String(ipKey || 'unknown').slice(0, 64)}`;
+}

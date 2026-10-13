@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  loginThrottleDecision, loginLockedMessage, loginClientKey,
+  loginThrottleDecision, loginLockedMessage, loginClientKey, shareAttemptKey,
   LOGIN_WINDOW_MS, LOGIN_LOCK_MS,
 } from './loginThrottle.mjs';
 
@@ -79,4 +79,15 @@ test('IP key：IPv4 原樣、IPv6 取 /64、沒有 → unknown', () => {
   assert.equal(loginClientKey('::1'), '0:0:0:0::/64');
   assert.equal(loginClientKey('::ffff:198.51.100.2'), '198.51.100.2');
   assert.equal(loginClientKey('fe80::1%eth0'), 'fe80:0:0:0::/64');
+});
+
+test('分享密碼 key：每條連結、每個 IP 分開算，不會跟登入的 key 撞', () => {
+  const ip = loginClientKey('203.0.113.7');
+  assert.equal(shareAttemptKey('abc123', ip), 'share:abc123|203.0.113.7');
+  assert.notEqual(shareAttemptKey('abc123', ip), shareAttemptKey('def456', ip));
+  assert.notEqual(shareAttemptKey('abc123', ip), shareAttemptKey('abc123', loginClientKey('198.51.100.2')));
+  assert.notEqual(shareAttemptKey('abc123', ip), ip);
+  assert.ok(!ip.startsWith('share:'));
+  assert.equal(shareAttemptKey('abc123', loginClientKey('')), 'share:abc123|unknown');
+  assert.equal(shareAttemptKey('t', null), 'share:t|unknown');
 });

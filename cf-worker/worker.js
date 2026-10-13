@@ -21,7 +21,7 @@
  */
 
 import {
-  loginThrottleDecision, loginLockedMessage, loginClientKey,
+  loginThrottleDecision, loginLockedMessage, loginClientKey, shareAttemptKey,
   LOGIN_ATTEMPT_KEEP_MS, LOGIN_LOOKBACK_MS,
 } from './loginThrottle.mjs';
 
@@ -3881,9 +3881,28 @@ async function handleShareRouter(request, env, url, token) {
   // [api, share, token, ...rest]
   const sub = segs[3] || null;        // 'data' / 'cues' / 'states' / 'comments'
 
-  const link = await env.DB.prepare(
+  const provided = request.headers.get('x-share-password') || url.searchParams.get('p') || '';
+  // 防猜密碼：跟登入同一套（同一個 IP 對同一條連結 15 分鐘內錯 10 次 → 鎖 15 分鐘，鎖定中密碼對也擋）
+  // 有帶密碼才需要查錯誤紀錄 → 跟查連結合成一次往返；沒帶密碼（第一次打開頁面）不多查
+  const now = Date.now();
+  const attemptKey = provided
+    ? shareAttemptKey(token, loginClientKey(request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')))
+    : null;
+  const linkStmt = env.DB.prepare(
     `SELECT token, project_id, song_id, password, expires_at FROM share_links WHERE token = ? LIMIT 1`
-  ).bind(token).first();
+  ).bind(token);
+  let link, recentFailures = [];
+  if (attemptKey) {
+    const [linkR, failR] = await env.DB.batch([
+      linkStmt,
+      env.DB.prepare(`SELECT attempted_at FROM login_attempts WHERE ip = ? AND attempted_at > ?`)
+        .bind(attemptKey, now - LOGIN_LOOKBACK_MS),
+    ]);
+    link = (linkR.results || [])[0] || null;
+    recentFailures = (failR.results || []).map(r => r.attempted_at);
+  } else {
+    link = await linkStmt.first();
+  }
   if (!link) return jsonResp({ error: 'Share link not found' }, 404);
   if (link.expires_at && new Date(link.expires_at + 'Z').getTime() < Date.now()) {
     return jsonResp({ error: 'Share link expired' }, 410);
@@ -3891,9 +3910,26 @@ async function handleShareRouter(request, env, url, token) {
 
   // 密碼檢查（password via header X-Share-Password）
   if (link.password) {
-    const provided = request.headers.get('x-share-password') || url.searchParams.get('p') || '';
+    if (!provided) return jsonResp({ error: 'Password required', requiresPassword: true }, 401);
+    const gate = loginThrottleDecision(recentFailures, now);
+    if (!gate.allowed) {
+      const retryAfterSec = Math.ceil(gate.retryAfterMs / 1000);
+      return new Response(JSON.stringify({ error: loginLockedMessage(gate.retryAfterMs), retryAfterSec }), {
+        status: 429,
+        headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Retry-After': String(retryAfterSec) }
+      });
+    }
     if (provided !== link.password) {
+      // 記一次錯，順手清掉一天以前的紀錄
+      await env.DB.batch([
+        env.DB.prepare(`DELETE FROM login_attempts WHERE attempted_at < ?`).bind(now - LOGIN_ATTEMPT_KEEP_MS),
+        env.DB.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(attemptKey, now),
+      ]);
       return jsonResp({ error: 'Password required', requiresPassword: true }, 401);
+    }
+    // 密碼對 → 這個 IP 對這條連結的錯誤歸零（有錯過才寫，不然每個請求都多一次寫入）
+    if (recentFailures.length > 0) {
+      await env.DB.prepare(`DELETE FROM login_attempts WHERE ip = ?`).bind(attemptKey).run();
     }
   }
 
