@@ -126,7 +126,8 @@ export function sheetLegend(mechanisms: Mechanism[], front?: MechVec3 | null): s
     } else {
       const r = matchRotaryAxis(m.axis, f);
       const axis = ROTARY_AXES.find(x => x.key === r.kind)!;
-      dir = `旋轉（${axis.label}），0 = 模型原本的方向，正的角度${axis.positive[r.positiveFirst ? 0 : 1]}`;
+      // 「旋轉・水平轉（像轉台）」：轉軸的名字本身有括號，外面不再包一層（以前會變成「旋轉（水平轉（像轉台））」）
+      dir = `旋轉・${axis.label}，0 = 模型原本的方向，正的角度${axis.positive[r.positiveFirst ? 0 : 1]}`;
     }
     const parts = [
       `${head}：${dir}`,

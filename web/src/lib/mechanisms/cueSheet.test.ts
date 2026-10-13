@@ -57,7 +57,7 @@ const GOLDEN = [
   '',
   '# 機關說明 Axes',
   '# 中央升降台（Axis 3）：直線，0 = cue 裡原本的位置，正的數字往上；行程 0 m ~ 3.5 m；最高 0.25 m/秒；常用位置 收起 0 / 半開 1.75 / 全開 3.5',
-  '# 旋轉舞台（Revolve）：旋轉（水平轉（像轉台）），0 = 模型原本的方向，正的角度從上面看順時針；行程 -180° ~ 180°；最高 6°/秒；常用位置 正面 0 / 側面 90 / 背面 180',
+  '# 旋轉舞台（Revolve）：旋轉・水平轉（像轉台），0 = 模型原本的方向，正的角度從上面看順時針；行程 -180° ~ 180°；最高 6°/秒；常用位置 正面 0 / 側面 90 / 背面 180',
   '# 左側 LED 滑軌（Axis 7）：直線，0 = cue 裡原本的位置，正的數字往左（觀眾看過去）；行程 0 m ~ 4 m；最高 0.5 m/秒；常用位置 收起 0 / 全開 4',
   '# 註：需要秒數 = 行程 ÷ 最高速度，以等速計算、沒有算加減速，實際會再久一點。GO 時間 = 到位時間 − 可用秒數；沒有影片時間的 cue 由現場叫 GO。',
 ];
@@ -110,5 +110,15 @@ describe('機關總表（設計文件的範例當標準答案）', () => {
     const csv2 = buildMechanismSheetCsv({ songs: [{ ...song, cues: song.cues.slice(0, 2) }], positions: [P('c2', 'f', 2)], mechanisms: [free] });
     expect(csv2.split('\r\n')[2].endsWith(',沒填最高速度')).toBe(true);
     expect(sheetLegend([free])[1]).toContain('沒填最高速度（不檢查）');
+  });
+
+  it('旋轉的說明不會括號疊括號：「旋轉・水平轉（像轉台）」「旋轉・前後翻」「旋轉・左右翻」', () => {
+    const tilt = mech({ id: 't', name: '翻板', kind: 'rotary', axis: { x: 1, y: 0, z: 0 }, pivot: { x: 0, y: 0, z: 0 }, travelMin: -90, travelMax: 90 });
+    const roll = mech({ id: 'r', name: '側翻', kind: 'rotary', axis: { x: 0, y: 0, z: 1 }, pivot: { x: 0, y: 0, z: 0 }, travelMin: -90, travelMax: 90 });
+    const [, a, b, c] = sheetLegend([rev, { ...tilt, order: 1 }, { ...roll, order: 2 }]);
+    expect(a).toContain('：旋轉・水平轉（像轉台），0 = 模型原本的方向');
+    expect(b).toContain('：旋轉・前後翻，0 = 模型原本的方向');
+    expect(c).toContain('：旋轉・左右翻，0 = 模型原本的方向');
+    for (const line of [a, b, c]) expect(line).not.toMatch(/（[^）]*（/);
   });
 });
