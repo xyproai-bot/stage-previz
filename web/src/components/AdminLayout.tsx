@@ -1,11 +1,12 @@
-import { ReactNode, useEffect, useState } from 'react';
-import { Link, NavLink, useNavigate } from 'react-router-dom';
+import { ReactNode, useEffect, useRef, useState } from 'react';
+import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { helpUrl } from '../lib/helpLinks';
 import { ROLE_LABEL } from '../lib/roleLabels';
-import { Archive, Boxes, Cloud, Folder, LogOut, Settings, Ticket, Users } from 'lucide-react';
+import { Archive, ArrowLeft, BookOpen, Boxes, Cloud, Folder, LogOut, Settings, Ticket, Users } from 'lucide-react';
 import HelpModal from './HelpModal';
 import NotificationBell from './NotificationBell';
+import OverflowMenu from './OverflowMenu';
 import Icon from './Icon';
 import { confirmDialog } from './dialogs';
 import './AdminLayout.css';
@@ -35,6 +36,13 @@ function AdminShell({ children }: AdminLayoutProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [helpOpen, setHelpOpen] = useState(false);
+  // 手機上側欄是一條可以左右滑的分頁列：換頁後把目前那一頁捲到看得到
+  const navRef = useRef<HTMLElement>(null);
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const active = navRef.current?.querySelector<HTMLElement>('.admin-sidebar__link.is-active');
+    if (active) scrollNavIntoView(active);
+  }, [pathname]);
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -63,7 +71,7 @@ function AdminShell({ children }: AdminLayoutProps) {
           <span className="admin-sidebar__logo-text">STAGE</span>
         </button>
 
-        <nav className="admin-sidebar__nav">
+        <nav className="admin-sidebar__nav" ref={navRef}>
           {NAV.map(item => (
             <NavLink
               key={item.key}
@@ -117,6 +125,14 @@ function AdminShell({ children }: AdminLayoutProps) {
   );
 }
 
+/** 手機上側欄變成一條可以左右滑的分頁列：目前那一頁捲到看得到（不動整個頁面） */
+function scrollNavIntoView(el: HTMLElement) {
+  const nav = el.parentElement;
+  if (!nav || nav.scrollWidth <= nav.clientWidth) return;
+  const left = el.offsetLeft - (nav.clientWidth - el.offsetWidth) / 2;
+  nav.scrollLeft = Math.max(0, left);
+}
+
 /** 非製作（動畫師 / 導演）看設定頁時的外框：沒有管理側欄，只有回自己的專案、說明、登出 */
 function MemberLayout({ children }: AdminLayoutProps) {
   const navigate = useNavigate();
@@ -131,21 +147,29 @@ function MemberLayout({ children }: AdminLayoutProps) {
   return (
     <div className="member-layout">
       <header className="member-layout__top">
-        <Link className="member-layout__back" to="/">回我的專案</Link>
+        <Link className="member-layout__back" to="/" title="回我的專案" aria-label="回我的專案"><Icon icon={ArrowLeft} /><span className="member-layout__back-label"> 回我的專案</span></Link>
         <span className="member-layout__brand">
           <span className="admin-sidebar__logo-mark" aria-hidden="true" />
           STAGE <strong>PREVIZ</strong>
         </span>
         <span className="member-layout__grow" />
-        <a className="member-layout__link" href={helpUrl()} target="_blank" rel="noopener">使用說明</a>
+        <a className="member-layout__link ovf-hide-narrow" href={helpUrl()} target="_blank" rel="noopener">使用說明</a>
         <NotificationBell />
-        <span className="member-layout__user">
+        <span className="member-layout__user ovf-hide-narrow">
           <span className="avatar avatar--sm" style={{ background: user?.avatarColor || '#10c78a' }}>
             {user?.name?.[0] || '?'}
           </span>
-          <span>{user?.name}</span>
+          <span className="member-layout__user-name">{user?.name}</span>
         </span>
-        <button className="member-layout__link" onClick={handleLogout}>登出</button>
+        <button className="member-layout__link ovf-hide-narrow" onClick={handleLogout}>登出</button>
+        <OverflowMenu
+          className="ovf-only-narrow"
+          header={user?.name}
+          items={[
+            { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(), external: true },
+            { key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: () => { void handleLogout(); } },
+          ]}
+        />
       </header>
       <main className="member-layout__main">{children}</main>
     </div>

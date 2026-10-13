@@ -211,3 +211,11 @@
   .mini-player__btn--play { min-width: 36px; height: 36px; }
   .mini-player__pin { width: 12px; height: 12px; top: -6px; }
 }
+
+/* 「比較」按鈕的字不換行；手機上收起來的小播放器寬一點，放得下播放、時間、比較、展開 */
+.mini-player__btn--flip { white-space: nowrap; flex-shrink: 0; }
+.mini-player__head > .mini-player__btn { flex-shrink: 0; }
+@media (max-width: 640px) {
+  .mini-player.is-collapsed { width: min(320px, calc(100% - 16px)); }
+  .mini-player.is-collapsed .mini-player__grip { display: none; }
+}

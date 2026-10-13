@@ -11,6 +11,8 @@ import AddVideoDialog from '../components/AddVideoDialog';
 import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
 import ShareSetlist from './ShareSetlist';
 import NotificationBell from '../components/NotificationBell';
+import OverflowMenu from '../components/OverflowMenu';
+import EmptyState from '../components/EmptyState';
 import ReviewHistory from '../components/ReviewHistory';
 import CommentThreadList from '../components/CommentThreadList';
 import { buildThreads, canPostComment, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, type CommentScope } from '../lib/commentThreads';
@@ -42,8 +44,8 @@ import {
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Film, HistoryIcon, Image, LoaderCircle, Music, Pause, Play, RefreshCw, Repeat,
-  TriangleAlert, Volume2, VolumeX, X,
+  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Play, RefreshCw, Repeat,
+  SearchX, Settings, TriangleAlert, UserRoundSearch, Volume2, VolumeX, X,
 } from 'lucide-react';
 import './Studio.css';
 
@@ -715,8 +717,8 @@ function StudioInner({ projectId }: { projectId: string }) {
     <header className="studio-top">
       <button className="studio-top__back" onClick={() => navigate('/studio')} title="所有專案" aria-label="所有專案"><Icon icon={ArrowLeft} size="md" /></button>
       <span className="studio-top__role">動畫師</span>
-      <span className="studio-top__project">
-        {projectName || (nameStatus === 'error' && !goneMessage ? (
+      <span className="studio-top__project" title={projectName || undefined}>
+        {projectName ? <span className="studio-top__name">{projectName}</span> : (nameStatus === 'error' && !goneMessage ? (
           <>
             {projectId}（讀取失敗）
             <button className="btn btn--ghost" onClick={() => refreshAll()} style={{ marginLeft: 8, padding: '3px 10px', fontSize: 12 }}>重試</button>
@@ -726,14 +728,24 @@ function StudioInner({ projectId }: { projectId: string }) {
       </span>
       <span className="grow" />
       {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
-      <a className="studio-top__help" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
+      <a className="studio-top__help ovf-hide-narrow" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
       {/* 設定頁有 NDI / AE 連線檢查 */}
-      <Link className="studio-top__help" to="/settings">設定</Link>
+      <Link className="studio-top__help ovf-hide-narrow" to="/settings">設定</Link>
       <NotificationBell />
+      {/* 手機：使用說明、設定、登出收進「⋯」 */}
+      <OverflowMenu
+        className="ovf-only-narrow"
+        header={user ? `${user.name} · 動畫師工作站` : undefined}
+        items={[
+          { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(), external: true },
+          { key: 'settings', label: '設定（AE 即時連線檢查）', icon: Settings, onSelect: () => navigate('/settings') },
+          ...(user ? [{ key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: async () => { await logout(); navigate('/login'); } }] : []),
+        ]}
+      />
       {user && (
-        <span className="studio-top__user">
-          <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
-          <span>{user.name}</span>
+        <span className="studio-top__user ovf-hide-narrow">
+          <span className="avatar avatar--sm" style={{ background: user.avatarColor }} title={user.name}>{user.name[0]}</span>
+          <span className="studio-top__user-name">{user.name}</span>
           <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
         </span>
       )}
@@ -794,7 +806,7 @@ function StudioInner({ projectId }: { projectId: string }) {
               {songSearch.trim() ? '沒有符合的歌'
                 : effectiveFilter === 'mine'
                   ? (songs.length > 0
-                    ? <>還沒有指派給你的歌（製作會在編輯頁指派）。<br />可以先按「全部」看所有歌。</>
+                    ? <>還沒有指派給你的歌<br /><button type="button" className="link-btn studio-songs__empty-action" onClick={() => setSongFilter('all')}>看全部的歌</button></>
                     : '這個專案還沒有歌')
                   : '這個專案還沒有歌'}
             </div>
@@ -1056,10 +1068,29 @@ function StudioInner({ projectId }: { projectId: string }) {
               )}
             </>
           ) : (
-            <div className="studio-stage__empty">
-              <div className="studio-stage__empty-icon"><Icon icon={Music} size="xxl" /></div>
-              <p>{visibleSongs.length === 0 ? '從左側挑一首歌開始' : '挑一首歌'}</p>
-            </div>
+            songsLoading ? (
+              <div className="studio-stage__empty"><Icon icon={LoaderCircle} spin /> 載入中…</div>
+            ) : songs.length === 0 ? (
+              <EmptyState icon={ListMusic} title="這個專案還沒有歌">
+                製作在管理頁加上歌曲、指派給你之後，就會出現在這裡，你也會收到通知（右上角的小鈴鐺）。
+              </EmptyState>
+            ) : visibleSongs.length === 0 && songSearch.trim() ? (
+              <EmptyState icon={SearchX} title={`找不到「${songSearch.trim()}」`} actions={<button className="btn btn--ghost" onClick={() => setSongSearch('')}>清除搜尋</button>}>
+                換個歌名或歌曲代號試試看。
+              </EmptyState>
+            ) : visibleSongs.length === 0 && effectiveFilter === 'mine' ? (
+              <EmptyState
+                icon={UserRoundSearch}
+                title="還沒有指派給你的歌"
+                actions={<button className="btn btn--primary" onClick={() => setSongFilter('all')}>先看全部的歌</button>}
+              >
+                製作把歌指派給你之後，會出現在「我的」，你也會收到通知（右上角的小鈴鐺）。這個專案目前有 {songs.length} 首歌。
+              </EmptyState>
+            ) : (
+              <EmptyState icon={Music} title="先挑一首歌">
+                從歌曲清單點一首歌，3D 舞台、影片和留言會出現在這裡。鍵盤 J / K 也可以切歌。
+              </EmptyState>
+            )
           )}
         </main>
 

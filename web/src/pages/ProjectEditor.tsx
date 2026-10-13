@@ -22,6 +22,7 @@ import ShareLinksDialog from '../components/ShareLinksDialog';
 import InviteDialog from '../components/InviteDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import NotificationBell from '../components/NotificationBell';
+import OverflowMenu from '../components/OverflowMenu';
 import DecisionDialog from '../components/DecisionDialog';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { pushRecentProject } from '../components/CommandPalette';
@@ -47,6 +48,7 @@ import {
   Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
   Palette, Pencil, Plus, Redo2, RotateCcw, Search, Shapes, Sprout, Trash2, Undo2, Upload, UserPlus, X,
 } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'mechanisms' | 'proposals' | 'objects';
@@ -854,23 +856,35 @@ export default function ProjectEditor() {
     } catch (e) { toast.error('刪除失敗：' + msg(e)); }
   }
 
+  // 上方列的按鈕（寬的時候一顆一顆列出來；手機收進「⋯」選單）
+  const topbarActions: { key: string; label: string; menuLabel: string; title: string; icon: LucideIcon; onSelect: () => void; disabled?: boolean; secondary?: boolean }[] = [
+    { key: 'storyboard', label: '分鏡', menuLabel: '分鏡（所有 cue 的縮圖）', title: '分鏡：這首歌所有 cue 的縮圖一覽', icon: LayoutGrid, onSelect: () => setStoryboardOpen(true), disabled: !selectedSong || masterCues.length === 0, secondary: true },
+    { key: 'diff', label: '對比', menuLabel: '兩個 cue 對比', title: '兩個 cue 並排對比', icon: Columns2, onSelect: () => setDiffOpen(true), disabled: !selectedSong || masterCues.length < 2, secondary: true },
+    { key: 'import', label: '匯入 Cue', menuLabel: '從別首歌匯入 cue', title: '從別首歌匯入 cue（巡迴複製、跨專案沿用）', icon: Import, onSelect: () => setImportCuesOpen(true), disabled: !selectedSong, secondary: true },
+    { key: 'search', label: '搜留言', menuLabel: '搜尋留言', title: '搜尋專案內所有歌的留言', icon: Search, onSelect: () => setCommentSearchOpen(true), secondary: true },
+    { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
+    { key: 'invite', label: '邀請', menuLabel: '邀請連結', title: '邀請連結：傳給導演 / 動畫師，點開就加進這個專案（不用登入碼）', icon: UserPlus, onSelect: () => setInviteOpen(true) },
+    { key: 'drive', label: 'Drive', menuLabel: projectMeta?.drive_folder_id ? 'Drive 來源（已設定）' : 'Drive 來源', title: 'Drive 來源設定', icon: Cloud, onSelect: () => setDriveOpen(true), secondary: true },
+    { key: 'activity', label: '最近活動', menuLabel: '最近活動', title: '最近活動', icon: HistoryIcon, onSelect: () => setActivityOpen(true), secondary: true },
+  ];
+
   return (
     <div className="editor">
       {/* Top */}
       <header className="editor-topbar">
         <button className="editor-back" onClick={() => navigate('/admin')} title="返回專案總覽" aria-label="返回專案總覽"><Icon icon={ArrowLeft} size="md" /></button>
         <div className="editor-breadcrumb">
-          <span className="muted">專案</span>
-          <span className="sep">/</span>
+          <span className="muted editor-breadcrumb__root">專案</span>
+          <span className="sep editor-breadcrumb__root">/</span>
           {/* 顯示專案名稱；載入中顯示「…」，載不到才退回代號 */}
-          <span className="strong">{projectMeta ? (projectMeta.name || projectId) : (projectMetaFailed ? projectId : '…')}</span>
+          <span className="strong editor-breadcrumb__project" title={projectMeta?.name || undefined}>{projectMeta ? (projectMeta.name || projectId) : (projectMetaFailed ? projectId : '…')}</span>
           {selectedSong && (<>
-            <span className="sep">/</span>
-            <span className="muted">{selectedSong.name}</span>
+            <span className="sep editor-breadcrumb__sub">/</span>
+            <span className="muted editor-breadcrumb__sub editor-breadcrumb__song" title={selectedSong.name}>{selectedSong.name}</span>
           </>)}
           {selectedCue && (<>
-            <span className="sep">/</span>
-            <span className="strong">{selectedCue.name}</span>
+            <span className="sep editor-breadcrumb__sub">/</span>
+            <span className="strong editor-breadcrumb__sub editor-breadcrumb__cue" title={selectedCue.name}>{selectedCue.name}</span>
           </>)}
         </div>
         <div className="editor-topbar__right">
@@ -896,68 +910,25 @@ export default function ProjectEditor() {
           >
             <Icon icon={Redo2} /><span className="editor-topbar__label"> 重做</span>{historyCounts.redo > 0 && <span className="muted small"> ({historyCounts.redo})</span>}
           </button>
-          <button
-            className="editor-topbar__activity editor-topbar__activity--secondary"
-            onClick={() => setStoryboardOpen(true)}
-            title="分鏡：這首歌所有 cue 的縮圖一覽"
-            disabled={!selectedSong || masterCues.length === 0}
-          >
-            <Icon icon={LayoutGrid} /><span className="editor-topbar__label"> 分鏡</span>
-          </button>
-          <button
-            className="editor-topbar__activity editor-topbar__activity--secondary"
-            onClick={() => setDiffOpen(true)}
-            title="兩個 cue 並排對比"
-            disabled={!selectedSong || masterCues.length < 2}
-          >
-            <Icon icon={Columns2} /><span className="editor-topbar__label"> 對比</span>
-          </button>
-          <button
-            className="editor-topbar__activity editor-topbar__activity--secondary"
-            onClick={() => setImportCuesOpen(true)}
-            title="從別首歌匯入 cue（巡迴複製、跨專案沿用）"
-            disabled={!selectedSong}
-          >
-            <Icon icon={Import} /><span className="editor-topbar__label"> 匯入 Cue</span>
-          </button>
-          <button
-            className="editor-topbar__activity editor-topbar__activity--secondary"
-            onClick={() => setCommentSearchOpen(true)}
-            title="搜尋專案內所有歌的留言"
-          >
-            <Icon icon={Search} /><span className="editor-topbar__label"> 搜留言</span>
-          </button>
-          <button
-            className="editor-topbar__activity"
-            onClick={() => setShareOpen(true)}
-            title="建立公開分享連結（外部的人不用登入就能看，只能看不能改）"
-          >
-            <Icon icon={Link} /><span className="editor-topbar__label"> 分享</span>
-          </button>
-          <button
-            className="editor-topbar__activity"
-            onClick={() => setInviteOpen(true)}
-            title="邀請連結：傳給導演 / 動畫師，點開就加進這個專案（不用登入碼）"
-            aria-label="邀請連結"
-          >
-            <Icon icon={UserPlus} /><span className="editor-topbar__label"> 邀請</span>
-          </button>
-          <button
-            className="editor-topbar__activity editor-topbar__activity--secondary"
-            onClick={() => setDriveOpen(true)}
-            title="Drive 來源設定"
-          >
-            <Icon icon={Cloud} /><span className="editor-topbar__label"> Drive</span>
-            {projectMeta?.drive_folder_id && <span className="editor-topbar__dot" title="已設定 Drive 資料夾" />}
-          </button>
-          <button
-            className="editor-topbar__activity editor-topbar__activity--secondary"
-            onClick={() => setActivityOpen(true)}
-            title="最近活動"
-          >
-            <Icon icon={HistoryIcon} /><span className="editor-topbar__label"> 最近活動</span>
-          </button>
+          {/* 寬的時候一顆一顆列出來（不夠寬只留圖示）；手機（640px 以下）收進「⋯」 */}
+          {topbarActions.map(a => (
+            <button
+              key={a.key}
+              className={'editor-topbar__activity ovf-hide-narrow' + (a.secondary ? ' editor-topbar__activity--secondary' : '')}
+              onClick={a.onSelect}
+              title={a.title}
+              aria-label={a.menuLabel}
+              disabled={a.disabled}
+            >
+              <Icon icon={a.icon} /><span className="editor-topbar__label"> {a.label}</span>
+              {a.key === 'drive' && projectMeta?.drive_folder_id && <span className="editor-topbar__dot" title="已設定 Drive 資料夾" />}
+            </button>
+          ))}
           <NotificationBell />
+          <OverflowMenu
+            className="ovf-only-narrow"
+            items={topbarActions.map(a => ({ key: a.key, label: a.menuLabel, icon: a.icon, disabled: a.disabled, onSelect: a.onSelect, separatorBefore: a.key === 'share' }))}
+          />
         </div>
       </header>
 

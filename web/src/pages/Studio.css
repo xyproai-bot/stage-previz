@@ -906,3 +906,35 @@
 .studio-review__last--needs_changes { border-left: 3px solid var(--danger); }
 .studio-review__last--approved { border-left: 3px solid var(--accent); }
 .studio-review > .review-history { margin: 0; }
+
+/* ─── 上方列：字永遠一行；專案名稱太長變「…」；手機（640px 以下）次要按鈕收進「⋯」 ─── */
+.studio-top { min-width: 0; }
+.studio-top > * { flex-shrink: 0; white-space: nowrap; }
+.studio-top > .grow { flex-shrink: 1; min-width: 0; }
+.studio-top__help { display: inline-flex; align-items: center; gap: 4px; }
+.studio-top__project {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+}
+.studio-top__project > * { flex-shrink: 0; }
+.studio-top__project > .studio-top__name {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.studio-top__user .link-btn { white-space: nowrap; }
+@media (max-width: 1024px) {
+  .studio-top__user-name { display: none; }
+}
+@media (max-width: 640px) {
+  .studio-top { gap: 8px; padding: 8px 12px; }
+}
+
+/* 空白頁（還沒有歌、還沒有指派給你的歌、還沒選歌）：在 3D 那一塊的正中間 */
+.studio-stage > .empty-state-box { flex: 1; }
+.studio-stage > .studio-stage__empty { flex-direction: row; gap: 6px; }
+.studio-songs__empty-action { margin-top: 8px; color: var(--accent); font-weight: 600; }

@@ -5,9 +5,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AtSign, Bell, CheckCheck, CircleCheck, CornerDownRight, Film, RotateCcw, UserPlus, X } from 'lucide-react';
+import { AtSign, Bell, BellOff, CheckCheck, CircleCheck, CornerDownRight, Film, RotateCcw, UserPlus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Icon from './Icon';
+import EmptyState from './EmptyState';
 import { useAuth } from '../lib/auth';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { listNotifications, markNotificationsRead, type AppNotification, type NotificationKind } from '../lib/reviewApi';
@@ -155,10 +156,9 @@ export default function NotificationBell({ placement = 'down-right', className }
             ) : status !== 'ready' && items.length === 0 ? (
               <div className="notif__empty">讀取中…</div>
             ) : items.length === 0 ? (
-              <div className="notif__empty">
-                還沒有通知。<br />
+              <EmptyState icon={BellOff} title="還沒有通知" size="compact">
                 有人 @ 你、你的歌被退或通過、有新版等你審、歌指派給你時，會出現在這裡。
-              </div>
+              </EmptyState>
             ) : (
               groups.map(g => (
                 <section key={g.label} className="notif__group">

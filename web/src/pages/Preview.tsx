@@ -10,6 +10,8 @@ import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import AddVideoDialog from '../components/AddVideoDialog';
 import ActivityDrawer from '../components/ActivityDrawer';
 import NotificationBell from '../components/NotificationBell';
+import OverflowMenu from '../components/OverflowMenu';
+import EmptyState from '../components/EmptyState';
 import DecisionDialog from '../components/DecisionDialog';
 import ReviewHistory from '../components/ReviewHistory';
 import HelpModal from '../components/HelpModal';
@@ -39,8 +41,8 @@ import {
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Clock, Film, HistoryIcon, LoaderCircle, MapPin, Pause, Play,
-  Square, X,
+  ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Clock, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin, Pause, Play,
+  Plus, RefreshCw, Square, X,
 } from 'lucide-react';
 import './Preview.css';
 
@@ -398,8 +400,8 @@ function PreviewInner({ projectId }: { projectId: string }) {
       <header className="preview-top">
         <button className="preview-top__back" onClick={() => navigate('/preview')} title="所有專案" aria-label="所有專案"><Icon icon={ArrowLeft} size="md" /></button>
         <span className="preview-top__role">導演</span>
-        <span className="preview-top__project">
-          {projectName || (nameStatus === 'error' && !goneMessage ? (
+        <span className="preview-top__project" title={projectName || undefined}>
+          {projectName ? <span className="preview-top__name">{projectName}</span> : (nameStatus === 'error' && !goneMessage ? (
             <>
               {projectId}（讀取失敗）
               <button className="btn btn--ghost btn--sm" onClick={() => refresh()} style={{ marginLeft: 8 }}>重試</button>
@@ -419,23 +421,24 @@ function PreviewInner({ projectId }: { projectId: string }) {
         {!goneMessage && (
           <>
             <button
-              className="btn btn--sm btn--ghost"
+              className="btn btn--sm btn--ghost ovf-hide-narrow"
               onClick={() => setActivityOpen(true)}
               title="最近活動"
             ><Icon icon={HistoryIcon} /> 活動</button>
             <button
-              className={'btn btn--sm ' + (showMode ? 'btn--primary' : 'btn--ghost')}
+              className={'btn btn--sm ' + (showMode ? 'btn--primary' : 'btn--ghost ovf-hide-narrow')}
               onClick={() => setShowMode(m => !m)}
               title={showMode ? '停止整場串播' : '從目前歌曲開始整場依序自動播放'}
+              aria-label={showMode ? '停止整場串播' : '整場串播'}
               disabled={songs.length === 0}
             >
-              {showMode ? <><Icon icon={Square} /> 停止整場</> : <><Icon icon={Play} /> 整場串播</>}
+              {showMode ? <><Icon icon={Square} /><span className="preview-top__btn-label"> 停止整場</span></> : <><Icon icon={Play} /> 整場串播</>}
             </button>
           </>
         )}
         {showMode && (
           <select
-            className="preview-top__interval"
+            className="preview-top__interval ovf-hide-narrow"
             value={showCueIntervalSec}
             onChange={e => setShowCueIntervalSec(parseInt(e.target.value, 10))}
             title="每個 cue 停留幾秒"
@@ -446,14 +449,27 @@ function PreviewInner({ projectId }: { projectId: string }) {
             <option value={10}>每 cue 10 秒</option>
           </select>
         )}
-        <button className="preview-top__icon-btn" onClick={() => setHelpOpen(true)} title="使用說明（比較版本、留言、通知）" aria-label="使用說明">
+        <button className="preview-top__icon-btn ovf-hide-narrow" onClick={() => setHelpOpen(true)} title="使用說明（比較版本、留言、通知）" aria-label="使用說明">
           <Icon icon={CircleHelp} size="md" />
         </button>
         <NotificationBell />
+        {/* 手機：活動、整場串播、說明、登出收進「⋯」 */}
+        <OverflowMenu
+          className="ovf-only-narrow"
+          header={user ? `${user.name} · 導演頁` : undefined}
+          items={[
+            ...(!goneMessage ? [
+              { key: 'activity', label: '最近活動', icon: HistoryIcon, onSelect: () => setActivityOpen(true) },
+              { key: 'show', label: showMode ? '停止整場串播' : '整場串播', icon: showMode ? Square : Play, active: showMode, disabled: songs.length === 0, onSelect: () => setShowMode(m => !m) },
+            ] : []),
+            { key: 'help', label: '使用說明', icon: CircleHelp, onSelect: () => setHelpOpen(true) },
+            ...(user ? [{ key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: async () => { await logout(); navigate('/login'); } }] : []),
+          ]}
+        />
         {user && (
-          <span className="preview-top__user">
-            <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
-            <span>{user.name}</span>
+          <span className="preview-top__user ovf-hide-narrow">
+            <span className="avatar avatar--sm" style={{ background: user.avatarColor }} title={user.name}>{user.name[0]}</span>
+            <span className="preview-top__user-name">{user.name}</span>
             <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
           </span>
         )}
@@ -470,10 +486,24 @@ function PreviewInner({ projectId }: { projectId: string }) {
       ) : songsLoading ? (
         <div className="preview-loading"><Icon icon={LoaderCircle} spin /> 載入中…</div>
       ) : songs.length === 0 ? (
-        <div className="preview-empty">
-          <h2>這個專案還沒有歌</h2>
-          <p>請製作在管理頁加上歌曲</p>
-        </div>
+        <EmptyState
+          icon={ListMusic}
+          title="這個專案還沒有歌"
+          className="preview-empty-state"
+          actions={projectRole === 'admin' ? (
+            <button className="btn btn--primary" onClick={() => navigate(`/admin/projects/${encodeURIComponent(projectId)}`)}>
+              <Icon icon={Plus} /> 到管理頁加歌
+            </button>
+          ) : (
+            <button className="btn btn--ghost" onClick={() => refresh()}>
+              <Icon icon={RefreshCw} /> 重新整理
+            </button>
+          )}
+        >
+          {projectRole === 'admin'
+            ? '在管理頁加上歌曲之後，導演就能在這裡一首一首看、留言、按通過。'
+            : '製作在管理頁加上歌曲之後，就會出現在這裡（這頁也會自己更新）。'}
+        </EmptyState>
       ) : selectedSongId && selectedSong ? (
         <SongDetail
           projectId={projectId}
@@ -556,7 +586,13 @@ function StatusBoard({
           </div>
           <div className="status-col__body">
             {songsByStatus[col.key].length === 0 ? (
-              <div className="status-col__empty">—</div>
+              col.key === 'in_review' ? (
+                <EmptyState icon={Inbox} title="目前沒有等你審的歌" size="compact">
+                  動畫師按「提交審查」後會出現在這裡，你也會收到通知（右上角的小鈴鐺）。
+                </EmptyState>
+              ) : (
+                <div className="status-col__empty">{col.key === 'approved' ? '還沒有通過的歌' : `沒有「${col.label}」的歌`}</div>
+              )
             ) : (
               songsByStatus[col.key].map(s => {
                 // 總覽只放審查中的快速按鈕（通過 / 需修改）；撤回通過請點進歌曲
@@ -875,14 +911,14 @@ function SongDetail({
   return (
     <div className="song-detail">
       <div className="song-detail__sub-top">
-        <button className="link-btn" onClick={onClose}><Icon icon={ArrowLeft} /> 回總覽</button>
+        <button className="link-btn song-detail__back" onClick={onClose} title="回總覽" aria-label="回總覽"><Icon icon={ArrowLeft} /><span className="song-detail__back-label"> 回總覽</span></button>
         <span className="song-detail__nav">
-          {prev && <button className="link-btn" onClick={() => onPickSong(prev.id)}><Icon icon={ChevronLeft} /> {prev.name}</button>}
+          {prev && <button className="link-btn song-detail__step" onClick={() => onPickSong(prev.id)} title={`上一首：${prev.name}`} aria-label={`上一首：${prev.name}`}><Icon icon={ChevronLeft} /><span className="song-detail__step-name">{prev.name}</span></button>}
           <span className="song-detail__title">
             {song.code && <span className="song-code" title="歌曲代號">{song.code}</span>}
             {song.name}
           </span>
-          {next && <button className="link-btn" onClick={() => onPickSong(next.id)}>{next.name} <Icon icon={ChevronRight} /></button>}
+          {next && <button className="link-btn song-detail__step" onClick={() => onPickSong(next.id)} title={`下一首：${next.name}`} aria-label={`下一首：${next.name}`}><span className="song-detail__step-name">{next.name}</span><Icon icon={ChevronRight} /></button>}
         </span>
         <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>
         <span className="grow" />
@@ -898,7 +934,7 @@ function SongDetail({
             ))}
           </div>
         )}
-        {actionsHint && <span className="muted small">{actionsHint}</span>}
+        {actionsHint && <span className="muted small song-detail__hint">{actionsHint}</span>}
       </div>
 
       <div className="song-detail__body">

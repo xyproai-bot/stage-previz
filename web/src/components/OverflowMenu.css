@@ -1,0 +1,89 @@
+/* 上方列的「⋯」選單 */
+.ovf { position: relative; display: inline-flex; flex-shrink: 0; }
+.ovf__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ovf__btn:hover,
+.ovf__btn.is-open { color: var(--text); border-color: var(--border-strong); }
+.ovf__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.ovf__menu {
+  position: fixed;
+  z-index: 950;
+  min-width: 210px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.55);
+  animation: ovf-in 0.12s ease-out;
+  /* 上方列有的設了不換行 / 大寫 / 字距 */
+  white-space: normal;
+  text-transform: none;
+  letter-spacing: normal;
+  font-weight: 400;
+  text-align: left;
+}
+.ovf__header {
+  padding: 6px 10px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ovf__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ovf__item:hover:not(:disabled),
+.ovf__item:focus-visible { background: var(--surface-2); outline: none; text-decoration: none; }
+.ovf__item:disabled { opacity: 0.4; cursor: not-allowed; }
+.ovf__item.is-danger { color: var(--danger); }
+.ovf__item.is-active { color: var(--accent); }
+.ovf__icon { display: inline-flex; width: 16px; justify-content: center; color: var(--text-dim); flex-shrink: 0; }
+.ovf__item.is-danger .ovf__icon,
+.ovf__item.is-active .ovf__icon { color: inherit; }
+.ovf__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ovf__on { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0; }
+.ovf__sep { height: 1px; margin: 4px 6px; background: var(--border); }
+
+@keyframes ovf-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .ovf__menu { animation: none; } }
+@media (hover: none) and (pointer: coarse) { .ovf__btn { width: 40px; height: 40px; } }
+
+/* 上方列共用：寬的時候直接顯示的次要按鈕 / 窄的時候才出現的「⋯」 */
+.ovf-only-narrow { display: none !important; }
+@media (max-width: 640px) {
+  .ovf-hide-narrow { display: none !important; }
+  .ovf-only-narrow { display: inline-flex !important; }
+}

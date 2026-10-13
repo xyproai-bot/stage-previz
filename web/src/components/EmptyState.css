@@ -1,0 +1,37 @@
+/* 空白頁的說明：圖示 + 標題 + 一句話 + 下一步 */
+.empty-state-box {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-align: center;
+  color: var(--text-dim);
+  margin: 0 auto;
+}
+.empty-state-box--page { padding: 48px 24px; max-width: 460px; min-height: 260px; }
+.empty-state-box--compact { padding: 20px 12px; max-width: 320px; gap: 6px; }
+.empty-state-box__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 4px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.empty-state-box--compact .empty-state-box__icon { width: 40px; height: 40px; margin-bottom: 2px; }
+.empty-state-box__title { font-size: 15px; font-weight: 700; color: var(--text); line-height: 1.4; }
+.empty-state-box--compact .empty-state-box__title { font-size: 13px; }
+.empty-state-box__text { font-size: 13px; line-height: 1.7; color: var(--text-dim); }
+.empty-state-box--compact .empty-state-box__text { font-size: 12px; line-height: 1.6; color: var(--text-muted); }
+.empty-state-box__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.empty-state-box__actions .btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }

@@ -801,3 +801,74 @@
 @media (hover: none) and (pointer: coarse) {
   .preview-top__icon-btn { width: 40px; height: 40px; }
 }
+
+/* ─── 上方列：字永遠一行；專案名稱太長變「…」；手機（640px 以下）次要按鈕收進「⋯」 ─── */
+.preview-top { min-width: 0; }
+.preview-top > * { flex-shrink: 0; white-space: nowrap; }
+.preview-top > .grow { flex-shrink: 1; min-width: 0; }
+.preview-top .btn { display: inline-flex; align-items: center; gap: 4px; }
+.preview-top__project {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  overflow: hidden;
+}
+.preview-top__project > * { flex-shrink: 0; }
+.preview-top__project > .preview-top__name {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.preview-top__user .link-btn { white-space: nowrap; }
+@media (max-width: 1024px) {
+  .preview-top__user-name { display: none; }
+}
+@media (max-width: 900px) {
+  .preview-top__progress-bar { display: none; }
+  .preview-top__progress { margin-left: 0; }
+}
+@media (max-width: 640px) {
+  .preview-top { gap: 8px; padding: 8px 12px; }
+  .preview-top__btn-label { display: none; }
+  .preview-top .btn--sm { min-height: 34px; }
+}
+
+/* 歌曲頁的上方列：上一首 / 下一首的歌名太長變「…」，手機只留箭頭；按鈕、狀態不換行 */
+.song-detail__sub-top > * { flex-shrink: 0; white-space: nowrap; }
+.song-detail__sub-top > .song-detail__nav { flex: 0 1 auto; }
+.song-detail__sub-top > .grow { flex-shrink: 1; min-width: 0; }
+.song-detail__nav > * { flex-shrink: 0; }
+.song-detail__nav > .song-detail__title { flex-shrink: 1; min-width: 0; }
+.song-detail__step,
+.song-detail__back { display: inline-flex; align-items: center; gap: 2px; min-width: 0; white-space: nowrap; }
+.song-detail__nav > .song-detail__step { flex-shrink: 2; min-width: 28px; }
+.song-detail__step-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-detail__sub-top > .song-detail__hint { white-space: normal; min-width: 0; flex-shrink: 1; }
+@media (max-width: 1024px) {
+  .song-detail__step-name { max-width: 110px; }
+}
+@media (max-width: 640px) {
+  .song-detail__sub-top { padding: 8px 12px; row-gap: 6px; }
+  .song-detail__step-name,
+  .song-detail__back-label { display: none; }
+  .song-detail__step,
+  .song-detail__back { justify-content: center; min-width: 34px; min-height: 34px; padding: 4px 6px; }
+  .song-detail__sub-top > .grow { display: none; }
+  .song-detail__approve { margin-left: auto; }
+  .song-detail__sub-top > .song-detail__hint { flex: 1 1 100%; order: 10; }
+}
+
+/* 空白頁：專案還沒有歌（整頁置中） */
+.preview > .preview-empty-state { flex: 1; }
+/* 手機：看板一欄一欄往下排，每欄有幾首就多高（不在欄裡面再捲一次） */
+@media (max-width: 640px) {
+  .status-board { grid-auto-rows: auto; }
+  .status-col__body { flex: none; overflow: visible; }
+}

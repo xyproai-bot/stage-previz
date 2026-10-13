@@ -300,3 +300,22 @@
     width: 100%;
   }
 }
+
+/* ─── 頁面上方列（專案總覽、用戶、模型庫…）：按鈕的字不換行；手機上標題 + 按鈕一行、搜尋框自己一行 ─── */
+.admin-topbar { gap: 12px; }
+.admin-topbar h1 { white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.admin-topbar__actions { min-width: 0; }
+.admin-topbar__actions > * { flex-shrink: 0; }
+.admin-topbar__actions .btn { white-space: nowrap; display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 768px) {
+  .admin-topbar { padding: 16px 16px 14px; }
+  .admin-topbar__actions { flex-wrap: wrap; gap: 8px; }
+  .admin-topbar__actions > .admin-search { flex: 1 1 200px; width: auto; min-width: 0; }
+}
+@media (max-width: 640px) {
+  .admin-topbar { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .admin-topbar h1 { flex: 1 1 auto; font-size: 20px; }
+  .admin-topbar__actions { display: contents; }
+  .admin-topbar__actions > .admin-search { order: 10; flex: 1 1 100%; }
+  .admin-content { padding-left: 16px; padding-right: 16px; }
+}

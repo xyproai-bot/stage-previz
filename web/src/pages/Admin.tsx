@@ -4,13 +4,14 @@ import AdminLayout from '../components/AdminLayout';
 import ProjectCard from '../components/ProjectCard';
 import NewProjectDialog from '../components/NewProjectDialog';
 import RecentProjectsBar from '../components/RecentProjectsBar';
+import OverflowMenu from '../components/OverflowMenu';
 import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
 import type { Project } from '../lib/mockData';
 import Icon from '../components/Icon';
 import { confirmDialog, promptDialog, toast } from '../components/dialogs';
 import {
-  Archive, ArrowRight, Clapperboard, Construction, Folder, Import, LoaderCircle, Music, Search, Shapes, TriangleAlert, Upload,
+  Archive, ArrowRight, Clapperboard, Construction, Folder, Import, LoaderCircle, Music, Plus, Search, Shapes, TriangleAlert, Upload,
 } from 'lucide-react';
 import './Admin.css';
 
@@ -294,11 +295,15 @@ function ProjectsTab() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <button className="btn btn--ghost" onClick={triggerImport} title="從 JSON 匯入專案備份（也可拖檔到頁面）">
+          <button className="btn btn--ghost ovf-hide-narrow" onClick={triggerImport} title="從 JSON 匯入專案備份（也可拖檔到頁面）">
             <Icon icon={Upload} /> 匯入
           </button>
+          <OverflowMenu
+            className="ovf-only-narrow"
+            items={[{ key: 'import', label: '匯入專案備份（.json）', icon: Upload, onSelect: triggerImport }]}
+          />
           <button className="btn btn--primary" onClick={() => setDialogOpen(true)}>
-            ＋ 新增專案
+            <Icon icon={Plus} /> 新增專案
           </button>
         </div>
       </header>
@@ -328,6 +333,7 @@ function ProjectsTab() {
         ) : filtered.length === 0 ? (
           <EmptyState
             onCreate={() => setDialogOpen(true)}
+            onClearFilter={() => { setSearch(''); setFilter('all'); }}
             hasFilter={search.length > 0 || filter !== 'all'}
             hasAnyProjects={projects.length > 0}
           />
@@ -370,8 +376,9 @@ function ProjectsTab() {
   );
 }
 
-function EmptyState({ onCreate, hasFilter, hasAnyProjects }: {
+function EmptyState({ onCreate, onClearFilter, hasFilter, hasAnyProjects }: {
   onCreate: () => void;
+  onClearFilter: () => void;
   hasFilter: boolean;
   hasAnyProjects: boolean;
 }) {
@@ -380,6 +387,8 @@ function EmptyState({ onCreate, hasFilter, hasAnyProjects }: {
       <div className="empty-card">
         <div className="empty-card__icon"><Icon icon={Search} size="xl" /></div>
         <p>找不到符合的專案</p>
+        <small>換個關鍵字，或看全部的專案</small>
+        <button className="btn btn--ghost" onClick={onClearFilter} style={{ marginTop: 12 }}>顯示全部專案</button>
       </div>
     );
   }
