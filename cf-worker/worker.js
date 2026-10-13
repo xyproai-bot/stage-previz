@@ -432,7 +432,7 @@ async function updateProject(request, env, projectId, me) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets', 'look_settings'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets', 'look_settings', 'material_overrides'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
   // tags 是 array → 存成 JSON string
@@ -444,9 +444,10 @@ async function updateProject(request, env, projectId, me) {
   if ('scaleCorrection' in body && !('scale_correction' in body)) body.scale_correction = body.scaleCorrection;
   if ('mechanismOffsets' in body && !('mechanism_offsets' in body)) body.mechanism_offsets = body.mechanismOffsets;
   if ('lookSettings' in body && !('look_settings' in body)) body.look_settings = body.lookSettings;
-  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body;
+  if ('materialOverrides' in body && !('material_overrides' in body)) body.material_overrides = body.materialOverrides;
+  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body || 'material_overrides' in body;
   if (touchesViewSettings && me?.role !== 'admin') {
-    return jsonResp({ error: '只有 admin 能改校準 / 機關滑桿 / 現場設定' }, 403);
+    return jsonResp({ error: '只有 admin 能改 3D 檢視設定（校準 / 機關滑桿 / 現場設定 / 材質）' }, 403);
   }
   if ('scale_correction' in body) {
     const n = Number(body.scale_correction);
@@ -462,6 +463,11 @@ async function updateProject(request, env, projectId, me) {
     const clean = sanitizeLookSettings(body.look_settings);
     if (!clean) return jsonResp({ error: 'look_settings 不合法' }, 400);
     body.look_settings = JSON.stringify(clean);
+  }
+  if ('material_overrides' in body) {
+    const clean = sanitizeMaterialOverrides(body.material_overrides);
+    if (!clean) return jsonResp({ error: 'material_overrides 不合法' }, 400);
+    body.material_overrides = JSON.stringify(clean);
   }
   const sets = [], values = [];
   for (const k of allowed) {
@@ -479,7 +485,7 @@ async function updateProject(request, env, projectId, me) {
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   // 滑桿 / 現場設定拖動會一直存，不寫 activity（不然 audit log 會被洗版）
   const onlyLiveTweaks = sets.length > 0 && Object.keys(body).every(k =>
-    ['mechanism_offsets', 'mechanismOffsets', 'look_settings', 'lookSettings'].includes(k));
+    ['mechanism_offsets', 'mechanismOffsets', 'look_settings', 'lookSettings', 'material_overrides', 'materialOverrides'].includes(k));
   if (!onlyLiveTweaks) {
     await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
   }
@@ -515,6 +521,37 @@ const LOOK_SETTING_RANGES = {
   reflectionSharpness: [0, 1],
   ledViewFalloff: [0, 1],
 };
+
+// 材質覆寫（依 C4D 材質名稱）：範圍要跟 web/src/lib/stageLook/materialOverrides.ts 的 MATERIAL_RANGES 一致
+const MATERIAL_RANGES = {
+  roughness: [0, 1],
+  metalness: [0, 1],
+  envIntensity: [0, 5],
+  opacity: [0, 1],
+};
+
+function sanitizeMaterialOverrides(raw) {
+  let obj = raw;
+  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { return null; } }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const entries = Object.entries(obj);
+  if (entries.length > 300) return null;
+  const out = {};
+  for (const [name, v] of entries) {
+    if (name.length > 100 || !v || typeof v !== 'object' || Array.isArray(v)) return null;
+    const o = {};
+    for (const [key, [min, max]] of Object.entries(MATERIAL_RANGES)) {
+      if (!(key in v)) continue;
+      const n = Number(v[key]);
+      if (!isFinite(n)) return null;
+      o[key] = Math.max(min, Math.min(max, n));
+    }
+    if (typeof v.color === 'string' && /^#[0-9a-f]{6}$/i.test(v.color)) o.color = v.color.toLowerCase();
+    if (v.mirrorFloor === true) o.mirrorFloor = true;
+    if (Object.keys(o).length) out[name] = o;
+  }
+  return out;
+}
 
 function sanitizeLookSettings(raw) {
   let obj = raw;
@@ -3785,7 +3822,7 @@ async function handleShareRouter(request, env, url, token) {
   if (sub === 'data' && request.method === 'GET') {
     // bundle 給 share viewer：project meta + songs + stage_objects + model
     const proj = await env.DB.prepare(
-      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
     ).bind(link.project_id).first();
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
@@ -3823,6 +3860,7 @@ async function handleShareRouter(request, env, url, token) {
       scaleCorrection: proj.scale_correction ?? 1,
       mechanismOffsets: safeJsonObj(proj.mechanism_offsets, {}),
       lookSettings: safeJsonObj(proj.look_settings, {}),
+      materialOverrides: safeJsonObj(proj.material_overrides, {}),
     });
   }
 
