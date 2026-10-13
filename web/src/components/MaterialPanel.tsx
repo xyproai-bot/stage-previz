@@ -95,7 +95,7 @@ export default function MaterialPanel({ materials, overrides, onChange, onClose 
           </div>
         );
       })}
-      <div style={{ opacity: 0.6, fontSize: 11, marginTop: 8 }}>改了會自動存，導演 / 動畫師看到的一樣</div>
+      <div style={{ opacity: 0.6, fontSize: 11, marginTop: 8 }}>改了會自動存（這台電腦也會留一份），導演 / 動畫師看到的一樣</div>
     </div>
   );
 }

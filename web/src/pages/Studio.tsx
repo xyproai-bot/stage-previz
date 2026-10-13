@@ -9,6 +9,7 @@ import { ProjectCardSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { markSeen, songUnread } from '../lib/unreadComments';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
+import { usePersonalLook } from '../lib/stageLook/personalLook';
 import './Studio.css';
 
 type Tab = 'cues' | 'review' | 'activity';
@@ -112,6 +113,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   const { user, logout } = useAuth();
   // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，動畫師這邊只看）
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
+  // 現場設定：專案預設 + 自己調過的（存在這台電腦）
+  const personalLook = usePersonalLook(projectId, view.lookSettings);
 
   const [projectName, setProjectName] = useState<string>('');
   const [songs, setSongs] = useState<Song[]>([]);
@@ -476,8 +479,11 @@ function StudioInner({ projectId }: { projectId: string }) {
                   scaleCorrection={view.scaleCorrection}
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                   mechanismOffsets={view.mechanismOffsets}
-                  lookSettings={view.lookSettings}
-                  onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
+                  lookSettings={personalLook.effective}
+                  onLookSettingsChange={personalLook.set}
+                  lookCustomized={personalLook.customized}
+                  onLookReset={personalLook.reset}
+                  onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
                   materialOverrides={view.materialOverrides}
                   onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                 />

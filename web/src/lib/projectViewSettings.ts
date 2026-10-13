@@ -5,9 +5,10 @@
 //   <StageScene scaleCorrection={view.scaleCorrection}
 //               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
 //               mechanismOffsets={view.mechanismOffsets}
-//               lookSettings={view.lookSettings}
-//               onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
-//               materialOverrides={view.materialOverrides}
+//               lookSettings={personalLook.effective}       // usePersonalLook(projectId, view.lookSettings)
+//               onLookSettingsChange={personalLook.set}     // 每個人調自己的，存在自己電腦
+//               onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
+//               materialOverrides={view.materialOverrides}  // admin 調的，這台電腦也留一份
 //               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined} />
 //
 // 之前校準 / 滑桿存在各自瀏覽器的 localStorage → 導演 / 動畫師 / 換電腦都看不到。
@@ -19,6 +20,7 @@ import type { MechanismOffsets } from './api';
 import { toast } from './toast';
 import { DEFAULT_LOOK_SETTINGS, normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 import { normalizeMaterialOverrides, type MaterialOverride, type MaterialOverrides } from './stageLook/materialOverrides';
+import { chooseMaterials, readMaterialCache, writeMaterialCache } from './stageLook/materialCache';
 
 const SAVE_DELAY_MS = 500;  // 滑桿停手多久才存
 
@@ -76,6 +78,8 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   const materialsRef = useRef<MaterialOverrides>({});
   // 還沒送出的修改（滑桿 / 現場設定），停手 SAVE_DELAY_MS 後合併成一次存
   const pendingRef = useRef<{ timer: number; projectId: string; patch: Partial<api.ProjectViewSettings> } | null>(null);
+  // 存檔失敗的提示一個頁面只跳一次（拖滑桿時不要一直跳）
+  const saveErrorShownRef = useRef(false);
 
   const applyScale = (n: number) => { scaleRef.current = n; setScale(n); };
   const applyOffsets = (o: MechanismOffsets) => { offsetsRef.current = o; setOffsets(o); };
@@ -88,8 +92,12 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     if (!p) return;
     clearTimeout(p.timer);
     pendingRef.current = null;
-    api.updateProjectViewSettings(p.projectId, p.patch, { keepalive })
-      .catch(e => toast.error('設定儲存失敗：' + (e instanceof Error ? e.message : String(e))));
+    api.updateProjectViewSettings(p.projectId, p.patch, { keepalive }).catch(e => {
+      if (saveErrorShownRef.current) return;
+      saveErrorShownRef.current = true;
+      console.warn('[viewSettings] save failed', e);
+      toast.error('設定還沒存到專案上（材質會先存在這台電腦，重新整理不會不見）');
+    });
   }, []);
 
   // 載入專案設定（+ admin 搬舊瀏覽器資料）
@@ -100,12 +108,16 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     applyOffsets({});
     applyLook(DEFAULT_LOOK_SETTINGS);
     applyMaterials({});
+    // admin 調過的材質，這台電腦有留一份 → 專案上讀不到 / 還沒存上去時用這份
+    const cachedMaterials = canEdit ? readMaterialCache(localStorage, projectId) : null;
     (async () => {
       let settings: api.ProjectViewSettings;
       try {
         settings = await api.getProjectViewSettings(projectId);
       } catch {
-        return;  // 讀不到就維持預設（未校準 / 沒位移 / 預設現場設定）
+        // 讀不到就維持預設（未校準 / 沒位移 / 預設現場設定），材質用這台電腦留的
+        if (!cancelled && cachedMaterials) applyMaterials(cachedMaterials);
+        return;
       }
       if (cancelled) return;
 
@@ -136,7 +148,14 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       applyScale(settings.scaleCorrection);
       applyOffsets(settings.mechanismOffsets);
       applyLook(settings.lookSettings);
-      applyMaterials(settings.materialOverrides);
+
+      const materials = chooseMaterials(settings.materialOverrides, cachedMaterials);
+      applyMaterials(materials.value);
+      if (canEdit && !materials.fromCache) writeMaterialCache(localStorage, projectId, materials.value);
+      if (materials.fromCache) {
+        // 專案上還沒有 → 補存上去（後台還沒更新會失敗，沒關係，這台電腦還留著）
+        api.updateProjectViewSettings(projectId, { materialOverrides: materials.value }).catch(() => {});
+      }
     })();
     return () => {
       cancelled = true;
@@ -203,8 +222,9 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     else merged[name] = { ...(cur[name] || {}), ...patch };
     const next = normalizeMaterialOverrides(merged);
     applyMaterials(next);
+    if (projectId) writeMaterialCache(localStorage, projectId, next);
     scheduleSave({ materialOverrides: next });
-  }, [canEdit, scheduleSave]);
+  }, [projectId, canEdit, scheduleSave]);
 
   return {
     scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, canEdit,

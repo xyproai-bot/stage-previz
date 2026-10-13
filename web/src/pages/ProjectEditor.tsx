@@ -18,6 +18,7 @@ import ShareLinksDialog from '../components/ShareLinksDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import { pushRecentProject } from '../components/CommandPalette';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
+import { usePersonalLook } from '../lib/stageLook/personalLook';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -83,6 +84,8 @@ export default function ProjectEditor() {
 
   // 機關 offset（per LED panel，公尺）+ 測距校準倍率 — 存在專案上，所有人共用，admin 才能改
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
+  // 現場設定：專案預設 + 自己調過的（存在這台電腦）
+  const personalLook = usePersonalLook(projectId, view.lookSettings);
 
   const [rightTab, setRightTab] = useState<RightTab>('cues');
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -817,8 +820,11 @@ export default function ProjectEditor() {
               mechanismOffsets={view.mechanismOffsets}
               scaleCorrection={view.scaleCorrection}
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
-              lookSettings={view.lookSettings}
-              onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
+              lookSettings={personalLook.effective}
+              onLookSettingsChange={personalLook.set}
+              lookCustomized={personalLook.customized}
+              onLookReset={personalLook.reset}
+              onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
               materialOverrides={view.materialOverrides}
               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
             />
@@ -1016,7 +1022,7 @@ export default function ProjectEditor() {
                 songName={selectedSong.name}
                 scaleCorrection={view.scaleCorrection}
                 mechanismOffsets={view.mechanismOffsets}
-                lookSettings={view.lookSettings}
+                lookSettings={personalLook.effective}
                 materialOverrides={view.materialOverrides}
               />
             </div>

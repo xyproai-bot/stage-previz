@@ -1,9 +1,15 @@
-import { DEFAULT_LOOK_SETTINGS, LOOK_SETTING_RANGES, type LookSettings } from '../lib/stageLook/lookSettings';
+import { LOOK_SETTING_RANGES, type LookSettings } from '../lib/stageLook/lookSettings';
 
 interface Props {
   settings: LookSettings;
   onChange: (patch: Partial<LookSettings>) => void;
   onClose: () => void;
+  /** 跟專案預設不一樣嗎 */
+  customized: boolean;
+  /** 清掉自己的調整，回到專案預設 */
+  onReset: () => void;
+  /** admin 才有：把目前的設定變成所有人的預設 */
+  onSaveAsDefault?: () => void;
 }
 
 const ROWS: { key: keyof LookSettings; label: string; hint: string; step: number }[] = [
@@ -16,13 +22,8 @@ const ROWS: { key: keyof LookSettings; label: string; hint: string; step: number
   { key: 'reflectionSharpness', label: '倒影清晰度', hint: '倒影清楚還是模糊', step: 0.05 },
 ];
 
-/** 現場模式設定（admin 才看得到；改了全專案共用） */
-export default function LookSettingsPanel({ settings, onChange, onClose }: Props) {
-  const reset = () => {
-    const patch: Partial<LookSettings> = {};
-    for (const r of ROWS) patch[r.key] = DEFAULT_LOOK_SETTINGS[r.key];
-    onChange(patch);
-  };
+/** 現場模式設定：每個人自己調、存在自己電腦；admin 可以把自己的設定變成所有人的預設 */
+export default function LookSettingsPanel({ settings, onChange, onClose, customized, onReset, onSaveAsDefault }: Props) {
   return (
     <div
       data-ui-element
@@ -35,7 +36,6 @@ export default function LookSettingsPanel({ settings, onChange, onClose }: Props
     >
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
         <strong style={{ flex: 1 }}>🎚 現場設定</strong>
-        <button className="btn btn--ghost btn--sm" onClick={reset} title="回到預設值">重設</button>
         <button className="btn btn--ghost btn--sm" onClick={onClose} title="關閉">×</button>
       </div>
       {ROWS.map(r => {
@@ -55,7 +55,27 @@ export default function LookSettingsPanel({ settings, onChange, onClose }: Props
           </label>
         );
       })}
-      <div style={{ opacity: 0.6, fontSize: 11 }}>改了會自動存，導演 / 動畫師看到的一樣</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 8 }}>
+        <button
+          className="btn btn--ghost btn--sm"
+          onClick={onReset}
+          disabled={!customized}
+          title="清掉你自己的調整，回到專案預設"
+        >
+          {customized ? '回到專案預設' : '目前就是專案預設'}
+        </button>
+        {onSaveAsDefault && (
+          <button
+            className="btn btn--sm"
+            onClick={onSaveAsDefault}
+            disabled={!customized}
+            title="把你現在的設定變成所有人打開時的預設（每個人還是可以自己再調）"
+          >
+            {customized ? '設為所有人的預設' : '✓ 所有人的預設就是這組'}
+          </button>
+        )}
+      </div>
+      <div style={{ opacity: 0.6, fontSize: 11 }}>你調的只存在這台電腦，重新整理也會留著；不會影響別人</div>
     </div>
   );
 }

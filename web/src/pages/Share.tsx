@@ -6,6 +6,7 @@ import StageScene from '../components/StageScene';
 import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
 import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
+import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueAtTime } from '../lib/cueTiming';
 import type { NdiClientStatus } from '../lib/ndiClient';
 import './Share.css';
@@ -129,6 +130,11 @@ export default function Share() {
   }, [selectedCueId, cueStates, data]);
 
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId), [cues, selectedCueId]);
+
+  // 現場設定：專案預設 + 自己調過的（存在這台電腦，重新整理也會留著）
+  const projectLook = useMemo(() => normalizeLookSettings(data?.lookSettings), [data]);
+  const personalLook = usePersonalLook(data?.project.id, projectLook);
+  const materialOverrides = useMemo(() => normalizeMaterialOverrides(data?.materialOverrides), [data]);
 
   // ── 本地影片播到某秒 → 自動切到對應 cue（cue 有設「對應影片時間」才會動）──
   // 只在「應該的 cue」改變時才切，手動點的 cue 會保留到影片進入下一段
@@ -277,8 +283,11 @@ export default function Share() {
               crossfadeSeconds={selectedCue?.crossfadeSeconds ?? 0}
               scaleCorrection={data.scaleCorrection ?? 1}
               mechanismOffsets={data.mechanismOffsets}
-              lookSettings={normalizeLookSettings(data.lookSettings)}
-              materialOverrides={normalizeMaterialOverrides(data.materialOverrides)}
+              lookSettings={personalLook.effective}
+              onLookSettingsChange={personalLook.set}
+              lookCustomized={personalLook.customized}
+              onLookReset={personalLook.reset}
+              materialOverrides={materialOverrides}
               enableNdi={source === 'ndi'}
               onNdiStatus={setNdiStatus}
               ledVideo={source === 'video' && local.ready ? local.video : null}

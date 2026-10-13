@@ -66,7 +66,7 @@ interface Props {
   modelUrl?: string | null;
   /** 唯讀模式：不顯示移動/旋轉/縮放工具，不啟用 transform gizmo（給動畫師/導演 view） */
   readOnly?: boolean;
-  /** 預設 render mode（quick / live；舊值 realistic / cinematic 當 live） */
+  /** 預設 render mode（沒給 = live；舊值 realistic / cinematic 當 live） */
   defaultRenderMode?: RenderMode | 'realistic' | 'cinematic';
   /** NDI helper 連線：true 時連 ws://127.0.0.1:7777 把 frames 餵給 LED 面板 */
   enableNdi?: boolean;
@@ -92,10 +92,16 @@ interface Props {
   scaleCorrection?: number;
   /** 有傳才顯示「設為已知距離 / 重設」— 只有 admin 能改校準 */
   onScaleCorrectionChange?: (n: number) => void;
-  /** 現場模式設定（存在專案上全員共用）；沒傳用預設 */
+  /** 現場模式設定（專案預設 + 自己調過的）；沒傳用預設 */
   lookSettings?: LookSettings;
-  /** 有傳才顯示「🎚 設定」面板 — 只有 admin */
+  /** 有傳才顯示「🎚 設定」面板（每個人都可以調自己的） */
   onLookSettingsChange?: (patch: Partial<LookSettings>) => void;
+  /** 自己的設定跟專案預設不一樣嗎 */
+  lookCustomized?: boolean;
+  /** 清掉自己的調整，回到專案預設 */
+  onLookReset?: () => void;
+  /** admin 才有：把目前的設定變成所有人的預設 */
+  onLookSaveAsDefault?: () => void;
   /** 依 C4D 材質名稱的覆寫（存在專案上全員共用） */
   materialOverrides?: MaterialOverrides;
   /** 有傳才顯示「🎨 材質」面板 — 只有 admin；patch = null → 回到 C4D 原本 */
@@ -109,7 +115,7 @@ type RenderMode = 'quick' | 'live';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, materialOverrides, onMaterialOverrideChange, ledVideo }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, ledVideo }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -132,10 +138,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   const [mode, setMode] = useState<Mode>('translate');
   const [space, setSpace] = useState<'world' | 'local'>('world');
-  const [showLabels, setShowLabels] = useState(true);
-  // 舊的 realistic / cinematic 都併成「現場」
+  // 物件名稱 label 預設關掉（按 L 或工具列打開）
+  const [showLabels, setShowLabels] = useState(false);
+  // 大家一打開就是「現場」；只有明確指定 quick 才用快速（舊的 realistic / cinematic 也當現場）
   const [renderMode, setRenderMode] = useState<RenderMode>(
-    defaultRenderMode && defaultRenderMode !== 'quick' ? 'live' : 'quick',
+    defaultRenderMode === 'quick' ? 'quick' : 'live',
   );
   const [lookPanelOpen, setLookPanelOpen] = useState(false);
   const [materialPanelOpen, setMaterialPanelOpen] = useState(false);
@@ -191,7 +198,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   })]);
   const lookRef = useRef<LookSettings>(lookSettings);
   lookRef.current = lookSettings;
-  const showLabelsRef = useRef(true);
+  const showLabelsRef = useRef(false);
   // NDI mock：當 LED 在 realistic/cinematic 模式且沒有 imageUrl，
   // 套一張動態 procedural canvas 貼圖當作「即將接 NDI」的預覽
   const ndiMockTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
@@ -405,6 +412,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     {
       const layer = document.createElement('div');
       layer.className = 'stage-scene__lock-pins';
+      layer.style.display = showLabelsRef.current && !readOnlyRef.current ? '' : 'none';
       container.appendChild(layer);
       lockPinLayerRef.current = layer;
     }
@@ -998,6 +1006,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (!labelLayerRef.current || !container.contains(labelLayerRef.current)) {
       const layer = document.createElement('div');
       layer.className = 'stage-scene__labels';
+      layer.style.display = showLabelsRef.current ? '' : 'none';
       container.appendChild(layer);
       labelLayerRef.current = layer;
     }
@@ -1792,7 +1801,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           <button
             className={'tool ' + (lookPanelOpen ? 'is-active' : '')}
             onClick={() => { setLookPanelOpen(o => !o); setMaterialPanelOpen(false); }}
-            title="現場設定：底光 / 曝光 / LED 照明 / 光暈（所有人共用）"
+            title="現場設定：底光 / 曝光 / LED 照明 / 光暈 / 倒影（調的是你自己看到的）"
           >🎚 設定</button>
         )}
         {onMaterialOverrideChange && (
@@ -1957,7 +1966,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         {cueName && <span className="cue-tag">當前 cue：<strong>{cueName}</strong></span>}
       </div>
       {lookPanelOpen && renderMode === 'live' && onLookSettingsChange && (
-        <LookSettingsPanel settings={lookSettings} onChange={onLookSettingsChange} onClose={() => setLookPanelOpen(false)} />
+        <LookSettingsPanel
+          settings={lookSettings}
+          onChange={onLookSettingsChange}
+          onClose={() => setLookPanelOpen(false)}
+          customized={lookCustomized}
+          onReset={onLookReset || (() => {})}
+          onSaveAsDefault={onLookSaveAsDefault}
+        />
       )}
       {materialPanelOpen && onMaterialOverrideChange && (
         <MaterialPanel
