@@ -73,7 +73,14 @@ export class LedLightRig {
 
   setMaxLights(n: number) { this.maxLights = Math.max(0, n); }
 
-  setEnabled(on: boolean) { this.enabled = on; }
+  setEnabled(on: boolean) {
+    this.enabled = on;
+    // 關掉時立刻熄燈（切回快速模式後 render loop 不會再呼叫 updatePoses）
+    if (!on) {
+      for (const e of this.entries) e.light.visible = false;
+      this.visibleCount = 0;
+    }
+  }
 
   updatePoses(objects: Map<string, THREE.Object3D>) {
     const { pos, n, h, s, target } = this.tmp;

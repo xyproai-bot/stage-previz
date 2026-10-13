@@ -1234,12 +1234,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     renderer.toneMapping = live ? THREE.NeutralToneMapping : THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = live ? look.exposure : 1;
     if (!live) scene.environment = null;
-    scene.environmentIntensity = live ? 0.5 + look.ledLightStrength * 0.5 : 1;
+    scene.environmentIntensity = live ? 0.2 + look.ledLightStrength * 0.4 : 1;
     const bloom = bloomPassRef.current;
     if (bloom) {
       bloom.strength = look.bloomStrength;
-      bloom.radius = 0.55;
-      bloom.threshold = 0.6;
+      bloom.radius = 0.3;
+      bloom.threshold = 0.75;
     }
     ledRigRef.current?.setEnabled(live);
   }, [renderMode, lookSettings]);

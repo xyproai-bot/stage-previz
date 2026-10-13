@@ -76,6 +76,18 @@ describe('LedLightRig', () => {
     expect(light.intensity).toBeCloseTo(0.5 * LED_LIGHT_BASE_INTENSITY);
   });
 
+  it('關閉的當下燈就熄掉（不用等下一次 updatePoses）', () => {
+    const { scene, rig, panel } = setup();
+    rig.setObjectEmitters('a', buildLedEmitters(panel));
+    rig.setEnabled(true);
+    rig.updateColors(() => [1, 1, 1], () => white, 1);
+    rig.updatePoses(new Map([['a', panel]]));
+    rig.setEnabled(false);
+    const light = scene.children.find(c => (c as THREE.RectAreaLight).isRectAreaLight)!;
+    expect(light.visible).toBe(false);
+    expect(rig.lightCount).toBe(0);
+  });
+
   it('關閉時燈全部隱藏', () => {
     const { rig, panel } = setup();
     rig.setObjectEmitters('a', buildLedEmitters(panel));
