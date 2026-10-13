@@ -12,6 +12,7 @@ import ArchivedProjects from './pages/ArchivedProjects';
 import Settings from './pages/Settings';
 import CommandPalette from './components/CommandPalette';
 import ToastContainer from './components/ToastContainer';
+import { DialogHost } from './components/dialogs';
 import ErrorBoundary from './components/ErrorBoundary';
 import { RequireAuth, useAuth } from './lib/auth';
 import { HomeRedirect, RequireAdmin, RouteLoading } from './lib/roleRouting';
@@ -68,6 +69,8 @@ export default function App() {
       </ErrorBoundary>
       <GlobalCmdK />
       <ToastContainer />
+      {/* 站內確認 / 輸入對話框（取代瀏覽器的 confirm / prompt） */}
+      <DialogHost />
     </>
   );
 }

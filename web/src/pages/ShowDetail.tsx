@@ -6,6 +6,7 @@ import * as api from '../lib/api';
 import type { Project } from '../lib/mockData';
 import type { ShowDetail as ShowDetailT } from '../lib/api';
 import Icon from '../components/Icon';
+import { confirmDialog, promptDialog, toast } from '../components/dialogs';
 import { ArrowLeft, Folder, LoaderCircle, Pencil, Trash2, TriangleAlert } from 'lucide-react';
 import './Shows.css';
 
@@ -39,28 +40,39 @@ export default function ShowDetail() {
 
   async function handleRename() {
     if (!show) return;
-    const name = prompt('新的 Show 名稱', show.name)?.trim();
+    const name = (await promptDialog({
+      title: '改 Show 名稱',
+      label: 'Show 名稱',
+      defaultValue: show.name,
+      confirmLabel: '改名',
+      maxLength: 100,
+    }))?.trim();
     if (!name || name === show.name) return;
     try {
       await api.updateShow(show.id, { name });
       await refresh();
     } catch (e) {
-      alert('改名失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('改名失敗：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
   async function handleDelete() {
     if (!show) return;
     if (projects.length > 0) {
-      alert(`這個 Show 底下還有 ${projects.length} 個專案，請先把專案移走或封存後再刪。`);
+      toast.warn(`這個 Show 底下還有 ${projects.length} 個專案，請先把專案移走或封存，再刪 Show。`);
       return;
     }
-    if (!confirm(`刪除 Show「${show.name}」？此操作無法復原。`)) return;
+    if (!(await confirmDialog({
+      title: `刪除 Show「${show.name}」？`,
+      message: '刪了就救不回來。',
+      confirmLabel: '刪除',
+      destructive: true,
+    }))) return;
     try {
       await api.deleteShow(show.id);
       navigate('/admin/shows');
     } catch (e) {
-      alert('刪除失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('刪除失敗：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 

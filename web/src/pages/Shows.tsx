@@ -5,6 +5,7 @@ import NewShowDialog from '../components/NewShowDialog';
 import * as api from '../lib/api';
 import type { Show } from '../lib/api';
 import Icon from '../components/Icon';
+import { toast } from '../components/dialogs';
 import { LoaderCircle, Ticket, TriangleAlert } from 'lucide-react';
 import './Shows.css';
 
@@ -38,7 +39,7 @@ export default function Shows() {
       await refresh();
       navigate(`/admin/shows/${id}`);
     } catch (e) {
-      alert('建立失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('Show 沒有建立：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setCreating(false);
     }

@@ -9,6 +9,7 @@ import { shareSlugUrl, shareTokenUrl } from '../lib/siteUrl';
 import { parseServerTime } from '../lib/serverTime';
 import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, Music, Pencil, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
+import { confirmDialog, promptDialog } from './dialogs';
 import './ShareLinksDialog.css';
 
 interface Props {
@@ -104,7 +105,12 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
   }
 
   async function handleDelete(token: string) {
-    if (!confirm('刪除這個分享連結？\n\n之前發出去的人會立刻失效。')) return;
+    if (!(await confirmDialog({
+      title: '刪除這個分享連結？',
+      message: '已經傳出去的這個連結會馬上打不開。',
+      confirmLabel: '刪除',
+      destructive: true,
+    }))) return;
     try { await api.deleteShareLink(projectId, token); toast.success('已刪除分享連結'); await refresh(); }
     catch (e) { toast.error('刪除失敗：' + (e instanceof Error ? e.message : String(e))); }
   }
@@ -132,8 +138,13 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
     } finally { setSavingSlug(false); }
   }
 
-  function clearSlug(l: ShareLink) {
-    if (!confirm('拿掉這條連結的好讀網址？\n\n之前發出去的好讀網址會馬上打不開；下面那串舊式網址照樣能用。')) return;
+  async function clearSlug(l: ShareLink) {
+    if (!(await confirmDialog({
+      title: '拿掉這條連結的好讀網址？',
+      message: '之前傳出去的好讀網址會馬上打不開；下面那串舊式網址照樣能用。',
+      confirmLabel: '拿掉',
+      destructive: true,
+    }))) return;
     void saveSlug(l, null);
   }
 
@@ -142,8 +153,15 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
       await navigator.clipboard.writeText(url);
       toast.success('已複製連結');
     } catch {
-      // fallback：開新分頁讓用戶自己複製
-      window.prompt('複製這個連結：', url);
+      // 瀏覽器不讓複製 → 把連結顯示出來讓他自己選起來複製
+      void promptDialog({
+        title: '複製這個連結',
+        message: '瀏覽器不讓我們直接複製，請把下面的連結選起來複製（手機長按）。',
+        defaultValue: url,
+        readOnly: true,
+        confirmLabel: '好',
+        cancelLabel: null,
+      });
     }
   }
 

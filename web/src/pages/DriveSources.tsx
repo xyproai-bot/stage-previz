@@ -4,6 +4,7 @@ import * as api from '../lib/api';
 import type { DriveAccount } from '../lib/api';
 import { formatDateTime } from '../lib/serverTime';
 import Icon from '../components/Icon';
+import { confirmDialog, toast } from '../components/dialogs';
 import { TriangleAlert } from 'lucide-react';
 import './DriveSources.css';
 
@@ -36,18 +37,23 @@ export default function DriveSources() {
       await api.startDriveOAuth('/admin/drive-sources');
       // 走到這裡前已經 location.href 跳走
     } catch (e) {
-      alert('連接失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('沒有連上 Google：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setConnecting(false);
     }
   }
 
   async function handleDisconnect(acc: DriveAccount) {
-    if (!confirm(`斷開 ${acc.email}？\n\n所有用此帳號的專案會失去 Drive 同步（檔案 cache 保留，但不會更新）。`)) return;
+    if (!(await confirmDialog({
+      title: `斷開 ${acc.email}？`,
+      message: '用這個帳號的專案都會停止跟 Drive 同步。已經抓下來的檔案清單會留著，只是不會再更新。',
+      confirmLabel: '斷開',
+      destructive: true,
+    }))) return;
     try {
       await api.deleteDriveAccount(acc.id);
       await refresh();
-    } catch (e) { alert('斷開失敗：' + (e instanceof Error ? e.message : String(e))); }
+    } catch (e) { toast.error('斷開失敗：' + (e instanceof Error ? e.message : String(e))); }
   }
 
   return (

@@ -4,6 +4,7 @@ import type { ModelVersion } from '../lib/api';
 import { parseServerTime } from '../lib/serverTime';
 import { Box, RotateCcw, Trash2, TriangleAlert, X } from 'lucide-react';
 import Icon from './Icon';
+import { confirmDialog, toast } from './dialogs';
 import './ModelVersionsDialog.css';
 
 interface Props {
@@ -66,14 +67,18 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
 
   async function handleActivate(v: ModelVersion) {
     if (v.isActive) return;
-    if (!confirm(`切換到此版本？\n\n上傳於 ${formatTime(v.uploaded)}（${formatSize(v.size)}）\n切換後 3D 視窗會重載這個版本。`)) return;
+    if (!(await confirmDialog({
+      title: '換成這一版模型？',
+      message: `${formatTime(v.uploaded)} 上傳（${formatSize(v.size)}）\n換了之後 3D 畫面會重新載入這一版。`,
+      confirmLabel: '換成這一版',
+    }))) return;
     setBusyKey(v.key);
     try {
       await api.activateModelVersion(projectId, v.key);
       onChanged();
       await refresh();
     } catch (e) {
-      alert('切換失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('沒有換成：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusyKey(null);
     }
@@ -81,13 +86,18 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
 
   async function handleDelete(v: ModelVersion) {
     if (v.isActive) return;
-    if (!confirm(`刪除這個舊版本？\n\n上傳於 ${formatTime(v.uploaded)}（${formatSize(v.size)}）\n此操作無法復原（R2 直接刪除）。`)) return;
+    if (!(await confirmDialog({
+      title: '刪除這一版舊模型？',
+      message: `${formatTime(v.uploaded)} 上傳（${formatSize(v.size)}）\n檔案會直接刪掉，刪了就救不回來。`,
+      confirmLabel: '刪除',
+      destructive: true,
+    }))) return;
     setBusyKey(v.key);
     try {
       await api.deleteModelVersion(projectId, v.key);
       await refresh();
     } catch (e) {
-      alert('刪除失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('刪除失敗：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusyKey(null);
     }

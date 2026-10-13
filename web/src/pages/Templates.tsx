@@ -5,6 +5,7 @@ import type { SharedAsset } from '../lib/api';
 import { parseServerTime } from '../lib/serverTime';
 import { useAuth } from '../lib/auth';
 import Icon from '../components/Icon';
+import { confirmDialog, promptDialog, toast } from '../components/dialogs';
 import { Box, Boxes, FileText, LoaderCircle, Pencil, Plus, Trash2, TriangleAlert, X } from 'lucide-react';
 import './Templates.css';
 
@@ -40,25 +41,43 @@ export default function Templates() {
   useEffect(() => { refresh(); }, [refresh]);
 
   async function handleRename(a: SharedAsset) {
-    const name = prompt('改名稱', a.name)?.trim();
+    const name = (await promptDialog({
+      title: '改模型名稱',
+      label: '名稱',
+      defaultValue: a.name,
+      confirmLabel: '改名',
+      maxLength: 100,
+    }))?.trim();
     if (!name || name === a.name) return;
     try { await api.updateAsset(a.id, { name }); await refresh(); }
-    catch (e) { alert('失敗：' + (e instanceof Error ? e.message : String(e))); }
+    catch (e) { toast.error('改名失敗：' + (e instanceof Error ? e.message : String(e))); }
   }
   async function handleEditDesc(a: SharedAsset) {
-    const d = prompt('改描述', a.description)?.trim();
+    const d = (await promptDialog({
+      title: `「${a.name}」的說明`,
+      label: '說明（可以留空）',
+      defaultValue: a.description,
+      confirmLabel: '儲存',
+      required: false,
+      maxLength: 500,
+    }))?.trim();
     if (d == null || d === a.description) return;
     try { await api.updateAsset(a.id, { description: d }); await refresh(); }
-    catch (e) { alert('失敗：' + (e instanceof Error ? e.message : String(e))); }
+    catch (e) { toast.error('說明沒有存到：' + (e instanceof Error ? e.message : String(e))); }
   }
   async function handleDelete(a: SharedAsset) {
     if (a.usedByCount > 0) {
-      alert(`這個模型還有 ${a.usedByCount} 個專案在用，請先把那些專案換成別的模型再刪。`);
+      toast.warn(`這個模型還有 ${a.usedByCount} 個專案在用，請先把那些專案換成別的模型再刪。`);
       return;
     }
-    if (!confirm(`刪除模型「${a.name}」？\n\n模型會先標成停用，檔案還會留著。`)) return;
+    if (!(await confirmDialog({
+      title: `刪除模型「${a.name}」？`,
+      message: '模型會先標成停用、不會再出現在模型庫，檔案還會留著。',
+      confirmLabel: '刪除',
+      destructive: true,
+    }))) return;
     try { await api.deleteAsset(a.id); await refresh(); }
-    catch (e) { alert('失敗：' + (e instanceof Error ? e.message : String(e))); }
+    catch (e) { toast.error('刪除失敗：' + (e instanceof Error ? e.message : String(e))); }
   }
 
   const isAdmin = me?.role === 'admin';

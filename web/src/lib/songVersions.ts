@@ -236,3 +236,20 @@ export function deleteVersionMessage(item: Pick<VersionItem, 'label' | 'title'>)
     + '刪掉後，所有人的清單上都看不到這一版，沒辦法從畫面上救回來。\n'
     + `${name} 這個號碼不會再用：之後交的新版本號碼會繼續往上加，不會補回 ${name}。`;
 }
+
+/**
+ * 還沒好的那一版（上傳中 / 複製中 / 失敗）要拿掉時問的話（站內確認對話框用）。
+ * 失敗的 → 從清單拿掉；還在傳 / 複製的 → 停下來，已經傳的部分會丟掉。
+ */
+export function removePendingQuestion(
+  v: Pick<SongVideo, 'status'>, name: string,
+): { title: string; message?: string; confirmLabel: string; cancelLabel?: string; destructive: true } {
+  if (v.status === 'failed') return { title: `把「${name}」從清單拿掉？`, confirmLabel: '拿掉', destructive: true };
+  return {
+    title: v.status === 'uploading' ? `停止上傳「${name}」？` : `停止複製「${name}」？`,
+    message: '已經傳的部分會丟掉。',
+    confirmLabel: v.status === 'uploading' ? '停止上傳' : '停止複製',
+    cancelLabel: '繼續',
+    destructive: true,
+  };
+}

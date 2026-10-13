@@ -20,12 +20,13 @@ import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
 import { CommentSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
+import { confirmDialog, splitQuestion } from '../components/dialogs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { cueTransitionSeconds } from '../lib/cueTiming';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
-import { canAddVideo, canModifyVideo, deleteVersionMessage, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
+import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
@@ -880,7 +881,7 @@ function SongDetail({
   useVideoJobDone(onJobDone);
 
   async function handleDeleteVersion(item: VersionItem) {
-    if (!confirm(deleteVersionMessage(item))) return;
+    if (!(await confirmDialog({ ...splitQuestion(deleteVersionMessage(item)), confirmLabel: `刪除 ${item.label || '這一版'}`, destructive: true }))) return;
     try {
       await deleteSongVideo(projectId, song.id, item.id);
       toast.success(`已刪除 ${item.label}`);
@@ -896,7 +897,7 @@ function SongDetail({
   }
   async function handleRemovePending(v: SongVideo) {
     const name = v.title || '這一版';
-    if (!confirm(v.status === 'failed' ? `把「${name}」從清單拿掉？` : `取消「${name}」？已經傳的部分會丟掉。`)) return;
+    if (!(await confirmDialog(removePendingQuestion(v, name)))) return;
     try { await deleteSongVideo(projectId, song.id, v.id); await versions.reload(); }
     catch (e) { toast.error('沒有成功：' + friendlyError(e)); }
   }
@@ -1253,7 +1254,7 @@ function SongComments({
     const ids = resolvableSelected.map(c => c.id);
     if (ids.length === 0) return;
     const label = latest ? `已改好（${latest.label}）` : '已改好';
-    if (!confirm(`把 ${ids.length} 則留言標成「${label}」？`)) return;
+    if (!(await confirmDialog({ title: `把 ${ids.length} 則留言標成「${label}」？`, confirmLabel: '標成已改好' }))) return;
     let okCount = 0;
     let lastList: SongComment[] | null = null;
     for (const id of ids) {
@@ -1271,8 +1272,13 @@ function SongComments({
     const ids = deletableSelected.map(c => c.id);
     if (ids.length === 0) return;
     const skipped = selectedIds.size - ids.length;
-    const note = skipped > 0 ? `\n\n（另外 ${skipped} 則是別人的留言，只有留言的人或製作能刪，會跳過）` : '';
-    if (!confirm(`刪除 ${ids.length} 則留言（底下的回覆一起刪）？無法復原。${note}`)) return;
+    const note = skipped > 0 ? `\n另外 ${skipped} 則是別人的留言，只有留言的人或製作能刪，會跳過。` : '';
+    if (!(await confirmDialog({
+      title: `刪除 ${ids.length} 則留言？`,
+      message: `底下的回覆會一起刪掉，刪了就救不回來。${note}`,
+      confirmLabel: `刪除 ${ids.length} 則`,
+      destructive: true,
+    }))) return;
     let okCount = 0;
     let lastList: SongComment[] | null = null;
     for (const id of ids) {

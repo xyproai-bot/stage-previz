@@ -20,6 +20,7 @@ import { formatClock } from '../lib/localVideo';
 import { roleLabel } from '../lib/roleLabels';
 import { friendlyError } from '../lib/songReview';
 import { toast } from '../lib/toast';
+import { confirmDialog } from './dialogs';
 import './CommentThreadList.css';
 
 interface Props {
@@ -94,9 +95,13 @@ export default function CommentThreadList({
     void run(() => api.patchSongComment(projectId, song.id, id, { text }), '修改失敗：', () => setEditingId(null));
   }
 
-  function remove(c: SongComment, replies: number) {
-    const more = replies > 0 ? `\n\n底下的 ${replies} 則回覆會一起刪掉。` : '';
-    if (!confirm(`刪除這則留言？${more}`)) return;
+  async function remove(c: SongComment, replies: number) {
+    if (!(await confirmDialog({
+      title: '刪除這則留言？',
+      message: replies > 0 ? `底下的 ${replies} 則回覆會一起刪掉。刪了就救不回來。` : '刪了就救不回來。',
+      confirmLabel: '刪除',
+      destructive: true,
+    }))) return;
     void run(() => api.deleteSongComment(projectId, song.id, c.id), '刪除失敗：');
   }
 

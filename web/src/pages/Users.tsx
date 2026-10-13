@@ -9,6 +9,7 @@ import { ROLE_LABEL } from '../lib/roleLabels';
 import { formatLoginCodeForDisplay, loginCodeDisplay, LOGIN_CODE_HIDDEN_TEXT } from '../lib/inviteMessage';
 import { copyToClipboard } from '../lib/clipboard';
 import { toast } from '../lib/toast';
+import { confirmDialog } from '../components/dialogs';
 import Icon from '../components/Icon';
 import InviteDialog from '../components/InviteDialog';
 import OpenInvitesList from '../components/OpenInvitesList';
@@ -67,10 +68,15 @@ export default function Users() {
   // 重設登入碼（還沒有的人 = 產生一組）：新的只顯示這一次，舊的馬上不能用
   async function handleResetCode(u: UserAdmin) {
     const hasCode = loginCodeDisplay(u).kind !== 'none';
-    const question = hasCode
-      ? `重設「${u.name}」的登入碼？\n\n舊的登入碼會馬上不能用，對方下次要用新的。`
-      : `幫「${u.name}」產生一組登入碼？`;
-    if (!confirm(question)) return;
+    const ok = await confirmDialog(hasCode
+      ? {
+        title: `重設「${u.name}」的登入碼？`,
+        message: '舊的登入碼會馬上不能用，對方下次要用新的。',
+        confirmLabel: '重設登入碼',
+        destructive: true,
+      }
+      : { title: `幫「${u.name}」產生一組登入碼？`, confirmLabel: '產生登入碼' });
+    if (!ok) return;
     try {
       const { accessCode, shownOnce } = await api.setAccessCode(u.id);
       setShownCode({ name: u.name, code: accessCode, shownOnce: !!shownOnce, isReset: hasCode });
@@ -88,36 +94,46 @@ export default function Users() {
 
   async function handleToggleActive(u: UserAdmin) {
     const verb = u.deactivated ? '重新啟用' : '停用';
-    if (!confirm(`${verb}「${u.name}」？停用後對方無法登入，但既有資料保留。`)) return;
+    if (!(await confirmDialog({
+      title: `${verb}「${u.name}」？`,
+      message: u.deactivated ? '重新啟用後，對方就能再登入。' : '停用後對方就不能登入，資料都會留著；之後可以再重新啟用。',
+      confirmLabel: verb,
+      destructive: !u.deactivated,
+    }))) return;
     try {
       await api.updateUserAdmin(u.id, { deactivated: !u.deactivated });
       await refresh();
     } catch (e) {
-      alert('失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error(`沒有${verb}成功：` + (e instanceof Error ? e.message : String(e)));
     }
   }
 
   async function handleChangeRole(u: UserAdmin, role: UserRole) {
     if (u.id === me?.id && role !== 'admin') {
-      alert('不能把自己的權限降低：至少要保留一個製作。');
+      toast.warn('不能把自己改成別的角色：至少要留一個製作。');
       return;
     }
     try {
       await api.updateUserAdmin(u.id, { role });
       await refresh();
     } catch (e) {
-      alert('失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('角色沒有改成：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
   async function handleDelete(u: UserAdmin) {
-    if (u.id === me?.id) { alert('不能刪除自己的帳號'); return; }
-    if (!confirm(`永久刪除「${u.name}」？\n\n對方馬上無法登入。\n他建立的專案會保留，被指派的權限會清除。`)) return;
+    if (u.id === me?.id) { toast.warn('不能刪除自己的帳號'); return; }
+    if (!(await confirmDialog({
+      title: `永久刪除「${u.name}」？`,
+      message: '對方馬上就不能登入。他建立的專案會留著，加進專案的權限會清掉。刪了就救不回來。',
+      confirmLabel: '永久刪除',
+      destructive: true,
+    }))) return;
     try {
       await api.deleteUserAdmin(u.id);
       await refresh();
     } catch (e) {
-      alert('刪除失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('刪除失敗：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -381,7 +397,7 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
       }
       await onChanged();
     } catch (e) {
-      alert('失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error((currentRole ? '沒有移出專案：' : '沒有加進專案：') + (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }
@@ -393,7 +409,7 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
       await api.addUserToProject(user.id, pid, newRole);
       await onChanged();
     } catch (e) {
-      alert('失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('專案角色沒有改成：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusy(false);
     }

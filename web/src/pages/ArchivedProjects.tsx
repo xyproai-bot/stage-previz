@@ -5,6 +5,7 @@ import * as api from '../lib/api';
 import type { Project } from '../lib/mockData';
 import { parseServerTime } from '../lib/serverTime';
 import { toast } from '../lib/toast';
+import { confirmDialog } from '../components/dialogs';
 import Icon from '../components/Icon';
 import { Archive, RotateCcw, TriangleAlert } from 'lucide-react';
 import './ArchivedProjects.css';
@@ -27,7 +28,11 @@ export default function ArchivedProjects() {
   useEffect(() => { refresh(); }, [refresh]);
 
   async function handleRestore(p: Project) {
-    if (!confirm(`還原專案「${p.name}」？\n\n還原後會回到專案列表。`)) return;
+    if (!(await confirmDialog({
+      title: `還原專案「${p.name}」？`,
+      message: '還原後會回到專案總覽，大家又看得到。',
+      confirmLabel: '還原',
+    }))) return;
     setRestoring(p.id);
     try {
       await api.restoreProject(p.id);

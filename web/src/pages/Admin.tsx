@@ -8,6 +8,7 @@ import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
 import type { Project } from '../lib/mockData';
 import Icon from '../components/Icon';
+import { confirmDialog, promptDialog, toast } from '../components/dialogs';
 import {
   Archive, ArrowRight, Clapperboard, Construction, Folder, Import, LoaderCircle, Music, Search, Shapes, TriangleAlert, Upload,
 } from 'lucide-react';
@@ -65,13 +66,19 @@ function ProjectsTab() {
   function clearSelection() { setSelectedIds(new Set()); }
   async function bulkArchive() {
     const ids = Array.from(selectedIds);
-    if (!confirm(`封存 ${ids.length} 個選中的專案？`)) return;
+    if (!(await confirmDialog({
+      title: `封存選中的 ${ids.length} 個專案？`,
+      message: '封存後不會出現在專案總覽，資料都會留著，之後可以在「封存的專案」還原。',
+      confirmLabel: '封存',
+      destructive: true,
+    }))) return;
     let ok = 0, fail = 0;
     for (const id of ids) {
       try { await api.archiveProject(id); ok++; }
       catch { fail++; }
     }
-    alert(`已封存 ${ok} 個${fail ? ` · 失敗 ${fail} 個` : ''}`);
+    if (fail) toast.warn(`已封存 ${ok} 個，${fail} 個沒有封存成功`);
+    else toast.success(`已封存 ${ok} 個專案`);
     clearSelection();
     await refresh();
   }
@@ -122,7 +129,7 @@ function ProjectsTab() {
       if (res?.id) navigate(`/admin/projects/${encodeURIComponent(res.id)}`);
       else await refresh();
     } catch (e) {
-      alert('建立失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('專案沒有建立：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setCreating(false);
     }
@@ -130,31 +137,40 @@ function ProjectsTab() {
 
   async function handleDuplicate(p: Project) {
     if (duplicating) return;
-    const newName = prompt(
-      `複製專案「${p.name}」\n\n新專案會包含全部物件、歌曲、cue 跟 cue 裡的物件位置。\n模型檔共用同一份（不重新上傳）。\n\n新專案名稱：`,
-      `${p.name} (副本)`,
-    );
-    if (!newName) return;
+    const newName = await promptDialog({
+      title: `複製專案「${p.name}」`,
+      message: '新專案會帶著全部物件、歌曲、cue 和每個 cue 裡的物件位置。模型檔共用同一份，不用重新上傳。',
+      label: '新專案名稱',
+      defaultValue: `${p.name} (副本)`,
+      confirmLabel: '複製',
+      maxLength: 100,
+    });
+    if (!newName?.trim()) return;
     setDuplicating(p.id);
     try {
       const res = await api.duplicateProject(p.id, { newName: newName.trim() });
-      alert(`已複製：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
+      toast.success(`已複製：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
       await refresh();
       navigate(`/admin/projects/${res.id}`);
     } catch (e) {
-      alert('複製失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('複製失敗：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setDuplicating(null);
     }
   }
 
   async function handleArchive(p: Project) {
-    if (!confirm(`封存專案「${p.name}」？\n\n封存後不會在列表中出現，但所有資料保留。日後可以從 D1 還原。`)) return;
+    if (!(await confirmDialog({
+      title: `封存專案「${p.name}」？`,
+      message: '封存後不會出現在專案總覽，資料都會留著，之後可以在「封存的專案」還原。',
+      confirmLabel: '封存',
+      destructive: true,
+    }))) return;
     try {
       await api.archiveProject(p.id);
       await refresh();
     } catch (e) {
-      alert('封存失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('封存失敗：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -162,23 +178,28 @@ function ProjectsTab() {
     try {
       await api.exportProjectToFile(p.id, p.name);
     } catch (e) {
-      alert('匯出失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('匯出失敗：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
   async function handleEditTags(p: Project) {
     const current = (p.tags || []).join(', ');
-    const input = prompt(
-      `編輯「${p.name}」的標籤\n\n用逗號分隔，例：演唱會, 巡迴, 試片\n（最多 20 個）`,
-      current,
-    );
+    const input = await promptDialog({
+      title: `「${p.name}」的標籤`,
+      label: '標籤（用逗號分開，最多 20 個）',
+      placeholder: '例：演唱會, 巡迴, 試片',
+      defaultValue: current,
+      hint: '全部清空就是拿掉所有標籤',
+      confirmLabel: '儲存',
+      required: false,
+    });
     if (input == null) return;
     const tags = input.split(',').map(t => t.trim()).filter(Boolean).slice(0, 20);
     try {
       await api.updateProject(p.id, { tags });
       await refresh();
     } catch (e) {
-      alert('更新標籤失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('標籤沒有存到：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -187,17 +208,23 @@ function ProjectsTab() {
       const text = await file.text();
       const data = JSON.parse(text);
       if (!data?.project || !Array.isArray(data?.stageObjects)) {
-        alert('檔案格式不對 — 不像匯出檔');
+        toast.error('這個檔案不是專案備份。請選「匯出」存下來的 .json 檔');
         return;
       }
-      const newName = prompt('匯入後的新專案名稱：', `${data.project.name} (匯入)`);
-      if (!newName) return;
+      const newName = await promptDialog({
+        title: '匯入專案',
+        label: '匯入後的專案名稱',
+        defaultValue: `${data.project.name} (匯入)`,
+        confirmLabel: '匯入',
+        maxLength: 100,
+      });
+      if (!newName?.trim()) return;
       const res = await api.importProject({ ...data, newName: newName.trim() });
-      alert(`已匯入：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
+      toast.success(`已匯入：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
       await refresh();
       navigate(`/admin/projects/${res.id}`);
     } catch (e) {
-      alert('匯入失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error(e instanceof SyntaxError ? '這個檔案讀不懂，不是專案備份（.json）' : '匯入失敗：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 

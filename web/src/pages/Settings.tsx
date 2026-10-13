@@ -9,6 +9,7 @@ import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } f
 import { HELP_ANCHORS, helpUrl, ndiHelpAnchor, type HelpAnchor } from '../lib/helpLinks';
 import { clearPersonalLooks, countPersonalLooks } from '../lib/localPrefs';
 import { toast } from '../lib/toast';
+import { confirmDialog } from '../components/dialogs';
 import { version as APP_VERSION } from '../../package.json';
 import { ROLE_LABEL } from '../lib/roleLabels';
 import Icon from '../components/Icon';
@@ -160,11 +161,13 @@ function ThisComputerSection() {
     };
   }, []);
 
-  function handleClearLooks() {
-    if (!confirm(
-      `清掉你在 ${lookCount} 個專案自己調的現場亮度？\n\n` +
-      '這些專案會回到專案預設的亮度。只影響這台電腦，不會動到別人。',
-    )) return;
+  async function handleClearLooks() {
+    if (!(await confirmDialog({
+      title: `清掉你在 ${lookCount} 個專案自己調的現場亮度？`,
+      message: '這些專案會回到專案預設的亮度。只影響這台電腦，不會動到別人。',
+      confirmLabel: '清掉',
+      destructive: true,
+    }))) return;
     const removed = clearPersonalLooks(browserStorage());
     setLookCount(countPersonalLooks(browserStorage()));
     toast.success(`已清掉 ${removed} 個專案的現場亮度，回到專案預設`);

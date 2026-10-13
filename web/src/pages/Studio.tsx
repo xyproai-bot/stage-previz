@@ -17,12 +17,13 @@ import { buildThreads, canPostComment, defaultScope, filterAndSortThreads, scope
 import { lastReviewSentence, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
 import { toast } from '../lib/toast';
+import { confirmDialog, splitQuestion } from '../components/dialogs';
 import { getLastSeen, markSeen, newFromOthersSince, songsToFetch, unreadFromSummary } from '../lib/unreadComments';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
-import { canAddVideo, canModifyVideo, deleteVersionMessage, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
+import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
@@ -552,7 +553,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   useVideoJobDone(onJobDone);
 
   async function handleDeleteVersion(item: VersionItem) {
-    if (!selectedSong || !confirm(deleteVersionMessage(item))) return;
+    if (!selectedSong || !(await confirmDialog({ ...splitQuestion(deleteVersionMessage(item)), confirmLabel: `刪除 ${item.label || '這一版'}`, destructive: true }))) return;
     try {
       await deleteSongVideo(projectId, selectedSong.id, item.id);
       toast.success(`已刪除 ${item.label}`);
@@ -571,7 +572,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   async function handleRemovePending(v: SongVideo) {
     if (!selectedSong) return;
     const name = v.title || '這一版';
-    if (!confirm(v.status === 'failed' ? `把「${name}」從清單拿掉？` : `取消「${name}」？已經傳的部分會丟掉。`)) return;
+    if (!(await confirmDialog(removePendingQuestion(v, name)))) return;
     try { await deleteSongVideo(projectId, selectedSong.id, v.id); await versions.reload(); }
     catch (e) { toast.error('沒有成功：' + friendlyError(e)); }
   }
@@ -628,11 +629,12 @@ function StudioInner({ projectId }: { projectId: string }) {
     }
 
     if (!hasVideo) {
-      const ok = confirm(
-        `這首歌「${song.name}」還沒有影片。\n\n` +
-        `導演看到的會是空的，建議先按「加影片」交一版。\n\n` +
-        `還是要提交嗎？`
-      );
+      const ok = await confirmDialog({
+        title: `「${song.name}」還沒有影片，還是要提交審查嗎？`,
+        message: '導演看到的會是空的，建議先按「加影片」交一版。',
+        confirmLabel: '還是提交',
+        cancelLabel: '先不要',
+      });
       if (!ok) return false;
     }
 
@@ -1244,7 +1246,11 @@ function ReviewTab({
     setPosting(true);
     try {
       if (to === 'in_review') {
-        if (!confirm(`把「${song.name}」狀態改為「審查中」？\n\n留言框裡的話會一起送出，導演會收到通知。`)) return;
+        if (!(await confirmDialog({
+          title: `把「${song.name}」交給導演審查？`,
+          message: '狀態會改成「審查中」，留言框裡的話會一起送出，導演會收到通知。',
+          confirmLabel: '提交審查',
+        }))) return;
         const ok = await onSubmitForReview(note);
         if (ok) setNote('');
       } else {

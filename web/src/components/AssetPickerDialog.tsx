@@ -4,6 +4,7 @@ import * as api from '../lib/api';
 import type { SharedAsset } from '../lib/api';
 import { ArrowRight, Box, Boxes, LoaderCircle, TriangleAlert, X } from 'lucide-react';
 import Icon from './Icon';
+import { confirmDialog, toast } from './dialogs';
 import './AssetPickerDialog.css';
 
 interface Props {
@@ -45,14 +46,18 @@ export default function AssetPickerDialog({ open, projectId, currentKey, onClose
   if (!open) return null;
 
   async function pick(a: SharedAsset) {
-    if (!confirm(`把這個專案的模型換成「${a.name}」？\n\n會換掉專案目前的模型，原本的版本還會留在歷史版本裡。`)) return;
+    if (!(await confirmDialog({
+      title: `把這個專案的模型換成「${a.name}」？`,
+      message: '專案目前的模型會被換掉，原本的那一版還留在「歷史版本」裡，隨時可以換回來。',
+      confirmLabel: '換成這個模型',
+    }))) return;
     setBusyId(a.id);
     try {
       await api.useAssetForProject(projectId, a.id);
       onPicked();
       onClose();
     } catch (e) {
-      alert('切換失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('模型沒有換成：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusyId(null);
     }

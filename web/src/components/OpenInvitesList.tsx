@@ -7,6 +7,7 @@ import { inviteExpiryText, inviteUsesText } from '../lib/inviteMessage';
 import { toast } from '../lib/toast';
 import { Ban, LoaderCircle, RefreshCw } from 'lucide-react';
 import Icon from './Icon';
+import { confirmDialog } from './dialogs';
 import './InviteDialog.css';
 
 interface Props {
@@ -38,7 +39,12 @@ export default function OpenInvitesList({ projectId, reloadKey = 0, showProject 
   useEffect(() => { void refresh(); }, [refresh, reloadKey]);
 
   async function revoke(inv: Invite) {
-    if (!confirm(`撤銷「${inv.personName}」的邀請連結？\n\n之前傳出去的這個連結會馬上不能用。`)) return;
+    if (!(await confirmDialog({
+      title: `撤銷「${inv.personName}」的邀請連結？`,
+      message: '之前傳出去的這個連結會馬上不能用。',
+      confirmLabel: '撤銷',
+      destructive: true,
+    }))) return;
     setBusyId(inv.id);
     try {
       await api.revokeInvite(inv.projectId, inv.id);

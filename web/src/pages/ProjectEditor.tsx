@@ -28,6 +28,7 @@ import { EditHistory, historyScope } from '../lib/editHistory';
 import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
+import { chooseDialog, confirmDialog, promptDialog } from '../components/dialogs';
 import { friendlyError, staleStatusMessage } from '../lib/songReview';
 import type { ProjectMember } from '../lib/mockData';
 import { SONG_STATUS_LABEL } from '../lib/songReview';
@@ -274,7 +275,7 @@ export default function ProjectEditor() {
       setSongs(list);
       setSelectedSongId(prev => prev || (list[0]?.id ?? null));
     } catch (e) {
-      alert('載入歌曲失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('歌單讀不到：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setSongsLoading(false);
     }
@@ -434,26 +435,26 @@ export default function ProjectEditor() {
   // ── Song actions ──
   async function handleAddSong() {
     if (!projectId) return;
-    const name = prompt('新增歌曲名稱（例：S03 主題曲）')?.trim();
+    const name = (await promptDialog({ title: '新增歌曲', label: '歌名', placeholder: '例：S03 主題曲', confirmLabel: '新增', maxLength: 100 }))?.trim();
     if (!name) return;
     try { await api.createSong(projectId, name); await refreshSongs(); }
-    catch (e) { alert('新增失敗：' + msg(e)); }
+    catch (e) { toast.error('歌曲沒有新增：' + msg(e)); }
   }
   async function handleRenameSong(songId: string, currentName: string) {
     if (!projectId) return;
-    const name = prompt('改名稱', currentName)?.trim();
+    const name = (await promptDialog({ title: '改歌名', label: '歌名', defaultValue: currentName, confirmLabel: '改名', maxLength: 100 }))?.trim();
     if (!name || name === currentName) return;
     try { await api.updateSong(projectId, songId, { name }); await refreshSongs(); }
-    catch (e) { alert('改名失敗：' + msg(e)); }
+    catch (e) { toast.error('改名失敗：' + msg(e)); }
   }
   async function handleDeleteSong(songId: string, name: string) {
     if (!projectId) return;
-    if (!confirm(`刪除歌曲「${name}」？這會連同它的所有 cue 一起刪掉。`)) return;
+    if (!(await confirmDialog({ title: `刪除歌曲「${name}」？`, message: '它的所有 cue 會一起刪掉，刪了就救不回來。', confirmLabel: '刪除', destructive: true }))) return;
     try {
       await api.deleteSong(projectId, songId);
       if (selectedSongId === songId) setSelectedSongId(null);
       await refreshSongs();
-    } catch (e) { alert('刪除失敗：' + msg(e)); }
+    } catch (e) { toast.error('刪除失敗：' + msg(e)); }
   }
   /**
    * 管理頁的狀態選單：帶上畫面上以為的目前狀態（expectedStatus）→ 導演 / 動畫師剛改過的話後台回 409，
@@ -517,7 +518,7 @@ export default function ProjectEditor() {
     [reordered[idx], reordered[newIdx]] = [reordered[newIdx], reordered[idx]];
     setSongs(reordered);
     try { await api.reorderSongs(projectId, reordered.map(s => s.id)); }
-    catch (e) { alert('排序失敗：' + msg(e)); await refreshSongs(); }
+    catch (e) { toast.error('順序沒有存到：' + msg(e)); await refreshSongs(); }
   }
 
   // ── Cue templates / palette ──
@@ -525,21 +526,36 @@ export default function ProjectEditor() {
 
   async function handleSaveCueAsTemplate(cueId: string, cueName: string) {
     if (!projectId) return;
-    const name = prompt(`把這個 cue 的物件位置存成「常用擺位」\n\n名稱：`, cueName)?.trim();
+    const name = (await promptDialog({
+      title: '存成「常用擺位」',
+      message: '把這個 cue 裡每個物件的位置存起來，之後新增 cue 時可以直接套用。',
+      label: '名稱',
+      defaultValue: cueName,
+      confirmLabel: '下一步',
+      maxLength: 100,
+    }))?.trim();
     if (!name) return;
-    const scope = confirm('這個常用擺位要給「所有專案」都能用嗎？\n\n按確定 = 所有專案都能用；取消 = 只給這個專案用');
+    const choice = await chooseDialog({
+      title: `「${name}」要給哪些專案用？`,
+      choices: [
+        { value: 'project', label: '只給這個專案' },
+        { value: 'global', label: '所有專案都能用', primary: true },
+      ],
+    });
+    if (!choice) return;
+    const scope = choice === 'global';
     try {
       await api.createCueTemplate(projectId, { name, description: '', fromCueId: cueId, global: scope });
-      alert(`已存成${scope ? '所有專案都能用' : '這個專案'}的常用擺位「${name}」`);
+      toast.success(`已存成${scope ? '所有專案都能用' : '這個專案'}的常用擺位「${name}」`);
     } catch (e) {
-      alert('存常用擺位失敗：' + msg(e));
+      toast.error('常用擺位沒有存到：' + msg(e));
     }
   }
 
   async function handleApplyTemplate(templateId: string) {
     if (!projectId || !selectedSongId) return;
     const defaultName = `Cue ${cues.length + 1}`;
-    const name = prompt('新 cue 名稱：', defaultName)?.trim();
+    const name = (await promptDialog({ title: '用常用擺位新增 cue', label: 'cue 名稱', defaultValue: defaultName, confirmLabel: '新增', maxLength: 100 }))?.trim();
     if (!name) return;
     try {
       // 模板有自己的淡入淡出秒數會蓋過這個預設
@@ -547,39 +563,39 @@ export default function ProjectEditor() {
       await refreshCues();
       setRightTab('cues');
       setTemplatePickerOpen(false);
-    } catch (e) { alert('套用常用擺位失敗：' + msg(e)); }
+    } catch (e) { toast.error('常用擺位沒有套用：' + msg(e)); }
   }
 
   // ── Cue actions ──
   async function handleAddBlankCue() {
     if (!projectId || !selectedSongId) return;
     const defaultName = `Cue ${cues.length + 1}`;
-    const name = prompt('新增空白 cue（全部用預設位置）\n\n名稱：', defaultName)?.trim();
+    const name = (await promptDialog({ title: '新增空白 cue', message: '所有物件都在預設位置。', label: 'cue 名稱', defaultValue: defaultName, confirmLabel: '新增', maxLength: 100 }))?.trim();
     if (!name) return;
     try { await api.createCue(projectId, selectedSongId, { name, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS }); await refreshCues(); setRightTab('cues'); }
-    catch (e) { alert('新增失敗：' + msg(e)); }
+    catch (e) { toast.error('cue 沒有新增：' + msg(e)); }
   }
   async function handleCloneCue(sourceCueId?: string) {
     if (!projectId || !selectedSongId) return;
     const src = sourceCueId
       ? cues.find(c => c.id === sourceCueId)
       : (selectedCue);
-    if (!src) { alert('沒有選中的 cue 可沿用，請先在左側選一個 cue'); return; }
+    if (!src) { toast.warn('還沒有選 cue，請先在清單裡選一個要沿用的 cue'); return; }
     const defaultName = `${src.name} (副本)`;
-    const name = prompt(`沿用「${src.name}」— 新 cue 名稱：`, defaultName)?.trim();
+    const name = (await promptDialog({ title: `沿用「${src.name}」新增 cue`, label: '新 cue 名稱', defaultValue: defaultName, confirmLabel: '新增', maxLength: 100 }))?.trim();
     if (!name) return;
     try {
       // 後台複製 cue 時不會帶淡入淡出秒數 → 自己帶原本 cue 的
       await api.createCue(projectId, selectedSongId, { name, cloneFrom: src.id, crossfadeSeconds: src.crossfadeSeconds });
       await refreshCues();
       setRightTab('cues');
-    } catch (e) { alert('沿用失敗：' + msg(e)); }
+    } catch (e) { toast.error('沒有沿用成功：' + msg(e)); }
   }
   async function handleSnapshotCue() {
     if (!projectId || !selectedSongId) return;
-    if (viewportStates.length === 0) { alert('沒有物件可以記下來'); return; }
+    if (viewportStates.length === 0) { toast.warn('舞台上還沒有物件，沒有東西可以記下來'); return; }
     const defaultName = selectedCue ? `${selectedCue.name}（目前狀態）` : `Cue ${cues.length + 1}`;
-    const name = prompt('從目前 3D 狀態建立 cue\n\n名稱：', defaultName)?.trim();
+    const name = (await promptDialog({ title: '用目前的 3D 畫面新增 cue', message: '每個物件現在的位置都會記進新的 cue。', label: 'cue 名稱', defaultValue: defaultName, confirmLabel: '新增', maxLength: 100 }))?.trim();
     if (!name) return;
     try {
       const snapshotStates = viewportStates.map(s => ({
@@ -590,7 +606,7 @@ export default function ProjectEditor() {
       await api.createCue(projectId, selectedSongId, { name, snapshotStates, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS });
       await refreshCues();
       setRightTab('cues');
-    } catch (e) { alert('建立失敗：' + msg(e)); }
+    } catch (e) { toast.error('cue 沒有新增：' + msg(e)); }
   }
   async function handleDuplicateCueQuick(cueId: string) {
     if (!projectId || !selectedSongId) return;
@@ -599,34 +615,34 @@ export default function ProjectEditor() {
     try {
       await api.createCue(projectId, selectedSongId, { name: `${src.name} (副本)`, cloneFrom: cueId, crossfadeSeconds: src.crossfadeSeconds });
       await refreshCues();
-    } catch (e) { alert('複製失敗：' + msg(e)); }
+    } catch (e) { toast.error('複製失敗：' + msg(e)); }
   }
   async function handleResetCue(cueId: string, name: string) {
     if (!projectId || !selectedSongId) return;
-    if (!confirm(`重置「${name}」cue 裡所有物件的調整？所有物件會回到預設位置。`)) return;
+    if (!(await confirmDialog({ title: `重置 cue「${name}」？`, message: '這個 cue 裡所有物件的調整都會清掉，回到預設位置。', confirmLabel: '重置', destructive: true }))) return;
     try {
       await api.resetCue(projectId, selectedSongId, cueId);
       await refreshCueStates();
-    } catch (e) { alert('重置失敗：' + msg(e)); }
+    } catch (e) { toast.error('重置失敗：' + msg(e)); }
   }
   async function handleRenameCue(cueId: string, currentName: string) {
     if (!projectId || !selectedSongId) return;
-    const name = prompt('改名稱', currentName)?.trim();
+    const name = (await promptDialog({ title: '改 cue 名稱', label: 'cue 名稱', defaultValue: currentName, confirmLabel: '改名', maxLength: 100 }))?.trim();
     if (!name || name === currentName) return;
     try {
       await api.updateCue(projectId, selectedSongId, cueId, { name });
       await refreshCues();
-    } catch (e) { alert('改名失敗：' + msg(e)); }
+    } catch (e) { toast.error('改名失敗：' + msg(e)); }
   }
   async function handleDeleteCue(cueId: string, name: string) {
     if (!projectId || !selectedSongId) return;
-    if (!confirm(`刪除 cue「${name}」？`)) return;
+    if (!(await confirmDialog({ title: `刪除 cue「${name}」？`, message: '刪了就救不回來。', confirmLabel: '刪除', destructive: true }))) return;
     try {
       await api.deleteCue(projectId, selectedSongId, cueId);
       historyRef.current.clear(historyScope(cueId));
       if (selectedCueId === cueId) setSelectedCueId(null);
       await refreshCues();
-    } catch (e) { alert('刪除失敗：' + msg(e)); }
+    } catch (e) { toast.error('刪除失敗：' + msg(e)); }
   }
   async function moveCue(cueId: string, direction: -1 | 1) {
     if (!projectId || !selectedSongId) return;
@@ -639,14 +655,14 @@ export default function ProjectEditor() {
     try {
       await api.reorderCues(projectId, selectedSongId, reordered.map(c => c.id));
       await refreshCues();
-    } catch (e) { alert('排序失敗：' + msg(e)); }
+    } catch (e) { toast.error('順序沒有存到：' + msg(e)); }
   }
   async function handleUpdateCueMeta(patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>>) {
     if (!projectId || !selectedSongId || !selectedCueId) return;
     try {
       await api.updateCue(projectId, selectedSongId, selectedCueId, patch);
       await refreshCues();
-    } catch (e) { alert('更新 cue 失敗：' + msg(e)); }
+    } catch (e) { toast.error('cue 沒有存到：' + msg(e)); }
   }
 
   // ── Cue state (per object override) actions ──
@@ -725,7 +741,7 @@ export default function ProjectEditor() {
   /** askFirst = false：多選一起重置時，外面已經問過一次了 */
   async function handleResetState(objId: string, askFirst = true) {
     if (!projectId || !selectedSongId || !selectedCueId) return;
-    if (askFirst && !confirm('把這個物件重置回預設位置？')) return;
+    if (askFirst && !(await confirmDialog({ title: '把這個物件重置回預設位置？', message: '可以按「復原」改回來。', confirmLabel: '重置' }))) return;
     const pid = projectId, songId = selectedSongId, cueId = selectedCueId;
     const scope = historyScope(cueId);
     try {
@@ -748,34 +764,36 @@ export default function ProjectEditor() {
   // ── Stage object actions ──
   async function handleSeedObjects() {
     if (!projectId) return;
-    if (!confirm('一鍵塞入 10 個常用物件範例（SKY、LED-1~4、樂手 LED、旋轉舞臺、升降台、走位）？')) return;
+    if (!(await confirmDialog({ title: '加入 10 個常用物件範例？', message: 'SKY、LED-1～4、樂手 LED、旋轉舞臺、升降台、走位。之後可以改名或刪掉。', confirmLabel: '加入範例' }))) return;
     try {
       const r = await api.seedDefaultStageObjects(projectId);
-      alert(`已新增 ${r.inserted} 個範例物件`);
+      toast.success(`已新增 ${r.inserted} 個範例物件`);
       await refreshStageObjects();
       await refreshCueStates();
-    } catch (e) { alert('失敗：' + msg(e)); }
+    } catch (e) { toast.error('範例物件沒有加入：' + msg(e)); }
   }
   async function handleAddObject() {
     if (!projectId) return;
-    const meshName = prompt('C4D 物件名稱（要跟 .glb 檔裡的物件名稱一樣）')?.trim();
+    const meshName = (await promptDialog({ title: '新增物件', label: 'C4D 物件名稱', hint: '要跟 .glb 檔裡的物件名稱一模一樣', confirmLabel: '下一步', maxLength: 200 }))?.trim();
     if (!meshName) return;
-    const displayName = prompt('顯示名稱（顯示用、可留空）', meshName)?.trim() || meshName;
+    const shown = await promptDialog({ title: '新增物件', label: '畫面上顯示的名稱（可以留空）', defaultValue: meshName, confirmLabel: '新增', required: false, maxLength: 100 });
+    if (shown == null) return;
+    const displayName = shown.trim() || meshName;
     try {
       await api.createStageObject(projectId, { meshName, displayName, category: 'other' });
       await refreshStageObjects();
       await refreshCueStates();
-    } catch (e) { alert('失敗：' + msg(e)); }
+    } catch (e) { toast.error('物件沒有新增：' + msg(e)); }
   }
   async function handleRenameObject(obj: StageObject) {
     if (!projectId) return;
-    const displayName = prompt('改顯示名稱', obj.displayName)?.trim();
+    const displayName = (await promptDialog({ title: '改物件名稱', label: '畫面上顯示的名稱', defaultValue: obj.displayName, confirmLabel: '改名', maxLength: 100 }))?.trim();
     if (!displayName || displayName === obj.displayName) return;
     try {
       await api.updateStageObject(projectId, obj.id, { displayName });
       await refreshStageObjects();
       await refreshCueStates();
-    } catch (e) { alert('失敗：' + msg(e)); }
+    } catch (e) { toast.error('改名失敗：' + msg(e)); }
   }
   async function handleChangeCategory(obj: StageObject, category: StageObjectCategory) {
     if (!projectId) return;
@@ -783,7 +801,7 @@ export default function ProjectEditor() {
       await api.updateStageObject(projectId, obj.id, { category });
       await refreshStageObjects();
       await refreshCueStates();
-    } catch (e) { alert('失敗：' + msg(e)); }
+    } catch (e) { toast.error('分類沒有存到：' + msg(e)); }
   }
   async function handleUpdateMaterial(objId: string, patch: MaterialProps) {
     if (!projectId) return;
@@ -793,7 +811,7 @@ export default function ProjectEditor() {
     try {
       await api.updateStageObject(projectId, objId, { materialProps: merged });
       await refreshStageObjects();
-    } catch (e) { alert('材質更新失敗：' + msg(e)); }
+    } catch (e) { toast.error('材質沒有存到：' + msg(e)); }
   }
   async function handleUpdateLed(objId: string, patch: LedProps) {
     if (!projectId) return;
@@ -803,7 +821,7 @@ export default function ProjectEditor() {
     try {
       await api.updateStageObject(projectId, objId, { ledProps: merged });
       await refreshStageObjects();
-    } catch (e) { alert('LED 屬性更新失敗：' + msg(e)); }
+    } catch (e) { toast.error('LED 設定沒有存到：' + msg(e)); }
   }
 
   async function handleToggleLock(obj: StageObject) {
@@ -814,16 +832,16 @@ export default function ProjectEditor() {
       if (!obj.locked) setSelectedObjectIds(prev => prev.filter(x => x !== obj.id));
       await refreshStageObjects();
       await refreshCueStates();
-    } catch (e) { alert('失敗：' + msg(e)); }
+    } catch (e) { toast.error((obj.locked ? '沒有解鎖：' : '沒有鎖住：') + msg(e)); }
   }
   async function handleDeleteObject(obj: StageObject) {
     if (!projectId) return;
-    if (!confirm(`刪除物件「${obj.displayName}」？所有 cue 裡對它的調整也會一起刪掉。`)) return;
+    if (!(await confirmDialog({ title: `刪除物件「${obj.displayName}」？`, message: '所有 cue 裡對它的調整也會一起刪掉，刪了就救不回來。', confirmLabel: '刪除', destructive: true }))) return;
     try {
       await api.deleteStageObject(projectId, obj.id);
       await refreshStageObjects();
       await refreshCueStates();
-    } catch (e) { alert('失敗：' + msg(e)); }
+    } catch (e) { toast.error('刪除失敗：' + msg(e)); }
   }
 
   return (
@@ -1398,9 +1416,9 @@ function CueTemplatePickerDialog({
   if (!open) return null;
 
   async function handleDelete(t: api.CueTemplate) {
-    if (!confirm(`刪除常用擺位「${t.name}」？`)) return;
+    if (!(await confirmDialog({ title: `刪除常用擺位「${t.name}」？`, message: '已經用它建好的 cue 不受影響。', confirmLabel: '刪除', destructive: true }))) return;
     try { await api.deleteCueTemplate(t.id); setTemplates(prev => prev.filter(x => x.id !== t.id)); }
-    catch (e) { alert('失敗：' + (e instanceof Error ? e.message : String(e))); }
+    catch (e) { toast.error('刪除失敗：' + (e instanceof Error ? e.message : String(e))); }
   }
 
   return (
@@ -1852,7 +1870,7 @@ function ObjectAttributePanelMulti({
   }
 
   async function resetAll() {
-    if (!confirm(`把 ${selectedStates.length} 個物件重置回預設位置？`)) return;
+    if (!(await confirmDialog({ title: `把 ${selectedStates.length} 個物件重置回預設位置？`, message: '可以按「復原」改回來。', confirmLabel: '重置' }))) return;
     setBusy(true);
     try {
       for (const s of selectedStates) {

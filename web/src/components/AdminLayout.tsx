@@ -7,6 +7,7 @@ import { Archive, Boxes, Cloud, Folder, LogOut, Settings, Ticket, Users } from '
 import HelpModal from './HelpModal';
 import NotificationBell from './NotificationBell';
 import Icon from './Icon';
+import { confirmDialog } from './dialogs';
 import './AdminLayout.css';
 
 interface AdminLayoutProps {
@@ -49,7 +50,7 @@ function AdminShell({ children }: AdminLayoutProps) {
   }, [helpOpen]);
 
   async function handleLogout() {
-    if (!confirm('登出？')) return;
+    if (!(await confirmDialog({ title: '要登出嗎？', confirmLabel: '登出' }))) return;
     await logout();
     navigate('/login');
   }
@@ -122,7 +123,7 @@ function MemberLayout({ children }: AdminLayoutProps) {
   const { user, logout } = useAuth();
 
   async function handleLogout() {
-    if (!confirm('登出？')) return;
+    if (!(await confirmDialog({ title: '要登出嗎？', confirmLabel: '登出' }))) return;
     await logout();
     navigate('/login');
   }

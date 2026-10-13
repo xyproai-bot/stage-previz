@@ -11,6 +11,7 @@ import { helpUrl, ndiHelpAnchor } from '../lib/helpLinks';
 import { toast } from '../lib/toast';
 import { BookOpen, Circle, CircleCheck, Copy, Download, ExternalLink, Pause, Radio, TriangleAlert, X } from 'lucide-react';
 import Icon from './Icon';
+import { promptDialog } from './dialogs';
 import './NdiGuide.css';
 
 interface GuideProps {
@@ -43,7 +44,14 @@ async function copyPageLink() {
     toast.success('已複製連結，貼到 Chrome、Edge 或 Firefox 打開');
   } catch {
     // 不給複製（權限 / 舊瀏覽器）→ 顯示出來讓他自己選
-    window.prompt('複製這個連結，貼到 Chrome、Edge 或 Firefox 打開：', url);
+    void promptDialog({
+      title: '複製這個連結',
+      message: '瀏覽器不讓我們直接複製。請把下面的連結選起來複製（手機長按），貼到 Chrome、Edge 或 Firefox 打開。',
+      defaultValue: url,
+      readOnly: true,
+      confirmLabel: '好',
+      cancelLabel: null,
+    });
   }
 }
 

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  canAddVideo, canModifyVideo, choiceFor, deleteVersionMessage, itemFromShareVideo, itemFromVideo,
+  canAddVideo, canModifyVideo, choiceFor, deleteVersionMessage, removePendingQuestion, itemFromShareVideo, itemFromVideo,
   itemsFromLegacyDrive, pendingVideos, pickVersion, readVersionChoice, readyItems, versionChoiceStorageKey,
   writeVersionChoice, type VersionItem,
 } from './songVersions';
@@ -175,5 +175,13 @@ describe('誰能加 / 刪影片（跟後台一樣）', () => {
     const msg = deleteVersionMessage({ label: 'V2', title: 'S01_開場' });
     expect(msg).toContain('V2（S01_開場）');
     expect(msg).toContain('V2 這個號碼不會再用');
+  });
+
+  it('拿掉還沒好的那一版：失敗的「拿掉」、還在傳的「停止上傳」、複製中的「停止複製」，都是紅色按鈕', () => {
+    expect(removePendingQuestion({ status: 'failed' }, 'S01.mp4')).toEqual({ title: '把「S01.mp4」從清單拿掉？', confirmLabel: '拿掉', destructive: true });
+    const up = removePendingQuestion({ status: 'uploading' }, 'S01.mp4');
+    expect(up).toMatchObject({ title: '停止上傳「S01.mp4」？', confirmLabel: '停止上傳', cancelLabel: '繼續', destructive: true });
+    expect(up.message).toContain('已經傳的部分會丟掉');
+    expect(removePendingQuestion({ status: 'processing' }, 'x').confirmLabel).toBe('停止複製');
   });
 });
