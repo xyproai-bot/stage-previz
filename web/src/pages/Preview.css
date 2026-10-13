@@ -225,13 +225,17 @@
 .song-detail__body {
   flex: 1;
   display: grid;
-  grid-template-columns: 1fr 360px;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  /* 只有一列，高度鎖在畫面內：影片、3D 畫布、留言都不能把這列撐高
+     （以前有影片時整列被撐到超過畫面，cue 列被推到畫面外面） */
+  grid-template-rows: minmax(0, 1fr);
   min-height: 0;
 }
 .song-detail__main {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
 }
 .song-detail__stage {
   position: relative;
@@ -244,6 +248,7 @@
 }
 .song-detail__stage > .stage-scene {
   flex: 1;
+  min-height: 0;  /* 3D 畫面跟著剩下的空間縮，cue 列永遠留在下面 */
 }
 
 /* ── Video pane（Drive 影片預覽）── */
@@ -253,7 +258,20 @@
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
-  max-height: 50vh;
+  /* 最多半個畫面，而且至少留 160px 給下面的 3D 畫面 + cue 列（iPad 這種矮的畫面也看得到 cue 列） */
+  max-height: min(50vh, calc(100% - 160px));
+}
+/* 標題列、時間軸、錯誤列固定高度；影片本身縮到放得下
+   （以前影片 + 時間軸加起來超過上限，時間軸蓋到 3D 畫面上） */
+.video-pane > .video-pane__head,
+.video-pane > .video-tl,
+.video-pane > .video-pane__err-row {
+  flex-shrink: 0;
+}
+.video-pane > .video-pane__video,
+.video-pane > .video-pane__compare {
+  flex: 0 1 auto;
+  min-height: 0;
 }
 .video-pane--collapsed {
   max-height: none;
@@ -390,6 +408,7 @@
 
 /* Cue bar */
 .song-detail__cuebar {
+  flex-shrink: 0;
   border-top: 1px solid var(--border);
   background: var(--surface-1);
   display: flex;
@@ -827,8 +846,8 @@
 
   /* Song detail：side panel 改成下方折疊 */
   .song-detail__body {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr 320px;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 320px;
   }
   .song-detail__side {
     border-left: none;

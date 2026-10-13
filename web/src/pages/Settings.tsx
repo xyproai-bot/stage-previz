@@ -31,7 +31,7 @@ export default function Settings() {
         <NdiSection />
         {/* 自己調的現場亮度：只有管理員能調燈光，其他人看不到這區 */}
         {user?.role === 'admin' && <ThisComputerSection />}
-        <AboutSection />
+        <AboutSection isAdmin={user?.role === 'admin'} />
       </div>
     </AdminLayout>
   );
@@ -195,14 +195,15 @@ function ThisComputerSection() {
 
 // ─── 關於 ───
 
-function AboutSection() {
+function AboutSection({ isAdmin }: { isAdmin: boolean }) {
   return (
     <section className="settings-card">
       <h2>關於</h2>
       <dl className="settings-account__rows">
         <div><dt>版本</dt><dd>{APP_VERSION}</dd></div>
-        <div><dt>使用說明</dt><dd>按右下角的 ?（或鍵盤 ?）</dd></div>
-        <div><dt>AE 即時預覽</dt><dd><a href={helpUrl()} target="_blank" rel="noopener">圖文說明（不用登入，可以直接傳給動畫師）↗</a></dd></div>
+        {/* 管理頁右下角有 ? 按鈕；動畫師 / 導演的上方列是「使用說明」 */}
+        <div><dt>使用說明</dt><dd>{isAdmin ? '按右下角的 ?（或鍵盤 ?）' : '按上方的「使用說明」'}</dd></div>
+        <div><dt>AE 即時預覽</dt><dd><a href={helpUrl()} target="_blank" rel="noopener">{isAdmin ? '圖文說明（不用登入，可以直接傳給動畫師）↗' : '圖文說明（不用登入）↗'}</a></dd></div>
       </dl>
     </section>
   );

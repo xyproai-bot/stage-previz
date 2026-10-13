@@ -5,11 +5,11 @@ import ProjectCard from '../components/ProjectCard';
 import NewProjectDialog from '../components/NewProjectDialog';
 import RecentProjectsBar from '../components/RecentProjectsBar';
 import * as api from '../lib/api';
+import { useAuth } from '../lib/auth';
 import type { Project } from '../lib/mockData';
 import './Admin.css';
 
 type Filter = 'all' | 'active' | 'in_review' | 'mine';
-const ME = 'Phang'; // 暫時硬編，之後從 auth 拿
 
 export default function Admin() {
   const { tab } = useParams();
@@ -28,6 +28,10 @@ export default function Admin() {
 
 function ProjectsTab() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  // 「我負責的」= 我有被加進去的專案（用登入的人的 id 比，不是名字）
+  const myId = user?.id ?? null;
+  const isMine = (p: Project) => myId != null && p.members.some(m => m.id === myId);
   const [projects, setProjects] = useState<Project[]>([]);
   const [showsById, setShowsById] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
@@ -90,27 +94,29 @@ function ProjectsTab() {
     let list = projects;
     if (filter === 'active') list = list.filter(p => p.status === 'active');
     else if (filter === 'in_review') list = list.filter(p => p.status === 'in_review');
-    else if (filter === 'mine') list = list.filter(p => p.members.some(m => m.name === ME));
+    else if (filter === 'mine') list = list.filter(isMine);
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       list = list.filter(p => p.name.toLowerCase().includes(q) || p.description.toLowerCase().includes(q));
     }
     return list;
-  }, [projects, filter, search]);
+  }, [projects, filter, search, myId]);
 
   const counts = useMemo(() => ({
     all: projects.length,
     active: projects.filter(p => p.status === 'active').length,
     in_review: projects.filter(p => p.status === 'in_review').length,
-    mine: projects.filter(p => p.members.some(m => m.name === ME)).length,
-  }), [projects]);
+    mine: projects.filter(isMine).length,
+  }), [projects, myId]);
 
   async function handleCreate(data: { name: string; description: string; showId?: string | null }) {
     try {
       setCreating(true);
-      await api.createProject(data);
+      const res = await api.createProject(data);
       setDialogOpen(false);
-      await refresh();
+      // 建好直接進編輯器（新手流程：上傳模型 → 物件 → 歌 → cue 都在那邊）
+      if (res?.id) navigate(`/admin/projects/${encodeURIComponent(res.id)}`);
+      else await refresh();
     } catch (e) {
       alert('建立失敗：' + (e instanceof Error ? e.message : String(e)));
     } finally {

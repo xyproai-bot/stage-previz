@@ -1,6 +1,7 @@
 import { ReactNode, useEffect, useState } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { helpUrl } from '../lib/helpLinks';
 import HelpModal from './HelpModal';
 import './AdminLayout.css';
 
@@ -15,10 +16,17 @@ const NAV = [
   { key: 'users', icon: '👥', label: '用戶', path: '/admin/users' },
   { key: 'templates', icon: '📐', label: '模板庫', path: '/admin/templates' },
   { key: 'archived', icon: '🗑', label: '封存的專案', path: '/admin/archived' },
-  { key: 'settings', icon: '⚙️', label: '設定', path: '/admin/settings' },
+  { key: 'settings', icon: '⚙️', label: '設定', path: '/settings' },
 ];
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
+  const { user } = useAuth();
+  // 管理側欄只給製作；動畫師 / 導演開設定頁時用簡單的上方列
+  if (user && user.role !== 'admin') return <MemberLayout>{children}</MemberLayout>;
+  return <AdminShell>{children}</AdminShell>;
+}
+
+function AdminShell({ children }: AdminLayoutProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
   const [helpOpen, setHelpOpen] = useState(false);
@@ -98,6 +106,40 @@ export default function AdminLayout({ children }: AdminLayoutProps) {
         >?</button>
       </main>
       <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+    </div>
+  );
+}
+
+/** 非製作（動畫師 / 導演）看設定頁時的外框：沒有管理側欄，只有回自己的專案、說明、登出 */
+function MemberLayout({ children }: AdminLayoutProps) {
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
+
+  async function handleLogout() {
+    if (!confirm('登出？')) return;
+    await logout();
+    navigate('/login');
+  }
+
+  return (
+    <div className="member-layout">
+      <header className="member-layout__top">
+        <Link className="member-layout__back" to="/">回我的專案</Link>
+        <span className="member-layout__brand">
+          <span className="admin-sidebar__logo-mark" aria-hidden="true" />
+          STAGE <strong>PREVIZ</strong>
+        </span>
+        <span className="member-layout__grow" />
+        <a className="member-layout__link" href={helpUrl()} target="_blank" rel="noopener">使用說明</a>
+        <span className="member-layout__user">
+          <span className="avatar avatar--sm" style={{ background: user?.avatarColor || '#10c78a' }}>
+            {user?.name?.[0] || '?'}
+          </span>
+          <span>{user?.name}</span>
+        </span>
+        <button className="member-layout__link" onClick={handleLogout}>登出</button>
+      </header>
+      <main className="member-layout__main">{children}</main>
     </div>
   );
 }

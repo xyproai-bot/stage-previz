@@ -1,21 +1,23 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
+import { returnPathAfterLogin } from '../lib/landing';
 import './Login.css';
 
 export default function Login() {
   const { login, user, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const from = (location.state as { from?: string } | null)?.from || '/admin';
+  // 被要求登入前想去的頁面（RequireAuth 記下來的）
+  const from = (location.state as { from?: string } | null)?.from;
 
   const [code, setCode] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 已登入直接導
+  // 已登入 / 剛登入 → 回到原本想去的頁面（自己能開的才回去），不然去首頁，首頁會依角色帶到對的地方
   useEffect(() => {
-    if (!authLoading && user) navigate(from, { replace: true });
+    if (!authLoading && user) navigate(returnPathAfterLogin(user.role, from) ?? '/', { replace: true });
   }, [authLoading, user, navigate, from]);
 
   async function handleLogin(e: React.FormEvent) {
@@ -25,8 +27,7 @@ export default function Login() {
     if (!trimmed) { setError('請輸入號碼'); return; }
     setSubmitting(true);
     try {
-      await login(trimmed);
-      navigate(from, { replace: true });
+      await login(trimmed);  // 登入成功 → user 變了，上面的 effect 會帶去對的頁面
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

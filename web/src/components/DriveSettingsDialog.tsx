@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { DriveAccount, DriveFile, DriveSyncLogEntry, Song } from '../lib/api';
 import { toast } from '../lib/toast';
+import { formatRelativeTime } from '../lib/serverTime';
 import './DriveSettingsDialog.css';
 
 interface Props {
@@ -262,7 +263,7 @@ export default function DriveSettingsDialog({
             </button>
             {lastSync && (
               <span className="muted small drive-dlg__last-sync">
-                上次同步：{formatRelative(lastSync.ranAt)}
+                上次同步：{formatRelativeTime(lastSync.ranAt)}
                 （{lastSync.filesClassified} 已分類 / {lastSync.filesUnclassified} 未分類）
               </span>
             )}
@@ -333,7 +334,7 @@ function DriveFileRow({ file, songs, onAssign }: {
         <div className="drive-file__meta">
           {file.mimeType && <span>{shortMime(file.mimeType)}</span>}
           {file.sizeBytes && <span>{formatSize(file.sizeBytes)}</span>}
-          {file.modifiedTime && <span>{formatRelative(file.modifiedTime)}</span>}
+          {file.modifiedTime && <span>{formatRelativeTime(file.modifiedTime)}</span>}
           <span className={'drive-file__badge drive-file__badge--' + file.classifiedBy}>
             {file.classifiedBy === 'manual' ? '🔒 手動' : '⚙ 規則'}
           </span>
@@ -390,15 +391,4 @@ function formatSize(b: number): string {
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
   if (b < 1024 * 1024 * 1024) return `${(b / 1024 / 1024).toFixed(1)} MB`;
   return `${(b / 1024 / 1024 / 1024).toFixed(2)} GB`;
-}
-
-function formatRelative(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const diff = (Date.now() - d.getTime()) / 1000;
-    if (diff < 60) return '剛剛';
-    if (diff < 3600) return `${Math.floor(diff / 60)} 分鐘前`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)} 小時前`;
-    return d.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' });
-  } catch { return iso; }
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project, SongStatus, SongStatusCounts } from '../lib/mockData';
+import { formatRelativeTime } from '../lib/serverTime';
 import './ProjectCard.css';
 
 const STATUS_LABELS: Record<Project['status'], { label: string; cls: string }> = {
@@ -28,17 +29,6 @@ const SONG_STATUS_LABEL: Record<SongStatus, string> = {
   needs_changes: '需修改',
   todo: '未開始',
 };
-
-function timeAgo(iso: string) {
-  const ms = Date.now() - new Date(iso).getTime();
-  const min = Math.floor(ms / 60000);
-  if (min < 1) return '剛才';
-  if (min < 60) return `${min} 分鐘前`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} 小時前`;
-  const day = Math.floor(hr / 24);
-  return `${day} 天前`;
-}
 
 export default function ProjectCard({
   project, showName, onDuplicate, onArchive, onExport, onEditTags,
@@ -182,7 +172,7 @@ export default function ProjectCard({
             </>
           )}
           <span className="dot">·</span>
-          <span className="project-card__time">{timeAgo(project.updatedAt)}</span>
+          <span className="project-card__time">{formatRelativeTime(project.updatedAt)}</span>
         </div>
 
         <div className="project-card__avatars">

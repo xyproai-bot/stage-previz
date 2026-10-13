@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import AdminLayout from '../components/AdminLayout';
 import * as api from '../lib/api';
 import type { DriveAccount } from '../lib/api';
+import { formatDateTime } from '../lib/serverTime';
 import './DriveSources.css';
 
 export default function DriveSources() {
@@ -99,8 +100,8 @@ export default function DriveSources() {
                     <div className="drive-account__name">{a.name || a.email}</div>
                     <div className="drive-account__email">{a.email}</div>
                     <div className="drive-account__meta">
-                      連接：{formatDate(a.createdAt)}
-                      {a.lastUsedAt && <> · 最後使用：{formatDate(a.lastUsedAt)}</>}
+                      連接：{formatDateTime(a.createdAt)}
+                      {a.lastUsedAt && <> · 最後使用：{formatDateTime(a.lastUsedAt)}</>}
                     </div>
                   </div>
                   <button className="btn btn--ghost btn--sm" onClick={() => handleDisconnect(a)}>
@@ -125,11 +126,4 @@ export default function DriveSources() {
       </div>
     </AdminLayout>
   );
-}
-
-function formatDate(iso: string): string {
-  try {
-    const d = new Date(iso);
-    return d.toLocaleString('zh-TW', { year: 'numeric', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-  } catch { return iso; }
 }

@@ -197,3 +197,64 @@
     padding-left: 16px;
   }
 }
+
+/* ── 非製作（動畫師 / 導演）看設定頁：沒有管理側欄 ── */
+.member-layout {
+  min-height: 100vh;
+  background: var(--bg);
+}
+.member-layout__top {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  font-size: 13px;
+  flex-wrap: wrap;
+}
+.member-layout__back {
+  color: var(--text);
+  text-decoration: none;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.member-layout__back:hover { border-color: var(--border-strong); }
+.member-layout__brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.15em;
+  color: var(--text-dim);
+}
+.member-layout__brand strong { color: var(--text); }
+.member-layout__brand .admin-sidebar__logo-mark { width: 14px; height: 14px; }
+.member-layout__grow { flex: 1; }
+.member-layout__link {
+  color: var(--text-dim);
+  text-decoration: none;
+  background: transparent;
+  border: none;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+.member-layout__link:hover { color: var(--text); background: var(--surface-2); }
+.member-layout__user {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-dim);
+}
+.member-layout__main {
+  max-width: 960px;
+  margin: 0 auto;
+}
+@media (max-width: 640px) {
+  .member-layout__top { padding: 8px 16px; gap: 8px; }
+  .member-layout__brand { display: none; }
+}

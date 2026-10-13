@@ -1,6 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { Routes, Route } from 'react-router-dom';
-import RolePicker from './pages/RolePicker';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Admin from './pages/Admin';
 import ProjectEditor from './pages/ProjectEditor';
@@ -15,6 +14,8 @@ import CommandPalette from './components/CommandPalette';
 import ToastContainer from './components/ToastContainer';
 import ErrorBoundary from './components/ErrorBoundary';
 import { RequireAuth, useAuth } from './lib/auth';
+import { HomeRedirect, RequireAdmin, RouteLoading } from './lib/roleRouting';
+import MyProjectsPage from './lib/MyProjectsPage';
 
 // Lazy-load 大頁面（含 StageScene + three.js 的）→ 不必要時不下載
 const Studio  = lazy(() => import('./pages/Studio'));
@@ -24,7 +25,7 @@ const Share   = lazy(() => import('./pages/Share'));
 const Help    = lazy(() => import('./pages/Help'));
 
 function PageLoading() {
-  return <div className="empty-state"><h1>⏳</h1><p>載入頁面…</p></div>;
+  return <RouteLoading text="載入頁面…" />;
 }
 
 export default function App() {
@@ -33,21 +34,26 @@ export default function App() {
       <ErrorBoundary>
         <Suspense fallback={<PageLoading />}>
           <Routes>
-            <Route path="/" element={<RolePicker />} />
+            {/* 首頁：沒登入 → 登入頁；登入了 → 依角色進自己的頁面 */}
+            <Route path="/" element={<HomeRedirect />} />
             <Route path="/login" element={<Login />} />
-            <Route path="/admin" element={<RequireAuth><Admin /></RequireAuth>} />
-            <Route path="/admin/projects/:projectId" element={<RequireAuth><ErrorBoundary><ProjectEditor /></ErrorBoundary></RequireAuth>} />
-            <Route path="/admin/shows" element={<RequireAuth><Shows /></RequireAuth>} />
-            <Route path="/admin/shows/:showId" element={<RequireAuth><ShowDetail /></RequireAuth>} />
-            <Route path="/admin/users" element={<RequireAuth role="admin"><Users /></RequireAuth>} />
-            <Route path="/admin/templates" element={<RequireAuth><Templates /></RequireAuth>} />
-            <Route path="/admin/drive-sources" element={<RequireAuth role="admin"><DriveSources /></RequireAuth>} />
-        <Route path="/admin/archived" element={<RequireAuth role="admin"><ArchivedProjects /></RequireAuth>} />
-            <Route path="/admin/settings" element={<RequireAuth><Settings /></RequireAuth>} />
-            <Route path="/admin/:tab" element={<RequireAuth><Admin /></RequireAuth>} />
-            <Route path="/studio" element={<RequireAuth><ErrorBoundary><Studio /></ErrorBoundary></RequireAuth>} />
+            {/* 管理頁只給製作（admin）；其他角色會被帶回自己的頁面 */}
+            <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
+            <Route path="/admin/projects/:projectId" element={<RequireAdmin><ErrorBoundary><ProjectEditor /></ErrorBoundary></RequireAdmin>} />
+            <Route path="/admin/shows" element={<RequireAdmin><Shows /></RequireAdmin>} />
+            <Route path="/admin/shows/:showId" element={<RequireAdmin><ShowDetail /></RequireAdmin>} />
+            <Route path="/admin/users" element={<RequireAdmin><Users /></RequireAdmin>} />
+            <Route path="/admin/templates" element={<RequireAdmin><Templates /></RequireAdmin>} />
+            <Route path="/admin/drive-sources" element={<RequireAdmin><DriveSources /></RequireAdmin>} />
+            <Route path="/admin/archived" element={<RequireAdmin><ArchivedProjects /></RequireAdmin>} />
+            {/* 設定每個登入的人都能開（動畫師要用 NDI 檢查連線）；舊網址轉過去 */}
+            <Route path="/admin/settings" element={<Navigate to="/settings" replace />} />
+            <Route path="/settings" element={<RequireAuth><Settings /></RequireAuth>} />
+            <Route path="/admin/:tab" element={<RequireAdmin><Admin /></RequireAdmin>} />
+            {/* 沒指定專案 → 我的專案清單（只有我被加入的） */}
+            <Route path="/studio" element={<RequireAuth><MyProjectsPage kind="studio" /></RequireAuth>} />
             <Route path="/studio/:projectId" element={<RequireAuth><ErrorBoundary><Studio /></ErrorBoundary></RequireAuth>} />
-            <Route path="/preview" element={<RequireAuth><ErrorBoundary><Preview /></ErrorBoundary></RequireAuth>} />
+            <Route path="/preview" element={<RequireAuth><MyProjectsPage kind="preview" /></RequireAuth>} />
             <Route path="/preview/:projectId" element={<RequireAuth><ErrorBoundary><Preview /></ErrorBoundary></RequireAuth>} />
             <Route path="/share/:token" element={<ErrorBoundary><Share /></ErrorBoundary>} />
             {/* 好讀分享網址（/s/jinma2026-k7p2），同一個分享頁 */}
@@ -63,10 +69,10 @@ export default function App() {
   );
 }
 
-/** Cmd/Ctrl+K palette — 只在登入狀態 mount */
+/** Cmd/Ctrl+K palette — 只給製作（裡面的動作和搜尋結果都是進管理頁） */
 function GlobalCmdK() {
   const { user } = useAuth();
-  if (!user) return null;
+  if (!user || user.role !== 'admin') return null;
   return <CommandPalette />;
 }
 
