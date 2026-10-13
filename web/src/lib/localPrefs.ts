@@ -1,8 +1,8 @@
 // 這台電腦（這個瀏覽器）存的個人設定 — 設定頁用來顯示 / 清掉「自己調的現場亮度」。
 //
 // 只動 sp-look:*（每個人自己調的現場亮度，見 stageLook/personalLook.ts）。
-// admin 的材質暫存（sp-materials:*）、重置視角暫存（sp-home-view:*）可能還有沒存到伺服器的設定，
-// 視角書籤（sp_camera_bookmarks:*）是使用者自己存的，這裡都不碰。
+// 視角書籤（sp_camera_bookmarks:*）是使用者自己存的，這裡不碰；
+// 舊版的材質 / 重置視角暫存（sp-materials:*、sp-home-view:*）打開專案時另外清（legacyViewCache.ts）。
 
 type StorageScan = Pick<Storage, 'length' | 'key'>;
 type StorageClear = StorageScan & Pick<Storage, 'removeItem'>;

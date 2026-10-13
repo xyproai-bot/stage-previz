@@ -8,11 +8,13 @@
 //               lookSettings={personalLook.effective}       // usePersonalLook(projectId, view.lookSettings)
 //               onLookSettingsChange={personalLook.set}     // 每個人調自己的，存在自己電腦
 //               onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
-//               materialOverrides={view.materialOverrides}  // admin 調的，這台電腦也留一份
+//               materialOverrides={view.materialOverrides}  // admin 調的，存在專案上
 //               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined} />
 //
 // 之前校準 / 滑桿存在各自瀏覽器的 localStorage → 導演 / 動畫師 / 換電腦都看不到。
 // 現在存在 project 上（worker 只允許 admin 改）；admin 第一次打開時會把舊瀏覽器裡的值搬上去。
+// 材質 / 重置視角一律以專案上存的為準：以前在自己電腦留的暫存（會把舊值補存回專案、蓋掉別台電腦的修改）
+// 已經拿掉，打開時順便清掉（legacyViewCache.ts）。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from './api';
@@ -20,8 +22,8 @@ import type { MechanismOffsets } from './api';
 import { toast } from './toast';
 import { DEFAULT_LOOK_SETTINGS, normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 import { normalizeMaterialOverrides, type MaterialOverride, type MaterialOverrides } from './stageLook/materialOverrides';
-import { chooseMaterials, readMaterialCache, writeMaterialCache } from './stageLook/materialCache';
-import { chooseHomeView, readHomeViewCache, writeHomeViewCache, type HomeView } from './homeView';
+import type { HomeView } from './homeView';
+import { clearLegacyViewCaches } from './legacyViewCache';
 import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
 
 const SAVE_DELAY_MS = 500;  // 滑桿停手多久才存
@@ -64,6 +66,8 @@ export interface ProjectViewSettingsState {
   /** AE 畫布尺寸（NDI Webcam 預覽用；null = 還沒填） */
   ledCanvas: LedCanvas | null;
   canEdit: boolean;
+  /** 專案設定讀完了沒（讀失敗也算完，用預設值）；還沒讀完時校準倍率還是預設的 1 */
+  loaded: boolean;
   setScaleCorrection: (n: number) => void;
   updateMechanismOffset: (objId: string, axis: 'x' | 'y', value: number) => void;
   resetAllMechanismOffsets: () => void;
@@ -83,6 +87,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   const [materialOverrides, setMaterials] = useState<MaterialOverrides>({});
   const [homeView, setHomeViewState] = useState<HomeView | null>(null);
   const [ledCanvas, setLedCanvasState] = useState<LedCanvas | null>(null);
+  const [loaded, setLoaded] = useState(false);
   // ref 跟 state 同步：存檔 / 失敗回滾要拿「目前值」，不想把 callback 綁在 state 上
   const scaleRef = useRef(1);
   const offsetsRef = useRef<MechanismOffsets>({});
@@ -108,7 +113,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       if (saveErrorShownRef.current) return;
       saveErrorShownRef.current = true;
       console.warn('[viewSettings] save failed', e);
-      toast.error('設定還沒存到專案上（材質會先存在這台電腦，重新整理不會不見）');
+      toast.error('設定沒有存到專案上（網路或伺服器有問題），請稍後再調一次');
     });
   }, []);
 
@@ -122,17 +127,16 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     applyMaterials({});
     setHomeViewState(null);
     setLedCanvasState(null);
-    // admin 調過的材質，這台電腦有留一份 → 專案上讀不到 / 還沒存上去時用這份
-    const cachedMaterials = canEdit ? readMaterialCache(localStorage, projectId) : null;
-    const cachedHomeView = canEdit ? readHomeViewCache(localStorage, projectId) : null;
+    setLoaded(false);
+    // 舊版在這台電腦留的材質 / 重置視角暫存：不再讀、不再補存回專案（會蓋掉別台電腦的修改），清掉
+    try { clearLegacyViewCaches(localStorage); } catch { /* 無痕模式 / 讀不到 storage → 不用清 */ }
     (async () => {
       let settings: api.ProjectViewSettings;
       try {
         settings = await api.getProjectViewSettings(projectId);
       } catch {
-        // 讀不到就維持預設（未校準 / 沒位移 / 預設現場設定），材質用這台電腦留的
-        if (!cancelled && cachedMaterials) applyMaterials(cachedMaterials);
-        if (!cancelled && cachedHomeView) setHomeViewState(cachedHomeView);
+        // 讀不到就維持預設（未校準 / 沒位移 / 預設現場設定 / 沒調材質 / 自動視角）
+        if (!cancelled) setLoaded(true);
         return;
       }
       if (cancelled) return;
@@ -165,19 +169,9 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       applyOffsets(settings.mechanismOffsets);
       applyLook(settings.lookSettings);
       setLedCanvasState(settings.ledCanvas);
-
-      const materials = chooseMaterials(settings.materialOverrides, cachedMaterials);
-      applyMaterials(materials.value);
-      if (canEdit && !materials.fromCache) writeMaterialCache(localStorage, projectId, materials.value);
-      const home = chooseHomeView(settings.homeView, cachedHomeView);
-      setHomeViewState(home.value);
-      if (canEdit && !home.fromCache) writeHomeViewCache(localStorage, projectId, home.value);
-
-      // 專案上還沒有、這台電腦有 → 補存上去（後台還沒更新會失敗，沒關係，這台電腦還留著）
-      const backfill: Partial<api.ProjectViewSettings> = {};
-      if (materials.fromCache) backfill.materialOverrides = materials.value;
-      if (home.fromCache) backfill.homeView = home.value;
-      if (Object.keys(backfill).length > 0) api.updateProjectViewSettings(projectId, backfill).catch(() => {});
+      applyMaterials(settings.materialOverrides);
+      setHomeViewState(settings.homeView);
+      setLoaded(true);
     })();
     return () => {
       cancelled = true;
@@ -244,16 +238,14 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     else merged[name] = { ...(cur[name] || {}), ...patch };
     const next = normalizeMaterialOverrides(merged);
     applyMaterials(next);
-    if (projectId) writeMaterialCache(localStorage, projectId, next);
     scheduleSave({ materialOverrides: next });
-  }, [projectId, canEdit, scheduleSave]);
+  }, [canEdit, scheduleSave]);
 
   const setHomeView = useCallback((view: HomeView | null) => {
     if (!canEdit) return;
     setHomeViewState(view);
-    if (projectId) writeHomeViewCache(localStorage, projectId, view);
     scheduleSave({ homeView: view });
-  }, [projectId, canEdit, scheduleSave]);
+  }, [canEdit, scheduleSave]);
 
   // AE 畫布尺寸：admin 在管理頁填一次（按 Enter / 離開欄位才存），不用像滑桿那樣等停手，直接送出
   const setLedCanvas = useCallback((v: LedCanvas | null) => {
@@ -265,7 +257,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   }, [canEdit, scheduleSave, flushPending]);
 
   return {
-    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView, ledCanvas, canEdit,
+    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView, ledCanvas, canEdit, loaded,
     setScaleCorrection, updateMechanismOffset, resetAllMechanismOffsets, setLookSettings, setMaterialOverride, setHomeView,
     setLedCanvas,
   };

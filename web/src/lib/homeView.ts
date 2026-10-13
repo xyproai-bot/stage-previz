@@ -9,8 +9,6 @@ export interface HomeView {
   fov: number;
 }
 
-type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
-
 const MAX_COORD = 100000;
 export const HOME_FOV_RANGE: [number, number] = [10, 120];
 
@@ -32,31 +30,4 @@ export function normalizeHomeView(raw: unknown): HomeView | null {
   if (position.every((n, i) => Math.abs(n - target[i]) < 1e-6)) return null;  // 看向自己 → 沒有方向
   const [min, max] = HOME_FOV_RANGE;
   return { position, target, fov: Math.min(max, Math.max(min, fov)) };
-}
-
-const key = (projectId: string) => `sp-home-view:${projectId}`;
-
-export function readHomeViewCache(storage: StorageLike, projectId: string): HomeView | null {
-  try {
-    return normalizeHomeView(storage.getItem(key(projectId)));
-  } catch {
-    return null;
-  }
-}
-
-export function writeHomeViewCache(storage: StorageLike, projectId: string, view: HomeView | null) {
-  try {
-    const clean = normalizeHomeView(view);
-    if (clean) storage.setItem(key(projectId), JSON.stringify(clean));
-    else storage.removeItem(key(projectId));
-  } catch { /* 無痕模式 / 空間滿 → 這次不存 */ }
-}
-
-/** 專案上有 → 用專案的；沒有但這台電腦有 → 用這台電腦的（fromCache = true，之後要補存回專案） */
-export function chooseHomeView(
-  server: HomeView | null, local: HomeView | null,
-): { value: HomeView | null; fromCache: boolean } {
-  if (server) return { value: server, fromCache: false };
-  if (local) return { value: local, fromCache: true };
-  return { value: null, fromCache: false };
 }
