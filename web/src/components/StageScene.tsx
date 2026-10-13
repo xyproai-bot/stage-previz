@@ -40,11 +40,21 @@ import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOv
 import MaterialPanel from './MaterialPanel';
 import { detectFloorPlane } from '../lib/stageLook/floorPlane';
 import {
-  BookOpen, Box, Camera, ChevronDown, Download, ExternalLink, Footprints, Globe, Grid3x3, MapPin, Move, Palette, Pause,
-  PersonStanding, RefreshCw, Rotate3d, Ruler, SlidersHorizontal, Sparkles, Tag, Target, Video, X, Zap,
+  BookOpen, Box, Camera, ChevronDown, Download, ExternalLink, FileBraces, FileSpreadsheet, Footprints, Globe, Grid3x3, ImageDown,
+  MapPin, MonitorCheck, Move, Palette, Pause, PersonStanding, Ratio, RefreshCw, Rotate3d, Ruler, SlidersHorizontal, Sparkles,
+  Tag, Target, Video, X, Zap, type LucideIcon,
 } from 'lucide-react';
 import Icon from './Icon';
 import { promptDialog } from './dialogs';
+import { toast } from '../lib/toast';
+import StageToolbar, { type ToolDef, type ToolMenuSection } from './StageToolbar';
+import { LED_CANVAS_RANGE, normalizeLedCanvas, type LedCanvas } from '../lib/ledCanvas';
+import {
+  buildLedLayout, canvasSourceText, layoutToCsv, layoutToJson, ledMapFileName, parseCanvasInput, resolveLedCanvas, testPatternSize, todayString,
+  type CanvasSize, type LedLayout, type LedMapMeta,
+} from '../lib/ledMap';
+import { ledPanelInputs, type LedSceneObject } from '../lib/ledMapScene';
+import { downloadBlob, drawTestPattern, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import './StageScene.css';
 
 // 3D 畫面上用 DOM 直接畫的小圖示（物件名稱旁的鎖、留言圖釘）：跟 lucide 的 Lock / MessageSquare 同一個圖形
@@ -186,6 +196,14 @@ interface Props {
    * 一律現場模式、不能調燈光 / 材質、快捷鍵關掉、不能選物件（轉視角 / 縮放照常）
    */
   toolbarMode?: 'full' | 'viewer';
+  /** 專案名稱（LED 對位圖上的說明） */
+  projectName?: string;
+  /** AE 畫布大小（LED 內容合成的寬高，專案上存的）；null / 沒給 = 還沒設定 → 用目前影片的大小，再沒有就 3840 × 2160 */
+  ledCanvas?: LedCanvas | null;
+  /** 有傳才能在「LED 對位圖」裡改畫布大小 — 只有製作 */
+  onLedCanvasChange?: (v: LedCanvas | null) => void;
+  /** 「更多」選單裡的 LED 對位圖（下載 PNG / CSV / JSON、LED 顯示測試圖）；預設有 */
+  ledMapMenu?: boolean;
 }
 
 /** 設定機關時問舞台的事（StageScene 的 sceneQueryRef） */
@@ -213,7 +231,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -366,9 +384,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const lookRef = useRef<LookSettings>(lookSettings);
   lookRef.current = lookSettings;
   const showLabelsRef = useRef(false);
-  // NDI mock：當 LED 在 realistic/cinematic 模式且沒有 imageUrl，
-  // 套一張動態 procedural canvas 貼圖當作「即將接 NDI」的預覽
-  const ndiMockTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
+  // LED 測試圖：沒有畫面（影片 / AE 即時 / 本地檔案）時 LED 顯示的，跟 LED 對位圖同一套位置
+  // 模型 / 畫布大小換了才重畫（state：換了要讓材質重新套）
+  const [testPatternTex, setTestPatternTex] = useState<THREE.CanvasTexture | null>(null);
+  // 「LED 顯示測試圖」開著：有畫面時也顯示測試圖（檢查對位用；只有自己看得到，這個分頁記得）
+  const [forceTestPattern, setForceTestPattern] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('sp_led_test_pattern') === '1'; } catch { return false; }
+  });
+  // 目前影片 / 圖片的大小（製作還沒設定畫布大小時，對位圖用這個）
+  const [mediaSize, setMediaSize] = useState<CanvasSize | null>(null);
+  const [ledMapBusy, setLedMapBusy] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // NDI 真連線：connect 後拿到 frames 就 update CanvasTexture（替代 mock）
   const ndiLiveTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
   // 本地影片 / 圖片 → LED 貼圖（ledVideo / ledImage prop 變了就重建）
@@ -614,24 +640,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       });
       container.appendChild(layer);
       commentPinLayerRef.current = layer;
-    }
-
-    // ── NDI mock texture（procedural animated canvas）──
-    // 當 LED 沒設 imageUrl 且不是 quick 模式 → 套這張動態貼圖當「NDI 即將接上」預覽
-    try {
-      const c = document.createElement('canvas');
-      c.width = 256; c.height = 128;
-      const cctx = c.getContext('2d');
-      if (cctx) {
-        const tex = new THREE.CanvasTexture(c);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.minFilter = THREE.LinearFilter;
-        tex.magFilter = THREE.LinearFilter;
-        tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
-        ndiMockTextureRef.current = { texture: tex, canvas: c, ctx: cctx };
-      }
-    } catch (e) {
-      console.warn('[StageScene] NDI mock canvas init failed:', e);
     }
 
     // ── NDI live texture（CanvasTexture 接 NDI helper 的 frames）──
@@ -956,7 +964,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
     // Render loop（用 setAnimationLoop 而非 rAF — 才能支援 WebXR）
     let stopped = false;
-    let frameStart = performance.now();
     let lastTickTs = performance.now();
     let lastColorTs = 0;
     let lastEnvTs = 0;
@@ -1085,14 +1092,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // 機關：這一幀的值（影片時間軸 / 照機器速度走）→ 套到每個物件（整個畫面只在這裡寫 mesh 的位置）
       commitPosesRef.current(nowTs, !!framePoses);
 
-      // Animate NDI mock texture (cheap procedural — only updates in live mode)
-      const ndiMock = ndiMockTextureRef.current;
       const rmode = renderModeRef.current;
-      if (ndiMock && rmode !== 'quick') {
-        const t = (performance.now() - frameStart) * 0.001;
-        drawNdiMock(ndiMock.ctx, ndiMock.canvas, t);
-        ndiMock.texture.needsUpdate = true;
-      }
 
       // VR 模式時 EffectComposer / CubeCamera 不能用（需要單一 framebuffer）
       const inXR = renderer.xr.isPresenting;
@@ -1113,9 +1113,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             (id) => props.get(id) || fallback,
             lookRef.current.ledLightStrength,
           );
-          // LED 表面：像素格密度跟著貼圖解析度、側看衰減跟著現場設定
+          // LED 表面：像素格密度跟著貼圖解析度、側看衰減跟著現場設定（測試圖不畫像素格，字才清楚）
           const liveTexture = ndiLiveTextureRef.current?.texture;
-          const mockTexture = ndiMockTextureRef.current?.texture;
           for (const mat of ledMaterialsRef.current) {
             const tex = mat.emissiveMap;
             const img = tex?.image as { width?: number; height?: number; videoWidth?: number; videoHeight?: number } | undefined;
@@ -1125,7 +1124,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             updateLedSurface(mat, {
               on: !!tex,
               texels: [iw * density, ih * density],
-              gridStrength: tex && tex !== mockTexture ? 1 : 0,
+              gridStrength: tex && !tex.userData.ledTestPattern ? 1 : 0,
               viewFalloff: lookRef.current.ledViewFalloff,
             });
           }
@@ -1200,8 +1199,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       try { composerRef.current?.dispose(); } catch {}
       composerRef.current = null;
       bloomPassRef.current = null;
-      try { ndiMockTextureRef.current?.texture.dispose(); } catch {}
-      ndiMockTextureRef.current = null;
       try { ndiLiveTextureRef.current?.texture.dispose(); } catch {}
       ndiLiveTextureRef.current = null;
       try {
@@ -1425,6 +1422,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const fromModel = modelMeshMapRef.current.get(s.meshName);
         if (fromModel) {
           obj = fromModel.clone(true);
+          obj.userData.fromModel = true;  // LED 對位圖只看模型裡的（沒模型時的方塊替身不算）
           const isLedPanel = s.category === 'led_panel';
           // 給每個子 mesh 標 objectId 讓 raycaster 抓得到
           obj.traverse((child) => {
@@ -1800,12 +1798,163 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (image.complete) tex.needsUpdate = true;
       else image.addEventListener('load', () => { tex.needsUpdate = true; }, { once: true });
     }
+    // 記下畫面大小（製作還沒設定畫布大小時，LED 對位圖用這個）
+    const readSize = () => {
+      const w = ledVideo ? ledVideo.videoWidth : image?.naturalWidth || 0;
+      const h = ledVideo ? ledVideo.videoHeight : image?.naturalHeight || 0;
+      if (w >= 16 && h >= 16) setMediaSize(prev => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+    };
+    readSize();
+    const sizeTarget: HTMLElement | null = ledVideo ?? image ?? null;
+    const sizeEvents = ledVideo ? ['loadedmetadata', 'resize'] : ['load'];
+    sizeEvents.forEach(ev => sizeTarget?.addEventListener(ev, readSize));
     ledMediaTextureRef.current = tex;
     return () => {
+      sizeEvents.forEach(ev => sizeTarget?.removeEventListener(ev, readSize));
       if (ledMediaTextureRef.current === tex) ledMediaTextureRef.current = null;
       tex.dispose();
     };
   }, [ledVideo, ledImage]);
+
+  // ── LED 對位圖 / 測試圖：每塊 LED 在畫布上的位置（從模型的 UV 算）──
+  const resolvedCanvas = useMemo(
+    () => resolveLedCanvas(ledCanvas, mediaSize),
+    [ledCanvas?.width, ledCanvas?.height, mediaSize?.width, mediaSize?.height], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const computeLedLayout = useCallback((canvas: CanvasSize): LedLayout => {
+    const objs: LedSceneObject[] = [];
+    const list: { id: string; name: string; order: number; category: string }[] = stageObjectsRef.current
+      ? stageObjectsRef.current.map(o => ({ id: o.id, name: o.displayName || o.meshName, order: o.order, category: o.category }))
+      : (statesRef.current || []).map(st => ({ id: st.objectId, name: st.displayName || st.meshName, order: st.order, category: st.category }));
+    for (const o of list) {
+      if (o.category !== 'led_panel') continue;
+      const mesh = meshesRef.current.get(o.id);
+      if (!mesh || !mesh.userData.fromModel) continue;
+      objs.push({ id: o.id, name: o.name, order: o.order, root: mesh });
+    }
+    return buildLedLayout(ledPanelInputs(objs), canvas);
+  }, []);
+  // 哪些 LED（名字 / 順序）：變了才重畫測試圖
+  const ledObjectsKey = stageObjects
+    ? stageObjects.filter(o => o.category === 'led_panel').map(o => `${o.id}:${o.displayName}:${o.order}`).join('|')
+    : states.filter(st => st.category === 'led_panel').map(st => `${st.objectId}:${st.displayName}:${st.order}`).join('|');
+
+  // 測試圖貼圖：模型 / LED / 畫布大小換了才重畫（畫一次、上傳一次，之後不用每幀更新）
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    let layout = computeLedLayout(resolvedCanvas.canvas);
+    if (layout.panels.length === 0) {
+      // 還沒有模型（LED 是方塊替身）：整張畫布一張測試圖
+      const hasLed = (stageObjectsRef.current || statesRef.current || []).some(o => o.category === 'led_panel');
+      if (!hasLed) { setTestPatternTex(null); return; }
+      layout = buildLedLayout([{ id: 'led', name: 'LED', tris: [0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1] }], resolvedCanvas.canvas);
+    }
+    const low = startQuality === 'low';
+    const maxTex = renderer.capabilities.maxTextureSize || 4096;
+    const size = testPatternSize(layout.canvas, Math.min(maxTex, low ? 4096 : 8192), low ? 4e6 : 8.4e6);
+    const canvas = document.createElement('canvas');
+    canvas.width = size.width;
+    canvas.height = size.height;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    try {
+      drawTestPattern(ctx, layout, size.scale);
+    } catch (e) {
+      console.warn('[StageScene] test pattern draw failed:', e);
+      return;
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.flipY = false;  // 跟 AE 即時 / 本地檔案同一套（UV 原點在左上）
+    tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
+    tex.generateMipmaps = true;  // 不會變的圖：遠看字和格線不會閃
+    tex.minFilter = THREE.LinearMipmapLinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+    tex.userData.ledTestPattern = true;
+    setTestPatternTex(tex);
+    // 等材質換成新的那張再丟（不然會有一幀用到已經丟掉的）
+    return () => { window.setTimeout(() => tex.dispose(), 1000); };
+  }, [modelVersion, ledObjectsKey, states.length, resolvedCanvas.canvas.width, resolvedCanvas.canvas.height, computeLedLayout, startQuality]);
+
+  useEffect(() => {
+    try { sessionStorage.setItem('sp_led_test_pattern', forceTestPattern ? '1' : '0'); } catch { /* 只是不會記得 */ }
+  }, [forceTestPattern]);
+
+  const ledMapMeta = (): LedMapMeta => ({
+    projectName: projectName || '',
+    date: todayString(),
+    canvas: resolvedCanvas.canvas,
+    canvasSource: resolvedCanvas.source,
+  });
+
+  async function downloadLedMap(kind: 'png' | 'csv' | 'json') {
+    const layout = computeLedLayout(resolvedCanvas.canvas);
+    if (layout.panels.length === 0) {
+      toast.error('找不到 LED：要等模型載好，而且物件分類是「LED」的才畫得出來');
+      return;
+    }
+    const meta = ledMapMeta();
+    if (kind === 'csv') {
+      downloadBlob(new Blob([layoutToCsv(layout)], { type: 'text/csv;charset=utf-8' }), ledMapFileName('csv', meta));
+      return;
+    }
+    if (kind === 'json') {
+      downloadBlob(new Blob([layoutToJson(layout, meta)], { type: 'application/json' }), ledMapFileName('json', meta));
+      return;
+    }
+    setLedMapBusy(true);
+    try {
+      // 先讓「正在畫」顯示出來再開始畫（大畫布要一兩秒）
+      await new Promise(r => requestAnimationFrame(() => r(null)));
+      const png = await renderAlignmentMapPng(layout, meta);
+      downloadBlob(png.blob, ledMapFileName('png', meta));
+      if (png.scale < 1) {
+        toast.warn(`這台電腦的瀏覽器畫不了原尺寸，對位圖縮小成 ${png.width} × ${png.height}；圖上標的位置還是原尺寸的像素`, 8000);
+      } else if (layout.skipped.length > 0) {
+        toast.warn(`對位圖下載好了；${layout.skipped.length} 塊 LED 沒有 UV、沒畫出來：${layout.skipped.slice(0, 3).join('、')}${layout.skipped.length > 3 ? '…' : ''}`, 8000);
+      } else {
+        toast.success(`LED 對位圖下載好了（${meta.canvas.width} × ${meta.canvas.height}）`);
+      }
+    } catch (e) {
+      toast.error('LED 對位圖沒畫出來：' + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setLedMapBusy(false);
+    }
+  }
+
+  async function editLedCanvas() {
+    if (!onLedCanvasChange) return;
+    const cur = resolvedCanvas.canvas;
+    const v = await promptDialog({
+      title: 'LED 畫布大小',
+      label: 'AE 合成的寬 × 高（像素）',
+      defaultValue: `${cur.width} × ${cur.height}`,
+      placeholder: '例：10496 × 5120',
+      confirmLabel: '儲存',
+      required: false,
+      hint: '動畫師的 AE 合成做這個大小，LED 對位圖、測試圖都照它畫；所有人一起用。清空 = 還沒設定',
+      validate: (t) => {
+        if (!t.trim()) return null;
+        const c = parseCanvasInput(t);
+        if (!c) return '請寫成「寬 × 高」，例：10496 × 5120';
+        if (!normalizeLedCanvas(c)) return `寬、高要是 ${LED_CANVAS_RANGE[0]} 到 ${LED_CANVAS_RANGE[1]} 的整數`;
+        return null;
+      },
+    });
+    if (v === null) return;
+    if (!v.trim()) {
+      onLedCanvasChange(null);
+      toast.info('畫布大小清掉了：LED 對位圖改用目前影片的大小，沒有影片就用 3840 × 2160');
+      return;
+    }
+    const c = normalizeLedCanvas(parseCanvasInput(v));
+    if (c) {
+      onLedCanvasChange(c);
+      toast.success(`LED 畫布大小改成 ${c.width} × ${c.height}`);
+    }
+  }
 
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
   useEffect(() => {
@@ -1830,13 +1979,16 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const ledBrightness = so?.ledProps?.brightness ?? 1.0;
 
       // LED 貼圖 priority（不分 render mode，Quick 也要吃 NDI）：
+      //   0. 「LED 顯示測試圖」開著 → 一律測試圖（檢查對位用）
       //   1. user imageUrl（admin 在物件設定的）
       //   2. 本地影片 / 圖片（分享頁拖進來的檔案，ledVideo / ledImage prop）
       //   3. NDI 真連線（ndi-helper 推 frames 進來）
-      //   4. NDI mock（程序動態貼圖，等 helper 連上前的預覽）— 只在 isLit 開
+      //   4. 測試圖（還沒有畫面時：每塊 LED 的名字、格線、彩條，看得出對位對不對）
       const ledImageUrl = (isLed && so?.ledProps?.imageUrl) || null;
       let ledTexture: THREE.Texture | null = null;
-      if (ledImageUrl) {
+      if (isLed && forceTestPattern && testPatternTex) {
+        ledTexture = testPatternTex;
+      } else if (ledImageUrl) {
         const cache = ledTextureCacheRef.current;
         if (!cache.has(ledImageUrl)) {
           const loader = new THREE.TextureLoader();
@@ -1855,9 +2007,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       } else if (isLed && ndiActive && ndiLiveTextureRef.current) {
         // NDI 連上了 → 用真實 NDI frame texture（Quick 模式也要）
         ledTexture = ndiLiveTextureRef.current.texture;
-      } else if (isLed && isLit && ndiMockTextureRef.current) {
-        // mock 動態貼圖只在 isLit 用（Quick 模式時不打擾）
-        ledTexture = ndiMockTextureRef.current.texture;
+      } else if (isLed && testPatternTex) {
+        ledTexture = testPatternTex;
       }
 
       obj.traverse((c) => {
@@ -2005,7 +2156,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, testPatternTex, forceTestPattern]);
 
   // ── 淡入淡出的半透明 shader 先編好（不然第一次換 cue 淡入淡出會卡一下）──
   // 模型載好 / 切模式 / 改材質 / 換 LED 畫面 / 畫質換了（燈數會變）→ 等畫面穩一點再編
@@ -2047,7 +2198,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       fadeWarmupRef.current = warm;
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [modelVersion, renderMode, materialOverrides, stageObjects, ledVideo, ledImage, ndiActive, qualityLevel]);
+  }, [modelVersion, renderMode, materialOverrides, stageObjects, ledVideo, ledImage, ndiActive, qualityLevel, testPatternTex, forceTestPattern]);
 
   // ── 地板倒影的反射平面 + 材質面板的材質清單（換模型 / 物件移動 / 改材質後重算）──
   useEffect(() => {
@@ -2353,240 +2504,345 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const cycleRenderMode = useCallback(() => {
     setRenderMode(m => (m === 'quick' ? 'live' : 'quick'));
   }, []);
-  const renderModeLabel = renderMode === 'live'
-    ? <><Icon icon={Sparkles} size="md" /> 現場</>
-    : <><Icon icon={Zap} size="md" /> 快速</>;
   const renderModeNext = renderMode === 'live' ? '快速（像素 1:1 對顏色）' : '現場（暗場 + LED 照明 + 光暈）';
+
+  // ── 工具列：永遠一排；放不下時先拿掉字、再把不常用的收進「更多」（StageToolbar）──
+  // priority 0 = 一定要看得到（移動 / 旋轉、快速 / 現場、重置攝影機、AE 即時）；數字越大越早收
+  const toolBtn = (o: {
+    icon: LucideIcon; label: string; title: string; labeled: boolean; onClick: () => void;
+    active?: boolean; pressed?: boolean; extra?: ReactNode;
+  }) => (
+    <button
+      type="button"
+      className={'tool' + (o.labeled ? '' : ' tool--icon') + (o.active ? ' is-active' : '')}
+      onClick={o.onClick}
+      title={o.title}
+      aria-label={o.labeled ? undefined : o.label}
+      aria-pressed={o.pressed}
+    >
+      <Icon icon={o.icon} size="md" />
+      {o.labeled && <span className="tool__label">{o.label}</span>}
+      {o.extra}
+    </button>
+  );
+  const toggleMeasure = () => {
+    const next = !measureMode;
+    setMeasureMode(next);
+    if (!next) {
+      // 關閉時清線
+      measurePointsRef.current = [];
+      setMeasureDistance(null);
+      if (measureLineRef.current) {
+        (measureLineRef.current.geometry as THREE.BufferGeometry).setFromPoints([]);
+      }
+    }
+  };
+  const toggleSpace = () => setSpace(s => (s === 'world' ? 'local' : 'world'));
+  const openLookPanel = () => { setLookPanelOpen(o => !o); setMaterialPanelOpen(false); };
+  const openMaterialPanel = () => { setMaterialPanelOpen(o => !o); setLookPanelOpen(false); };
+  const openHomeViewPanel = () => { setHomeViewPanelOpen(o => !o); setBookmarkPanelOpen(false); setNdiPopoverOpen(false); };
+  const openBookmarkPanel = () => { setBookmarkPanelOpen(o => !o); setHomeViewPanelOpen(false); setNdiPopoverOpen(false); };
+  const resetTitle = homeView ? '重置攝影機（回到設定好的畫面）' : '重置攝影機（正面全景）';
+
+  const tools: ToolDef[] = [];
+  if (!readOnly) {
+    tools.push({
+      id: 'move', group: 'edit', priority: 0,
+      render: (l) => toolBtn({ icon: Move, label: '移動', title: '移動 (W)', labeled: l, active: mode === 'translate', pressed: mode === 'translate', onClick: () => setMode('translate') }),
+      menu: { icon: Move, label: '移動', shortcut: 'W', checked: mode === 'translate', onSelect: () => setMode('translate') },
+    });
+    tools.push({
+      id: 'rotate', group: 'edit', priority: 0,
+      render: (l) => toolBtn({ icon: Rotate3d, label: '旋轉', title: '旋轉 (E)', labeled: l, active: mode === 'rotate', pressed: mode === 'rotate', onClick: () => setMode('rotate') }),
+      menu: { icon: Rotate3d, label: '旋轉', shortcut: 'E', checked: mode === 'rotate', onSelect: () => setMode('rotate') },
+    });
+    const spaceTitle = space === 'world' ? '目前是世界座標軸，按一下改成物件自己的軸 (Q)' : '目前是物件自己的軸，按一下改成世界座標軸 (Q)';
+    tools.push({
+      id: 'space', group: 'edit', priority: 2,
+      render: (l) => toolBtn({ icon: space === 'world' ? Globe : Box, label: space === 'world' ? '世界' : '物件', title: spaceTitle, labeled: l, onClick: toggleSpace }),
+      menu: { icon: space === 'world' ? Globe : Box, label: space === 'world' ? '座標軸：世界' : '座標軸：物件自己的', shortcut: 'Q', hint: spaceTitle, onSelect: toggleSpace },
+    });
+  }
+  if (!viewer) {
+    tools.push({
+      id: 'render', group: 'look', priority: 0,
+      render: (l) => toolBtn({
+        icon: renderMode === 'live' ? Sparkles : Zap, label: renderMode === 'live' ? '現場' : '快速', title: `切到 ${renderModeNext}`,
+        labeled: l, active: renderMode !== 'quick', onClick: cycleRenderMode,
+      }),
+      menu: { icon: renderMode === 'live' ? Sparkles : Zap, label: renderMode === 'live' ? '畫面：現場（切到快速）' : '畫面：快速（切到現場）', onSelect: cycleRenderMode },
+    });
+    if (renderMode === 'live' && onLookSettingsChange) {
+      const t = '現場設定：底光 / 曝光 / LED 照明 / 光暈 / 倒影（調的是你自己看到的）';
+      tools.push({
+        id: 'look', group: 'look', priority: 1,
+        render: (l) => toolBtn({ icon: SlidersHorizontal, label: '設定', title: t, labeled: l, active: lookPanelOpen, onClick: openLookPanel }),
+        menu: { icon: SlidersHorizontal, label: '現場設定…', hint: t, onSelect: openLookPanel },
+      });
+    }
+    if (onMaterialOverrideChange) {
+      const t = '材質：依 C4D 材質名稱調顏色 / 亮霧面 / 金屬感 / 反射 / 透明度，指定鏡面地板（所有人共用）';
+      tools.push({
+        id: 'material', group: 'look', priority: 3,
+        render: (l) => toolBtn({ icon: Palette, label: '材質', title: t, labeled: l, active: materialPanelOpen, onClick: openMaterialPanel }),
+        menu: { icon: Palette, label: '材質…', hint: t, onSelect: openMaterialPanel },
+      });
+    }
+    tools.push({
+      id: 'wire', group: 'look', priority: 5,
+      render: (l) => toolBtn({ icon: Grid3x3, label: '線框', title: wireframe ? '切回實心 (X)' : '線框模式：看穿模型 (X)', labeled: l, active: wireframe, pressed: wireframe, onClick: () => setWireframe(w => !w) }),
+      menu: { icon: Grid3x3, label: '線框', shortcut: 'X', checked: wireframe, onSelect: () => setWireframe(w => !w) },
+    });
+    if (showScaleButton) {
+      tools.push({
+        id: 'scale', group: 'show', priority: 6,
+        render: (l) => toolBtn({ icon: PersonStanding, label: '比例尺', title: showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格', labeled: l, active: showScaleRef, pressed: showScaleRef, onClick: () => setShowScaleRef(s => !s) }),
+        menu: { icon: PersonStanding, label: '比例尺', checked: showScaleRef, hint: '人形剪影 + 1m 網格', onSelect: () => setShowScaleRef(s => !s) },
+      });
+    }
+    tools.push({
+      id: 'labels', group: 'show', priority: 2,
+      render: (l) => toolBtn({ icon: Tag, label: '名稱', title: showLabels ? '隱藏物件名稱 (L)' : '顯示物件名稱 (L)', labeled: l, active: showLabels, pressed: showLabels, onClick: () => setShowLabels(s => !s) }),
+      menu: { icon: Tag, label: '物件名稱', shortcut: 'L', checked: showLabels, onSelect: () => setShowLabels(s => !s) },
+    });
+  }
+  tools.push({
+    id: 'reset', group: 'camera', priority: 0,
+    render: () => (
+      <button type="button" className="tool tool--icon" onClick={resetCamera} title={resetTitle} aria-label="重置攝影機">
+        <Icon icon={Video} size="md" />
+      </button>
+    ),
+    menu: { icon: Video, label: '重置攝影機', hint: resetTitle, onSelect: resetCamera },
+  });
+  if (onHomeViewChange && !viewer) {
+    tools.push({
+      id: 'home', group: 'camera', priority: 4, noSepBefore: true,
+      render: () => (
+        <button
+          type="button"
+          className={'tool tool--chevron' + (homeViewPanelOpen ? ' is-active' : '')}
+          onClick={openHomeViewPanel}
+          title="設定重置攝影機的畫面（所有人按「重置攝影機」都會回到這裡）"
+          aria-label="設定重置攝影機的畫面"
+          aria-expanded={homeViewPanelOpen}
+        ><Icon icon={ChevronDown} /></button>
+      ),
+      menu: { icon: Video, label: '設定重置攝影機的畫面…', hint: '所有人按「重置攝影機」都會回到這裡', onSelect: openHomeViewPanel },
+    });
+  }
+  if (!viewer) {
+    tools.push({
+      id: 'walk', group: 'camera', priority: 6,
+      render: (l) => toolBtn({ icon: Footprints, label: '漫遊', title: walkMode ? '離開漫遊模式（或按 Esc）' : '漫遊模式：WASD 走動、滑鼠看四周', labeled: l, active: walkMode, pressed: walkMode, onClick: () => setWalkMode(m => !m) }),
+      menu: { icon: Footprints, label: '漫遊', checked: walkMode, hint: 'WASD 走動、滑鼠看四周（Esc 離開）', onSelect: () => setWalkMode(m => !m) },
+    });
+    if (bookmarkScope) {
+      const t = `視角書籤（${bookmarks.length}）— 儲存 / 切換常用視角`;
+      tools.push({
+        id: 'views', group: 'camera', priority: 3,
+        render: (l) => toolBtn({
+          icon: Camera, label: '視角', title: t, labeled: l, active: bookmarkPanelOpen, onClick: openBookmarkPanel,
+          extra: l && bookmarks.length > 0 ? <span className="muted small"> {bookmarks.length}</span> : null,
+        }),
+        menu: { icon: Camera, label: bookmarks.length > 0 ? `視角書籤…（${bookmarks.length}）` : '視角書籤…', hint: t, onSelect: openBookmarkPanel },
+      });
+    }
+    if (onAddAnchoredComment) {
+      tools.push({
+        id: 'pin', group: 'mark', priority: 1,
+        render: (l) => toolBtn({ icon: MapPin, label: '3D 留言', title: addPinMode ? '取消 3D 留言模式' : '在 3D 場景上某個位置 / 物件加留言', labeled: l, active: addPinMode, pressed: addPinMode, onClick: () => setAddPinMode(m => !m) }),
+        menu: { icon: MapPin, label: '3D 留言', checked: addPinMode, hint: '在 3D 場景上某個位置 / 物件加留言', onSelect: () => setAddPinMode(m => !m) },
+      });
+    }
+    tools.push({
+      id: 'measure', group: 'mark', priority: 4,
+      render: (l) => toolBtn({ icon: Ruler, label: '測距', title: measureMode ? '關閉測距' : '測距：點兩個點看距離（公尺）', labeled: l, active: measureMode, pressed: measureMode, onClick: toggleMeasure }),
+      menu: { icon: Ruler, label: '測距', checked: measureMode, hint: '點兩個點看距離（公尺）', onSelect: toggleMeasure },
+    });
+  }
+  if (enableNdi) {
+    tools.push({
+      id: 'ndi', group: 'status', priority: 0, noSepBefore: true,
+      render: () => (
+        <button
+          type="button"
+          className={'ndi-pill ' + ndiPillClass(ndiGuideState)}
+          onClick={() => { setNdiPopoverOpen(o => !o); setBookmarkPanelOpen(false); setHomeViewPanelOpen(false); }}
+          title={ndiGuideState.step === 'live' ? `AE 即時：${ndiStepMessage(ndiGuideState, ndi.env.browser).title}` : '點擊看 AE 即時連線狀態'}
+          aria-expanded={ndiPopoverOpen}
+        >
+          {ndiPillIcon(ndiGuideState)} {ndiShortLabel(ndiGuideState)}
+        </button>
+      ),
+      menu: null,
+    });
+  }
+  if (cueName) {
+    tools.push({
+      id: 'cue', group: 'status', priority: 3.5, noSepBefore: true,
+      flex: { min: 90, compactMin: 64 },
+      render: (l, fw) => (
+        <span className={'cue-tag' + (l ? '' : ' cue-tag--compact')} style={fw ? { maxWidth: fw } : undefined} title={`當前 cue：${cueName}`}>
+          {l ? <>當前 cue：<strong>{cueName}</strong></> : <strong>{cueName}</strong>}
+        </span>
+      ),
+      menu: null,
+    });
+  }
+
+  // 「更多」選單固定的一段：LED 對位圖（給動畫師做 AE 合成用）
+  const canvasNow = resolvedCanvas.canvas;
+  const ledSections: ToolMenuSection[] = ledMapMenu ? [{
+    id: 'ledmap',
+    title: 'LED 對位圖',
+    items: [
+      {
+        icon: ImageDown,
+        label: ledMapBusy ? '正在畫對位圖…' : '下載對位圖（PNG）',
+        disabled: ledMapBusy,
+        hint: '每塊 LED 在 AE 畫布上的位置：名字、x y w h、每 100 px 格線；可以直接放進 AE 當參考圖層',
+        onSelect: () => { void downloadLedMap('png'); },
+      },
+      { icon: FileSpreadsheet, label: '下載位置表（CSV）', hint: 'Excel 打得開：每塊 LED 的名字和 x、y、w、h', onSelect: () => { void downloadLedMap('csv'); } },
+      { icon: FileBraces, label: '下載位置表（JSON）', hint: '給 AE 腳本 / 程式讀', onSelect: () => { void downloadLedMap('json'); } },
+      {
+        icon: MonitorCheck,
+        label: 'LED 顯示測試圖',
+        checked: forceTestPattern,
+        keepOpen: true,
+        hint: '有畫面時也讓 LED 顯示測試圖，檢查每塊 LED 對得對不對（只有你這邊看得到）',
+        onSelect: () => setForceTestPattern(v => !v),
+      },
+      ...(onLedCanvasChange ? [{
+        icon: Ratio,
+        label: '設定畫布大小…',
+        hint: 'AE 合成的寬 × 高（所有人一起用）',
+        onSelect: () => { void editLedCanvas(); },
+      }] : []),
+    ],
+    note: (
+      <>
+        畫布 {canvasNow.width} × {canvasNow.height}（{canvasSourceText(resolvedCanvas.source)}）
+        {resolvedCanvas.source !== 'project' && !onLedCanvasChange && <><br />AE 合成要做多大，以製作給的為準</>}
+      </>
+    ),
+  }] : [];
 
   return (
     <div className="stage-scene" ref={containerRef}>
-      <div className={'stage-scene__toolbar' + (viewer ? ' is-viewer' : '')}>
-        {!readOnly && (
-          <>
-            <button
-              className={'tool ' + (mode === 'translate' ? 'is-active' : '')}
-              onClick={() => setMode('translate')}
-              title="移動 (W)"
-            ><Icon icon={Move} size="md" /> 移動</button>
-            <button
-              className={'tool ' + (mode === 'rotate' ? 'is-active' : '')}
-              onClick={() => setMode('rotate')}
-              title="旋轉 (E)"
-            ><Icon icon={Rotate3d} size="md" /> 旋轉</button>
-            <span className="tool-sep" />
-            <button
-              className="tool"
-              onClick={() => setSpace(s => s === 'world' ? 'local' : 'world')}
-              title={space === 'world' ? '目前是世界座標軸，按一下改成物件自己的軸 (Q)' : '目前是物件自己的軸，按一下改成世界座標軸 (Q)'}
-            >{space === 'world' ? <><Icon icon={Globe} size="md" /> 世界</> : <><Icon icon={Box} size="md" /> 物件</>}</button>
-            <span className="tool-sep" />
-          </>
-        )}
-        {!viewer && (<>
-          <button
-            className={'tool ' + (renderMode !== 'quick' ? 'is-active' : '')}
-            onClick={cycleRenderMode}
-            title={`切到 ${renderModeNext}`}
-          >{renderModeLabel}</button>
-          {renderMode === 'live' && onLookSettingsChange && (
-            <button
-              className={'tool ' + (lookPanelOpen ? 'is-active' : '')}
-              onClick={() => { setLookPanelOpen(o => !o); setMaterialPanelOpen(false); }}
-              title="現場設定：底光 / 曝光 / LED 照明 / 光暈 / 倒影（調的是你自己看到的）"
-            ><Icon icon={SlidersHorizontal} size="md" /> 設定</button>
-          )}
-          {onMaterialOverrideChange && (
-            <button
-              className={'tool ' + (materialPanelOpen ? 'is-active' : '')}
-              onClick={() => { setMaterialPanelOpen(o => !o); setLookPanelOpen(false); }}
-              title="材質：依 C4D 材質名稱調顏色 / 亮霧面 / 金屬感 / 反射 / 透明度，指定鏡面地板（所有人共用）"
-            ><Icon icon={Palette} size="md" /> 材質</button>
-          )}
-          <button
-            className={'tool ' + (wireframe ? 'is-active' : '')}
-            onClick={() => setWireframe(w => !w)}
-            title={wireframe ? '切回實心 (X)' : '線框模式：看穿模型 (X)'}
-          ><Icon icon={Grid3x3} size="md" /> 線框</button>
-          {showScaleButton && (
-            <button
-              className={'tool ' + (showScaleRef ? 'is-active' : '')}
-              onClick={() => setShowScaleRef(s => !s)}
-              title={showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格'}
-            ><Icon icon={PersonStanding} size="md" /> 比例尺</button>
-          )}
-          <button
-            className={'tool ' + (showLabels ? 'is-active' : '')}
-            onClick={() => setShowLabels(s => !s)}
-            title={showLabels ? '隱藏物件名稱 (L)' : '顯示物件名稱 (L)'}
-          ><Icon icon={Tag} size="md" /> 名稱</button>
-        </>)}
-        <div className="bm-wrap" style={{ display: 'flex' }}>
-          <button
-            className="tool"
-            onClick={resetCamera}
-            title={homeView ? '重置攝影機（回到設定好的畫面）' : '重置攝影機（正面全景）'}
-            aria-label="重置攝影機"
-          ><Icon icon={Video} size="md" /></button>
-          {onHomeViewChange && !viewer && (
-            <button
-              className={'tool ' + (homeViewPanelOpen ? 'is-active' : '')}
-              onClick={() => { setHomeViewPanelOpen(o => !o); setBookmarkPanelOpen(false); }}
-              title="設定重置攝影機的畫面（所有人按「重置攝影機」都會回到這裡）"
-              aria-label="設定重置攝影機的畫面"
-              style={{ paddingLeft: 2, paddingRight: 4 }}
-            ><Icon icon={ChevronDown} /></button>
-          )}
-          {homeViewPanelOpen && onHomeViewChange && !viewer && (
-            <HomeViewPanel
-              view={displayedHomeView()}
-              isCustom={!!homeView}
-              scale={scaleCorrection}
-              onCaptureCurrent={() => { const v = currentCameraView(); if (v) onHomeViewChange(v); }}
-              onChange={v => {
-                if (v.position.every((n, i) => Math.abs(n - v.target[i]) < 1e-6)) return;  // 看向自己 → 不收
-                onHomeViewChange(v);
-                jumpCamera(v);
-              }}
-              onUseAuto={() => {
-                onHomeViewChange(null);
-                const home = computeAutoHome();
-                if (home) flyCamera(home.position, home.target, DEFAULT_FOV);
-              }}
-              onClose={() => setHomeViewPanelOpen(false)}
-            />
-          )}
-        </div>
-        {!viewer && (<>
-          <button
-            className={'tool ' + (walkMode ? 'is-active' : '')}
-            onClick={() => setWalkMode(m => !m)}
-            title={walkMode ? '離開漫遊模式（或按 Esc）' : '漫遊模式：WASD 走動、滑鼠看四周'}
-          ><Icon icon={Footprints} size="md" /> 漫遊</button>
-          {bookmarkScope && (
-            <div className="bm-wrap">
-              <button
-                className={'tool ' + (bookmarkPanelOpen ? 'is-active' : '')}
-                onClick={() => setBookmarkPanelOpen(o => !o)}
-                title={`視角書籤（${bookmarks.length}）— 儲存 / 切換常用視角`}
-              ><Icon icon={Camera} size="md" /> 視角{bookmarks.length > 0 && <span className="muted small"> {bookmarks.length}</span>}</button>
-              {bookmarkPanelOpen && (
-                <div className="bm-popover" onClick={e => e.stopPropagation()}>
-                  <div className="bm-popover__head">
-                    <span>視角書籤</span>
-                    <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
-                  </div>
-                  <button className="btn btn--primary btn--sm bm-popover__save" onClick={saveCurrentCamera}>
-                    + 儲存目前視角
-                  </button>
-                  {bookmarks.length === 0 ? (
-                    <div className="bm-popover__empty">還沒儲存任何視角</div>
-                  ) : (
-                    <ul className="bm-popover__list">
-                      {bookmarks.map(bm => (
-                        <li key={bm.id}>
-                          <button className="bm-row" onClick={() => loadBookmark(bm)}>
-                            <span className="bm-row__name">{bm.name}</span>
-                            <span className="bm-row__coords">({bm.pos.map(n => n.toFixed(1)).join(', ')})</span>
-                          </button>
-                          <button className="bm-row__del" onClick={() => deleteBookmark(bm.id)} title="刪除這個視角" aria-label="刪除這個視角"><Icon icon={X} /></button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-          {onAddAnchoredComment && (
-            <button
-              className={'tool ' + (addPinMode ? 'is-active' : '')}
-              onClick={() => setAddPinMode(m => !m)}
-              title={addPinMode ? '取消 3D 留言模式' : '在 3D 場景上某個位置 / 物件加留言'}
-            ><Icon icon={MapPin} size="md" /> 3D 留言</button>
-          )}
-          <button
-            className={'tool ' + (measureMode ? 'is-active' : '')}
-            onClick={() => {
-              const next = !measureMode;
-              setMeasureMode(next);
-              if (!next) {
-                // 關閉時清線
-                measurePointsRef.current = [];
-                setMeasureDistance(null);
-                if (measureLineRef.current) {
-                  (measureLineRef.current.geometry as THREE.BufferGeometry).setFromPoints([]);
-                }
-              }
+      <StageToolbar
+        tools={tools}
+        sections={ledSections}
+        className={viewer ? 'is-viewer' : undefined}
+        menuOpen={moreMenuOpen}
+        onMenuOpenChange={setMoreMenuOpen}
+        menuHeader={(hidden) => (hidden.has('cue') && cueName ? <>當前 cue：<strong>{cueName}</strong></> : null)}
+      >
+        {homeViewPanelOpen && onHomeViewChange && !viewer && (
+          <HomeViewPanel
+            view={displayedHomeView()}
+            isCustom={!!homeView}
+            scale={scaleCorrection}
+            onCaptureCurrent={() => { const v = currentCameraView(); if (v) onHomeViewChange(v); }}
+            onChange={v => {
+              if (v.position.every((n, i) => Math.abs(n - v.target[i]) < 1e-6)) return;  // 看向自己 → 不收
+              onHomeViewChange(v);
+              jumpCamera(v);
             }}
-            title={measureMode ? '關閉測距' : '測距：點兩個點看距離（公尺）'}
-          ><Icon icon={Ruler} size="md" /> 測距</button>
-        </>)}
-        <span className="grow" />
-        {enableNdi && (
-          <div className="ndi-wrap">
-            <button
-              className={'ndi-pill ' + ndiPillClass(ndiGuideState)}
-              onClick={() => setNdiPopoverOpen(o => !o)}
-              title={ndiGuideState.step === 'live' ? `AE 即時：${ndiStepMessage(ndiGuideState, ndi.env.browser).title}` : '點擊看 AE 即時連線狀態'}
-            >
-              {ndiPillIcon(ndiGuideState)} {ndiShortLabel(ndiGuideState)}
+            onUseAuto={() => {
+              onHomeViewChange(null);
+              const home = computeAutoHome();
+              if (home) flyCamera(home.position, home.target, DEFAULT_FOV);
+            }}
+            onClose={() => setHomeViewPanelOpen(false)}
+          />
+        )}
+        {bookmarkPanelOpen && bookmarkScope && !viewer && (
+          <div className="bm-popover" onClick={e => e.stopPropagation()}>
+            <div className="bm-popover__head">
+              <span>視角書籤</span>
+              <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
+            </div>
+            <button className="btn btn--primary btn--sm bm-popover__save" onClick={saveCurrentCamera}>
+              + 儲存目前視角
             </button>
-            {ndiPopoverOpen && (
-              <div className="ndi-popover" onClick={e => e.stopPropagation()}>
-                <div className="ndi-popover__head">
-                  AE 即時（NDI 小程序）
-                  <button className="ndi-popover__close" onClick={() => setNdiPopoverOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} /></button>
-                </div>
-                <div className="ndi-popover__body">
-                  {ndiGuideState.step === 'live' && (
-                    <div className="ndi-popover__live"><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiStepMessage(ndiGuideState, ndi.env.browser).title}</div>
-                  )}
-                  <NdiChecklist
-                    guide={ndiGuideState}
-                    env={ndi.env}
-                    onConnect={ndi.connect}
-                    onSelectSource={ndi.selectSource}
-                    showAutostartNote={false}
-                  />
-                  {!sourcePickerInStep(ndiGuideState) && showSourcePicker(ndiGuideState) && (
-                    <NdiSourcePicker guide={ndiGuideState} onSelectSource={ndi.selectSource} />
-                  )}
-                  <NdiAutostartNote guide={ndiGuideState} />
-                  {ndiGuideState.outdated && ndiGuideState.step !== 'helper_outdated' && (
-                    <p className="ndi-popover__note">
-                      小程序有新版（你的是 {ndiGuideState.helperVersion}）：
-                      <a href={ndi.env.os === 'mac' ? NDI_HELPER_DOWNLOAD_URL_MAC : NDI_HELPER_DOWNLOAD_URL}><Icon icon={Download} /> 下載更新</a>
-                    </p>
-                  )}
-                  {ndiGuideState.helperVersion && !ndiGuideState.outdated && (
-                    <p className="ndi-popover__note">小程序版本 {ndiGuideState.helperVersion}</p>
-                  )}
-                </div>
-                <div className="ndi-popover__actions">
-                  <button
-                    className="btn btn--ghost btn--sm"
-                    onClick={ndi.retry}
-                    disabled={ndiGuideState.step === 'browser_unsupported'}
-                  ><Icon icon={RefreshCw} /> 重新連線</button>
-                  <a
-                    className="btn btn--ghost btn--sm"
-                    href={NDI_TOOLS_URL}
-                    target="_blank"
-                    rel="noreferrer"
-                  >NDI Tools <Icon icon={ExternalLink} size="xs" /></a>
-                  <a
-                    className="btn btn--ghost btn--sm ndi-popover__help"
-                    href={helpUrl(ndiHelpAnchor(ndiGuideState.step) ?? HELP_ANCHORS.aeLive)}
-                    target="_blank"
-                    rel="noopener"
-                  ><Icon icon={BookOpen} /> 圖文說明</a>
-                </div>
-              </div>
+            {bookmarks.length === 0 ? (
+              <div className="bm-popover__empty">還沒儲存任何視角</div>
+            ) : (
+              <ul className="bm-popover__list">
+                {bookmarks.map(bm => (
+                  <li key={bm.id}>
+                    <button className="bm-row" onClick={() => loadBookmark(bm)}>
+                      <span className="bm-row__name">{bm.name}</span>
+                      <span className="bm-row__coords">({bm.pos.map(n => n.toFixed(1)).join(', ')})</span>
+                    </button>
+                    <button className="bm-row__del" onClick={() => deleteBookmark(bm.id)} title="刪除這個視角" aria-label="刪除這個視角"><Icon icon={X} /></button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         )}
-        {cueName && <span className="cue-tag">當前 cue：<strong>{cueName}</strong></span>}
-      </div>
+        {enableNdi && ndiPopoverOpen && (
+          <div className="ndi-popover" onClick={e => e.stopPropagation()}>
+            <div className="ndi-popover__head">
+              AE 即時（NDI 小程序）
+              <button className="ndi-popover__close" onClick={() => setNdiPopoverOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} /></button>
+            </div>
+            <div className="ndi-popover__body">
+              {ndiGuideState.step === 'live' && (
+                <div className="ndi-popover__live"><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiStepMessage(ndiGuideState, ndi.env.browser).title}</div>
+              )}
+              <NdiChecklist
+                guide={ndiGuideState}
+                env={ndi.env}
+                onConnect={ndi.connect}
+                onSelectSource={ndi.selectSource}
+                showAutostartNote={false}
+              />
+              {!sourcePickerInStep(ndiGuideState) && showSourcePicker(ndiGuideState) && (
+                <NdiSourcePicker guide={ndiGuideState} onSelectSource={ndi.selectSource} />
+              )}
+              <NdiAutostartNote guide={ndiGuideState} />
+              {ndiGuideState.outdated && ndiGuideState.step !== 'helper_outdated' && (
+                <p className="ndi-popover__note">
+                  小程序有新版（你的是 {ndiGuideState.helperVersion}）：
+                  <a href={ndi.env.os === 'mac' ? NDI_HELPER_DOWNLOAD_URL_MAC : NDI_HELPER_DOWNLOAD_URL}><Icon icon={Download} /> 下載更新</a>
+                </p>
+              )}
+              {ndiGuideState.helperVersion && !ndiGuideState.outdated && (
+                <p className="ndi-popover__note">小程序版本 {ndiGuideState.helperVersion}</p>
+              )}
+            </div>
+            <div className="ndi-popover__actions">
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={ndi.retry}
+                disabled={ndiGuideState.step === 'browser_unsupported'}
+              ><Icon icon={RefreshCw} /> 重新連線</button>
+              <a
+                className="btn btn--ghost btn--sm"
+                href={NDI_TOOLS_URL}
+                target="_blank"
+                rel="noreferrer"
+              >NDI Tools <Icon icon={ExternalLink} size="xs" /></a>
+              <a
+                className="btn btn--ghost btn--sm ndi-popover__help"
+                href={helpUrl(ndiHelpAnchor(ndiGuideState.step) ?? HELP_ANCHORS.aeLive)}
+                target="_blank"
+                rel="noopener"
+              ><Icon icon={BookOpen} /> 圖文說明</a>
+            </div>
+          </div>
+        )}
+      </StageToolbar>
+      {forceTestPattern && testPatternTex && (
+        <div className="stage-scene__testpattern-note" role="status">
+          <Icon icon={MonitorCheck} /> LED 正在顯示測試圖
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setForceTestPattern(false)}>關掉</button>
+        </div>
+      )}
       {ndiCardShown && (
         <NdiGuideCard
           guide={ndiGuideState}
@@ -2758,44 +3014,6 @@ function disposeObject3D(obj: THREE.Object3D) {
       mats.forEach((mat) => mat.dispose?.());
     }
   });
-}
-
-// NDI mock：模擬即時影像的程序動態貼圖
-// 真 NDI helper 接上後就直接換成 NDI 來源的 BGRA buffer，材質結構不變
-function drawNdiMock(ctx: CanvasRenderingContext2D, c: HTMLCanvasElement, t: number) {
-  const w = c.width, h = c.height;
-  // 漸層底（橫向移動）
-  const g = ctx.createLinearGradient(0, 0, w, 0);
-  const phase = (t * 0.15) % 1;
-  g.addColorStop(0,                 hsl((phase * 360),       70, 35));
-  g.addColorStop(0.5,               hsl(((phase + 0.33) * 360) % 360, 75, 45));
-  g.addColorStop(1,                 hsl(((phase + 0.66) * 360) % 360, 70, 30));
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, w, h);
-  // 掃描線
-  ctx.strokeStyle = 'rgba(255,255,255,0.12)';
-  ctx.lineWidth = 1;
-  const scanY = ((Math.sin(t * 1.7) * 0.5 + 0.5) * h) | 0;
-  ctx.beginPath();
-  ctx.moveTo(0, scanY);
-  ctx.lineTo(w, scanY);
-  ctx.stroke();
-  // 中央文字提示
-  ctx.fillStyle = 'rgba(255,255,255,0.85)';
-  ctx.font = 'bold 22px Inter, sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('LIVE PREVIEW', w / 2 + 10, h / 2 - 12);
-  ctx.beginPath();
-  ctx.arc(w / 2 - 92, h / 2 - 12, 6, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.font = '12px monospace';
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.fillText('示意畫面 · 連上 AE 即時後會換成 AE 的畫面', w / 2, h / 2 + 12);
-}
-
-function hsl(h: number, s: number, l: number) {
-  return `hsl(${h.toFixed(0)}, ${s}%, ${l}%)`;
 }
 
 function updateLockPins(

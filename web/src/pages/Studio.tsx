@@ -949,6 +949,9 @@ function StudioInner({ projectId }: { projectId: string }) {
                   homeView={view.homeView}
                   onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
                   onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
+                  projectName={projectName}
+                  ledCanvas={view.ledCanvas}
+                  onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
                 />
                 {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
                 {selectedVersion && (

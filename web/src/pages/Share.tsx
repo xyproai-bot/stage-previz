@@ -9,6 +9,7 @@ import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '.
 import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
 import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import { normalizeHomeView } from '../lib/homeView';
+import { normalizeLedCanvas } from '../lib/ledCanvas';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { toast } from '../lib/toast';
@@ -312,6 +313,7 @@ export default function Share() {
   const projectLook = useMemo(() => normalizeLookSettings(data?.lookSettings), [data]);
   const materialOverrides = useMemo(() => normalizeMaterialOverrides(data?.materialOverrides), [data]);
   const homeView = useMemo(() => normalizeHomeView(data?.homeView ?? null), [data]);
+  const ledCanvas = useMemo(() => normalizeLedCanvas(data?.ledCanvas ?? null), [data]);
 
   // ── LED 上在放影片（歌曲影片 / 本地影片）→ 舞台、cue 列跟著影片時間走 ──
   // cue 在「對應影片時間」剛好到位，提前「轉場」秒數等速出發；暫停就停在半路、拉時間軸就跟著退。
@@ -488,6 +490,8 @@ export default function Share() {
                 ledVideo={videoMode && local.ready ? local.video : null}
                 ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
                 poseAtFrame={poseAtFrame}
+                projectName={data.project.name}
+                ledCanvas={ledCanvas}
               />
               {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
               {selectedVersion && (

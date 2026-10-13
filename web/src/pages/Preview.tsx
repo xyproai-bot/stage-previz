@@ -517,6 +517,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
           stageObjects={stageObjects}
           viewportStates={viewportStates}
           modelUrl={modelUrl}
+          projectName={projectName}
           cueName={selectedCue?.name}
           user={user}
           projectRole={projectRole}
@@ -654,7 +655,7 @@ function StatusBoard({
 function SongDetail({
   projectId, song, cues, cuesReady, selectedCueId, onSelectCue, autoStep, onToggleAutoStep,
   stageObjects, viewportStates, modelUrl, cueName, user, projectRole, onChangeStatus, onClose, onPickSong, songs, members,
-  target, onTargetDone,
+  target, onTargetDone, projectName,
 }: {
   projectId: string;
   song: Song;
@@ -668,6 +669,8 @@ function SongDetail({
   stageObjects: StageObject[];
   viewportStates: CueState[];
   modelUrl: string | null;
+  /** LED 對位圖上寫的專案名稱 */
+  projectName?: string;
   cueName?: string;
   user: ReturnType<typeof useAuth>['user'];
   projectRole: ProjectRole | null;
@@ -997,6 +1000,9 @@ function SongDetail({
                 homeView={view.homeView}
                 onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
                 onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
+                projectName={projectName}
+                ledCanvas={view.ledCanvas}
+                onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
                 onAddAnchoredComment={(anchor) => {
                   // 上層存暫存的 anchor，留言區會接著用
                   pendingAnchorRef.current = anchor;

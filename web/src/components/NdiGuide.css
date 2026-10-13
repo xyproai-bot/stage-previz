@@ -22,10 +22,7 @@
   cursor: default;
   user-select: text;    /* 說明文字可以選起來複製 */
 }
-/* 工具列可能換成兩排時往下讓（只看模式的工具列很短，不會換排） */
-@container stage-scene (max-width: 540px) {
-  .stage-scene__toolbar:not(.is-viewer) ~ .ndi-guide { top: 92px; max-height: calc(100% - 104px); }
-}
+/* 工具列永遠一排（StageToolbar），卡片固定在工具列下面 */
 
 .ndi-guide__head {
   display: flex;

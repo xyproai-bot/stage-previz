@@ -1112,6 +1112,9 @@ export default function ProjectEditor() {
               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
               homeView={view.homeView}
               onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
+              projectName={projectMeta?.name}
+              ledCanvas={view.ledCanvas}
+              onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
             />
           )}
         </section>

@@ -15,44 +15,82 @@
   height: 100% !important;
 }
 
-/* Toolbar overlay
-   以前用 left:50% + translateX(-50%) 置中，工具列最多只能用到 3D 區塊一半寬，
-   字就被擠成直的。現在左右各留 10px、寬度貼著內容、置中；
-   放不下時：先變成只剩圖示（見下面 @container），再不夠才換第二排，字永遠不斷行。 */
-.stage-scene__toolbar {
+/* ── 3D 工具列（StageToolbar.tsx）──
+   永遠一排、置中。放不下時（量 3D 區塊的寬，不是整個視窗）：
+     1. 全部帶字 → 2. 從最不常用的開始拿掉字 → 3. 全部只剩圖示 → 4. 不常用的收進「更多」（⋯）
+   怎麼收在 lib/toolbarLayout.ts；這裡不再用 @container 猜寬度、也不會換成兩排。
+   .stage-scene__toolbar-row 是整條（左右各離 10px），工具列在中間；彈出框 / 選單對齊工具列右邊（--tb-right），
+   不夠寬時貼齊 3D 區塊，不會被切掉。 */
+.stage-scene__toolbar-row {
   position: absolute;
   top: 10px;
   left: 10px;
   right: 10px;
-  width: fit-content;
-  margin: 0 auto;
   display: flex;
-  flex-wrap: wrap;
   justify-content: center;
+  align-items: flex-start;
+  pointer-events: none;
+  z-index: 5;
+}
+.stage-scene__toolbar-row > * { pointer-events: auto; }
+
+.stage-scene__toolbar {
+  display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
   padding: 6px;
+  min-width: 0;
+  max-width: 100%;
   background: rgba(20, 22, 27, 0.85);
   border: 1px solid var(--border);
   backdrop-filter: blur(10px);
-  border-radius: 21px; /* 一排時是膠囊；萬一換成兩排就是圓角方塊 */
-  z-index: 5;
+  border-radius: 999px;
   font-size: 12.5px;
 }
-.stage-scene__toolbar > * { flex-shrink: 0; }
+/* 連一定要看得到的都放不下（極窄）：多的切掉，不撐破版面 */
+.stage-scene__toolbar.is-overfull { overflow: hidden; }
+.stage-scene__toolbar .tool-slot {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.stage-scene__toolbar .tool-slot--flex { flex-shrink: 1; min-width: 0; }
+
+/* 量寬度用的複本：看不到、點不到、不佔位置 */
+.stage-scene__toolbar--measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  max-width: none;
+  visibility: hidden;
+  pointer-events: none !important;
+  z-index: -1;
+}
 
 .stage-scene__toolbar .tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 30px;
   background: transparent;
   border: none;
   color: var(--text-dim);
-  padding: 6px 12px;
+  padding: 0 12px;
   border-radius: 999px;
   cursor: pointer;
   font-family: inherit;
   font-size: 12.5px;
+  line-height: 1;
   white-space: nowrap;
   transition: background 0.1s, color 0.1s;
 }
+/* 只剩圖示：正方形 */
+.stage-scene__toolbar .tool.tool--icon { width: 32px; padding: 0; }
+/* 重置攝影機旁邊的 ▾（設定重置的畫面） */
+.stage-scene__toolbar .tool.tool--chevron { width: 18px; padding: 0; margin-left: -4px; }
 .stage-scene__toolbar .tool:hover {
   background: var(--surface-2);
   color: var(--text);
@@ -62,23 +100,23 @@
   color: #000;
   font-weight: 600;
 }
+.stage-scene__toolbar .tool:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 .stage-scene__toolbar .tool-sep {
   width: 1px;
   height: 16px;
   background: var(--border-strong);
   margin: 0 2px;
 }
-/* 工具列寬度貼著內容，不需要撐開的空白（留著反而會在換排時把東西推到邊邊） */
-.stage-scene__toolbar .grow { display: none; }
-/* 當前 cue：名字太長時縮成「…」（至少留 90px），不要為了它多換一排 */
+/* 當前 cue：寬度由工具列分（剩下的空間），名字太長縮成「…」 */
 .stage-scene__toolbar .cue-tag {
+  display: block;
   color: var(--text-dim);
   padding: 0 10px;
   font-size: 12px;
   white-space: nowrap;
-  flex: 1 1 0;
-  min-width: 90px;
-  max-width: max-content;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -86,6 +124,7 @@
   color: var(--accent);
   margin-left: 4px;
 }
+.stage-scene__toolbar .cue-tag--compact strong { margin-left: 0; }
 
 /* NDI status pill */
 .stage-scene__toolbar .ndi-pill {
@@ -94,8 +133,12 @@
   padding: 3px 10px;
   border-radius: 999px;
   letter-spacing: 0.05em;
-  margin-right: 8px;
   white-space: nowrap;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  margin: 0 2px;
 }
 .ndi-pill--live {
   background: var(--accent-dim);
@@ -119,70 +162,113 @@
   50%      { box-shadow: 0 0 0 4px rgba(16, 199, 138, 0); }
 }
 
-.ndi-wrap { position: relative; margin-right: 8px; }
-.ndi-wrap .ndi-pill {
-  cursor: pointer;
-  border: none;
+/* 工具列下面的彈出框：對齊工具列右邊；工具列太窄、彈出框比較寬時，靠齊 3D 區塊右邊（不會超出左邊被切掉）
+   高度不超出 3D 區塊（--stage-h 由 StageToolbar 量），太高就捲動 */
+.stage-scene__toolbar-row > :is(.tb-menu, .bm-popover, .ndi-popover) {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: max(0px, min(var(--tb-right, 0px), calc(100% - var(--pop-w))));
+  width: var(--pop-w);
+  max-width: 100%;
+  max-height: calc(var(--stage-h, 600px) - 70px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+.stage-scene__toolbar-row > .tb-menu { --pop-w: 268px; }
+.stage-scene__toolbar-row > .bm-popover { --pop-w: 280px; }
+.stage-scene__toolbar-row > .ndi-popover { --pop-w: 320px; }
+
+/* 「更多」選單 */
+.tb-menu {
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  z-index: 60;
+  font-size: 12.5px;
+  cursor: default;
+}
+.tb-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
   font: inherit;
-  margin-right: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.tb-menu__item .ui-icon { color: var(--text-dim); flex-shrink: 0; }
+.tb-menu__item:hover:not(:disabled),
+.tb-menu__item:focus-visible { background: var(--surface-2); outline: none; }
+.tb-menu__item:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.tb-menu__item:disabled { opacity: 0.55; cursor: default; }
+.tb-menu__item.is-checked .ui-icon { color: var(--accent); }
+.tb-menu__label { flex: 1; min-width: 0; }
+.tb-menu__kbd {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0 5px;
+  line-height: 16px;
+}
+.tb-menu__check { width: 14px; display: inline-flex; justify-content: center; }
+.tb-menu__sep { height: 1px; background: var(--border); margin: 6px 4px; }
+.tb-menu__title {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+.tb-menu__note {
+  padding: 4px 10px 6px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.tb-menu__header {
+  padding: 6px 10px 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.tb-menu__header strong { color: var(--accent); }
+
+/* 「LED 顯示測試圖」開著時，左上角提醒一下（不擋操作） */
+.stage-scene__testpattern-note {
+  position: absolute;
+  left: 12px;
+  top: 58px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 10px;
+  background: rgba(20, 22, 27, 0.85);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text-dim);
+  backdrop-filter: blur(10px);
+}
+.stage-scene__testpattern-note .btn { padding: 2px 10px; font-size: 11.5px; }
+/* 3D 區塊不夠寬：AE 即時的檢查清單卡片（置中）可能跟它疊在一起 → 改放左下角（快捷鍵提示上面） */
+@container stage-scene (max-width: 800px) {
+  .stage-scene__testpattern-note { top: auto; bottom: 56px; }
 }
 
-/* ── 3D 區塊不夠寬時的精簡模式（看的是 3D 區塊的寬，不是整個視窗） ──
-   第 1 段「只留圖示」：按鈕寬度上限只夠放一個圖示，圖示後面的空白撐很寬，
-     後面的字就被推到按鈕外面藏起來（滑鼠移上去仍有說明文字）。
-   第 2 段「再擠一點」：間距縮小、當前 cue 只留名字。
-   還是放不下才換第二排；換排時右上角的「現場設定 / 材質」面板往下讓。
-   管理頁按鈕最多（有 移動 / 旋轉 / 縮放）：全部帶字約 1300px、只留圖示約 805px、再擠約 635px。
-   其他頁（動畫師 / 導演 / 分享）：全部帶字最多約 1000px、只留圖示約 640px、再擠約 510px。
-   :where(:has(.tool-sep)) = 管理頁的工具列（只有它有分隔線），:where 讓它不會蓋過後面的規則。 */
-@container stage-scene (max-width: 1340px) {
-  .stage-scene__toolbar:where(:has(.tool-sep)) .tool {
-    max-width: 33px;
-    padding-left: 8px;
-    padding-right: 8px;
-    overflow: hidden;
-    word-spacing: 100px;
-  }
-  .stage-scene__toolbar:where(:has(.tool-sep)) .tool span { display: none; }
-}
-@container stage-scene (max-width: 1040px) {
-  .stage-scene__toolbar .tool {
-    max-width: 33px;
-    padding-left: 8px;
-    padding-right: 8px;
-    overflow: hidden;
-    word-spacing: 100px;
-  }
-  .stage-scene__toolbar .tool span { display: none; }
-}
-@container stage-scene (max-width: 830px) {
-  .stage-scene__toolbar:where(:has(.tool-sep)) { top: 8px; gap: 2px; padding: 4px; border-radius: 19px; }
-  .stage-scene__toolbar:where(:has(.tool-sep)) .tool { max-width: 30px; padding-left: 6px; padding-right: 6px; }
-  .stage-scene__toolbar:where(:has(.tool-sep)) .tool-sep { margin: 0 1px; }
-  .stage-scene__toolbar:where(:has(.tool-sep)) .cue-tag { font-size: 0; padding: 0 8px 0 4px; min-width: 60px; }
-  .stage-scene__toolbar:where(:has(.tool-sep)) .cue-tag strong { font-size: 12px; margin-left: 0; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
-  .stage-scene__toolbar:where(:has(.tool-sep)) .ndi-pill { padding: 3px 8px; }
-  .stage-scene__toolbar:where(:has(.tool-sep)) .ndi-wrap { margin-right: 2px; }
-  /* 可能換排：NDI / 視角 的彈出框改對齊整條工具列的右下角，不會跑出 3D 區塊被切掉 */
-  .stage-scene__toolbar:where(:has(.tool-sep)) :is(.ndi-wrap, .bm-wrap) { position: static; }
-}
-@container stage-scene (max-width: 680px) {
-  .stage-scene__toolbar { top: 8px; gap: 2px; padding: 4px; border-radius: 19px; }
-  .stage-scene__toolbar .tool { max-width: 30px; padding-left: 6px; padding-right: 6px; }
-  .stage-scene__toolbar .tool-sep { margin: 0 1px; }
-  .stage-scene__toolbar .cue-tag { font-size: 0; padding: 0 8px 0 4px; min-width: 60px; }
-  .stage-scene__toolbar .cue-tag strong { font-size: 12px; margin-left: 0; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
-  .stage-scene__toolbar .ndi-pill { padding: 3px 8px; }
-  .stage-scene__toolbar .ndi-wrap { margin-right: 2px; }
-  .stage-scene__toolbar :is(.ndi-wrap, .bm-wrap) { position: static; }
-}
-/* 工具列換成兩排時，右上角的「現場設定 / 材質」面板（用 inline style 定位）往下讓 */
-@container stage-scene (max-width: 660px) {
-  .stage-scene__toolbar:where(:has(.tool-sep)) ~ [data-ui-element] { top: 92px !important; }
-}
-@container stage-scene (max-width: 540px) {
-  .stage-scene__toolbar ~ [data-ui-element] { top: 92px !important; }
-}
 .ndi-popover {
   position: absolute;
   top: calc(100% + 6px);
@@ -233,8 +319,7 @@
   font-size: 11.5px;
   padding: 6px 8px;
 }
-/* Camera bookmark popover */
-.bm-wrap { position: relative; }
+/* Camera bookmark popover（位置見上面 .stage-scene__toolbar-row > .bm-popover） */
 .bm-popover {
   position: absolute;
   top: calc(100% + 6px);
@@ -520,8 +605,6 @@
 
 /* 物件名稱前的鎖頭圖示 */
 .stage-scene__label .ui-icon { margin-right: 4px; }
-/* 工具列按鈕：圖示跟字中間留一點空 */
-.stage-scene__toolbar .tool .ui-icon { margin-right: 1px; }
 
 /* AE 即時的狀態點：綠色實心 = 正在播；空心 = 等待中 */
 .ndi-dot {
