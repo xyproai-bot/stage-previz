@@ -19,6 +19,11 @@ import './StageScene.css';
 // RectAreaLight 必須先 init uniforms（Three.js 內建）
 RectAreaLightUniformsLib.init();
 
+// LED 貼圖（NDI / mock / 自訂圖片）的 UV 超出 0~1 時要「繞回來」，跟 glTF 預設 sampler（REPEAT）、
+// C4D / AE 一致。用預設 ClampToEdge 的話，UV 落在負值的面板（C4D 匯出常見，例：v ∈ [-0.8, -0.45]）
+// 只會吃到貼圖邊緣那一排像素 → 整片變成拉長的條紋單色。
+const LED_TEXTURE_WRAP = THREE.RepeatWrapping;
+
 const CATEGORY_COLORS: Record<string, number> = {
   led_panel:  0x10c78a,
   mechanism:  0xffaa44,
@@ -382,6 +387,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         tex.colorSpace = THREE.SRGBColorSpace;
         tex.minFilter = THREE.LinearFilter;
         tex.magFilter = THREE.LinearFilter;
+        tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
         ndiMockTextureRef.current = { texture: tex, canvas: c, ctx: cctx };
       }
     } catch (e) {
@@ -400,6 +406,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         tex.magFilter = THREE.LinearFilter;
         // 模型 UV 是 baked 過的（top-left origin），跟 Electron 版一致 → flipY = false
         tex.flipY = false;
+        tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
         ndiLiveTextureRef.current = { texture: tex, canvas: c, ctx: cctx };
       }
     } catch (e) {
@@ -1200,6 +1207,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             console.warn('[StageScene] LED imageUrl load failed (CORS?):', ledImageUrl, err);
           });
           tex.colorSpace = THREE.SRGBColorSpace;
+          tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
           cache.set(ledImageUrl, tex);
         }
         ledTexture = cache.get(ledImageUrl) || null;
