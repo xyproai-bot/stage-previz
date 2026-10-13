@@ -252,8 +252,9 @@
   gap: 14px;
 }
 .studio-stage__empty-icon {
-  font-size: 64px;
-  opacity: 0.5;
+  line-height: 0;
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 
 /* Cuebar at bottom of stage */
@@ -837,3 +838,14 @@
 }
 .studio-gone { padding: 80px 24px; }
 .studio-gone p { max-width: 460px; margin: 0 auto; line-height: 1.6; }
+
+/* ─── 線條圖示（取代 emoji 後）：圖示按鈕置中 ─── */
+.studio-top__back,
+.studio-cuebar__nav,
+.studio-comment__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.studio-cuebar__nav { padding: 0; }
+.studio-loading { gap: 6px; }

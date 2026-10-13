@@ -127,7 +127,7 @@
   border-bottom: 1px solid var(--border);
   font-size: 13px;
 }
-.status-col__emoji { font-size: 16px; }
+.status-col__dot { margin: 0 2px; }
 .status-col__name { font-weight: 600; flex: 1; }
 .status-col__count {
   font-family: var(--font-mono);
@@ -882,3 +882,18 @@
   .btn--sm { padding: 8px 14px; font-size: 13px; }
   .link-btn { padding: 8px 12px; }
 }
+
+/* ─── 線條圖示（取代 emoji 後）：圖示按鈕置中 ─── */
+.cuebar-btn,
+.video-pane__toggle,
+.song-comment__del {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.video-pane__toggle { padding: 0; }
+.preview-loading { gap: 6px; }
+/* 留言標題列：窄的時候整塊換行，不要把名字、時間、按鈕擠成直的 */
+.song-comment__head { flex-wrap: wrap; row-gap: 4px; }
+.song-comment__head > * { white-space: nowrap; flex-shrink: 0; }
+.song-comment__attach { display: inline-flex; align-items: center; gap: 3px; }

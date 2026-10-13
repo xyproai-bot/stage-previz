@@ -53,7 +53,7 @@ describe('cueTransitionSeconds', () => {
   });
 });
 
-describe('parseCrossfadeInput（淡入淡出欄位的檢查）', () => {
+describe('parseCrossfadeInput（轉場秒數欄位的檢查）', () => {
   it('數字 → 存（小數點留兩位）', () => {
     expect(parseCrossfadeInput('1.5')).toBe(1.5);
     expect(parseCrossfadeInput(' 2 ')).toBe(2);
@@ -71,9 +71,9 @@ describe('parseCrossfadeInput（淡入淡出欄位的檢查）', () => {
 });
 
 describe('crossfadeLabel（cue 清單上寫的）', () => {
-  it('有秒數 → 淡入淡出幾秒；0 → 直接切換', () => {
-    expect(crossfadeLabel(1)).toBe('淡入淡出 1 秒');
-    expect(crossfadeLabel(2.5)).toBe('淡入淡出 2.5 秒');
+  it('有秒數 → 轉場幾秒；0 → 直接切換', () => {
+    expect(crossfadeLabel(1)).toBe('轉場 1 秒');
+    expect(crossfadeLabel(2.5)).toBe('轉場 2.5 秒');
     expect(crossfadeLabel(0)).toBe('直接切換');
     expect(crossfadeLabel(NaN)).toBe('直接切換');
   });

@@ -31,7 +31,8 @@
   justify-content: space-between;
 }
 .show-card__icon {
-  font-size: 28px;
+  display: inline-flex;
+  color: var(--accent);
 }
 .show-card__count {
   font-family: var(--font-mono);

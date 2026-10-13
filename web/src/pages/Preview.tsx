@@ -19,15 +19,21 @@ import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
   friendlyError, projectGoneMessage, canModifyComment, isOwnComment, sameSongs, sameComments,
 } from '../lib/songReview';
+import Icon, { StatusDot } from '../components/Icon';
+import { roleLabel } from '../lib/roleLabels';
+import {
+  ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, HistoryIcon, LoaderCircle, MapPin, Pause, Play, RefreshCw,
+  RotateCcw, Square, TriangleAlert, Video, X,
+} from 'lucide-react';
 import './Preview.css';
 
 type Status = Song['status'];
 
-const STATUS_COLUMNS: { key: Status; label: string; emoji: string }[] = [
-  { key: 'todo',          label: '待製作', emoji: '⏳' },
-  { key: 'in_review',     label: '審查中', emoji: '👀' },
-  { key: 'needs_changes', label: '需修改', emoji: '✏️' },
-  { key: 'approved',      label: '已通過', emoji: '✅' },
+const STATUS_COLUMNS: { key: Status; label: string }[] = [
+  { key: 'todo',          label: STATUS_LABEL.todo },
+  { key: 'in_review',     label: STATUS_LABEL.in_review },
+  { key: 'needs_changes', label: STATUS_LABEL.needs_changes },
+  { key: 'approved',      label: STATUS_LABEL.approved },
 ];
 
 export default function Preview() {
@@ -87,7 +93,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
     const sel = selectedSongIdRef.current;
     const was = sel ? prev.find(s => s.id === sel) : undefined;
     if (was && !list.some(s => s.id === sel)) {
-      toast.warn(`你正在看的「${was.name}」已經被刪除了（可能是製作主管剛刪的），已回到總覽`);
+      toast.warn(`你正在看的「${was.name}」已經被刪除了（可能是製作剛刪的），已回到總覽`);
       setSelectedSongId(null);
     }
     if (sameSongs(prev, list)) return;
@@ -340,8 +346,8 @@ function PreviewInner({ projectId }: { projectId: string }) {
   return (
     <div className="preview">
       <header className="preview-top">
-        <button className="preview-top__back" onClick={() => navigate('/preview')} title="所有專案">←</button>
-        <span className="preview-top__role">🎬 DIRECTOR</span>
+        <button className="preview-top__back" onClick={() => navigate('/preview')} title="所有專案" aria-label="所有專案"><Icon icon={ArrowLeft} size="md" /></button>
+        <span className="preview-top__role">導演</span>
         <span className="preview-top__project">
           {projectName || (nameStatus === 'error' && !goneMessage ? (
             <>
@@ -366,14 +372,14 @@ function PreviewInner({ projectId }: { projectId: string }) {
               className="btn btn--sm btn--ghost"
               onClick={() => setActivityOpen(true)}
               title="最近活動"
-            >🕒 活動</button>
+            ><Icon icon={HistoryIcon} /> 活動</button>
             <button
               className={'btn btn--sm ' + (showMode ? 'btn--primary' : 'btn--ghost')}
               onClick={() => setShowMode(m => !m)}
               title={showMode ? '停止整場串播' : '從目前歌曲開始整場依序自動播放'}
               disabled={songs.length === 0}
             >
-              {showMode ? '⏸ 停止整場' : '🎤 整場串播'}
+              {showMode ? <><Icon icon={Square} /> 停止整場</> : <><Icon icon={Play} /> 整場串播</>}
             </button>
           </>
         )}
@@ -382,12 +388,12 @@ function PreviewInner({ projectId }: { projectId: string }) {
             className="preview-top__interval"
             value={showCueIntervalSec}
             onChange={e => setShowCueIntervalSec(parseInt(e.target.value, 10))}
-            title="每 cue 停留秒數"
+            title="每個 cue 停留幾秒"
           >
-            <option value={2}>2s/cue</option>
-            <option value={3}>3s/cue</option>
-            <option value={5}>5s/cue</option>
-            <option value={10}>10s/cue</option>
+            <option value={2}>每 cue 2 秒</option>
+            <option value={3}>每 cue 3 秒</option>
+            <option value={5}>每 cue 5 秒</option>
+            <option value={10}>每 cue 10 秒</option>
           </select>
         )}
         {user && (
@@ -408,11 +414,11 @@ function PreviewInner({ projectId }: { projectId: string }) {
           <button className="btn btn--primary" onClick={() => navigate('/preview')} style={{ marginTop: 16 }}>回專案清單</button>
         </div>
       ) : songsLoading ? (
-        <div className="preview-loading">⏳ 載入中…</div>
+        <div className="preview-loading"><Icon icon={LoaderCircle} spin /> 載入中…</div>
       ) : songs.length === 0 ? (
         <div className="preview-empty">
           <h2>這個專案還沒有歌</h2>
-          <p>請製作主管在 admin 加上歌曲</p>
+          <p>請製作在管理頁加上歌曲</p>
         </div>
       ) : selectedSongId && selectedSong ? (
         <SongDetail
@@ -471,7 +477,7 @@ function StatusBoard({
       {STATUS_COLUMNS.map(col => (
         <div key={col.key} className={'status-col status-col--' + col.key}>
           <div className="status-col__head">
-            <span className="status-col__emoji">{col.emoji}</span>
+            <StatusDot status={col.key} className="status-col__dot" />
             <span className="status-col__name">{col.label}</span>
             <span className="status-col__count">{songsByStatus[col.key].length}</span>
           </div>
@@ -492,7 +498,7 @@ function StatusBoard({
                     >
                       <div className="status-card__name">{s.name}</div>
                       <div className="status-card__meta">
-                        {s.cueCount} cue{s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
+                        {s.cueCount} 個 cue{s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
                       </div>
                     </button>
                     {actions.length > 0 && (
@@ -616,11 +622,11 @@ function SongDetail({
   return (
     <div className="song-detail">
       <div className="song-detail__sub-top">
-        <button className="link-btn" onClick={onClose}>← 回總覽</button>
+        <button className="link-btn" onClick={onClose}><Icon icon={ArrowLeft} /> 回總覽</button>
         <span className="song-detail__nav">
-          {prev && <button className="link-btn" onClick={() => onPickSong(prev.id)}>‹ {prev.name}</button>}
+          {prev && <button className="link-btn" onClick={() => onPickSong(prev.id)}><Icon icon={ChevronLeft} /> {prev.name}</button>}
           <span className="song-detail__title">{song.name}</span>
-          {next && <button className="link-btn" onClick={() => onPickSong(next.id)}>{next.name} ›</button>}
+          {next && <button className="link-btn" onClick={() => onPickSong(next.id)}>{next.name} <Icon icon={ChevronRight} /></button>}
         </span>
         <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>
         <span className="grow" />
@@ -705,7 +711,8 @@ function SongDetail({
                   className={'cuebar-btn' + (autoStep ? ' is-active' : '')}
                   onClick={onToggleAutoStep}
                   title={autoStep ? '停止自動播放' : '每 2 秒自動切 cue'}
-                >{autoStep ? '⏸' : '▶'}</button>
+                  aria-label={autoStep ? '停止自動播放' : '每 2 秒自動切 cue'}
+                ><Icon icon={autoStep ? Pause : Play} size="md" /></button>
                 <div className="cuebar-track">
                   {cues.map((c, i) => (
                     <button
@@ -924,7 +931,7 @@ function SongComments({
     const ids = deletableSelected.map(c => c.id);
     if (ids.length === 0) return;
     const skipped = selectedIds.size - ids.length;
-    const note = skipped > 0 ? `\n\n（另外 ${skipped} 則是別人的留言，只有留言的人或 admin 能刪，會跳過）` : '';
+    const note = skipped > 0 ? `\n\n（另外 ${skipped} 則是別人的留言，只有留言的人或製作能刪，會跳過）` : '';
     if (!confirm(`刪除 ${ids.length} 則留言？無法復原。${note}`)) return;
     let okCount = 0;
     let lastList: SongComment[] | null = null;
@@ -1005,20 +1012,20 @@ function SongComments({
         <div className="song-comments__compose">
           {attachTime !== null && (
             <div className="song-comments__attach">
-              📍 掛在 <strong>{formatTimeMS(attachTime)}</strong>
-              <button className="link-btn" onClick={() => setAttachTime(null)} title="取消綁時間">×</button>
+              <Icon icon={Clock} /> 掛在 <strong>{formatTimeMS(attachTime)}</strong>
+              <button className="link-btn" onClick={() => setAttachTime(null)} title="取消綁時間" aria-label="取消綁時間"><Icon icon={X} /></button>
             </div>
           )}
           {attachAnchor && (
             <div className="song-comments__attach song-comments__attach--3d">
-              📌 3D 位置：<strong>
+              <Icon icon={MapPin} /> 3D 位置：<strong>
                 {attachAnchor.type === 'mesh'
                   ? `物件「${attachAnchor.meshName}」`
                   : attachAnchor.type === 'world'
                     ? `場景座標 (${attachAnchor.world.x.toFixed(1)}, ${attachAnchor.world.y.toFixed(1)}, ${attachAnchor.world.z.toFixed(1)})`
                     : '螢幕'}
               </strong>
-              <button className="link-btn" onClick={() => setAttachAnchor(null)} title="取消 3D 錨點">×</button>
+              <button className="link-btn" onClick={() => setAttachAnchor(null)} title="取消 3D 位置" aria-label="取消 3D 位置"><Icon icon={X} /></button>
             </div>
           )}
           <div style={{ position: 'relative' }}>
@@ -1097,13 +1104,13 @@ function SongComments({
                   <span className="song-comment__author">{c.author}</span>
                   <span className="song-comment__role">{roleLabel(c.role)}</span>
                   {c.time > 0 && (
-                    <span className="song-comment__attach" title="綁定影片時間">📍 {formatTimeMS(c.time)}</span>
+                    <span className="song-comment__attach" title="綁定影片時間"><Icon icon={Clock} size="xs" /> {formatTimeMS(c.time)}</span>
                   )}
                   {c.anchor && c.anchor.type !== 'screen' && (
-                    <span className="song-comment__attach" title="3D 位置">📌</span>
+                    <span className="song-comment__attach" title="3D 位置"><Icon icon={MapPin} size="xs" label="3D 位置" /></span>
                   )}
                   {isResolved && (
-                    <span className="song-comment__resolved-pill" title={c.resolvedBy ? `${c.resolvedBy} 解決於 ${formatRelativeTime(c.resolvedAt || '')}` : '已解決'}>✓ 已解決</span>
+                    <span className="song-comment__resolved-pill" title={c.resolvedBy ? `${c.resolvedBy} 解決於 ${formatRelativeTime(c.resolvedAt || '')}` : '已解決'}><Icon icon={Check} size="xs" /> 已解決</span>
                   )}
                   <span className="song-comment__time">{formatRelativeTime(c.createdAt)}</span>
                   {user && (
@@ -1111,7 +1118,8 @@ function SongComments({
                       className="song-comment__del"
                       onClick={() => handleToggleResolved(c)}
                       title={isResolved ? '標為未解決' : '標為已解決'}
-                    >{isResolved ? '↺' : '✓'}</button>
+                      aria-label={isResolved ? '標為未解決' : '標為已解決'}
+                    ><Icon icon={isResolved ? RotateCcw : Check} /></button>
                   )}
                   {canModify(c) && !editing && (
                     <>
@@ -1121,7 +1129,7 @@ function SongComments({
                         onClick={() => { setEditingId(c.id); setEditText(c.text); }}
                         title="修改"
                       >修改</button>
-                      <button className="song-comment__del" onClick={() => handleDelete(c.id)} title="刪除">×</button>
+                      <button className="song-comment__del" onClick={() => handleDelete(c.id)} title="刪除" aria-label="刪除"><Icon icon={X} /></button>
                     </>
                   )}
                 </div>
@@ -1315,15 +1323,15 @@ function SongVideoPane({
   }
 
   if (files === null && !error) {
-    return <div className="video-pane video-pane--empty">⏳ 載入影片清單…</div>;
+    return <div className="video-pane video-pane--empty"><Icon icon={LoaderCircle} spin /> 載入影片清單…</div>;
   }
   if (error) {
-    return <div className="video-pane video-pane--empty video-pane--err">⚠ {error}</div>;
+    return <div className="video-pane video-pane--empty video-pane--err"><Icon icon={TriangleAlert} /> {error}</div>;
   }
   if (files && files.length === 0) {
     return (
       <div className="video-pane video-pane--empty">
-        <span>🎬 這首歌沒有 Drive 影片</span>
+        <span><Icon icon={Video} /> 這首歌沒有 Drive 影片</span>
         <span className="muted small">（在 Drive 上傳檔名符合規則的檔案後，5 分鐘內自動同步）</span>
       </div>
     );
@@ -1344,11 +1352,11 @@ function SongVideoPane({
   return (
     <div className={'video-pane' + (collapsed ? ' video-pane--collapsed' : '')}>
       <div className="video-pane__head">
-        <button className="video-pane__toggle" onClick={() => setCollapsed(c => !c)}>
-          {collapsed ? '▶' : '▼'}
+        <button className="video-pane__toggle" onClick={() => setCollapsed(c => !c)} title={collapsed ? '展開' : '收起'} aria-label={collapsed ? '展開動畫稿' : '收起動畫稿'}>
+          <Icon icon={collapsed ? ChevronRight : ChevronDown} />
         </button>
         <span className="video-pane__title">
-          🎬 動畫稿{files && files.length > 1 ? `（${files.length} 版）` : ''}
+          <Icon icon={Video} /> 動畫稿{files && files.length > 1 ? `（${files.length} 版）` : ''}
         </span>
         {primary && !compareFid && (
           <span className="video-pane__filename">{primary.filename}</span>
@@ -1396,13 +1404,13 @@ function SongVideoPane({
               const idx = files.findIndex(x => x.driveFileId === f.driveFileId);
               return (
                 <option key={f.driveFileId} value={f.driveFileId}>
-                  vs {versionLabel(f, idx, files.length)}
+                  對比 {versionLabel(f, idx, files.length)}
                 </option>
               );
             })}
           </select>
         )}
-        <button className="link-btn" onClick={refresh} title="重新整理">↻</button>
+        <button className="link-btn" onClick={refresh} title="重新整理" aria-label="重新整理"><Icon icon={RefreshCw} /></button>
       </div>
       {!collapsed && primaryUrl && (
         <>
@@ -1427,7 +1435,7 @@ function SongVideoPane({
                     }
                   }}
                 />
-                {videoErrorA && <div className="video-pane__err">⚠ {videoErrorA}</div>}
+                {videoErrorA && <div className="video-pane__err"><Icon icon={TriangleAlert} /> {videoErrorA}</div>}
               </div>
               <div className="video-pane__compare-side">
                 <div className="video-pane__compare-label">B · {compare?.filename}</div>
@@ -1449,7 +1457,7 @@ function SongVideoPane({
                     }
                   }}
                 />
-                {videoErrorB && <div className="video-pane__err">⚠ {videoErrorB}</div>}
+                {videoErrorB && <div className="video-pane__err"><Icon icon={TriangleAlert} /> {videoErrorB}</div>}
               </div>
             </div>
           ) : (
@@ -1473,7 +1481,7 @@ function SongVideoPane({
               />
               {videoErrorA && (
                 <div className="video-pane__err-row">
-                  ⚠ {videoErrorA}
+                  <Icon icon={TriangleAlert} /> {videoErrorA}
                   <button className="link-btn" onClick={() => { setVideoRetryA(0); setVideoErrorA(null); }}>重新整理</button>
                 </div>
               )}
@@ -1502,8 +1510,3 @@ function formatTimeMS(s: number): string {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function roleLabel(r: SongComment['role']): string {
-  if (r === 'animator') return '動畫師';
-  if (r === 'director') return '導演';
-  return '製作';
-}

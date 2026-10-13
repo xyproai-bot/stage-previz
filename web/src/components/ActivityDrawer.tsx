@@ -2,6 +2,11 @@ import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
 import type { ActivityEntry, ActivityAction, ActivityTargetType } from '../lib/api';
 import { parseServerTime } from '../lib/serverTime';
+import {
+  Archive, ArrowUpDown, Copy, HistoryIcon, Pencil, Plus, RefreshCw, RotateCcw, Sprout, Target, Trash2, TriangleAlert, Upload, X,
+  type LucideIcon,
+} from 'lucide-react';
+import Icon from './Icon';
 import './ActivityDrawer.css';
 
 interface Props {
@@ -11,7 +16,7 @@ interface Props {
 }
 
 const SONG_STATUS_LABEL: Record<string, string> = {
-  todo: '未開始', in_review: '審查中', approved: '已通過', needs_changes: '需修改',
+  todo: '待製作', in_review: '審查中', approved: '已通過', needs_changes: '需修改',
 };
 
 const TARGET_LABEL: Record<ActivityTargetType, string> = {
@@ -23,9 +28,9 @@ const ACTION_VERB: Record<ActivityAction, string> = {
   reset: '重置', activate: '切換', archive: '封存', upload: '上傳', bulk_create: '批次建立', seed: '塞入範例',
 };
 
-const ACTION_ICON: Record<ActivityAction, string> = {
-  create: '➕', update: '✎', delete: '🗑', reorder: '↕',
-  reset: '↺', activate: '🎯', archive: '📦', upload: '⬆', bulk_create: '📋', seed: '🌱',
+const ACTION_ICON: Record<ActivityAction, LucideIcon> = {
+  create: Plus, update: Pencil, delete: Trash2, reorder: ArrowUpDown,
+  reset: RotateCcw, activate: Target, archive: Archive, upload: Upload, bulk_create: Copy, seed: Sprout,
 };
 
 function formatTime(iso: string) {
@@ -80,7 +85,7 @@ function describe(e: ActivityEntry): string {
   if (e.targetType === 'cue_state' && e.action === 'reset') {
     const cueName = (p as { cueName?: string }).cueName;
     const objectName = (p as { objectName?: string }).objectName;
-    return `把「${cueName}」cue 中的「${objectName}」重置回 default 位置`;
+    return `把「${cueName}」cue 中的「${objectName}」重置回預設位置`;
   }
 
   // 一般：「新增 / 更新 / 刪除 歌曲「XXX」」
@@ -130,10 +135,10 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
         <header className="activity-drawer__head">
           <div>
             <h3>最近活動</h3>
-            <p className="muted small">audit log — 不可改、不可刪。重要操作都會記錄。</p>
+            <p className="muted small">操作紀錄不能修改或刪除，重要的操作都會記下來。</p>
           </div>
-          <button className="activity-drawer__refresh" onClick={refresh} disabled={loading} title="重新整理">⟳</button>
-          <button className="activity-drawer__close" onClick={onClose} aria-label="關閉">×</button>
+          <button className="activity-drawer__refresh" onClick={refresh} disabled={loading} title="重新整理" aria-label="重新整理"><Icon icon={RefreshCw} size="md" /></button>
+          <button className="activity-drawer__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
 
         <div className="activity-drawer__body">
@@ -141,16 +146,16 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
             <div className="activity-empty muted">載入中…</div>
           ) : error ? (
             <div className="activity-empty">
-              <div style={{ fontSize: 32 }}>⚠️</div>
+              <Icon icon={TriangleAlert} size="xl" className="activity-empty__icon" />
               <div>載入失敗</div>
               <small style={{ color: 'var(--warn)' }}>{error}</small>
               <button className="btn btn--ghost" onClick={refresh} style={{ marginTop: 8 }}>重試</button>
             </div>
           ) : entries.length === 0 ? (
             <div className="activity-empty muted">
-              <div style={{ fontSize: 32 }}>🕒</div>
+              <Icon icon={HistoryIcon} size="xl" className="activity-empty__icon" />
               <div>還沒有活動紀錄</div>
-              <small>動點什麼吧 — 改個 status、新增 cue 都會出現在這</small>
+              <small>改歌曲狀態、新增 cue 這些操作都會出現在這裡</small>
             </div>
           ) : (
             <ul className="activity-list">
@@ -165,7 +170,7 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
                   </div>
                   <div className="activity-item__main">
                     <div className="activity-item__line">
-                      <span className="activity-item__icon" aria-hidden="true">{ACTION_ICON[e.action] || '·'}</span>
+                      <span className="activity-item__icon" aria-hidden="true"><Icon icon={ACTION_ICON[e.action] || Pencil} size="xs" /></span>
                       <strong>{e.userName}</strong>
                       <span className="activity-item__verb">{describe(e)}</span>
                     </div>

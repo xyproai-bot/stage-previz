@@ -7,6 +7,10 @@ import RecentProjectsBar from '../components/RecentProjectsBar';
 import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
 import type { Project } from '../lib/mockData';
+import Icon from '../components/Icon';
+import {
+  Archive, ArrowRight, Clapperboard, Construction, Folder, Import, LoaderCircle, Music, Search, Shapes, TriangleAlert, Upload,
+} from 'lucide-react';
 import './Admin.css';
 
 type Filter = 'all' | 'active' | 'in_review' | 'mine';
@@ -16,7 +20,7 @@ export default function Admin() {
 
   if (tab === 'drive-sources') return <AdminLayout><PlaceholderTab name="Drive 來源" /></AdminLayout>;
   if (tab === 'users') return <AdminLayout><PlaceholderTab name="用戶" /></AdminLayout>;
-  if (tab === 'templates') return <AdminLayout><PlaceholderTab name="模板庫" /></AdminLayout>;
+  if (tab === 'templates') return <AdminLayout><PlaceholderTab name="模型庫" /></AdminLayout>;
 
   return (
     <AdminLayout>
@@ -67,7 +71,7 @@ function ProjectsTab() {
       try { await api.archiveProject(id); ok++; }
       catch { fail++; }
     }
-    alert(`✅ 封存 ${ok} 個${fail ? ` · ❌ 失敗 ${fail}` : ''}`);
+    alert(`已封存 ${ok} 個${fail ? ` · 失敗 ${fail} 個` : ''}`);
     clearSelection();
     await refresh();
   }
@@ -127,14 +131,14 @@ function ProjectsTab() {
   async function handleDuplicate(p: Project) {
     if (duplicating) return;
     const newName = prompt(
-      `複製專案「${p.name}」\n\n新專案會包含全部 stage objects、歌曲、cue 跟 cue 內的物件位置。\n模型檔共用同一份（不重新上傳）。\n\n新專案名稱：`,
+      `複製專案「${p.name}」\n\n新專案會包含全部物件、歌曲、cue 跟 cue 裡的物件位置。\n模型檔共用同一份（不重新上傳）。\n\n新專案名稱：`,
       `${p.name} (副本)`,
     );
     if (!newName) return;
     setDuplicating(p.id);
     try {
       const res = await api.duplicateProject(p.id, { newName: newName.trim() });
-      alert(`✅ 已複製：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
+      alert(`已複製：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
       await refresh();
       navigate(`/admin/projects/${res.id}`);
     } catch (e) {
@@ -189,7 +193,7 @@ function ProjectsTab() {
       const newName = prompt('匯入後的新專案名稱：', `${data.project.name} (匯入)`);
       if (!newName) return;
       const res = await api.importProject({ ...data, newName: newName.trim() });
-      alert(`✅ 已匯入：${res.counts.stageObjects} 物件、${res.counts.songs} 歌、${res.counts.cues} cue`);
+      alert(`已匯入：${res.counts.stageObjects} 個物件、${res.counts.songs} 首歌、${res.counts.cues} 個 cue`);
       await refresh();
       navigate(`/admin/projects/${res.id}`);
     } catch (e) {
@@ -247,7 +251,7 @@ function ProjectsTab() {
       {dragActive && (
         <div className="admin-drop-overlay">
           <div className="admin-drop-overlay__inner">
-            <div className="admin-drop-overlay__icon">📥</div>
+            <div className="admin-drop-overlay__icon"><Icon icon={Import} size="xxl" /></div>
             <div className="admin-drop-overlay__title">放開即匯入專案</div>
             <div className="admin-drop-overlay__hint">.json 備份檔（從匯出產生的）</div>
           </div>
@@ -264,7 +268,7 @@ function ProjectsTab() {
             onChange={(e) => setSearch(e.target.value)}
           />
           <button className="btn btn--ghost" onClick={triggerImport} title="從 JSON 匯入專案備份（也可拖檔到頁面）">
-            ⬆ 匯入
+            <Icon icon={Upload} /> 匯入
           </button>
           <button className="btn btn--primary" onClick={() => setDialogOpen(true)}>
             ＋ 新增專案
@@ -277,7 +281,7 @@ function ProjectsTab() {
           {([
             ['all', '全部'],
             ['active', '進行中'],
-            ['in_review', '待修'],
+            ['in_review', '審查中'],
             ['mine', '我負責的'],
           ] as const).map(([key, label]) => (
             <button
@@ -307,7 +311,7 @@ function ProjectsTab() {
                 <span><strong>已選 {selectedIds.size}</strong> 個專案</span>
                 <button className="btn btn--ghost btn--sm" onClick={clearSelection}>清空選擇</button>
                 <span style={{ flex: 1 }} />
-                <button className="btn btn--ghost btn--sm" onClick={bulkArchive}>🗑 批次封存</button>
+                <button className="btn btn--ghost btn--sm" onClick={bulkArchive}><Icon icon={Archive} /> 批次封存</button>
               </div>
             )}
             <div className="project-grid">
@@ -347,7 +351,7 @@ function EmptyState({ onCreate, hasFilter, hasAnyProjects }: {
   if (hasFilter && hasAnyProjects) {
     return (
       <div className="empty-card">
-        <div className="empty-card__icon">🔍</div>
+        <div className="empty-card__icon"><Icon icon={Search} size="xl" /></div>
         <p>找不到符合的專案</p>
       </div>
     );
@@ -357,16 +361,16 @@ function EmptyState({ onCreate, hasFilter, hasAnyProjects }: {
 
 function OnboardingWizard({ onStart }: { onStart: () => void }) {
   const steps = [
-    { icon: '📁', title: '建立專案', desc: '取一個名字，例如「魅影巡演 2026」', here: true },
-    { icon: '📦', title: '上傳 3D 模型', desc: '把舞臺的 .glb / .gltf 拖進來，自動分類 LED / 走位 / 機關' },
-    { icon: '🧩', title: '認識物件',     desc: '一鍵塞入 10 個常用範例，或手動加你的 mesh' },
-    { icon: '🎵', title: '加入歌曲',     desc: '依 set list 排好順序，每首歌可獨立追蹤狀態' },
-    { icon: '🎬', title: '製作第一個 cue', desc: '從 3D viewport 直接 snapshot 位置，或從空白建立' },
+    { icon: Folder,       title: '建立專案', desc: '取一個名字，例如「魅影巡演 2026」', here: true },
+    { icon: Upload,       title: '上傳 3D 模型', desc: '把舞臺的 .glb / .gltf 拖進來，自動分類 LED / 走位 / 機關' },
+    { icon: Shapes,       title: '認識物件',     desc: '一鍵塞入 10 個常用範例，或手動加你的物件' },
+    { icon: Music,        title: '加入歌曲',     desc: '依歌單排好順序，每首歌可以分開追蹤進度' },
+    { icon: Clapperboard, title: '製作第一個 cue', desc: '從 3D 畫面直接記下目前的位置，或從空白建立' },
   ];
   return (
     <div className="onboarding">
       <div className="onboarding__head">
-        <div className="onboarding__hello">👋 歡迎</div>
+        <div className="onboarding__hello">歡迎</div>
         <h2>5 個步驟建立你的第一個 LED 舞臺預覽</h2>
         <p className="onboarding__sub">第 1 步在這裡，後面 4 步建好專案會自動帶你進編輯器繼續</p>
       </div>
@@ -374,7 +378,7 @@ function OnboardingWizard({ onStart }: { onStart: () => void }) {
         {steps.map((s, i) => (
           <li key={i} className={'onboarding-step' + (s.here ? ' is-current' : '')}>
             <div className="onboarding-step__num">{i + 1}</div>
-            <div className="onboarding-step__icon" aria-hidden="true">{s.icon}</div>
+            <div className="onboarding-step__icon" aria-hidden="true"><Icon icon={s.icon} size="lg" /></div>
             <div className="onboarding-step__body">
               <div className="onboarding-step__title">
                 {s.title}
@@ -384,7 +388,7 @@ function OnboardingWizard({ onStart }: { onStart: () => void }) {
             </div>
             {s.here && (
               <button className="btn btn--primary onboarding-step__cta" onClick={onStart}>
-                建立專案 →
+                建立專案 <Icon icon={ArrowRight} />
               </button>
             )}
           </li>
@@ -397,7 +401,7 @@ function OnboardingWizard({ onStart }: { onStart: () => void }) {
 function LoadingState() {
   return (
     <div className="empty-card">
-      <div className="empty-card__icon">⏳</div>
+      <div className="empty-card__icon"><Icon icon={LoaderCircle} size="xl" spin /></div>
       <p>載入專案中…</p>
     </div>
   );
@@ -406,7 +410,7 @@ function LoadingState() {
 function ErrorState({ message, onRetry }: { message: string; onRetry: () => void }) {
   return (
     <div className="empty-card">
-      <div className="empty-card__icon">⚠️</div>
+      <div className="empty-card__icon"><Icon icon={TriangleAlert} size="xl" /></div>
       <p>載入失敗</p>
       <small style={{ color: 'var(--warn)', maxWidth: 400 }}>{message}</small>
       <button className="btn btn--ghost" onClick={onRetry} style={{ marginTop: 12 }}>
@@ -424,9 +428,9 @@ function PlaceholderTab({ name }: { name: string }) {
       </header>
       <div className="admin-content">
         <div className="empty-card">
-          <div className="empty-card__icon">🚧</div>
+          <div className="empty-card__icon"><Icon icon={Construction} size="xl" /></div>
           <p>{name} 功能開發中</p>
-          <small>後續 Phase 會加上</small>
+          <small>之後的版本會加上</small>
         </div>
       </div>
     </>

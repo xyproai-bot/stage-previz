@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import { useAuth } from '../lib/auth';
-import type { UserRole } from '../lib/api';
 import { useNdiConnection } from '../lib/ndiConnection';
 import { ndiAutostartNote, ndiStepMessage, showSourcePicker, type NdiBrowser, type NdiGuide } from '../lib/ndiSteps';
 import { NdiSourcePicker } from '../components/NdiGuide';
@@ -11,13 +10,10 @@ import { HELP_ANCHORS, helpUrl, ndiHelpAnchor, type HelpAnchor } from '../lib/he
 import { clearPersonalLooks, countPersonalLooks } from '../lib/localPrefs';
 import { toast } from '../lib/toast';
 import { version as APP_VERSION } from '../../package.json';
+import { ROLE_LABEL } from '../lib/roleLabels';
+import Icon from '../components/Icon';
+import { BookOpen, Download, ExternalLink, TriangleAlert } from 'lucide-react';
 import './Settings.css';
-
-const ROLE_LABEL: Record<UserRole, string> = {
-  admin: '管理員',
-  animator: '動畫師',
-  director: '導演',
-};
 
 export default function Settings() {
   const { user } = useAuth();
@@ -57,7 +53,7 @@ function AccountSection() {
       <p className="settings-hint">
         {user.role === 'admin'
           ? <>要改名字或登入號碼，到 <Link to="/admin/users">用戶</Link> 頁。</>
-          : '要改名字或登入號碼，請找管理員。'}
+          : '要改名字或登入號碼，請找製作。'}
       </p>
     </section>
   );
@@ -76,10 +72,10 @@ function NdiSection() {
   const busy = checking && (g.step === 'connecting' || (g.step === 'need_permission' && g.pending));
   const mac = ndi.env.os === 'mac';
   const winLink = (
-    <a key="win" className={'btn ' + (mac ? 'btn--ghost' : 'btn--primary')} href={NDI_HELPER_DOWNLOAD_URL}>⬇ 下載 NDI 小程序（Windows）</a>
+    <a key="win" className={'btn ' + (mac ? 'btn--ghost' : 'btn--primary')} href={NDI_HELPER_DOWNLOAD_URL}><Icon icon={Download} /> 下載 NDI 小程序（Windows）</a>
   );
   const macLink = (
-    <a key="mac" className={'btn ' + (mac ? 'btn--primary' : 'btn--ghost')} href={NDI_HELPER_DOWNLOAD_URL_MAC}>⬇ 下載 NDI 小程序（Mac）</a>
+    <a key="mac" className={'btn ' + (mac ? 'btn--primary' : 'btn--ghost')} href={NDI_HELPER_DOWNLOAD_URL_MAC}><Icon icon={Download} /> 下載 NDI 小程序（Mac）</a>
   );
 
   return (
@@ -106,8 +102,8 @@ function NdiSection() {
 
       <div className="settings-links">
         {mac ? [macLink, winLink] : [winLink, macLink]}
-        <a className="btn btn--ghost" href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">NDI Tools（官方免費）↗</a>
-        <a className="btn btn--ghost" href={helpUrl(HELP_ANCHORS.aeLive)} target="_blank" rel="noopener">📖 圖文說明</a>
+        <a className="btn btn--ghost" href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">NDI Tools（官方免費）<Icon icon={ExternalLink} size="xs" /></a>
+        <a className="btn btn--ghost" href={helpUrl(HELP_ANCHORS.aeLive)} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 圖文說明</a>
       </div>
 
       <ol className="settings-steps">
@@ -136,9 +132,9 @@ function NdiCheckResult({ guide, browser }: { guide: NdiGuide; browser: NdiBrows
       <span>{msg.title}</span>
       {msg.detail.map(d => <span key={d} className="settings-status__sub">{d}</span>)}
       {guide.helperVersion && <span className="settings-status__sub">小程序版本 {guide.helperVersion}</span>}
-      {autostartNote && <span className="settings-status__sub settings-status__sub--warn">⚠ {autostartNote}</span>}
+      {autostartNote && <span className="settings-status__sub settings-status__sub--warn"><Icon icon={TriangleAlert} /> {autostartNote}</span>}
       {helpAnchor && (
-        <a className="settings-status__sub" href={helpUrl(helpAnchor)} target="_blank" rel="noopener">📖 看圖文說明</a>
+        <a className="settings-status__sub" href={helpUrl(helpAnchor)} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 看圖文說明</a>
       )}
     </span>
   );
@@ -203,7 +199,7 @@ function AboutSection({ isAdmin }: { isAdmin: boolean }) {
         <div><dt>版本</dt><dd>{APP_VERSION}</dd></div>
         {/* 管理頁右下角有 ? 按鈕；動畫師 / 導演的上方列是「使用說明」 */}
         <div><dt>使用說明</dt><dd>{isAdmin ? '按右下角的 ?（或鍵盤 ?）' : '按上方的「使用說明」'}</dd></div>
-        <div><dt>AE 即時預覽</dt><dd><a href={helpUrl()} target="_blank" rel="noopener">{isAdmin ? '圖文說明（不用登入，可以直接傳給動畫師）↗' : '圖文說明（不用登入）↗'}</a></dd></div>
+        <div><dt>AE 即時預覽</dt><dd><a href={helpUrl()} target="_blank" rel="noopener">{isAdmin ? '圖文說明（不用登入，可以直接傳給動畫師）' : '圖文說明（不用登入）'} <Icon icon={ExternalLink} size="xs" /></a></dd></div>
       </dl>
     </section>
   );

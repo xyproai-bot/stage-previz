@@ -250,7 +250,7 @@
   background: var(--surface-1);
   line-height: 1.6;
 }
-.help-checklist li > span { font-size: 18px; line-height: 1.5; }
+.help-checklist li > span { font-size: 18px; line-height: 1.5; display: inline-flex; align-items: flex-start; padding-top: 3px; color: var(--text-dim); }
 .help-checklist em { color: var(--warn); font-style: normal; font-weight: 600; }
 
 /* 步驟 */
@@ -297,7 +297,7 @@
   background: var(--accent-dim);
 }
 .help-note--warn { border-left-color: var(--warn); background: var(--warn-dim); }
-.help-note__icon { line-height: 1.75; }
+.help-note__icon { line-height: 1.75; display: inline-flex; padding-top: 4px; }
 .help-note--warn .help-note__icon { color: var(--warn); }
 .help-note__title { display: block; }
 .help-note p { margin: 2px 0 0; }
@@ -429,7 +429,7 @@
   line-height: 1.5;
   text-align: center;
 }
-.help-fig__placeholder-icon { font-size: 26px; opacity: 0.6; }
+.help-fig__placeholder-icon { line-height: 0; opacity: 0.6; }
 .help-fig__placeholder-sub { color: var(--text-muted); font-size: 12px; }
 
 /* 看大圖 */

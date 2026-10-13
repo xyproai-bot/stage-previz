@@ -1,4 +1,6 @@
 import { LOOK_SETTING_RANGES, type LookSettings } from '../lib/stageLook/lookSettings';
+import { Check, X } from 'lucide-react';
+import Icon from './Icon';
 
 interface Props {
   settings: LookSettings;
@@ -35,8 +37,8 @@ export default function LookSettingsPanel({ settings, onChange, onClose, customi
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-        <strong style={{ flex: 1 }}>🎚 現場設定</strong>
-        <button className="btn btn--ghost btn--sm" onClick={onClose} title="關閉">×</button>
+        <strong style={{ flex: 1 }}>現場設定</strong>
+        <button className="btn btn--ghost btn--sm" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} /></button>
       </div>
       {ROWS.map(r => {
         const [min, max] = LOOK_SETTING_RANGES[r.key];
@@ -71,7 +73,7 @@ export default function LookSettingsPanel({ settings, onChange, onClose, customi
             disabled={!customized}
             title="把你現在的設定變成所有人打開時的預設（每個人還是可以自己再調）"
           >
-            {customized ? '設為所有人的預設' : '✓ 所有人的預設就是這組'}
+            {customized ? '設為所有人的預設' : <><Icon icon={Check} /> 所有人的預設就是這組</>}
           </button>
         )}
       </div>

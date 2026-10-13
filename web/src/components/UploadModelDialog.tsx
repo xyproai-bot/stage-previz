@@ -3,16 +3,16 @@ import * as api from '../lib/api';
 import type { StageObjectCategory } from '../lib/api';
 import { parseGlbFile, classifyMeshName, prettifyName, type ParsedMesh } from '../lib/parseGlb';
 import { friendlyError } from '../lib/songReview';
+import { CircleCheck, FileText, Ruler, Scaling, TriangleAlert, Upload, X } from 'lucide-react';
+import Icon from './Icon';
+import { STAGE_CATEGORY, STAGE_CATEGORY_ORDER } from './stageCategories';
 import './UploadModelDialog.css';
 
-const CATEGORY_OPTIONS: Array<[StageObjectCategory, string, string]> = [
-  ['led_panel',  '🟦', 'LED 面板'],
-  ['mechanism', '⚙️', '機關'],
-  ['walk_point', '📍', '走位點'],
-  ['fixture',   '💡', '燈光/道具'],
-  ['performer', '🧍', '表演者'],
-  ['other',     '⬜', '其他'],
-];
+/** 命名規則說明裡的分類（名稱 + 圖示） */
+function CategoryName({ category }: { category: StageObjectCategory }) {
+  const c = STAGE_CATEGORY[category];
+  return <><Icon icon={c.icon} /> {c.label}</>;
+}
 
 interface Props {
   open: boolean;
@@ -95,7 +95,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       setSceneSize(sceneSizeMeters);
       setUnitGuess(ug);
       setStage(meshes.length > 0 ? 'review' : 'error');
-      if (meshes.length === 0) setError('GLB 解析後找不到 top-level 物件 — 確認模型是有 group/mesh，沒被全展平');
+      if (meshes.length === 0) setError('檔案裡讀不到任何物件：請確認 C4D 匯出時物件是分開的（不要全部合併成一個）');
 
       // 比對既有 stage_objects 的 mesh_name → 找出在新模型裡消失的（影響 3D pin 留言）
       try {
@@ -231,7 +231,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       <div className="upload-dialog" onClick={(e) => e.stopPropagation()}>
         <header className="upload-dialog__header">
           <h2>上傳 3D 模型（.glb / .gltf）</h2>
-          <button className="upload-dialog__close" onClick={onClose}>×</button>
+          <button className="upload-dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
 
         {stage === 'pick' && (
@@ -242,7 +242,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
               onDrop={onDrop}
               onClick={() => inputRef.current?.click()}
             >
-              <div className="upload-dropzone__icon">📦</div>
+              <div className="upload-dropzone__icon"><Icon icon={Upload} size="xxl" /></div>
               <div className="upload-dropzone__title">拖放 .glb 或 .gltf 到這裡</div>
               <small className="muted">或點擊選檔</small>
               <input
@@ -260,7 +260,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
               <input
                 type="url"
                 className="upload-url-input"
-                placeholder="或貼 .glb 檔案直連 URL（Sketchfab / GitHub raw / 公開 R2）"
+                placeholder="或貼 .glb 檔案的直接下載網址（Sketchfab / GitHub / 公開的雲端連結）"
                 value={urlInput}
                 onChange={e => setUrlInput(e.target.value)}
                 disabled={fetchingUrl}
@@ -270,19 +270,19 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
                 onClick={fetchFromUrl}
                 disabled={fetchingUrl || !urlInput.trim()}
               >
-                {fetchingUrl ? '載入中…' : '從 URL 載入'}
+                {fetchingUrl ? '載入中…' : '從網址載入'}
               </button>
             </div>
 
             <div className="upload-dialog__hint">
               <strong>命名規則</strong>（系統會自動分類）：
               <ul>
-                <li><code>LED_01_主牆</code> → 🟦 LED 面板</li>
-                <li><code>STAGE_01_升降</code> → ⚙️ 機關</li>
-                <li><code>ARTIST_01_主唱</code> → 🧍 表演者</li>
-                <li><code>PROP_01_麥架</code> / <code>LIGHT_01_搖頭</code> → 💡 燈光/道具</li>
-                <li><code>WALK_01_主舞</code> → 📍 走位點</li>
-                <li>其他名稱 → ⬜ 其他（可手動改分類）</li>
+                <li><code>LED_01_主牆</code> → <CategoryName category="led_panel" /></li>
+                <li><code>STAGE_01_升降</code> → <CategoryName category="mechanism" /></li>
+                <li><code>ARTIST_01_主唱</code> → <CategoryName category="performer" /></li>
+                <li><code>PROP_01_麥架</code> / <code>LIGHT_01_搖頭</code> → <CategoryName category="fixture" /></li>
+                <li><code>WALK_01_主舞</code> → <CategoryName category="walk_point" /></li>
+                <li>其他名稱 → <CategoryName category="other" />（可手動改分類）</li>
               </ul>
             </div>
           </>
@@ -297,33 +297,33 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
         {stage === 'review' && (
           <>
             <div className="upload-summary">
-              <span className="upload-summary__file">📄 {filename}</span>
+              <span className="upload-summary__file"><Icon icon={FileText} /> {filename}</span>
               <span className="upload-summary__count">{meshes.length} 個物件</span>
               <span className={'upload-summary__size' + (unitGuess !== 'normal' ? ' is-warn' : '')}>
-                📐 對角 {sceneSize.toFixed(sceneSize < 10 ? 2 : 1)} m
+                <Icon icon={Scaling} /> 對角 {sceneSize.toFixed(sceneSize < 10 ? 2 : 1)} m
               </span>
               {Object.entries(counts).filter(([, n]) => n > 0).map(([cat, n]) => {
-                const opt = CATEGORY_OPTIONS.find(c => c[0] === cat as StageObjectCategory)!;
+                const opt = STAGE_CATEGORY[cat as StageObjectCategory];
                 return (
                   <span key={cat} className="upload-summary__cat">
-                    {opt[1]} {n} {opt[2]}
+                    <Icon icon={opt.icon} /> {n} {opt.label}
                   </span>
                 );
               })}
               {otherCount > 0 && (
-                <span className="upload-warn">⚠️ {otherCount} 個未匹配規則，請手動指派</span>
+                <span className="upload-warn"><Icon icon={TriangleAlert} /> {otherCount} 個沒對到命名規則，請手動選分類</span>
               )}
             </div>
 
             {warnings.length > 0 && (
               <div className="upload-warnings">
-                {warnings.map((w, i) => <div key={i}>{w}</div>)}
+                {warnings.map((w, i) => <div key={i}><Icon icon={TriangleAlert} /> {w}</div>)}
               </div>
             )}
 
             {orphanedMeshes.length > 0 && (
               <div className="upload-orphan-warn">
-                <strong>⚠ 留言可能跑掉</strong>
+                <strong><Icon icon={TriangleAlert} /> 留言可能跑掉</strong>
                 <p>
                   舊模型有 <strong>{orphanedMeshes.length}</strong> 個物件名稱在新模型裡找不到：
                   <code className="upload-orphan-warn__list">
@@ -332,15 +332,15 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
                   </code>
                 </p>
                 <p className="muted">
-                  如果之前有人在這些物件上釘 3D 留言，匯入後留言會掛在錯的位置（fallback 顯示）。
-                  保留原本 mesh 命名可避免這問題。
+                  如果之前有人在這些物件上釘 3D 留言，匯入後留言會掛在錯的位置。
+                  在 C4D 裡保留原本的物件名稱就不會有這個問題。
                 </p>
               </div>
             )}
 
             {unitGuess !== 'normal' && (
               <div className="upload-unit-hint">
-                <strong>📏 尺寸看起來不對</strong>
+                <strong><Icon icon={Ruler} /> 尺寸看起來不對</strong>
                 <p>
                   GLB 標準是 1 unit = 1 公尺，舞臺對角通常 5-50 m 之間。
                   你的模型對角是 <strong>{sceneSize.toFixed(2)} m</strong>，看起來
@@ -357,7 +357,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
               <table>
                 <thead>
                   <tr>
-                    <th>Mesh 名稱</th>
+                    <th>C4D 物件名稱</th>
                     <th>顯示名稱</th>
                     <th>分類</th>
                     <th title="子節點數">子</th>
@@ -383,8 +383,8 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
                             onChange={(e) => patchMesh(i, { category: e.target.value as StageObjectCategory })}
                             className={isOther ? 'is-unmatched' : ''}
                           >
-                            {CATEGORY_OPTIONS.map(([c, ic, label]) => (
-                              <option key={c} value={c}>{ic} {label}</option>
+                            {STAGE_CATEGORY_ORDER.map(c => (
+                              <option key={c} value={c}>{STAGE_CATEGORY[c].label}</option>
                             ))}
                           </select>
                         </td>
@@ -465,13 +465,13 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
 
         {stage === 'done' && (
           <div className="upload-status upload-status--ok">
-            ✅ 匯入成功！
+            <Icon icon={CircleCheck} size="lg" /> 匯入成功！
           </div>
         )}
 
         {stage === 'error' && (
           <div className="upload-error">
-            <div className="upload-error__icon">⚠️</div>
+            <div className="upload-error__icon"><Icon icon={TriangleAlert} size="xl" /></div>
             <div className="upload-error__msg">{error || '失敗'}</div>
             <button className="btn btn--ghost" onClick={() => setStage('pick')}>重來</button>
           </div>

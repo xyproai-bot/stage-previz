@@ -1,4 +1,6 @@
 import { Component, type ReactNode } from 'react';
+import { RotateCw, TriangleAlert } from 'lucide-react';
+import Icon from './Icon';
 import './ErrorBoundary.css';
 
 interface Props {
@@ -36,7 +38,7 @@ export default class ErrorBoundary extends Component<Props, State> {
       if (this.props.fallback) return this.props.fallback(this.state.error, this.reset);
       return (
         <div className="err-boundary">
-          <div className="err-boundary__icon">⚠</div>
+          <div className="err-boundary__icon"><Icon icon={TriangleAlert} size="xxl" /></div>
           <h2>{this.props.title || '畫面崩潰了'}</h2>
           <p className="err-boundary__msg">{this.state.error.message}</p>
           <details className="err-boundary__details">
@@ -44,7 +46,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             <pre>{this.state.error.stack}</pre>
           </details>
           <div className="err-boundary__actions">
-            <button className="btn btn--primary" onClick={this.reset}>↻ 再試一次</button>
+            <button className="btn btn--primary" onClick={this.reset}><Icon icon={RotateCw} /> 再試一次</button>
             <button className="btn btn--ghost" onClick={() => window.location.reload()}>重新整理頁面</button>
           </div>
         </div>

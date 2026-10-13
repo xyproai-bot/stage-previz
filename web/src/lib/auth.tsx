@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, ReactNode, useCallback 
 import { Navigate, useLocation } from 'react-router-dom';
 import * as api from './api';
 import type { AuthUser, UserRole } from './api';
+import { ROLE_LABEL } from './roleLabels';
 
 interface AuthState {
   user: AuthUser | null;
@@ -69,8 +70,7 @@ export function RequireAuth({ children, role }: { children: ReactNode; role?: Us
   const location = useLocation();
   if (loading) {
     return (
-      <div className="empty-state">
-        <h1>⏳</h1>
+      <div className="empty-state" role="status">
         <p>載入中…</p>
       </div>
     );
@@ -80,7 +80,7 @@ export function RequireAuth({ children, role }: { children: ReactNode; role?: Us
     return (
       <div className="empty-state">
         <h1>403</h1>
-        <p>沒有權限存取此頁面（需要 {role} 角色）</p>
+        <p>沒有權限打開這個頁面（要{ROLE_LABEL[role]}才能看）</p>
       </div>
     );
   }

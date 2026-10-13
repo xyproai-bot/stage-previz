@@ -206,6 +206,10 @@
   font-weight: 600;
 }
 .ndi-popover__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   background: transparent;
   border: none;
   color: var(--text-dim);
@@ -513,3 +517,20 @@
   border-color: var(--warn);
   color: var(--warn);
 }
+
+/* 物件名稱前的鎖頭圖示 */
+.stage-scene__label .ui-icon { margin-right: 4px; }
+/* 工具列按鈕：圖示跟字中間留一點空 */
+.stage-scene__toolbar .tool .ui-icon { margin-right: 1px; }
+
+/* AE 即時的狀態點：綠色實心 = 正在播；空心 = 等待中 */
+.ndi-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+  vertical-align: calc(0.35em - 3.5px);
+  flex-shrink: 0;
+}
+.ndi-dot--on { background: currentColor; }

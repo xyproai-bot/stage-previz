@@ -32,7 +32,7 @@ export const FIGS = {
   shareLive: fig({
     src: '/help/web/share-live.webp', w: 1400, h: 850, width: 820,
     alt: '分享頁：AE 即時正在播',
-    caption: '成功的樣子：① 上面選「🔴 AE 即時」② 旁邊顯示你的 AE 和每秒幾張 ③ 3D 畫面上方亮綠色「LIVE」④ LED 上就是 AE 的畫面',
+    caption: '成功的樣子：① 上面選「AE 即時」② 旁邊顯示你的 AE 和每秒幾張 ③ 3D 畫面上方亮綠色「LIVE」④ LED 上就是 AE 的畫面',
     boxes: [
       { x: 0.86, y: 5.53, w: 6.79, h: 4.12, n: 1 },
       { x: 14.93, y: 6.0, w: 17.21, h: 3.18, n: 2 },
@@ -43,7 +43,7 @@ export const FIGS = {
   sharePermission: fig({
     src: '/help/web/share-permission.webp', w: 1400, h: 850, width: 820,
     alt: '分享頁第一次打開：AE 即時畫面卡片',
-    caption: '① 上面選「🔴 AE 即時」（預設就是）② 卡片上按「連接 AE 即時」',
+    caption: '① 上面選「AE 即時」（預設就是）② 卡片上按「連接 AE 即時」',
     boxes: [
       { x: 0.86, y: 5.53, w: 6.79, h: 4.12, n: 1 },
       { x: 40.5, y: 36.59, w: 7.64, h: 4.82, n: 2 },

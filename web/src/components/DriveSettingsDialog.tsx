@@ -4,6 +4,11 @@ import * as api from '../lib/api';
 import type { DriveAccount, DriveFile, DriveSyncLogEntry, Song } from '../lib/api';
 import { toast } from '../lib/toast';
 import { formatRelativeTime } from '../lib/serverTime';
+import {
+  CircleCheck, CircleQuestionMark, ExternalLink, FileText, Film, Image, Lock, Music, RefreshCw, Save, Settings2, TriangleAlert, X,
+  type LucideIcon,
+} from 'lucide-react';
+import Icon from './Icon';
 import './DriveSettingsDialog.css';
 
 interface Props {
@@ -158,14 +163,14 @@ export default function DriveSettingsDialog({
     <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="dlg drive-dlg">
         <header className="dlg__header">
-          <h2>☁ Drive 來源設定</h2>
-          <button className="dlg__close" onClick={onClose} aria-label="關閉">×</button>
+          <h2>Drive 來源設定</h2>
+          <button className="dlg__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
 
         <div className="dlg__body">
           {!accountsConfigured && (
             <div className="drive-dlg__warn">
-              ⚠ 平台尚未設定 Google OAuth secrets。請先到 Cloudflare Workers 設定，才能連接 Drive 帳號。
+              <Icon icon={TriangleAlert} /> 平台尚未設定 Google OAuth secrets。請先到 Cloudflare Workers 設定，才能連接 Drive 帳號。
             </div>
           )}
 
@@ -173,7 +178,7 @@ export default function DriveSettingsDialog({
             <label className="drive-dlg__label">
               <span>Google 帳號</span>
               {accountsConfigured && (
-                <Link to="/admin/drive-sources" className="link-btn" target="_blank">+ 連接新帳號 ↗</Link>
+                <Link to="/admin/drive-sources" className="link-btn" target="_blank">+ 連接新帳號 <Icon icon={ExternalLink} size="xs" /></Link>
               )}
             </label>
             {accountsErr && <div className="drive-dlg__err">{accountsErr}</div>}
@@ -252,14 +257,14 @@ export default function DriveSettingsDialog({
 
           <div className="drive-dlg__actions">
             <button className="btn" onClick={handleSaveSettings} disabled={savingSettings}>
-              💾 存設定
+              <Icon icon={Save} /> 存設定
             </button>
             <button
               className="btn btn--primary"
               onClick={handleSync}
               disabled={syncing || !folderId || !accountId}
             >
-              {syncing ? '同步中…' : '🔄 立即同步'}
+              {syncing ? '同步中…' : <><Icon icon={RefreshCw} /> 立即同步</>}
             </button>
             {lastSync && (
               <span className="muted small drive-dlg__last-sync">
@@ -271,7 +276,7 @@ export default function DriveSettingsDialog({
 
           {syncResult && (
             <div className="drive-dlg__sync-result">
-              ✅ 同步完成：找到 {syncResult.filesFound} 個檔案，
+              <Icon icon={CircleCheck} /> 同步完成：找到 {syncResult.filesFound} 個檔案，
               已分類 <strong>{syncResult.classified}</strong>，
               未分類 <strong>{syncResult.unclassified}</strong>，
               耗時 {syncResult.durationMs}ms
@@ -289,7 +294,7 @@ export default function DriveSettingsDialog({
               <div className="drive-files">
                 <div className="drive-files__group">
                   <div className="drive-files__group-title">
-                    🚧 未分類（{filesArr.filter(f => !f.songId).length}）
+                    <Icon icon={CircleQuestionMark} /> 未分類（{filesArr.filter(f => !f.songId).length}）
                   </div>
                   {filesArr.filter(f => !f.songId).length === 0 ? (
                     <div className="muted small">— 全部已分類 —</div>
@@ -304,7 +309,7 @@ export default function DriveSettingsDialog({
                   return (
                     <div key={s.id} className="drive-files__group">
                       <div className="drive-files__group-title">
-                        🎵 {s.name}（{songFiles.length}）
+                        <Icon icon={Music} /> {s.name}（{songFiles.length}）
                       </div>
                       {songFiles.map(f => (
                         <DriveFileRow key={f.id} file={f} songs={songsArr} onAssign={handleAssign} />
@@ -328,7 +333,7 @@ function DriveFileRow({ file, songs, onAssign }: {
 }) {
   return (
     <div className="drive-file">
-      <div className="drive-file__icon">{iconFor(file.mimeType)}</div>
+      <div className="drive-file__icon"><Icon icon={iconFor(file.mimeType)} size="lg" /></div>
       <div className="drive-file__info">
         <div className="drive-file__name">{file.filename}</div>
         <div className="drive-file__meta">
@@ -336,7 +341,7 @@ function DriveFileRow({ file, songs, onAssign }: {
           {file.sizeBytes && <span>{formatSize(file.sizeBytes)}</span>}
           {file.modifiedTime && <span>{formatRelativeTime(file.modifiedTime)}</span>}
           <span className={'drive-file__badge drive-file__badge--' + file.classifiedBy}>
-            {file.classifiedBy === 'manual' ? '🔒 手動' : '⚙ 規則'}
+            {file.classifiedBy === 'manual' ? <><Icon icon={Lock} size="xs" /> 手動</> : <><Icon icon={Settings2} size="xs" /> 規則</>}
           </span>
         </div>
       </div>
@@ -344,7 +349,7 @@ function DriveFileRow({ file, songs, onAssign }: {
         className="drive-file__select"
         value={file.songId || ''}
         onChange={e => onAssign(file, e.target.value || null)}
-        title="改歌曲歸類（手動 override）"
+        title="手動改這個檔案屬於哪首歌"
       >
         <option value="">未分類</option>
         {songs.map(s => (
@@ -372,18 +377,18 @@ function extractFolderId(input: string): string {
 }
 
 function shortMime(m: string): string {
-  if (m.startsWith('video/')) return '🎬 video';
-  if (m.startsWith('image/')) return '🖼 image';
-  if (m === 'application/vnd.google-apps.folder') return '📁 folder';
+  if (m.startsWith('video/')) return '影片';
+  if (m.startsWith('image/')) return '圖片';
+  if (m === 'application/vnd.google-apps.folder') return '資料夾';
   return m;
 }
 
-function iconFor(mime: string | null): string {
-  if (!mime) return '📄';
-  if (mime.startsWith('video/')) return '🎬';
-  if (mime.startsWith('image/')) return '🖼';
-  if (mime.startsWith('audio/')) return '🎵';
-  return '📄';
+function iconFor(mime: string | null): LucideIcon {
+  if (!mime) return FileText;
+  if (mime.startsWith('video/')) return Film;
+  if (mime.startsWith('image/')) return Image;
+  if (mime.startsWith('audio/')) return Music;
+  return FileText;
 }
 
 function formatSize(b: number): string {

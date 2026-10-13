@@ -2,12 +2,17 @@ import { useEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import * as api from '../lib/api';
+import {
+  Boxes, Clapperboard, Cloud, Folder, HistoryIcon, House, LogOut, Music, Palette, Search, Shapes, Ticket, Users,
+  type LucideIcon,
+} from 'lucide-react';
+import Icon from './Icon';
 import './CommandPalette.css';
 
 interface Command {
   id: string;
   group: string;        // Action / Project / Show / Recent / 用戶
-  icon: string;
+  icon: LucideIcon;
   label: string;
   hint?: string;
   run: () => void;
@@ -105,27 +110,27 @@ export default function CommandPalette() {
 
     // Actions（不論 query 都會列）
     cmds.push(
-      { id: 'a:home',       group: '動作', icon: '🏠', label: '回首頁',          run: () => { navigate('/'); close(); } },
-      { id: 'a:projects',   group: '動作', icon: '📁', label: '專案總覽',        run: () => { navigate('/admin'); close(); } },
-      { id: 'a:shows',      group: '動作', icon: '🎫', label: 'Show 巡迴',       run: () => { navigate('/admin/shows'); close(); } },
-      { id: 'a:templates',  group: '動作', icon: '📐', label: '模板庫',          run: () => { navigate('/admin/templates'); close(); } },
-      { id: 'a:studio',     group: '動作', icon: '🎨', label: '動畫師工作站',     hint: '/studio', run: () => { navigate('/studio'); close(); } },
-      { id: 'a:preview',    group: '動作', icon: '🎬', label: '導演進度頁',       hint: '/preview', run: () => { navigate('/preview'); close(); } },
+      { id: 'a:home',       group: '動作', icon: House,        label: '回首頁',          run: () => { navigate('/'); close(); } },
+      { id: 'a:projects',   group: '動作', icon: Folder,       label: '專案總覽',        run: () => { navigate('/admin'); close(); } },
+      { id: 'a:shows',      group: '動作', icon: Ticket,       label: 'Show 巡迴',       run: () => { navigate('/admin/shows'); close(); } },
+      { id: 'a:templates',  group: '動作', icon: Boxes,        label: '模型庫',          run: () => { navigate('/admin/templates'); close(); } },
+      { id: 'a:studio',     group: '動作', icon: Palette,      label: '動畫師工作站',     hint: '/studio', run: () => { navigate('/studio'); close(); } },
+      { id: 'a:preview',    group: '動作', icon: Clapperboard, label: '導演審片',         hint: '/preview', run: () => { navigate('/preview'); close(); } },
     );
     if (user?.role === 'admin') {
       cmds.push(
-        { id: 'a:users', group: '動作', icon: '👥', label: '用戶管理', run: () => { navigate('/admin/users'); close(); } },
-        { id: 'a:drive', group: '動作', icon: '☁', label: 'Drive 來源', run: () => { navigate('/admin/drive-sources'); close(); } },
+        { id: 'a:users', group: '動作', icon: Users, label: '用戶管理', run: () => { navigate('/admin/users'); close(); } },
+        { id: 'a:drive', group: '動作', icon: Cloud, label: 'Drive 來源', run: () => { navigate('/admin/drive-sources'); close(); } },
       );
     }
     cmds.push(
-      { id: 'a:logout',     group: '動作', icon: '⏻',  label: '登出',           run: async () => { close(); await logout(); navigate('/login'); } },
+      { id: 'a:logout',     group: '動作', icon: LogOut, label: '登出',           run: async () => { close(); await logout(); navigate('/login'); } },
     );
 
     // Recent
     for (const r of recent) {
       cmds.push({
-        id: `r:${r.id}`, group: '最近', icon: '🕒',
+        id: `r:${r.id}`, group: '最近', icon: HistoryIcon,
         label: r.name, hint: '最近開過',
         run: () => { navigate(`/admin/projects/${r.id}`); close(); },
       });
@@ -134,7 +139,7 @@ export default function CommandPalette() {
     // Projects
     for (const p of (projects as { id: string; name: string }[])) {
       cmds.push({
-        id: `p:${p.id}`, group: '專案', icon: '📁',
+        id: `p:${p.id}`, group: '專案', icon: Folder,
         label: p.name,
         run: () => { navigate(`/admin/projects/${p.id}`); close(); },
       });
@@ -143,7 +148,7 @@ export default function CommandPalette() {
     // Shows
     for (const s of shows) {
       cmds.push({
-        id: `s:${s.id}`, group: 'Show', icon: '🎫',
+        id: `s:${s.id}`, group: 'Show', icon: Ticket,
         label: s.name, hint: `${s.projectCount} 個專案`,
         run: () => { navigate(`/admin/shows/${s.id}`); close(); },
       });
@@ -153,21 +158,21 @@ export default function CommandPalette() {
     if (searchResults) {
       for (const sg of searchResults.songs) {
         cmds.push({
-          id: `srch-song:${sg.id}`, group: '搜尋：歌曲', icon: '🎵',
+          id: `srch-song:${sg.id}`, group: '搜尋：歌曲', icon: Music,
           label: sg.name, hint: sg.projectName,
           run: () => { navigate(`/admin/projects/${sg.projectId}`); close(); },
         });
       }
       for (const c of searchResults.cues) {
         cmds.push({
-          id: `srch-cue:${c.id}`, group: '搜尋：Cue', icon: '🎬',
+          id: `srch-cue:${c.id}`, group: '搜尋：Cue', icon: Clapperboard,
           label: c.name, hint: `${c.projectName} · ${c.songName}`,
           run: () => { navigate(`/admin/projects/${c.projectId}`); close(); },
         });
       }
       for (const o of searchResults.stageObjects) {
         cmds.push({
-          id: `srch-obj:${o.id}`, group: '搜尋：物件', icon: '🧩',
+          id: `srch-obj:${o.id}`, group: '搜尋：物件', icon: Shapes,
           label: o.name, hint: o.projectName,
           run: () => { navigate(`/admin/projects/${o.projectId}`); close(); },
         });
@@ -226,7 +231,7 @@ export default function CommandPalette() {
     <div className="cmdk-overlay" onClick={close}>
       <div className="cmdk-modal" onClick={(e) => e.stopPropagation()}>
         <div className="cmdk-search">
-          <span className="cmdk-search__icon">🔍</span>
+          <span className="cmdk-search__icon"><Icon icon={Search} size="md" /></span>
           <input
             ref={inputRef}
             type="text"
@@ -253,7 +258,7 @@ export default function CommandPalette() {
                     onMouseEnter={() => setActiveIdx(idx)}
                     onClick={() => c.run()}
                   >
-                    <span className="cmdk-item__icon">{c.icon}</span>
+                    <span className="cmdk-item__icon"><Icon icon={c.icon} size="md" /></span>
                     <span className="cmdk-item__label">{c.label}</span>
                     {c.hint && <span className="cmdk-item__hint">{c.hint}</span>}
                   </div>

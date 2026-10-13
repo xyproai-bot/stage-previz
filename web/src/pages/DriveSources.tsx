@@ -3,6 +3,8 @@ import AdminLayout from '../components/AdminLayout';
 import * as api from '../lib/api';
 import type { DriveAccount } from '../lib/api';
 import { formatDateTime } from '../lib/serverTime';
+import Icon from '../components/Icon';
+import { TriangleAlert } from 'lucide-react';
 import './DriveSources.css';
 
 export default function DriveSources() {
@@ -58,7 +60,7 @@ export default function DriveSources() {
 
         {!configured && (
           <div className="drive-sources__warn">
-            <strong>⚠ 平台尚未設定 Google OAuth</strong>
+            <strong><Icon icon={TriangleAlert} /> 平台尚未設定 Google OAuth</strong>
             <p>需要先在 Cloudflare Workers 的 secret 設定：</p>
             <ul>
               <li><code>GOOGLE_CLIENT_ID</code></li>

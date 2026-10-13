@@ -11,7 +11,7 @@
   gap: 12px;
   max-width: 600px;
 }
-.err-boundary__icon { font-size: 48px; color: var(--danger); }
+.err-boundary__icon { color: var(--danger); line-height: 0; }
 .err-boundary h2 { margin: 0; color: var(--text); }
 .err-boundary__msg {
   color: var(--danger);

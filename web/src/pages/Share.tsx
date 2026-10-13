@@ -14,6 +14,10 @@ import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } fro
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { helpUrl } from '../lib/helpLinks';
 import ShareSetlist from './ShareSetlist';
+import Icon from '../components/Icon';
+import {
+  BookOpen, FolderOpen, Image, LoaderCircle, Lock, Pause, Play, Radio, Repeat, TriangleAlert, Volume2, VolumeX, X,
+} from 'lucide-react';
 import './Share.css';
 
 /** LED 畫面來源：AE 即時（NDI 小程序）或本地檔案（拖進來的影片 / 圖片，只在這台電腦播） */
@@ -309,12 +313,12 @@ export default function Share() {
     return poseAtTime(tl.windows, tl.poses, local.video.currentTime);
   }, [local.video]);
 
-  if (loading) return <div className="share-loading">⏳ 載入中…</div>;
+  if (loading) return <div className="share-loading"><Icon icon={LoaderCircle} size="lg" spin /> 載入中…</div>;
 
   if (requiresPassword) {
     return (
       <div className="share-pwd">
-        <h1>🔒 此分享需要密碼</h1>
+        <h1><Icon icon={Lock} size="lg" /> 此分享需要密碼</h1>
         <form onSubmit={(e) => { e.preventDefault(); setSubmittedPwd(password); load(password); }}>
           <input
             type="password"
@@ -333,7 +337,7 @@ export default function Share() {
   if (error) {
     return (
       <div className="share-error">
-        <h1>⚠ 分享連結無效</h1>
+        <h1><Icon icon={TriangleAlert} size="lg" /> 分享連結無效</h1>
         <p>{error}</p>
       </div>
     );
@@ -344,11 +348,11 @@ export default function Share() {
   return (
     <div className="share">
       <header className="share-top">
-        <span className="share-top__brand">🎬 STAGE PREVIZ</span>
+        <span className="share-top__brand"><span className="brand-mark" aria-hidden="true" />STAGE PREVIZ</span>
         <span className="share-top__title">{data.project.name}</span>
         <span className="grow" />
         {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
-        <a className="share-top__help" href={helpUrl()} target="_blank" rel="noopener">📖 使用說明</a>
+        <a className="share-top__help" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
         <span className="share-top__hint">公開預覽 · 唯讀</span>
       </header>
 
@@ -401,17 +405,17 @@ export default function Share() {
         <main className="share-stage">
           <div className="share-source">
             <div className="share-source__switch">
-              <button className={source === 'ndi' ? 'is-active' : ''} onClick={() => setSource('ndi')}>🔴 AE 即時</button>
-              <button className={source === 'file' ? 'is-active' : ''} onClick={() => setSource('file')}>🎬 本地檔案</button>
+              <button className={source === 'ndi' ? 'is-active' : ''} onClick={() => setSource('ndi')}><Icon icon={Radio} /> AE 即時</button>
+              <button className={source === 'file' ? 'is-active' : ''} onClick={() => setSource('file')}><Icon icon={FolderOpen} /> 本地檔案</button>
             </div>
             <span className="share-source__status">
               {source === 'ndi'
                 ? (!ndiGuide ? '連線中…'
                   : ndiGuide.step === 'live'
-                  ? `● ${ndiGuide.source ?? 'AE'}${ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}`
+                  ? <><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiGuide.source ?? 'AE'}{ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}</>
                   : ndiShortLabel(ndiGuide))
-                : media.active?.kind === 'video' ? `${local.playing ? '▶' : '⏸'} ${media.active.name}`
-                : media.active ? `🖼 ${media.active.name}`
+                : media.active?.kind === 'video' ? <><Icon icon={local.playing ? Play : Pause} size="xs" /> {media.active.name}</>
+                : media.active ? <><Icon icon={Image} size="xs" /> {media.active.name}</>
                 : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
             </span>
           </div>
@@ -461,7 +465,7 @@ export default function Share() {
               enableNdi={source === 'ndi'}
               onNdiStatus={setNdiGuide}
               ndiGuide
-              ndiGuideHint="沒有 AE？按上面「🎬 本地檔案」把影片或圖片拖進來"
+              ndiGuideHint="沒有 AE？按上面的「本地檔案」把影片或圖片拖進來"
               ledVideo={videoMode && local.ready ? local.video : null}
               ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
               poseAtFrame={poseAtFrame}
@@ -483,14 +487,14 @@ export default function Share() {
           )}
           {!dragOver && source === 'file' && media.active && (media.active.kind === 'video' ? local.error : media.imageError) && (
             <div className="share-overlay share-overlay--error">
-              <strong>⚠ {media.active.kind === 'video' ? local.error : media.imageError}</strong>
+              <strong><Icon icon={TriangleAlert} /> {media.active.kind === 'video' ? local.error : media.imageError}</strong>
             </div>
           )}
 
           {videoMode && media.active && (
             <div className="share-player">
-              <button className="share-player__btn" onClick={local.togglePlay} title={local.playing ? '暫停' : '播放'}>
-                {local.playing ? '⏸' : '▶'}
+              <button className="share-player__btn" onClick={local.togglePlay} title={local.playing ? '暫停' : '播放'} aria-label={local.playing ? '暫停' : '播放'}>
+                <Icon icon={local.playing ? Pause : Play} size="md" />
               </button>
               <span className="share-player__time">{formatClock(local.time)} / {formatClock(local.duration)}</span>
               <input
@@ -503,12 +507,14 @@ export default function Share() {
                 className={'share-player__btn' + (local.loop ? ' is-active' : '')}
                 onClick={() => local.setLoop(!local.loop)}
                 title={local.loop ? '循環播放：開' : '循環播放：關'}
-              >🔁</button>
-              <button className="share-player__btn" onClick={() => local.setMuted(!local.muted)} title={local.muted ? '開聲音' : '靜音'}>
-                {local.muted ? '🔇' : '🔊'}
+                aria-label="循環播放"
+                aria-pressed={local.loop}
+              ><Icon icon={Repeat} size="md" /></button>
+              <button className="share-player__btn" onClick={() => local.setMuted(!local.muted)} title={local.muted ? '開聲音' : '靜音'} aria-label={local.muted ? '開聲音' : '靜音'}>
+                <Icon icon={local.muted ? VolumeX : Volume2} size="md" />
               </button>
               <span className="share-player__name" title={media.active.name}>{media.active.name}</span>
-              <button className="share-player__btn" onClick={() => { if (media.active) media.remove(media.active.id); }} title="從清單移除這支影片">✕</button>
+              <button className="share-player__btn" onClick={() => { if (media.active) media.remove(media.active.id); }} title="從清單移除這支影片" aria-label="從清單移除這支影片"><Icon icon={X} size="md" /></button>
             </div>
           )}
 

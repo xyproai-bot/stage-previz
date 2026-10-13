@@ -41,6 +41,10 @@
   max-width: 480px;
 }
 .versions-dialog__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -163,3 +167,4 @@
   justify-content: space-between;
   align-items: center;
 }
+.versions-empty__icon { color: var(--text-muted); }

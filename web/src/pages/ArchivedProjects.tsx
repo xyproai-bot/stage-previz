@@ -5,6 +5,8 @@ import * as api from '../lib/api';
 import type { Project } from '../lib/mockData';
 import { parseServerTime } from '../lib/serverTime';
 import { toast } from '../lib/toast';
+import Icon from '../components/Icon';
+import { Archive, RotateCcw, TriangleAlert } from 'lucide-react';
 import './ArchivedProjects.css';
 
 export default function ArchivedProjects() {
@@ -43,17 +45,17 @@ export default function ArchivedProjects() {
     <AdminLayout>
       <div className="archived">
         <header className="archived__head">
-          <h1>🗑 封存的專案</h1>
+          <h1>封存的專案</h1>
           <p>從這裡可以還原任何之前封存的專案。資料完整保留。</p>
         </header>
 
-        {error && <div className="archived__err">⚠ {error}</div>}
+        {error && <div className="archived__err"><Icon icon={TriangleAlert} /> {error}</div>}
 
         {projects === null && !error ? (
           <div className="archived__empty">載入中…</div>
         ) : projects && projects.length === 0 ? (
           <div className="archived__empty">
-            <div className="archived__empty-icon">🗂️</div>
+            <div className="archived__empty-icon"><Icon icon={Archive} size="xl" /></div>
             <div>沒有封存的專案</div>
           </div>
         ) : (
@@ -63,7 +65,7 @@ export default function ArchivedProjects() {
                 <div className="archived__row-info">
                   <div className="archived__row-name">{p.name}</div>
                   <div className="archived__row-meta">
-                    {p.songCount} 首歌 · {p.cueCount} cue · 封存於 {formatDate(p.updatedAt)}
+                    {p.songCount} 首歌 · {p.cueCount} 個 cue · 封存於 {formatDate(p.updatedAt)}
                   </div>
                   {p.description && <div className="archived__row-desc">{p.description}</div>}
                 </div>
@@ -72,7 +74,7 @@ export default function ArchivedProjects() {
                   onClick={() => handleRestore(p)}
                   disabled={restoring === p.id}
                 >
-                  {restoring === p.id ? '還原中…' : '↺ 還原'}
+                  {restoring === p.id ? '還原中…' : <><Icon icon={RotateCcw} /> 還原</>}
                 </button>
               </li>
             ))}

@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { MATERIAL_RANGES, type MaterialOverride, type MaterialOverrides, type ModelMaterialInfo } from '../lib/stageLook/materialOverrides';
+import { ChevronDown, ChevronRight, X } from 'lucide-react';
+import Icon from './Icon';
 
 interface Props {
   materials: ModelMaterialInfo[];
@@ -11,7 +13,7 @@ interface Props {
 type NumKey = 'roughness' | 'metalness' | 'envIntensity' | 'opacity';
 
 const SLIDERS: { key: NumKey; label: string; hint: string; origKey: NumKey }[] = [
-  { key: 'roughness', label: '亮面 ↔ 霧面', hint: '左邊亮面（會反光、倒影清楚），右邊霧面', origKey: 'roughness' },
+  { key: 'roughness', label: '亮面 / 霧面', hint: '左邊亮面（會反光、倒影清楚），右邊霧面', origKey: 'roughness' },
   { key: 'metalness', label: '金屬感', hint: '越高越像金屬（顏色會變成反光的顏色）', origKey: 'metalness' },
   { key: 'envIntensity', label: '反射強度', hint: '反射 LED 光的強弱', origKey: 'envIntensity' },
   { key: 'opacity', label: '不透明度', hint: '1 = 完全不透明', origKey: 'opacity' },
@@ -33,8 +35,8 @@ export default function MaterialPanel({ materials, overrides, onChange, onClose 
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
-        <strong style={{ flex: 1 }}>🎨 材質（依 C4D 材質名稱）</strong>
-        <button className="btn btn--ghost btn--sm" onClick={onClose} title="關閉">×</button>
+        <strong style={{ flex: 1 }}>材質（依 C4D 材質名稱）</strong>
+        <button className="btn btn--ghost btn--sm" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} /></button>
       </div>
       {sorted.length === 0 && <div style={{ opacity: 0.6 }}>模型裡沒有可調整的材質</div>}
       {sorted.map(mat => {
@@ -54,10 +56,10 @@ export default function MaterialPanel({ materials, overrides, onChange, onClose 
               <span style={{ width: 14, height: 14, borderRadius: 3, background: color, border: '1px solid rgba(255,255,255,0.3)' }} />
               <span style={{ flex: 1 }}>
                 {mat.name || '（沒有名稱）'}
-                {ov.mirrorFloor && ' 🪞'}
-                {changed && <span style={{ color: '#10c78a' }}> ●</span>}
+                {ov.mirrorFloor && <span style={{ opacity: 0.6 }}> · 鏡面地板</span>}
+                {changed && <span title="已調整" style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#10c78a', marginLeft: 6, verticalAlign: 'middle' }} />}
               </span>
-              <span style={{ opacity: 0.5 }}>{mat.count} 個物件 {open ? '▾' : '▸'}</span>
+              <span style={{ opacity: 0.5 }}>{mat.count} 個物件 <Icon icon={open ? ChevronDown : ChevronRight} /></span>
             </button>
             {open && (
               <div style={{ padding: '8px 0 4px 22px' }}>

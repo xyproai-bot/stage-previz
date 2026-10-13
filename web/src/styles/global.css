@@ -110,3 +110,15 @@ input, textarea, select {
   font-family: var(--font-mono);
   font-size: 12px;
 }
+
+/* 品牌小方塊（頁首 STAGE PREVIZ 前面那一塊綠色） */
+.brand-mark {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border-radius: 3px;
+  margin-right: 8px;
+  vertical-align: calc(0.35em - 6px);
+  flex-shrink: 0;
+}

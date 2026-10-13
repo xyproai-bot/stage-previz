@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
 import type { Cue, CueState } from '../lib/api';
+import { ArrowRight, X } from 'lucide-react';
+import Icon from './Icon';
 import './CueDiffDialog.css';
 
 interface Props {
@@ -105,8 +107,8 @@ export default function CueDiffDialog({ open, projectId, songId, cues, onClose }
     <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="dlg cue-diff-dlg">
         <header className="dlg__header">
-          <h2>🔀 Cue 並排對比</h2>
-          <button className="dlg__close" onClick={onClose}>×</button>
+          <h2>Cue 並排對比</h2>
+          <button className="dlg__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dlg__body">
           <div className="cue-diff__pickers">
@@ -117,7 +119,7 @@ export default function CueDiffDialog({ open, projectId, songId, cues, onClose }
                 {cues.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
               </select>
             </label>
-            <span className="cue-diff__arrow">→</span>
+            <span className="cue-diff__arrow"><Icon icon={ArrowRight} size="md" /></span>
             <label>
               <span>B</span>
               <select value={bId} onChange={e => setBId(e.target.value)}>

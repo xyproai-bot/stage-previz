@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
@@ -36,7 +36,28 @@ import { FloorReflection, applyFloorReflection, setFloorReflectionFor } from '..
 import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOverride, type MaterialOverrides, type ModelMaterialInfo } from '../lib/stageLook/materialOverrides';
 import MaterialPanel from './MaterialPanel';
 import { detectFloorPlane } from '../lib/stageLook/floorPlane';
+import {
+  BookOpen, Box, Camera, ChevronDown, Download, ExternalLink, Footprints, Globe, Grid3x3, MapPin, Move, Palette, Pause,
+  PersonStanding, RefreshCw, Rotate3d, Ruler, SlidersHorizontal, Sparkles, Tag, Target, Video, X, Zap,
+} from 'lucide-react';
+import Icon from './Icon';
 import './StageScene.css';
+
+// 3D 畫面上用 DOM 直接畫的小圖示（物件名稱旁的鎖、留言圖釘）：跟 lucide 的 Lock / MessageSquare 同一個圖形
+const SVG_BASE = 'xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"';
+const lockSvg = (size: number) =>
+  `<svg class="ui-icon" width="${size}" height="${size}" ${SVG_BASE}><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>`;
+const commentSvg = (size: number) =>
+  `<svg class="ui-icon" width="${size}" height="${size}" ${SVG_BASE}><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></svg>`;
+
+/** 物件名稱標籤：鎖住的物件前面多一個鎖頭圖示（內容沒變就不重畫） */
+function setObjectLabel(lbl: HTMLDivElement, name: string, locked: boolean) {
+  const key = (locked ? '1:' : '0:') + name;
+  if (lbl.dataset.content === key) return;
+  lbl.dataset.content = key;
+  lbl.textContent = name;
+  if (locked) lbl.insertAdjacentHTML('afterbegin', lockSvg(11));
+}
 
 // RectAreaLight 必須先 init uniforms（Three.js 內建）
 RectAreaLightUniformsLib.init();
@@ -1090,15 +1111,32 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const renderer = rendererRef.current;
     const container = containerRef.current;
     if (viewer || !renderer || !container) return;
+    // 不支援 VR 的瀏覽器不放按鈕（以前會顯示英文的「VR NOT SUPPORTED」）；按鈕上的字改成中文
+    const xr = (navigator as Navigator & { xr?: { isSessionSupported(mode: string): Promise<boolean> } }).xr;
+    if (!xr) return;
+    let cancelled = false;
     let vrBtn: HTMLElement | null = null;
-    try {
-      vrBtn = VRButton.createButton(renderer);
-      vrBtn.classList.add('stage-scene__vr-btn');
-      container.appendChild(vrBtn);
-    } catch (e) {
-      console.warn('[StageScene] VRButton failed (no WebXR support?):', e);
-    }
-    return () => { vrBtn?.remove(); };
+    let observer: MutationObserver | null = null;
+    xr.isSessionSupported('immersive-vr').then(ok => {
+      if (!ok || cancelled) return;
+      try {
+        const btn = VRButton.createButton(renderer);
+        btn.classList.add('stage-scene__vr-btn');
+        const translate = () => {
+          const t = btn.textContent;
+          if (t === 'ENTER VR') btn.textContent = '進入 VR';
+          else if (t === 'EXIT VR') btn.textContent = '離開 VR';
+        };
+        observer = new MutationObserver(translate);
+        observer.observe(btn, { childList: true, characterData: true, subtree: true });
+        translate();
+        container.appendChild(btn);
+        vrBtn = btn;
+      } catch (e) {
+        console.warn('[StageScene] VRButton failed (no WebXR support?):', e);
+      }
+    }).catch(() => { /* 問不到 = 不支援 */ });
+    return () => { cancelled = true; observer?.disconnect(); vrBtn?.remove(); };
   }, [viewer]);
 
   // ── Load .glb model (if any) → build mesh_name map ──
@@ -1299,16 +1337,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
         const lbl = document.createElement('div');
         lbl.className = 'stage-scene__label';
-        lbl.textContent = (s.locked && !readOnly ? '🔒 ' : '') + s.displayName;
+        setObjectLabel(lbl, s.displayName, !!s.locked && !readOnly);
         lbl.dataset.objectId = s.objectId;
         layer.appendChild(lbl);
         labels.set(s.objectId, lbl);
       } else {
         const lbl = labels.get(s.objectId);
-        if (lbl) {
-          const lblText = (s.locked && !readOnly ? '🔒 ' : '') + s.displayName;
-          if (lbl.textContent !== lblText) lbl.textContent = lblText;
-        }
+        if (lbl) setObjectLabel(lbl, s.displayName, !!s.locked && !readOnly);
       }
       obj.userData.locked = !!s.locked;
       obj.userData.objectId = s.objectId;
@@ -2092,11 +2127,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     jumpCamera(homeView);
   }, [homeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // 兩個模式：⚡ 快速（像素 1:1 對顏色）↔ 🎤 現場（暗場 + LED 照明 + 光暈）
+  // 兩個模式：快速（像素 1:1 對顏色）/ 現場（暗場 + LED 照明 + 光暈）
   const cycleRenderMode = useCallback(() => {
     setRenderMode(m => (m === 'quick' ? 'live' : 'quick'));
   }, []);
-  const renderModeLabel = renderMode === 'live' ? '🎤 現場' : '⚡ 快速';
+  const renderModeLabel = renderMode === 'live'
+    ? <><Icon icon={Sparkles} size="md" /> 現場</>
+    : <><Icon icon={Zap} size="md" /> 快速</>;
   const renderModeNext = renderMode === 'live' ? '快速（像素 1:1 對顏色）' : '現場（暗場 + LED 照明 + 光暈）';
 
   return (
@@ -2108,18 +2145,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
               className={'tool ' + (mode === 'translate' ? 'is-active' : '')}
               onClick={() => setMode('translate')}
               title="移動 (W)"
-            >↔ 移動</button>
+            ><Icon icon={Move} size="md" /> 移動</button>
             <button
               className={'tool ' + (mode === 'rotate' ? 'is-active' : '')}
               onClick={() => setMode('rotate')}
               title="旋轉 (E)"
-            >↻ 旋轉</button>
+            ><Icon icon={Rotate3d} size="md" /> 旋轉</button>
             <span className="tool-sep" />
             <button
               className="tool"
               onClick={() => setSpace(s => s === 'world' ? 'local' : 'world')}
-              title="切換 world / local 軸 (Q)"
-            >{space === 'world' ? '🌐 World' : '📦 Local'}</button>
+              title={space === 'world' ? '目前是世界座標軸，按一下改成物件自己的軸 (Q)' : '目前是物件自己的軸，按一下改成世界座標軸 (Q)'}
+            >{space === 'world' ? <><Icon icon={Globe} size="md" /> 世界</> : <><Icon icon={Box} size="md" /> 物件</>}</button>
             <span className="tool-sep" />
           </>
         )}
@@ -2134,42 +2171,48 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
               className={'tool ' + (lookPanelOpen ? 'is-active' : '')}
               onClick={() => { setLookPanelOpen(o => !o); setMaterialPanelOpen(false); }}
               title="現場設定：底光 / 曝光 / LED 照明 / 光暈 / 倒影（調的是你自己看到的）"
-            >🎚 設定</button>
+            ><Icon icon={SlidersHorizontal} size="md" /> 設定</button>
           )}
           {onMaterialOverrideChange && (
             <button
               className={'tool ' + (materialPanelOpen ? 'is-active' : '')}
               onClick={() => { setMaterialPanelOpen(o => !o); setLookPanelOpen(false); }}
               title="材質：依 C4D 材質名稱調顏色 / 亮霧面 / 金屬感 / 反射 / 透明度，指定鏡面地板（所有人共用）"
-            >🎨 材質</button>
+            ><Icon icon={Palette} size="md" /> 材質</button>
           )}
           <button
             className={'tool ' + (wireframe ? 'is-active' : '')}
             onClick={() => setWireframe(w => !w)}
-            title={wireframe ? '切回實心 (X)' : 'Wireframe / X-ray 模式（看穿模型）(X)'}
-          >🔳 Wire</button>
+            title={wireframe ? '切回實心 (X)' : '線框模式：看穿模型 (X)'}
+          ><Icon icon={Grid3x3} size="md" /> 線框</button>
           {showScaleButton && (
             <button
               className={'tool ' + (showScaleRef ? 'is-active' : '')}
               onClick={() => setShowScaleRef(s => !s)}
               title={showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格'}
-            >👤 比例尺</button>
+            ><Icon icon={PersonStanding} size="md" /> 比例尺</button>
           )}
           <button
             className={'tool ' + (showLabels ? 'is-active' : '')}
             onClick={() => setShowLabels(s => !s)}
-            title={showLabels ? '隱藏物件名稱 label (L)' : '顯示物件名稱 label (L)'}
-          >🏷️ Label</button>
+            title={showLabels ? '隱藏物件名稱 (L)' : '顯示物件名稱 (L)'}
+          ><Icon icon={Tag} size="md" /> 名稱</button>
         </>)}
         <div className="bm-wrap" style={{ display: 'flex' }}>
-          <button className="tool" onClick={resetCamera} title={homeView ? '重置攝影機（回到設定的重置視角）' : '重置攝影機（正面全景）'}>🎥</button>
+          <button
+            className="tool"
+            onClick={resetCamera}
+            title={homeView ? '重置攝影機（回到設定好的畫面）' : '重置攝影機（正面全景）'}
+            aria-label="重置攝影機"
+          ><Icon icon={Video} size="md" /></button>
           {onHomeViewChange && !viewer && (
             <button
               className={'tool ' + (homeViewPanelOpen ? 'is-active' : '')}
               onClick={() => { setHomeViewPanelOpen(o => !o); setBookmarkPanelOpen(false); }}
-              title="設定重置視角（所有人按 🎥 都會回到這裡）"
+              title="設定重置攝影機的畫面（所有人按「重置攝影機」都會回到這裡）"
+              aria-label="設定重置攝影機的畫面"
               style={{ paddingLeft: 2, paddingRight: 4 }}
-            >▾</button>
+            ><Icon icon={ChevronDown} /></button>
           )}
           {homeViewPanelOpen && onHomeViewChange && !viewer && (
             <HomeViewPanel
@@ -2195,20 +2238,20 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           <button
             className={'tool ' + (walkMode ? 'is-active' : '')}
             onClick={() => setWalkMode(m => !m)}
-            title={walkMode ? '離開 Walk 模式（或按 Esc）' : 'Walk 模式 — WASD 走位、滑鼠看四周'}
-          >🚶 Walk</button>
+            title={walkMode ? '離開漫遊模式（或按 Esc）' : '漫遊模式：WASD 走動、滑鼠看四周'}
+          ><Icon icon={Footprints} size="md" /> 漫遊</button>
           {bookmarkScope && (
             <div className="bm-wrap">
               <button
                 className={'tool ' + (bookmarkPanelOpen ? 'is-active' : '')}
                 onClick={() => setBookmarkPanelOpen(o => !o)}
                 title={`視角書籤（${bookmarks.length}）— 儲存 / 切換常用視角`}
-              >📷 視角{bookmarks.length > 0 && <span className="muted small"> {bookmarks.length}</span>}</button>
+              ><Icon icon={Camera} size="md" /> 視角{bookmarks.length > 0 && <span className="muted small"> {bookmarks.length}</span>}</button>
               {bookmarkPanelOpen && (
                 <div className="bm-popover" onClick={e => e.stopPropagation()}>
                   <div className="bm-popover__head">
                     <span>視角書籤</span>
-                    <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)}>×</button>
+                    <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
                   </div>
                   <button className="btn btn--primary btn--sm bm-popover__save" onClick={saveCurrentCamera}>
                     + 儲存目前視角
@@ -2223,7 +2266,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                             <span className="bm-row__name">{bm.name}</span>
                             <span className="bm-row__coords">({bm.pos.map(n => n.toFixed(1)).join(', ')})</span>
                           </button>
-                          <button className="bm-row__del" onClick={() => deleteBookmark(bm.id)} title="刪除">×</button>
+                          <button className="bm-row__del" onClick={() => deleteBookmark(bm.id)} title="刪除這個視角" aria-label="刪除這個視角"><Icon icon={X} /></button>
                         </li>
                       ))}
                     </ul>
@@ -2237,7 +2280,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
               className={'tool ' + (addPinMode ? 'is-active' : '')}
               onClick={() => setAddPinMode(m => !m)}
               title={addPinMode ? '取消 3D 留言模式' : '在 3D 場景上某個位置 / 物件加留言'}
-            >📍 3D 留言</button>
+            ><Icon icon={MapPin} size="md" /> 3D 留言</button>
           )}
           <button
             className={'tool ' + (measureMode ? 'is-active' : '')}
@@ -2253,8 +2296,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                 }
               }
             }}
-            title={measureMode ? '關閉測距' : '測距：點兩個點看距離（m）'}
-          >📏 測距</button>
+            title={measureMode ? '關閉測距' : '測距：點兩個點看距離（公尺）'}
+          ><Icon icon={Ruler} size="md" /> 測距</button>
         </>)}
         <span className="grow" />
         {enableNdi && (
@@ -2270,11 +2313,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
               <div className="ndi-popover" onClick={e => e.stopPropagation()}>
                 <div className="ndi-popover__head">
                   AE 即時（NDI 小程序）
-                  <button className="ndi-popover__close" onClick={() => setNdiPopoverOpen(false)}>×</button>
+                  <button className="ndi-popover__close" onClick={() => setNdiPopoverOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} /></button>
                 </div>
                 <div className="ndi-popover__body">
                   {ndiGuideState.step === 'live' && (
-                    <div className="ndi-popover__live">● {ndiStepMessage(ndiGuideState, ndi.env.browser).title}</div>
+                    <div className="ndi-popover__live"><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiStepMessage(ndiGuideState, ndi.env.browser).title}</div>
                   )}
                   <NdiChecklist
                     guide={ndiGuideState}
@@ -2290,7 +2333,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                   {ndiGuideState.outdated && ndiGuideState.step !== 'helper_outdated' && (
                     <p className="ndi-popover__note">
                       小程序有新版（你的是 {ndiGuideState.helperVersion}）：
-                      <a href={ndi.env.os === 'mac' ? NDI_HELPER_DOWNLOAD_URL_MAC : NDI_HELPER_DOWNLOAD_URL}>⬇ 下載更新</a>
+                      <a href={ndi.env.os === 'mac' ? NDI_HELPER_DOWNLOAD_URL_MAC : NDI_HELPER_DOWNLOAD_URL}><Icon icon={Download} /> 下載更新</a>
                     </p>
                   )}
                   {ndiGuideState.helperVersion && !ndiGuideState.outdated && (
@@ -2302,19 +2345,19 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                     className="btn btn--ghost btn--sm"
                     onClick={ndi.retry}
                     disabled={ndiGuideState.step === 'browser_unsupported'}
-                  >🔄 重新連線</button>
+                  ><Icon icon={RefreshCw} /> 重新連線</button>
                   <a
                     className="btn btn--ghost btn--sm"
                     href={NDI_TOOLS_URL}
                     target="_blank"
                     rel="noreferrer"
-                  >NDI Tools ↗</a>
+                  >NDI Tools <Icon icon={ExternalLink} size="xs" /></a>
                   <a
                     className="btn btn--ghost btn--sm ndi-popover__help"
                     href={helpUrl(ndiHelpAnchor(ndiGuideState.step) ?? HELP_ANCHORS.aeLive)}
                     target="_blank"
                     rel="noopener"
-                  >📖 圖文說明</a>
+                  ><Icon icon={BookOpen} /> 圖文說明</a>
                 </div>
               </div>
             )}
@@ -2353,7 +2396,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       {/* Measure result overlay */}
       {measureMode && (
         <div className="stage-scene__measure-overlay">
-          <strong>📏 測距模式</strong>
+          <strong><Icon icon={Ruler} /> 測距模式</strong>
           {measureDistance === null
             ? <span> · 點兩個點測距離（點地板或物件表面）</span>
             : (
@@ -2364,8 +2407,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                     className="btn btn--ghost btn--sm"
                     style={{ marginLeft: 12 }}
                     onClick={() => { setCalibrateInput(''); setCalibratePromptOpen(true); }}
-                    title="把剛剛量到的距離設為已知值 → 全專案的測距 / 比例尺 / 機關滑桿都會用這個倍率（所有人一起）"
-                  >🎯 設為已知距離</button>
+                    title="把剛剛量到的距離設為已知值，全專案的測距 / 比例尺 / 機關滑桿都會用這個倍率（所有人一起）"
+                  ><Icon icon={Target} /> 設為已知距離</button>
                 )}
               </>
             )
@@ -2458,8 +2501,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         {viewer
           ? <>拖拉旋轉視角 · 滾輪縮放</>
           : readOnly
-          ? <><kbd>L</kbd> label · 拖拉旋轉視角 · 滾輪縮放</>
-          : <><kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>Q</kbd> world/local · <kbd>L</kbd> label · <kbd>Esc</kbd> 取消選取</>
+          ? <><kbd>L</kbd> 物件名稱 · 拖拉旋轉視角 · 滾輪縮放</>
+          : <><kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>Q</kbd> 世界 / 物件軸 · <kbd>L</kbd> 物件名稱 · <kbd>Esc</kbd> 取消選取</>
         }
       </div>
     </div>
@@ -2477,10 +2520,10 @@ function ndiPillClass(g: NdiGuide): string {
   return 'ndi-pill--warn';
 }
 
-function ndiPillIcon(g: NdiGuide): string {
-  if (g.step === 'live') return '●';
-  if (g.step === 'waiting_frames' && g.hadFrames) return '‖';
-  return '○';
+function ndiPillIcon(g: NdiGuide): ReactNode {
+  if (g.step === 'live') return <span className="ndi-dot ndi-dot--on" aria-hidden="true" />;
+  if (g.step === 'waiting_frames' && g.hadFrames) return <Icon icon={Pause} size="xs" />;
+  return <span className="ndi-dot" aria-hidden="true" />;
 }
 
 function disposeObject3D(obj: THREE.Object3D) {
@@ -2520,10 +2563,13 @@ function drawNdiMock(ctx: CanvasRenderingContext2D, c: HTMLCanvasElement, t: num
   ctx.font = 'bold 22px Inter, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('● LIVE PREVIEW', w / 2, h / 2 - 12);
+  ctx.fillText('LIVE PREVIEW', w / 2 + 10, h / 2 - 12);
+  ctx.beginPath();
+  ctx.arc(w / 2 - 92, h / 2 - 12, 6, 0, Math.PI * 2);
+  ctx.fill();
   ctx.font = '12px monospace';
   ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  ctx.fillText('NDI mock · 接上 helper.exe 後即實時內容', w / 2, h / 2 + 12);
+  ctx.fillText('示意畫面 · 連上 AE 即時後會換成 AE 的畫面', w / 2, h / 2 + 12);
 }
 
 function hsl(h: number, s: number, l: number) {
@@ -2559,7 +2605,7 @@ function updateLockPins(
       pin = document.createElement('div');
       pin.className = 'stage-scene__lock-pin';
       pin.dataset.objectId = s.objectId;
-      pin.textContent = '🔒';
+      pin.innerHTML = lockSvg(13);
       pin.title = `${s.displayName} 已鎖定`;
       layer.appendChild(pin);
     }
@@ -2651,7 +2697,7 @@ function updateCommentPins(
       pin.className = 'stage-scene__comment-pin stage-scene__comment-pin--' + c.role;
       pin.dataset.commentId = c.id;
       pin.title = `${c.author}: ${c.text}`;
-      pin.textContent = '💬';
+      pin.innerHTML = commentSvg(15);
       pin.addEventListener('click', () => {
         const ev = new CustomEvent('stage-comment-pin-click', { detail: c.id, bubbles: true });
         layer.dispatchEvent(ev);

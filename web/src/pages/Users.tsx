@@ -5,13 +5,10 @@ import type { UserAdmin, UserRole } from '../lib/api';
 import { parseServerTime } from '../lib/serverTime';
 import type { Project } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
+import { ROLE_LABEL } from '../lib/roleLabels';
+import Icon from '../components/Icon';
+import { Copy, FolderPlus, LoaderCircle, Pencil, RefreshCw, Trash2, TriangleAlert, UserCheck, UserX, X } from 'lucide-react';
 import './Users.css';
-
-const ROLE_LABEL: Record<UserRole, string> = {
-  admin: 'Admin',
-  animator: 'Animator',
-  director: 'Director',
-};
 
 const PALETTE = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];
 
@@ -63,7 +60,7 @@ export default function Users() {
     try {
       const { accessCode } = await api.setAccessCode(u.id);
       const ok = await copyText(accessCode);
-      alert(`✅ 新號碼：${accessCode}\n\n${ok ? '已複製到剪貼簿，' : ''}請傳給對方。`);
+      alert(`新號碼：${accessCode}\n\n${ok ? '已複製到剪貼簿，' : ''}請傳給對方。`);
       await refresh();
     } catch (e) {
       alert('失敗：' + (e instanceof Error ? e.message : String(e)));
@@ -76,7 +73,7 @@ export default function Users() {
     try {
       const { accessCode } = await api.setAccessCode(u.id, code);
       await copyText(accessCode);
-      alert(`✅ 號碼設定為：${accessCode}\n\n已複製到剪貼簿，請傳給對方。`);
+      alert(`號碼設定為：${accessCode}\n\n已複製到剪貼簿，請傳給對方。`);
       await refresh();
     } catch (e) {
       alert('失敗：' + (e instanceof Error ? e.message : String(e)));
@@ -86,7 +83,7 @@ export default function Users() {
   async function handleCopyCode(u: UserAdmin) {
     if (!u.accessCode) { alert('此用戶還沒有號碼'); return; }
     const ok = await copyText(u.accessCode);
-    alert(ok ? `✅ 已複製：${u.accessCode}` : `號碼是：${u.accessCode}（手動複製）`);
+    alert(ok ? `已複製：${u.accessCode}` : `號碼是：${u.accessCode}（請手動複製）`);
   }
 
   async function handleToggleActive(u: UserAdmin) {
@@ -102,7 +99,7 @@ export default function Users() {
 
   async function handleChangeRole(u: UserAdmin, role: UserRole) {
     if (u.id === me?.id && role !== 'admin') {
-      alert('不能把自己的權限降低 — 至少要保留一個 admin。');
+      alert('不能把自己的權限降低：至少要保留一個製作。');
       return;
     }
     try {
@@ -140,10 +137,10 @@ export default function Users() {
         </p>
 
         {loading ? (
-          <div className="empty-card"><div className="empty-card__icon">⏳</div><p>載入中…</p></div>
+          <div className="empty-card"><div className="empty-card__icon"><Icon icon={LoaderCircle} size="xl" spin /></div><p>載入中…</p></div>
         ) : error ? (
           <div className="empty-card">
-            <div className="empty-card__icon">⚠️</div>
+            <div className="empty-card__icon"><Icon icon={TriangleAlert} size="xl" /></div>
             <p>{error}</p>
             <button className="btn btn--ghost" onClick={refresh} style={{ marginTop: 12 }}>重試</button>
           </div>
@@ -173,15 +170,15 @@ export default function Users() {
 
                   <div className="user-row__code-row">
                     <code className="user-row__code">{u.accessCode || '— 還沒有號碼 —'}</code>
-                    <button className="user-row__btn" onClick={() => handleCopyCode(u)} title="複製號碼">📋 複製</button>
-                    <button className="user-row__btn" onClick={() => handleRegenCode(u)} title="重新產生">↻ 重產生</button>
-                    <button className="user-row__btn" onClick={() => handleSetCustomCode(u)} title="自訂號碼">✎ 自訂</button>
+                    <button className="user-row__btn" onClick={() => handleCopyCode(u)} title="複製號碼"><Icon icon={Copy} /> 複製</button>
+                    <button className="user-row__btn" onClick={() => handleRegenCode(u)} title="重新產生"><Icon icon={RefreshCw} /> 重新產生</button>
+                    <button className="user-row__btn" onClick={() => handleSetCustomCode(u)} title="自訂號碼"><Icon icon={Pencil} /> 自訂</button>
                   </div>
 
                   <div className="user-row__projects">
                     <span className="muted small">可看的專案：</span>
                     {u.projects.length === 0 ? (
-                      <span className="muted small">{u.role === 'admin' ? '（admin 看全部，不需指派）' : '無 — 點右側「指派專案」加上'}</span>
+                      <span className="muted small">{u.role === 'admin' ? '（製作看得到全部，不用指派）' : '無 — 點右側「指派」加上'}</span>
                     ) : (
                       u.projects.map(p => (
                         <span key={p.projectId} className="user-project-tag" title={ROLE_LABEL[p.role]}>
@@ -197,11 +194,11 @@ export default function Users() {
                 </div>
 
                 <div className="user-row__actions">
-                  <button onClick={() => setEditingUser(u)} title="指派專案">📁 指派</button>
+                  <button onClick={() => setEditingUser(u)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
                   <button onClick={() => handleToggleActive(u)} title={u.deactivated ? '重新啟用' : '停用'}>
-                    {u.deactivated ? '✓ 啟用' : '⏸ 停用'}
+                    {u.deactivated ? <><Icon icon={UserCheck} /> 啟用</> : <><Icon icon={UserX} /> 停用</>}
                   </button>
-                  <button onClick={() => handleDelete(u)} disabled={u.id === me?.id} title="刪除">🗑</button>
+                  <button onClick={() => handleDelete(u)} disabled={u.id === me?.id} title="刪除" aria-label="刪除"><Icon icon={Trash2} /></button>
                 </div>
               </article>
             ))}
@@ -263,7 +260,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
         projectIds,
       });
       await copyText(accessCode);
-      alert(`✅ 用戶「${name.trim()}」已建立。\n\n號碼：${accessCode}\n\n（已複製到剪貼簿，請私訊給對方）`);
+      alert(`用戶「${name.trim()}」已建立。\n\n號碼：${accessCode}\n\n（已複製到剪貼簿，請私訊給對方）`);
       onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -281,7 +278,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__header">
           <h2>新增用戶</h2>
-          <button className="dialog__close" onClick={onClose}>×</button>
+          <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <form className="dialog__body" onSubmit={submit}>
           <div className="form-row">
@@ -291,11 +288,11 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
           <div className="form-row">
             <label htmlFor="u-role">預設角色</label>
             <select id="u-role" value={role} onChange={(e) => setRole(e.target.value as UserRole)}>
-              <option value="animator">Animator（動畫師）</option>
-              <option value="director">Director（導演）</option>
-              <option value="admin">Admin（管理員 — 看全部 + 管用戶）</option>
+              <option value="animator">{ROLE_LABEL.animator}</option>
+              <option value="director">{ROLE_LABEL.director}</option>
+              <option value="admin">{ROLE_LABEL.admin}（看得到全部專案、可以管用戶）</option>
             </select>
-            <small className="form-hint">這是預設角色。指派到特定 project 時可以再 override 成其他角色。</small>
+            <small className="form-hint">這是預設角色。指派到某個專案時，可以在那個專案改成別的角色。</small>
           </div>
           <div className="form-row">
             <label htmlFor="u-code">號碼（留空自動產生）</label>
@@ -319,7 +316,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
                   </label>
                 ))}
               </div>
-              <small className="form-hint">建好後也可從用戶旁的「📁 指派」隨時改。</small>
+              <small className="form-hint">建好後也可以從用戶旁邊的「指派」隨時改。</small>
             </div>
           )}
           <div className="form-row">
@@ -394,7 +391,7 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__header">
           <h2>指派專案 — {user.name}</h2>
-          <button className="dialog__close" onClick={onClose}>×</button>
+          <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dialog__body">
           {allProjects.length === 0 ? (
@@ -418,9 +415,9 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
                         onChange={(e) => changeRole(p.id, e.target.value as UserRole)}
                         disabled={busy}
                       >
-                        <option value="animator">Animator</option>
-                        <option value="director">Director</option>
-                        <option value="admin">Admin</option>
+                        <option value="animator">{ROLE_LABEL.animator}</option>
+                        <option value="director">{ROLE_LABEL.director}</option>
+                        <option value="admin">{ROLE_LABEL.admin}</option>
                       </select>
                     )}
                   </li>

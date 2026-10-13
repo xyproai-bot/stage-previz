@@ -32,6 +32,14 @@
   justify-content: center;
   filter: drop-shadow(0 1px 0 rgba(0,0,0,0.5));
 }
+/* 時間軸上的留言標記：向上的小三角形（顏色跟著留言的人的角色） */
+.video-tl__pin-mark {
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 10px solid currentColor;
+}
 .video-tl__pin:hover {
   transform: translateX(-50%) scale(1.4);
   color: #fff;

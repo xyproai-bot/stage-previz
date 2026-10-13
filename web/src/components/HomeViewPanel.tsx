@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import { HOME_FOV_RANGE, type HomeView } from '../lib/homeView';
+import { X } from 'lucide-react';
+import Icon from './Icon';
 
 interface Props {
   /** 目前 🎥 會回到的畫面（自訂的，或自動算的正面全景） */
@@ -64,12 +66,12 @@ export default function HomeViewPanel({ view, isCustom, scale, onCaptureCurrent,
   return (
     <div className="bm-popover" onClick={e => e.stopPropagation()} data-ui-element>
       <div className="bm-popover__head">
-        <span>🎥 重置視角</span>
-        <button className="dlg__close" onClick={onClose}>×</button>
+        <span>重置攝影機的畫面</span>
+        <button className="dlg__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
       </div>
       <div style={{ padding: '8px 10px' }}>
         <div className="muted small" style={{ marginBottom: 8 }}>
-          所有人按 🎥 都會回到這個畫面 · 目前：{isCustom ? '自訂' : '自動（正面全景）'}
+          所有人按「重置攝影機」都會回到這個畫面 · 目前：{isCustom ? '自訂' : '自動（正面全景）'}
         </div>
         <button className="btn btn--primary btn--sm" style={{ width: '100%', marginBottom: 10 }} onClick={onCaptureCurrent}>
           用現在的畫面

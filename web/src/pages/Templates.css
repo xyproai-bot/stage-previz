@@ -25,7 +25,7 @@
   align-items: center;
   margin-bottom: 4px;
 }
-.asset-card__icon { font-size: 28px; }
+.asset-card__icon { display: inline-flex; color: var(--text-dim); }
 .asset-card__used {
   font-family: var(--font-mono);
   font-size: 11px;

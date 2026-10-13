@@ -41,3 +41,5 @@
   color: var(--text-muted);
   margin-top: 2px;
 }
+
+.asset-picker__row__icon { color: var(--text-dim); }

@@ -7,6 +7,8 @@ import type { HomeView } from '../lib/homeView';
 import StageScene from './StageScene';
 import { toast } from '../lib/toast';
 import { exportSongStoryboardAsPdf, loadCueThumbs } from '../lib/exportPdf';
+import { Clapperboard, FileDown, GripVertical, ImageOff, LoaderCircle, RefreshCw } from 'lucide-react';
+import Icon from './Icon';
 import './CueStoryboard.css';
 
 interface Props {
@@ -178,7 +180,7 @@ export default function CueStoryboard({
   return (
     <div className="storyboard">
       <div className="storyboard__head">
-        <span>Storyboard ({cues.length} cue · {thumbs.size} 已生成) <span className="muted small">· 拖卡片重排 · Alt+拖複製</span></span>
+        <span>分鏡（{cues.length} 個 cue · 已有 {thumbs.size} 張縮圖）<span className="muted small">· 拖卡片重排 · 按住 Alt 拖可以複製</span></span>
         <div style={{ display: 'flex', gap: 6 }}>
           {missingCount > 0 && (
             <button
@@ -186,7 +188,7 @@ export default function CueStoryboard({
               onClick={generateAll}
               disabled={!!generating}
             >
-              {generating ? '生成中…' : `🎬 自動生成 ${missingCount} 張縮圖`}
+              {generating ? '生成中…' : <><Icon icon={Clapperboard} /> 自動生成 {missingCount} 張縮圖</>}
             </button>
           )}
           <button
@@ -199,11 +201,11 @@ export default function CueStoryboard({
                 cues,
                 thumbs: tm,
               });
-              toast.info('開啟列印對話框 → 選「儲存為 PDF」');
+              toast.info('已開啟列印視窗，請選「儲存為 PDF」');
             }}
             disabled={cues.length === 0}
-            title="匯出 storyboard 為 PDF"
-          >📄 匯出 PDF</button>
+            title="把分鏡匯出成 PDF"
+          ><Icon icon={FileDown} /> 匯出 PDF</button>
         </div>
       </div>
       <div className="storyboard__strip">
@@ -233,12 +235,12 @@ export default function CueStoryboard({
                 {url ? (
                   <img src={url} alt={c.name} />
                 ) : isGenerating ? (
-                  <div className="storyboard__placeholder">⏳ 生成中…</div>
+                  <div className="storyboard__placeholder"><Icon icon={LoaderCircle} spin /> 生成中…</div>
                 ) : (
-                  <div className="storyboard__placeholder">🎬 還沒縮圖</div>
+                  <div className="storyboard__placeholder"><Icon icon={ImageOff} /> 還沒有縮圖</div>
                 )}
                 <span className="storyboard__num">#{idx + 1}</span>
-                <span className="storyboard__drag-hint" title="拖拉重新排序">⋮⋮</span>
+                <span className="storyboard__drag-hint" title="拖拉重新排序"><Icon icon={GripVertical} /></span>
               </button>
               <div className="storyboard__meta">
                 <span className="storyboard__name">{c.name}</span>
@@ -247,7 +249,8 @@ export default function CueStoryboard({
                   onClick={() => regenerate(c)}
                   disabled={!!generating}
                   title="重新抓縮圖"
-                >↻</button>
+                  aria-label="重新抓縮圖"
+                ><Icon icon={RefreshCw} /></button>
               </div>
             </div>
           );

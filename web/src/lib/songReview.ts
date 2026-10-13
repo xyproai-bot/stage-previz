@@ -133,8 +133,8 @@ export function friendlyError(e: unknown): string {
 /** 專案整個讀不到（被封存 / 刪除 / 被移出專案）時要顯示的話；不是這種錯誤回 null */
 export function projectGoneMessage(e: unknown): string | null {
   const status = (e as { status?: unknown } | null)?.status;
-  if (status === 404) return '這個專案已經封存或刪除了，看不到內容。有問題請聯絡製作主管。';
-  if (status === 403) return '你已經不是這個專案的成員（可能被移出專案了）。有問題請聯絡製作主管。';
+  if (status === 404) return '這個專案已經封存或刪除了，看不到內容。有問題請聯絡製作。';
+  if (status === 403) return '你已經不是這個專案的成員（可能被移出專案了）。有問題請聯絡製作。';
   return null;
 }
 

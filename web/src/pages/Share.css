@@ -603,3 +603,18 @@
   .share-top__hint { display: none; }
   .share-player__name { display: none; }
 }
+
+/* ─── 線條圖示（取代 emoji 後）─── */
+.share-player__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 6px;
+}
+.share-setlist__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.share-setlist__thumb > span { display: inline-flex; color: var(--text-dim); }
+.share-loading { flex-direction: row; }

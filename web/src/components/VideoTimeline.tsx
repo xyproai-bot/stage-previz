@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SongComment } from '../lib/api';
 import { getThumb, putThumb, thumbKey } from '../lib/thumbCache';
+import { roleLabel } from '../lib/roleLabels';
+import { Clock, MessageSquarePlus } from 'lucide-react';
+import Icon from './Icon';
 import './VideoTimeline.css';
 
 const THUMB_COUNT = 24;        // 一條時間軸切 24 張縮圖（密度夠看流向 + 不爆 GPU）
@@ -203,6 +206,7 @@ export default function VideoTimeline({
               key={c.id}
               className={'video-tl__pin video-tl__pin--' + c.role}
               style={{ left: `${pct}%` }}
+              aria-label={`${c.author} 在 ${formatTime(c.time)} 的留言`}
               onMouseEnter={(e) => {
                 if (pinHoverTimerRef.current !== null) clearTimeout(pinHoverTimerRef.current);
                 const target = e.currentTarget;
@@ -225,7 +229,7 @@ export default function VideoTimeline({
                 else onSeek(c.time);
               }}
             >
-              ▲
+              <span className="video-tl__pin-mark" aria-hidden="true" />
             </button>
           );
         })}
@@ -242,7 +246,7 @@ export default function VideoTimeline({
               <strong>{pinHover.comment.author}</strong>
               <span className="muted small">{roleLabel(pinHover.comment.role)}</span>
               <span className="grow" />
-              <span className="video-tl__pin-popover-time">📍 {formatTime(pinHover.comment.time)}</span>
+              <span className="video-tl__pin-popover-time"><Icon icon={Clock} size="xs" /> {formatTime(pinHover.comment.time)}</span>
             </div>
             <div className="video-tl__pin-popover-text">{pinHover.comment.text}</div>
           </div>
@@ -301,9 +305,9 @@ export default function VideoTimeline({
           <button
             className="video-tl__add"
             onClick={() => onAddCommentHere(currentTime)}
-            title="在當前時間加留言（會 pin 在時間軸上）"
+            title="在目前的時間加留言（會標在時間軸上）"
           >
-            💬 在 {formatTime(currentTime)} 加留言
+            <Icon icon={MessageSquarePlus} /> 在 {formatTime(currentTime)} 加留言
           </button>
         )}
       </div>
@@ -318,8 +322,3 @@ function formatTime(s: number): string {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function roleLabel(r: SongComment['role']): string {
-  if (r === 'animator') return '動畫師';
-  if (r === 'director') return '導演';
-  return '製作';
-}

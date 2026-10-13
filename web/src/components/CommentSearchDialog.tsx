@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../lib/api';
 import type { Song, SongComment } from '../lib/api';
+import { Check, Clock, LoaderCircle, Music, X } from 'lucide-react';
+import Icon from './Icon';
 import './CommentSearchDialog.css';
 
 interface Props {
@@ -98,8 +100,8 @@ export default function CommentSearchDialog({ open, projectId, songs, onClose, o
     <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="dlg cmt-search-dlg">
         <header className="dlg__header">
-          <h2>🔍 搜尋專案留言</h2>
-          <button className="dlg__close" onClick={onClose}>×</button>
+          <h2>搜尋專案留言</h2>
+          <button className="dlg__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="cmt-search-dlg__filters">
           <input
@@ -118,8 +120,8 @@ export default function CommentSearchDialog({ open, projectId, songs, onClose, o
         </div>
         <div className="cmt-search-dlg__progress">
           {loading
-            ? `🔄 抓留言中… ${progress.done}/${progress.total} 首歌`
-            : `✓ 已掃 ${progress.done} 首歌，找到 ${hits.length} 則符合的留言`
+            ? <><Icon icon={LoaderCircle} spin /> 讀取留言中… {progress.done}/{progress.total} 首歌</>
+            : `已搜尋 ${progress.done} 首歌，找到 ${hits.length} 則符合的留言`
           }
         </div>
         <div className="cmt-search-dlg__list">
@@ -136,10 +138,10 @@ export default function CommentSearchDialog({ open, projectId, songs, onClose, o
                     onClick={() => onJump?.(h.songId, h.comment.id)}
                   >
                     <div className="cmt-search-row__head">
-                      <span className="cmt-search-row__song">🎵 {h.songName}</span>
+                      <span className="cmt-search-row__song"><Icon icon={Music} size="xs" /> {h.songName}</span>
                       <span className="cmt-search-row__author">{h.comment.author}</span>
-                      {h.comment.time > 0 && <span className="cmt-search-row__time">📍 {formatTimeMS(h.comment.time)}</span>}
-                      {h.comment.status === 'resolved' && <span className="cmt-search-row__resolved">✓</span>}
+                      {h.comment.time > 0 && <span className="cmt-search-row__time"><Icon icon={Clock} size="xs" /> {formatTimeMS(h.comment.time)}</span>}
+                      {h.comment.status === 'resolved' && <span className="cmt-search-row__resolved" title="已解決"><Icon icon={Check} size="xs" /> 已解決</span>}
                     </div>
                     <div className="cmt-search-row__text">
                       {highlight(h.comment.text, query)}

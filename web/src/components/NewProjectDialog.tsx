@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api';
 import type { Show } from '../lib/api';
+import { X } from 'lucide-react';
+import Icon from './Icon';
 import './NewProjectDialog.css';
 
 interface Props {
@@ -55,7 +57,7 @@ export default function NewProjectDialog({ open, onClose, onCreate, submitting =
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__header">
           <h2>新增專案</h2>
-          <button className="dialog__close" onClick={onClose} aria-label="關閉">×</button>
+          <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
 
         <form onSubmit={submit} className="dialog__body">

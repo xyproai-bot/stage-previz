@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react';
 import { formatClock } from '../lib/localVideo';
 import type { LocalMediaItem } from '../lib/localMedia';
+import Icon from '../components/Icon';
+import { Film, Image, Pause, Play, Plus, X } from 'lucide-react';
 
 /** 清單裡拖曳排順序用的資料型別（跟從電腦拖檔案進來分開：檔案的 types 會有 'Files'） */
 const ROW_DRAG_TYPE = 'application/x-stage-previz-media';
@@ -116,7 +118,7 @@ export default function ShareSetlist({
                   <span className={'share-setlist__thumb' + (!it.thumbReady ? ' is-loading' : '')}>
                     {thumb
                       ? <img src={thumb} alt="" draggable={false} />
-                      : it.thumbReady ? <span aria-hidden>{it.kind === 'video' ? '🎬' : '🖼'}</span> : null}
+                      : it.thumbReady ? <span aria-hidden><Icon icon={it.kind === 'video' ? Film : Image} size="md" /></span> : null}
                   </span>
                   <span className="share-setlist__text">
                     <span className="share-setlist__name">{it.name}</span>
@@ -125,7 +127,9 @@ export default function ShareSetlist({
                       {it.kind === 'video' && duration > 0 && <span className="share-setlist__dur">{formatClock(duration)}</span>}
                       {active && (
                         <span className="share-setlist__now">
-                          {it.kind === 'video' ? (activePlaying ? '▶ 播放中' : '⏸ 暫停') : '● 顯示中'}
+                          {it.kind === 'video'
+                            ? (activePlaying ? <><Icon icon={Play} size="xs" /> 播放中</> : <><Icon icon={Pause} size="xs" /> 暫停</>)
+                            : <><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> 顯示中</>}
                         </span>
                       )}
                     </span>
@@ -136,7 +140,7 @@ export default function ShareSetlist({
                   onClick={() => onRemove(it.id)}
                   title="從清單移除"
                   aria-label={`從清單移除 ${it.name}`}
-                >✕</button>
+                ><Icon icon={X} /></button>
               </li>
             );
           })}
@@ -148,7 +152,7 @@ export default function ShareSetlist({
         onClick={() => inputRef.current?.click()}
         title="加入影片 / 圖片（也可以直接把檔案拖進來）"
       >
-        <span className="share-setlist__add-main">＋<span className="share-setlist__add-label"> 加入影片 / 圖片…</span></span>
+        <span className="share-setlist__add-main"><Icon icon={Plus} /><span className="share-setlist__add-label"> 加入影片 / 圖片…</span></span>
         <span className="share-setlist__add-sub">{fileDragOver ? '放開就加進清單' : '也可以直接把檔案拖進來'}</span>
       </button>
       <input

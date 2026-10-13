@@ -5,6 +5,7 @@
 // → 用戶在 print dialog 選「儲存為 PDF」即可。Chrome / Safari / Edge / Firefox 都支援。
 
 import type { Cue } from './api';
+import { crossfadeLabel } from './cueTiming';
 
 interface ExportOptions {
   projectName: string;
@@ -30,9 +31,9 @@ export function exportSongStoryboardAsPdf({ projectName, songName, cues, thumbs 
         <div class="cue__num">#${i + 1}</div>
         ${thumb
           ? `<img class="cue__thumb" src="${thumb}" alt="${escapeHtml(c.name)}" />`
-          : `<div class="cue__placeholder">🎬 沒縮圖</div>`}
+          : `<div class="cue__placeholder">還沒有縮圖</div>`}
         <div class="cue__name">${escapeHtml(c.name)}</div>
-        ${c.crossfadeSeconds > 0 ? `<div class="cue__cross">⤴ Crossfade ${c.crossfadeSeconds}s</div>` : ''}
+        <div class="cue__cross">${crossfadeLabel(c.crossfadeSeconds)}</div>
       </div>
     `;
   }).join('\n');
@@ -41,7 +42,7 @@ export function exportSongStoryboardAsPdf({ projectName, songName, cues, thumbs 
 <html lang="zh-TW">
 <head>
   <meta charset="UTF-8" />
-  <title>${escapeHtml(projectName)} — ${escapeHtml(songName)} · Storyboard</title>
+  <title>${escapeHtml(projectName)} — ${escapeHtml(songName)} · 分鏡</title>
   <style>
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft JhengHei', sans-serif; margin: 0; padding: 24px; color: #111; background: #fff; }
     h1 { font-size: 18px; margin: 0 0 4px; }
@@ -60,7 +61,7 @@ export function exportSongStoryboardAsPdf({ projectName, songName, cues, thumbs 
 </head>
 <body>
   <h1>${escapeHtml(projectName)}</h1>
-  <h2>${escapeHtml(songName)} · Storyboard（${cues.length} cue）</h2>
+  <h2>${escapeHtml(songName)} · 分鏡（${cues.length} 個 cue）</h2>
   <div class="meta">列印時間：${new Date().toLocaleString('zh-TW')}</div>
   <div class="grid">
     ${cueRows}

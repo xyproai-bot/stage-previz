@@ -2,7 +2,10 @@ import { ReactNode, useEffect, useState } from 'react';
 import { Link, NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { helpUrl } from '../lib/helpLinks';
+import { ROLE_LABEL } from '../lib/roleLabels';
+import { Archive, Boxes, Cloud, Folder, LogOut, Settings, Ticket, Users } from 'lucide-react';
 import HelpModal from './HelpModal';
+import Icon from './Icon';
 import './AdminLayout.css';
 
 interface AdminLayoutProps {
@@ -10,13 +13,13 @@ interface AdminLayoutProps {
 }
 
 const NAV = [
-  { key: 'projects', icon: '📁', label: '專案', path: '/admin' },
-  { key: 'shows', icon: '🎫', label: 'Show 巡迴', path: '/admin/shows' },
-  { key: 'drive', icon: '☁️', label: 'Drive 來源', path: '/admin/drive-sources' },
-  { key: 'users', icon: '👥', label: '用戶', path: '/admin/users' },
-  { key: 'templates', icon: '📐', label: '模板庫', path: '/admin/templates' },
-  { key: 'archived', icon: '🗑', label: '封存的專案', path: '/admin/archived' },
-  { key: 'settings', icon: '⚙️', label: '設定', path: '/settings' },
+  { key: 'projects', icon: Folder, label: '專案', path: '/admin' },
+  { key: 'shows', icon: Ticket, label: 'Show 巡迴', path: '/admin/shows' },
+  { key: 'drive', icon: Cloud, label: 'Drive 來源', path: '/admin/drive-sources' },
+  { key: 'users', icon: Users, label: '用戶', path: '/admin/users' },
+  { key: 'templates', icon: Boxes, label: '模型庫', path: '/admin/templates' },
+  { key: 'archived', icon: Archive, label: '封存的專案', path: '/admin/archived' },
+  { key: 'settings', icon: Settings, label: '設定', path: '/settings' },
 ];
 
 export default function AdminLayout({ children }: AdminLayoutProps) {
@@ -68,7 +71,7 @@ function AdminShell({ children }: AdminLayoutProps) {
                 'admin-sidebar__link' + (isActive ? ' is-active' : '')
               }
             >
-              <span className="admin-sidebar__icon">{item.icon}</span>
+              <span className="admin-sidebar__icon"><Icon icon={item.icon} size="md" /></span>
               <span>{item.label}</span>
             </NavLink>
           ))}
@@ -83,15 +86,15 @@ function AdminShell({ children }: AdminLayoutProps) {
               {user?.name?.[0] || '?'}
             </div>
             <div className="admin-sidebar__user-info">
-              <div className="admin-sidebar__user-name">{user?.name || 'Loading…'}</div>
-              <div className="admin-sidebar__user-role">{user?.role || ''}</div>
+              <div className="admin-sidebar__user-name">{user?.name || '載入中…'}</div>
+              <div className="admin-sidebar__user-role">{user ? ROLE_LABEL[user.role] : ''}</div>
             </div>
             <button
               className="admin-sidebar__logout"
               onClick={handleLogout}
               title="登出"
               aria-label="登出"
-            >⏻</button>
+            ><Icon icon={LogOut} /></button>
           </div>
         </div>
       </aside>

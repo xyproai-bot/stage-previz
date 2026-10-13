@@ -8,7 +8,7 @@ import StageScene from '../components/StageScene';
 import { toast } from '../lib/toast';
 import { markSeen, songUnread } from '../lib/unreadComments';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
-import { cueTransitionSeconds } from '../lib/cueTiming';
+import { crossfadeLabel, cueTransitionSeconds } from '../lib/cueTiming';
 import { helpUrl } from '../lib/helpLinks';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { useLiveRefresh } from '../lib/liveRefresh';
@@ -18,6 +18,11 @@ import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
   friendlyError, projectGoneMessage, canModifyComment, sameSongs, sameComments, newCommentsFromOthers,
 } from '../lib/songReview';
+import Icon from '../components/Icon';
+import { roleLabel } from '../lib/roleLabels';
+import {
+  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, HistoryIcon, LoaderCircle, Music, RefreshCw, TriangleAlert, X,
+} from 'lucide-react';
 import './Studio.css';
 
 type Tab = 'cues' | 'review' | 'activity';
@@ -30,7 +35,7 @@ export default function Studio() {
 
   // 沒有專案 id 的 /studio 由「我的專案」頁處理（App 路由），這裡不會走到
   if (!projectId) return null;
-  if (authLoading) return <div className="studio-loading">⏳ 載入中…</div>;
+  if (authLoading) return <div className="studio-loading"><Icon icon={LoaderCircle} spin /> 載入中…</div>;
   if (!user) {
     navigate('/login', { replace: true });
     return null;
@@ -104,7 +109,7 @@ function StudioInner({ projectId }: { projectId: string }) {
     const sel = selectedSongIdRef.current;
     const was = sel ? prev.find(s => s.id === sel) : undefined;
     if (was && !list.some(s => s.id === sel)) {
-      toast.warn(`你正在看的「${was.name}」已經被刪除了（可能是製作主管剛刪的），畫面已更新`);
+      toast.warn(`你正在看的「${was.name}」已經被刪除了（可能是製作剛刪的），畫面已更新`);
     }
     if (sameSongs(prev, list)) return;
     songsRef.current = list;
@@ -437,8 +442,8 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   const topBar = (
     <header className="studio-top">
-      <button className="studio-top__back" onClick={() => navigate('/studio')} title="所有專案">←</button>
-      <span className="studio-top__role">🎨 ANIMATOR</span>
+      <button className="studio-top__back" onClick={() => navigate('/studio')} title="所有專案" aria-label="所有專案"><Icon icon={ArrowLeft} size="md" /></button>
+      <span className="studio-top__role">動畫師</span>
       <span className="studio-top__project">
         {projectName || (nameStatus === 'error' && !goneMessage ? (
           <>
@@ -450,7 +455,7 @@ function StudioInner({ projectId }: { projectId: string }) {
       </span>
       <span className="grow" />
       {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
-      <a className="studio-top__help" href={helpUrl()} target="_blank" rel="noopener">📖 使用說明</a>
+      <a className="studio-top__help" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
       {/* 設定頁有 NDI / AE 連線檢查 */}
       <Link className="studio-top__help" to="/settings">設定</Link>
       {user && (
@@ -501,11 +506,11 @@ function StudioInner({ projectId }: { projectId: string }) {
               className="studio-songs__search"
               value={songSearch}
               onChange={e => setSongSearch(e.target.value)}
-              placeholder="🔍 搜尋歌名…"
+              placeholder="搜尋歌名…"
             />
           </div>
 
-          {songsLoading && <div className="studio-songs__empty">⏳ 載入中…</div>}
+          {songsLoading && <div className="studio-songs__empty"><Icon icon={LoaderCircle} spin /> 載入中…</div>}
           {songsError && (
             <div className="studio-songs__empty studio-songs__empty--err">
               {songsError}
@@ -517,7 +522,7 @@ function StudioInner({ projectId }: { projectId: string }) {
               {songSearch.trim() ? '沒有符合的歌'
                 : effectiveFilter === 'mine'
                   ? (songs.length > 0
-                    ? <>還沒有指派給你的歌（製作主管會在編輯器指派）。<br />可以先按「全部」看所有歌。</>
+                    ? <>還沒有指派給你的歌（製作會在編輯頁指派）。<br />可以先按「全部」看所有歌。</>
                     : '這個專案還沒有歌')
                   : '這個專案還沒有歌'}
             </div>
@@ -589,7 +594,7 @@ function StudioInner({ projectId }: { projectId: string }) {
               </div>
               {masterCues.length > 0 && (
                 <div className="studio-cuebar">
-                  <span className="studio-cuebar__label">Cues</span>
+                  <span className="studio-cuebar__label">Cue</span>
                   <button
                     className="studio-cuebar__nav"
                     onClick={() => {
@@ -598,7 +603,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                       setSelectedCueId(masterCues[next].id);
                     }}
                     title="上一個 cue (Shift+K)"
-                  >‹</button>
+                    aria-label="上一個 cue"
+                  ><Icon icon={ChevronLeft} size="md" /></button>
                   <div className="studio-cuebar__track">
                     {masterCues.map((c, i) => (
                       <button
@@ -620,7 +626,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                       setSelectedCueId(masterCues[next].id);
                     }}
                     title="下一個 cue (Shift+J)"
-                  >›</button>
+                    aria-label="下一個 cue"
+                  ><Icon icon={ChevronRight} size="md" /></button>
                   <span className="studio-cuebar__hint">
                     {selectedCueId ? `${masterCues.findIndex(c => c.id === selectedCueId) + 1}/${masterCues.length}` : `0/${masterCues.length}`}
                   </span>
@@ -629,7 +636,7 @@ function StudioInner({ projectId }: { projectId: string }) {
             </>
           ) : (
             <div className="studio-stage__empty">
-              <div className="studio-stage__empty-icon">🎤</div>
+              <div className="studio-stage__empty-icon"><Icon icon={Music} size="xxl" /></div>
               <p>{visibleSongs.length === 0 ? '從左側挑一首歌開始' : '挑一首歌'}</p>
             </div>
           )}
@@ -640,7 +647,7 @@ function StudioInner({ projectId }: { projectId: string }) {
             <button
               className={'tab' + (tab === 'cues' ? ' is-active' : '')}
               onClick={() => setTab('cues')}
-            >Cues ({masterCues.length})</button>
+            >Cue（{masterCues.length}）</button>
             <button
               className={'tab' + (tab === 'review' ? ' is-active' : '')}
               onClick={() => setTab('review')}
@@ -652,7 +659,7 @@ function StudioInner({ projectId }: { projectId: string }) {
             <button
               className={'tab' + (tab === 'activity' ? ' is-active' : '')}
               onClick={() => setTab('activity')}
-            >🕒 活動</button>
+            ><Icon icon={HistoryIcon} /> 活動</button>
           </div>
           <div className="studio-right__body">
             {tab === 'cues' && (
@@ -662,14 +669,14 @@ function StudioInner({ projectId }: { projectId: string }) {
                 onSelectCue={setSelectedCueId}
                 emptyHint={
                   !selectedSong ? '先挑一首歌'
-                  : cuesStatus === 'loading' ? '⏳ 載入 cue 中…'
+                  : cuesStatus === 'loading' ? <><Icon icon={LoaderCircle} spin /> 載入 cue 中…</>
                   : cuesStatus === 'error' ? (
                     <>
-                      <div>⚠️ cue 載入失敗</div>
+                      <div><Icon icon={TriangleAlert} /> cue 載入失敗</div>
                       <button className="btn btn--ghost" onClick={() => setCuesReloadKey(k => k + 1)} style={{ marginTop: 8 }}>重試</button>
                     </>
                   )
-                  : '這首歌還沒有 cue，請聯絡製作主管'
+                  : '這首歌還沒有 cue，請聯絡製作'
                 }
               />
             )}
@@ -731,7 +738,7 @@ function CuesTab({
             <span className="studio-cues__num">#{idx + 1}</span>
             <span className="studio-cues__name">{c.name}</span>
             {c.crossfadeSeconds > 0 && (
-              <span className="studio-cues__cross">⤴ {c.crossfadeSeconds}s</span>
+              <span className="studio-cues__cross">{crossfadeLabel(c.crossfadeSeconds)}</span>
             )}
           </button>
         </li>
@@ -859,7 +866,7 @@ function ReviewTab({
         <div className="studio-review__compose">
           <textarea
             placeholder={canSubmit
-              ? '寫一段給導演 / 製作主管的話，按「提交審查」會一起送出'
+              ? '寫一段給導演 / 製作的話，按「提交審查」會一起送出'
               : '在這裡留言（給協作者看）'}
             value={note}
             onChange={e => setNote(e.target.value)}
@@ -894,7 +901,7 @@ function ReviewTab({
                           onClick={() => { setEditingId(c.id); setEditText(c.text); }}
                           title="修改"
                         >修改</button>
-                        <button className="studio-comment__del" onClick={() => handleDelete(c.id)} title="刪除">×</button>
+                        <button className="studio-comment__del" onClick={() => handleDelete(c.id)} title="刪除" aria-label="刪除"><Icon icon={X} /></button>
                       </>
                     )}
                   </div>
@@ -919,11 +926,6 @@ function ReviewTab({
   );
 }
 
-function roleLabel(r: SongComment['role']): string {
-  if (r === 'animator') return '動畫師';
-  if (r === 'director') return '導演';
-  return '製作';
-}
 
 /* ──────────── Activity feed (read-only viewer) ──────────── */
 
@@ -947,7 +949,7 @@ function ActivityList({ projectId }: { projectId: string }) {
     <div className="activity-list">
       <div className="activity-list__head">
         <span>最近 {items.length} 筆</span>
-        <button className="link-btn" onClick={refresh}>↻</button>
+        <button className="link-btn" onClick={refresh} title="重新整理" aria-label="重新整理"><Icon icon={RefreshCw} /></button>
       </div>
       <ul>
         {items.map(a => (

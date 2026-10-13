@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import { X } from 'lucide-react';
+import Icon from './Icon';
 import './HelpModal.css';
 
 export default function HelpModal({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -18,21 +20,21 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
       <div className="help-modal" onClick={(e) => e.stopPropagation()}>
         <header className="help-modal__head">
           <h2>使用說明</h2>
-          <button className="dialog__close" onClick={onClose}>×</button>
+          <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="help-modal__body">
           <section>
-            <h3>🌍 全域</h3>
+            <h3>全站</h3>
             <dl>
               <dt><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>K</kbd></dt>
-              <dd>開啟「快速搜尋 / 切換」面板（找專案、Show、cue、物件）</dd>
+              <dd>快速搜尋 / 切換（找專案、Show、cue、物件）</dd>
               <dt><kbd>?</kbd></dt>
-              <dd>開啟此說明</dd>
+              <dd>打開這個說明</dd>
             </dl>
           </section>
 
           <section>
-            <h3>📁 專案編輯器（在某個 project 內）</h3>
+            <h3>專案編輯頁</h3>
             <dl>
               <dt><kbd>J</kbd> / <kbd>K</kbd></dt>
               <dd>切到下一首 / 上一首歌</dd>
@@ -46,129 +48,132 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
           </section>
 
           <section>
-            <h3>🎮 3D Viewport</h3>
+            <h3>3D 畫面</h3>
             <dl>
               <dt><kbd>W</kbd> / <kbd>E</kbd></dt>
               <dd>切換 移動 / 旋轉 工具</dd>
               <dt><kbd>Q</kbd></dt>
-              <dd>切換 World / Local 軸向</dd>
+              <dd>切換 世界座標軸 / 物件自己的軸</dd>
               <dt><kbd>L</kbd></dt>
-              <dd>顯示 / 隱藏物件 label</dd>
+              <dd>顯示 / 隱藏物件名稱</dd>
+              <dt><kbd>X</kbd></dt>
+              <dd>線框模式（看穿模型）</dd>
               <dt><kbd>Esc</kbd></dt>
               <dd>取消選取</dd>
               <dt>點物件</dt>
               <dd>單選</dd>
               <dt><kbd>Shift</kbd>+點物件</dt>
-              <dd>加 / 減選（多選）</dd>
-              <dt>多選後拖 gizmo</dt>
-              <dd>所有選中物件一起移動 / 旋轉</dd>
+              <dd>加選 / 減選（多選）</dd>
+              <dt>多選後拖控制器</dt>
+              <dd>所有選中的物件一起移動 / 旋轉</dd>
+              <dt>重置攝影機</dt>
+              <dd>工具列的攝影機按鈕：回到設定好的畫面（旁邊的小箭頭可以設定這個畫面）</dd>
             </dl>
           </section>
 
           <section>
-            <h3>🎬 Cue 系統</h3>
+            <h3>Cue</h3>
             <ul>
-              <li><strong>Cue tracking</strong>：cue 沒設某物件位置時，會自動繼承同 song 內前一個 cue 的位置（不是回到 default）</li>
-              <li><strong>Cue 模板（💎）</strong>：把常用 cue 存成模板，新 cue 可從模板一鍵套用，跨專案也可用（全域模板）</li>
-              <li><strong>Crossfade</strong>：cue 設 crossfade 秒數後，切換 cue 時 mesh 位置 / 角度會平滑過渡（不再硬切）</li>
-              <li><strong>Storyboard</strong>：topbar「🎬 Storyboard」可一覽該歌所有 cue 縮圖；自動從 3D 場景抓圖存 localStorage</li>
+              <li><strong>沿用前一個 cue</strong>：cue 沒設某個物件的位置時，會沿用同一首歌前一個 cue 的位置（不會跳回預設位置）</li>
+              <li><strong>轉場</strong>：每個 cue 可以設轉場秒數，換 cue 時物件會在這段時間內滑過去；0 秒 = 直接切換</li>
+              <li><strong>常用擺位</strong>：在 cue 旁邊按書籤圖示，把這個 cue 的物件位置存起來；新增 cue 時選「從常用擺位建立」就能套用，也可以給所有專案共用</li>
+              <li><strong>分鏡</strong>：上方「分鏡」可以一次看這首歌所有 cue 的縮圖，也能匯出 PDF</li>
             </ul>
           </section>
 
           <section>
-            <h3>✨ 渲染模式</h3>
+            <h3>畫面模式</h3>
             <ul>
-              <li><strong>⚡ Quick</strong>：純色 PBR，快但沒 LED 發光</li>
-              <li><strong>🎬 Realistic</strong>：LED 發光、HDR 環境貼圖、ACES tone mapping</li>
-              <li><strong>✨ Cinematic</strong>：Realistic + Bloom 後處理（LED 真的「溢光」）</li>
-              <li>StageScene 工具列點 mode 按鈕循環切換</li>
+              <li><strong>快速</strong>：LED 顏色跟 AE 一樣（像素 1:1），看得最清楚</li>
+              <li><strong>現場</strong>：暗場、LED 照亮周圍、光暈，比較像演出當天的樣子</li>
+              <li>現場模式的「設定」可以調底光、曝光、LED 照明、光暈、倒影（只影響你自己看到的）</li>
             </ul>
           </section>
 
           <section>
-            <h3>📺 NDI 即時預覽（動畫師端）</h3>
+            <h3>AE 即時（NDI）</h3>
             <ul>
-              <li>動畫師端跑 <code>stage-previz-ndi-helper.exe</code> 後，LED 板會顯示 AE 的 NDI 即時內容</li>
-              <li>StageScene 工具列「○ NDI 等待中 / ● LIVE NDI」綠點 — 點開 popover 看狀態、選來源、重連</li>
-              <li>沒接 NDI 時 LED 顯示彩色掃描線 mock（避免黑屏）</li>
+              <li>動畫師的電腦開著 NDI 小程序，3D 舞台的 LED 就會即時顯示 AE 的畫面</li>
+              <li>3D 畫面上方的 NDI 標示：綠色實心點 = 正在播、空心點 = 等待中；點一下可以看狀態、選來源、重新連線</li>
+              <li>還沒接上 AE 時，LED 會顯示彩色的示意畫面（不會全黑）</li>
             </ul>
           </section>
 
           <section>
-            <h3>☁ Drive 整合</h3>
+            <h3>Google Drive</h3>
             <ul>
-              <li>admin 在 <code>/admin/drive-sources</code> 連 Google 帳號（一次）</li>
-              <li>專案編輯器 topbar「☁ Drive」設 Drive 資料夾 + 檔名規則（預設 <code>^S(\d+)_</code>）</li>
-              <li>每 5 分鐘自動同步；新版本影片自動分到對應歌曲</li>
-              <li>導演端 SongDetail 自動顯示最新影片，多版本可下拉切換、可「⊞ 並排對比」V1 vs V2</li>
+              <li>製作先在「Drive 來源」連接 Google 帳號（只要一次）</li>
+              <li>專案編輯頁上方的「Drive」設定要抓哪個資料夾、檔名規則</li>
+              <li>每 5 分鐘自動同步，新版本的影片會自動分到對應的歌</li>
+              <li>導演頁會自動顯示最新的影片，有好幾版時可以切換、並排對比</li>
             </ul>
           </section>
 
           <section>
-            <h3>🎤 導演端</h3>
+            <h3>導演頁</h3>
             <dl>
               <dt><kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd></dt>
-              <dd>切 cue（在 SongDetail 內）</dd>
-              <dt>「🎤 整場串播」</dt>
-              <dd>從目前歌曲依序自動推進，每 cue 停留 N 秒</dd>
-              <dt>影片 ▲ pin</dt>
-              <dd>留言時間軸位置；hover 看預覽，點擊跳到對應留言</dd>
-              <dt>「💬 在 X 加留言」</dt>
-              <dd>留言會綁定當前影片時間，list 顯示 📍</dd>
-              <dt>「📍 3D 留言」</dt>
-              <dd>StageScene 工具列開啟 → 點 3D 物件 / 空白 → 留言綁定 mesh / world 座標，視角變了 pin 跟著走</dd>
-              <dt>「🔗 分享」</dt>
-              <dd>建公開連結（admin 端）：寄給外部人看 read-only 預覽，可設密碼 / 期限</dd>
+              <dd>切 cue（在歌曲頁裡）</dd>
+              <dt>「整場串播」</dt>
+              <dd>從目前的歌開始依序自動播放，每個 cue 停幾秒可以選</dd>
+              <dt>時間軸上的小三角形</dt>
+              <dd>留言的時間點；滑鼠移上去看內容，點一下跳到那則留言</dd>
+              <dt>「在 00:12 加留言」</dt>
+              <dd>留言會綁在目前的影片時間</dd>
+              <dt>「3D 留言」</dt>
+              <dd>在 3D 畫面點物件或空白處，留言會釘在那個位置，轉視角也會跟著</dd>
+              <dt>「分享」</dt>
+              <dd>製作建立公開連結：外部的人不用登入就能看（只能看不能改），可以設密碼和期限</dd>
             </dl>
           </section>
 
           <section>
-            <h3>💬 留言</h3>
+            <h3>留言</h3>
             <ul>
-              <li><strong>篩選 / 排序</strong>：未解決 / 已解決 / 全部 × 角色 × 時間排序</li>
-              <li><strong>已解決標記</strong>：點留言旁邊「✓」切換 open / resolved（記下誰解決 + 何時）</li>
-              <li><strong>3D 錨點</strong>：留言可貼在物件 / 場景座標上，3D viewport 顯示 💬 pin</li>
-              <li><strong>影片時間</strong>：留言可綁影片秒數，時間軸顯示 ▲</li>
+              <li><strong>篩選 / 排序</strong>：未解決 / 已解決 / 全部，依角色、依時間排</li>
+              <li><strong>已解決</strong>：按留言旁邊的打勾圖示，切換「已解決 / 未解決」（會記下是誰、什麼時候）</li>
+              <li><strong>3D 位置</strong>：留言可以釘在物件或場景上，3D 畫面會顯示留言圖釘</li>
+              <li><strong>影片時間</strong>：留言可以綁影片的秒數，時間軸上會有小三角形</li>
             </ul>
           </section>
 
           <section>
-            <h3>🥽 WebXR</h3>
+            <h3>VR</h3>
             <ul>
-              <li>Quest 瀏覽器 / 支援 WebXR 的桌面瀏覽器：StageScene 右下角會出 VR 按鈕</li>
-              <li>戴上頭盔直接走進舞臺（cinematic 模式自動 fallback 為單純 render）</li>
+              <li>支援 VR 的瀏覽器（例如 Quest）：3D 畫面右下角會出現「進入 VR」按鈕</li>
+              <li>戴上頭盔就能直接走進舞台</li>
             </ul>
           </section>
 
           <section>
-            <h3>👥 用戶 / 權限</h3>
+            <h3>用戶與權限</h3>
             <ul>
-              <li>每個用戶一組「號碼」（access code）登入，沒有密碼</li>
-              <li>admin 可以建用戶、改名、改號碼、指派專案</li>
-              <li>非 admin 用戶只看到 admin 指派的專案</li>
-              <li>所有操作都會記在「最近活動」（audit log）</li>
+              <li>每個人用一組「號碼」登入，沒有密碼</li>
+              <li>製作可以新增用戶、改名、改號碼、指派專案</li>
+              <li>動畫師和導演只看得到被指派的專案</li>
+              <li>重要的操作都會記在「最近活動」</li>
             </ul>
           </section>
 
           <section>
-            <h3>📦 模型 / 資產</h3>
+            <h3>模型</h3>
             <ul>
-              <li>每個專案可上傳一個 .glb / .gltf；舊版本自動保留，可隨時切回</li>
-              <li>模板庫（共用資產）：admin 上傳一份，多個專案共用同一個 model（不重複佔空間）</li>
-              <li>LED 板會在 Realistic 模式發光投影到周圍物件</li>
+              <li>每個專案可以上傳一個 .glb / .gltf；舊版本會自動留著，隨時可以切回</li>
+              <li>模型庫：製作上傳一份，多個專案共用同一個模型（不重複佔空間）</li>
+              <li>LED 在「現場」模式會發光，照亮周圍的物件</li>
             </ul>
           </section>
 
           <section>
-            <h3>🎫 Show 巡迴</h3>
+            <h3>Show 巡迴</h3>
             <ul>
-              <li>Show 是巡迴的母體：一個 Show 可包含多個專案（每場一個專案）</li>
-              <li>從「📋 複製專案」可以快速複製整棵樹開新場次</li>
+              <li>Show 是一整個巡迴：一個 Show 底下可以放好幾個專案（每場一個）</li>
+              <li>專案卡片的「複製專案」可以快速複製整個專案，開新的場次</li>
             </ul>
           </section>
         </div>
         <footer className="help-modal__foot">
-          <span className="muted small">需求 / 回報問題 → 直接跟 admin 說</span>
+          <span className="muted small">有需求或發現問題，請直接跟我們說</span>
           <button className="btn btn--primary" onClick={onClose}>知道了</button>
         </footer>
       </div>

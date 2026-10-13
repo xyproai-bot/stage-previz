@@ -7,6 +7,8 @@ import {
 } from '../lib/shareSlug';
 import { shareSlugUrl, shareTokenUrl } from '../lib/siteUrl';
 import { parseServerTime } from '../lib/serverTime';
+import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, Music, Pencil, Trash2, X } from 'lucide-react';
+import Icon from './Icon';
 import './ShareLinksDialog.css';
 
 interface Props {
@@ -122,7 +124,7 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
     setSavingSlug(true);
     try {
       await api.updateShareLinkSlug(projectId, l.token, slug);
-      toast.success(slug ? '好讀網址已更新 ✓' : '已拿掉好讀網址');
+      toast.success(slug ? '好讀網址已更新' : '已拿掉好讀網址');
       setEditingToken(null);
       await refresh();
     } catch (e) {
@@ -138,7 +140,7 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
   async function copyLink(url: string) {
     try {
       await navigator.clipboard.writeText(url);
-      toast.success('已複製連結 ✓');
+      toast.success('已複製連結');
     } catch {
       // fallback：開新分頁讓用戶自己複製
       window.prompt('複製這個連結：', url);
@@ -154,12 +156,12 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
     <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="dlg" style={{ maxWidth: 760 }}>
         <header className="dlg__header">
-          <h2>🔗 公開分享連結</h2>
-          <button className="dlg__close" onClick={onClose}>×</button>
+          <h2>公開分享連結</h2>
+          <button className="dlg__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dlg__body">
           <p className="share-dlg__hint">
-            建立連結後寄給外部人 → 對方不需登入，直接看 read-only 預覽（包含 3D 場景 + cue 切換）
+            建立連結後傳給外部的人，對方不用登入就能看（只能看、不能改；包含 3D 舞台和 cue 切換）
           </p>
 
           {/* Create form */}
@@ -228,28 +230,29 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                             <div className="share-link-row__alt">
                               <span>舊式網址（一直能用）：</span>
                               <code title={tokenUrl}>{tokenUrl}</code>
-                              <button className="share-link-row__mini" onClick={() => copyLink(tokenUrl)} title="複製舊式網址">📋</button>
+                              <button className="share-link-row__mini" onClick={() => copyLink(tokenUrl)} title="複製舊式網址" aria-label="複製舊式網址"><Icon icon={Copy} size="xs" /></button>
                             </div>
                           )}
                           <div className="share-link-row__meta">
                             {l.songId
-                              ? `🎵 ${songs.find(s => s.id === l.songId)?.name || '單首歌'}`
-                              : '📁 整個專案'}
-                            {l.hasPassword && ' · 🔒 有密碼'}
-                            {l.expiresAt && ` · ⏰ ${expired ? '已過期' : `到期 ${new Date(parseServerTime(l.expiresAt)).toLocaleDateString('zh-TW')}`}`}
-                            {' · 👁 ' + l.viewCount + ' 次瀏覽'}
+                              ? <><Icon icon={Music} size="xs" /> {songs.find(s => s.id === l.songId)?.name || '單首歌'}</>
+                              : <><Icon icon={Folder} size="xs" /> 整個專案</>}
+                            {l.hasPassword && <> · <Icon icon={Lock} size="xs" /> 有密碼</>}
+                            {l.expiresAt && <> · <Icon icon={Clock} size="xs" /> {expired ? '已過期' : `到期 ${new Date(parseServerTime(l.expiresAt)).toLocaleDateString('zh-TW')}`}</>}
+                            <> · <Icon icon={Eye} size="xs" /> {l.viewCount} 次瀏覽</>
                             {l.lastViewedAt && ` · 上次 ${formatRelative(l.lastViewedAt)}`}
                           </div>
                         </div>
                         <div className="share-link-row__actions">
-                          <button className="btn btn--ghost btn--sm" onClick={() => copyLink(mainUrl)} title="複製連結">📋</button>
-                          <a className="btn btn--ghost btn--sm" href={mainUrl} target="_blank" rel="noreferrer" title="打開看看">↗</a>
+                          <button className="btn btn--ghost btn--sm" onClick={() => copyLink(mainUrl)} title="複製連結" aria-label="複製連結"><Icon icon={Copy} /></button>
+                          <a className="btn btn--ghost btn--sm" href={mainUrl} target="_blank" rel="noreferrer" title="打開看看" aria-label="打開看看"><Icon icon={ExternalLink} /></a>
                           <button
                             className="btn btn--ghost btn--sm"
                             onClick={() => (editing ? setEditingToken(null) : startEditSlug(l))}
                             title={l.slug ? '改好讀網址' : '加一個好讀網址'}
-                          >✏️</button>
-                          <button className="btn btn--ghost btn--sm" onClick={() => handleDelete(l.token)} title="刪除">🗑</button>
+                            aria-label={l.slug ? '改好讀網址' : '加一個好讀網址'}
+                          ><Icon icon={Pencil} /></button>
+                          <button className="btn btn--ghost btn--sm" onClick={() => handleDelete(l.token)} title="刪除這條連結" aria-label="刪除這條連結"><Icon icon={Trash2} /></button>
                         </div>
                       </div>
                       {editing && (
@@ -319,7 +322,8 @@ function SlugFields({ draft, onChange, allowEmpty = false }: {
               className="btn btn--ghost btn--sm"
               onClick={() => onChange({ ...draft, suffix: randomSlugSuffix() })}
               title="換一組隨機碼"
-            >🎲</button>
+              aria-label="換一組隨機碼"
+            ><Icon icon={Dices} /></button>
           )}
         </div>
       </label>

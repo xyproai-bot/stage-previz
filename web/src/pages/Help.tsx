@@ -8,6 +8,11 @@ import { HELP_ANCHORS as A, type HelpAnchor } from '../lib/helpLinks';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
 import { NDI_AUTOSTART_NOTE, OLD_HELPER_HINT, PERMISSION_PROMPT_TEXT, permissionFixSteps } from '../lib/ndiSteps';
 import { FIGS, type FigKey, type HelpFig } from './helpFigures';
+import Icon from '../components/Icon';
+import {
+  Check, ChevronDown, Clapperboard, Copy, Download, ExternalLink, FolderOpen, Globe, Image, Info, Laptop, Lightbulb, Link,
+  Menu, Monitor, Puzzle, Radio, RadioTower, Scan, Square, SquareCheck, TriangleAlert, X,
+} from 'lucide-react';
 import './Help.css';
 
 // ─── 目錄 ───
@@ -165,7 +170,7 @@ function Num({ n }: { n: number }) {
 function Note({ kind = 'tip', title, children }: { kind?: 'tip' | 'warn'; title?: string; children: ReactNode }) {
   return (
     <div className={'help-note help-note--' + kind}>
-      <span className="help-note__icon" aria-hidden>{kind === 'warn' ? '⚠' : '💡'}</span>
+      <span className="help-note__icon" aria-hidden><Icon icon={kind === 'warn' ? TriangleAlert : Lightbulb} size="md" /></span>
       <div>
         {title && <strong className="help-note__title">{title}</strong>}
         {children}
@@ -214,7 +219,7 @@ function F({ k }: { k: FigKey }) {
     <figure className="help-fig" style={maxWidth ? { maxWidth } : undefined}>
       {missing ? (
         <div className="help-fig__placeholder" role="img" aria-label={fig.alt}>
-          <span className="help-fig__placeholder-icon" aria-hidden>🖼</span>
+          <span className="help-fig__placeholder-icon" aria-hidden><Icon icon={Image} size="xl" /></span>
           <span>{fig.alt}</span>
           <span className="help-fig__placeholder-sub">（圖片準備中）</span>
         </div>
@@ -244,8 +249,8 @@ function Lightbox({ k, onClose }: { k: FigKey; onClose: () => void }) {
     <div className="help-lightbox" role="dialog" aria-modal="true" aria-label={fig.alt} onClick={onClose}>
       <div className="help-lightbox__bar" onClick={e => e.stopPropagation()}>
         <span className="help-lightbox__title">{fig.caption ?? fig.alt}</span>
-        <a href={fig.src} target="_blank" rel="noreferrer">原圖 ↗</a>
-        <button type="button" onClick={onClose} aria-label="關閉">×</button>
+        <a href={fig.src} target="_blank" rel="noreferrer">原圖 <Icon icon={ExternalLink} size="xs" /></a>
+        <button type="button" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
       </div>
       <div className="help-lightbox__body">
         <FigImage fig={fig} zoomed />
@@ -265,10 +270,10 @@ function ChromePromptMock() {
     <figure className="help-fig help-mock help-mock--chrome" aria-label={`示意圖：Chrome 問「${PERMISSION_PROMPT_TEXT}」，按「允許」`}>
       <div className="help-mock__frame help-mock__frame--light">
         <span className="help-mock__tag">示意圖</span>
-        <div className="help-mock__url" aria-hidden><span className="help-mock__lock">ⓘ</span> previz.haimiaan.com/s/…</div>
+        <div className="help-mock__url" aria-hidden><span className="help-mock__lock"><Icon icon={Info} size="xs" /></span> previz.haimiaan.com/s/…</div>
         <div className="help-mock__prompt" aria-hidden>
           <div className="help-mock__prompt-title">previz.haimiaan.com 想要</div>
-          <div className="help-mock__prompt-row"><span>🖥</span>{PERMISSION_PROMPT_TEXT}</div>
+          <div className="help-mock__prompt-row"><Icon icon={Monitor} /> {PERMISSION_PROMPT_TEXT}</div>
           <div className="help-mock__prompt-btns">
             <span className="help-mock__btn">封鎖</span>
             <span className="help-mock__btn is-primary">允許<span className="help-num help-mock__num">1</span></span>
@@ -288,15 +293,15 @@ function ResolutionMock() {
         <span className="help-mock__tag">示意圖</span>
         <div className="help-mock__viewer" aria-hidden>合成視窗</div>
         <div className="help-mock__bar" aria-hidden>
-          <span className="help-mock__chip">50% ▾</span>
-          <span className="help-mock__chip is-on">Third ▾<span className="help-num help-mock__num">1</span></span>
-          <span className="help-mock__chip">▣</span>
+          <span className="help-mock__chip">50% <Icon icon={ChevronDown} size="xs" /></span>
+          <span className="help-mock__chip is-on">Third <Icon icon={ChevronDown} size="xs" /><span className="help-num help-mock__num">1</span></span>
+          <span className="help-mock__chip"><Icon icon={Scan} size="xs" /></span>
           <span className="help-mock__chip">0:00:12:05</span>
         </div>
         <ul className="help-mock__menu" aria-hidden>
           <li>Full</li>
           <li>Half</li>
-          <li className="is-on">✓ Third</li>
+          <li className="is-on"><Icon icon={Check} size="xs" /> Third</li>
           <li>Quarter</li>
           <li className="is-sep">Custom…</li>
         </ul>
@@ -309,8 +314,8 @@ function ResolutionMock() {
 function DownloadHelper({ only }: { only?: 'windows' | 'mac' }) {
   return (
     <div className="help-actions">
-      {only !== 'mac' && <a className="help-btn help-btn--primary" href={NDI_HELPER_DOWNLOAD_URL}>⬇ 下載 NDI 小程序（Windows）</a>}
-      {only !== 'windows' && <a className={'help-btn' + (only === 'mac' ? ' help-btn--primary' : '')} href={NDI_HELPER_DOWNLOAD_URL_MAC}>⬇ 下載 NDI 小程序（Mac）</a>}
+      {only !== 'mac' && <a className="help-btn help-btn--primary" href={NDI_HELPER_DOWNLOAD_URL}><Icon icon={Download} /> 下載 NDI 小程序（Windows）</a>}
+      {only !== 'windows' && <a className={'help-btn' + (only === 'mac' ? ' help-btn--primary' : '')} href={NDI_HELPER_DOWNLOAD_URL_MAC}><Icon icon={Download} /> 下載 NDI 小程序（Mac）</a>}
     </div>
   );
 }
@@ -318,7 +323,7 @@ function DownloadHelper({ only }: { only?: 'windows' | 'mac' }) {
 function NdiToolsButton() {
   return (
     <div className="help-actions">
-      <a className="help-btn help-btn--primary" href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">前往 NDI Tools 下載頁（免費）↗</a>
+      <a className="help-btn help-btn--primary" href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">前往 NDI Tools 下載頁（免費）<Icon icon={ExternalLink} size="xs" /></a>
     </div>
   );
 }
@@ -404,7 +409,7 @@ export default function Help() {
     <ZoomContext.Provider value={setZoom}>
       <div className="help">
         <header className="help-top">
-          <a className="help-top__brand" href="/">🎬 STAGE PREVIZ</a>
+          <a className="help-top__brand" href="/"><span className="brand-mark" aria-hidden="true" />STAGE PREVIZ</a>
           <span className="help-top__title">使用說明</span>
           <span className="grow" />
           <button
@@ -414,7 +419,7 @@ export default function Help() {
             aria-controls="help-toc"
             onClick={() => setMenuOpen(o => !o)}
           >
-            <span aria-hidden>☰</span> 目錄<span className="help-top__current">{currentLabel ? ` · ${currentLabel}` : ''}</span>
+            <Icon icon={Menu} /> 目錄<span className="help-top__current">{currentLabel ? ` · ${currentLabel}` : ''}</span>
           </button>
         </header>
 
@@ -446,12 +451,12 @@ export default function Help() {
 
             <Section id={A.whatYouNeed} title="要準備什麼">
               <ul className="help-checklist">
-                <li><span aria-hidden>💻</span><div><strong>Windows 或 Mac 電腦</strong>（就是跑 AE 的那台）</div></li>
-                <li><span aria-hidden>🌐</span><div><strong>Chrome、Edge 或 Firefox</strong> 瀏覽器。<em>Safari 不行</em>（iPhone、iPad 也不行）</div></li>
-                <li><span aria-hidden>📡</span><div><strong>NDI Tools</strong>：NDI 官方的免費軟體，AE 靠它把畫面送出來</div></li>
-                <li><span aria-hidden>🧩</span><div><strong>NDI 小程序</strong>：我們做的小程式，免費，在背景接收 AE 的畫面</div></li>
-                <li><span aria-hidden>🎬</span><div><strong>After Effects</strong></div></li>
-                <li><span aria-hidden>🔗</span><div><strong>分享連結</strong>：導演或管理員給你的網址</div></li>
+                <li><span aria-hidden><Icon icon={Laptop} size="lg" /></span><div><strong>Windows 或 Mac 電腦</strong>（就是跑 AE 的那台）</div></li>
+                <li><span aria-hidden><Icon icon={Globe} size="lg" /></span><div><strong>Chrome、Edge 或 Firefox</strong> 瀏覽器。<em>Safari 不行</em>（iPhone、iPad 也不行）</div></li>
+                <li><span aria-hidden><Icon icon={RadioTower} size="lg" /></span><div><strong>NDI Tools</strong>：NDI 官方的免費軟體，AE 靠它把畫面送出來</div></li>
+                <li><span aria-hidden><Icon icon={Puzzle} size="lg" /></span><div><strong>NDI 小程序</strong>：我們做的小程式，免費，在背景接收 AE 的畫面</div></li>
+                <li><span aria-hidden><Icon icon={Clapperboard} size="lg" /></span><div><strong>After Effects</strong></div></li>
+                <li><span aria-hidden><Icon icon={Link} size="lg" /></span><div><strong>分享連結</strong>：導演或製作給你的網址</div></li>
               </ul>
             </Section>
 
@@ -536,10 +541,10 @@ export default function Help() {
 
                 <p>在「視訊預覽」頁，照這樣設定：</p>
                 <ol className="help-steps help-steps--marked">
-                  <li><Num n={1} />☑ <strong>勾</strong>「<Ui>Enable Mercury Transmit</Ui>」</li>
-                  <li><Num n={2} />在清單裡「<Ui>NDI output</Ui>」那一行，☑ <strong>勾</strong>「<Ui>Video Stream</Ui>」<br />
+                  <li><Num n={1} /><Icon icon={SquareCheck} /> <strong>勾</strong>「<Ui>Enable Mercury Transmit</Ui>」</li>
+                  <li><Num n={2} />在清單裡「<Ui>NDI output</Ui>」那一行，<Icon icon={SquareCheck} /> <strong>勾</strong>「<Ui>Video Stream</Ui>」<br />
                     <span className="help-muted">（沒有「NDI output」這一行 = NDI Tools 還沒裝好，或裝完還沒重開 AE）</span></li>
-                  <li><Num n={3} />☐ <strong>不要勾</strong>「<Ui>Disable video output when in the background</Ui>」（中文版：在背景時停用視訊輸出）<br />
+                  <li><Num n={3} /><Icon icon={Square} /> <strong>不要勾</strong>「<Ui>Disable video output when in the background</Ui>」（中文版：在背景時停用視訊輸出）<br />
                     <span className="help-muted">（不然你一點到瀏覽器，AE 就停止送畫面）</span></li>
                   <li><Num n={4} />按「<Ui>OK</Ui>」</li>
                 </ol>
@@ -556,7 +561,7 @@ export default function Help() {
               <Section id={A.chromeAllow} level={3} title="④ 用 Chrome 打開分享連結，按「允許」">
                 <ol className="help-steps">
                   <li>用 <strong>Chrome</strong>（或 Edge、Firefox）打開導演給你的分享連結。</li>
-                  <li>上面選「<Ui>🔴 AE 即時</Ui>」（預設就是），3D 舞台上會出現「AE 即時畫面」卡片 → 按「<Ui>連接 AE 即時</Ui>」。
+                  <li>上面選「<Ui><Icon icon={Radio} /> AE 即時</Ui>」（預設就是），3D 舞台上會出現「AE 即時畫面」卡片 → 按「<Ui>連接 AE 即時</Ui>」。
                     <F k="sharePermission" />
                   </li>
                   <li>瀏覽器左上角（網址列下面）會跳出一個小視窗問：<br />
@@ -575,12 +580,12 @@ export default function Help() {
               <ol className="help-steps">
                 <li>打開 AE 和你的專案（小程序開機就自己開了，不用管）。</li>
                 <li>按空白鍵<strong>播放</strong>你的合成。</li>
-                <li>用 Chrome 打開分享連結，上面選「<Ui>🔴 AE 即時</Ui>」。</li>
+                <li>用 Chrome 打開分享連結，上面選「<Ui><Icon icon={Radio} /> AE 即時</Ui>」。</li>
                 <li>3D 畫面上方出現綠色「<Ui>LIVE</Ui>」，LED 就是 AE 的畫面了。</li>
               </ol>
               <F k="shareLive" />
               <p>畫面卡卡的或電腦很燙？看 <Go to={A.resolution}>建議的預覽解析度</Go>。</p>
-              <p>卡片上的「<Ui>×</Ui>」可以把卡片收起來；按 3D 畫面上方的 NDI 標示可以再打開。沒有 AE 的時候，可以按「<Ui>🎬 本地檔案</Ui>」把影片或圖片拖進來看。</p>
+              <p>卡片右上角的「<Ui><Icon icon={X} /></Ui>」可以把卡片收起來；按 3D 畫面上方的 NDI 標示可以再打開。沒有 AE 的時候，可以按「<Ui><Icon icon={FolderOpen} /> 本地檔案</Ui>」把影片或圖片拖進來看。</p>
             </Section>
 
             <Section id={A.resolution} title="建議的預覽解析度">
@@ -678,7 +683,7 @@ export default function Help() {
               </Faq>
 
               <Faq id={A.faqSafari} title="「Safari 不支援 AE 即時畫面」">
-                <p>Safari 會直接擋掉網頁連到小程序，沒辦法用。請改用 <strong>Chrome、Edge 或 Firefox</strong> 打開同一個連結。卡片上的「<Ui>📋 複製這個連結</Ui>」可以把網址複製起來，貼到 Chrome。</p>
+                <p>Safari 會直接擋掉網頁連到小程序，沒辦法用。請改用 <strong>Chrome、Edge 或 Firefox</strong> 打開同一個連結。卡片上的「<Ui><Icon icon={Copy} /> 複製這個連結</Ui>」可以把網址複製起來，貼到 Chrome。</p>
                 <p className="help-muted">iPhone、iPad 上的瀏覽器都是 Safari 核心，也不行。AE 即時本來就要在跑 AE 的電腦上看。</p>
                 <F k="cardSafari" />
               </Faq>
@@ -690,7 +695,7 @@ export default function Help() {
             </Section>
 
             <footer className="help-footer">
-              <p>還是不行？把 3D 舞台上卡片的畫面截圖傳給導演或管理員。</p>
+              <p>還是不行？把 3D 舞台上卡片的畫面截圖傳給導演或製作。</p>
             </footer>
           </main>
         </div>

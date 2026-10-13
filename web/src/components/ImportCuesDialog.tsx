@@ -3,6 +3,8 @@ import * as api from '../lib/api';
 import type { Song } from '../lib/api';
 import type { Project } from '../lib/mockData';
 import { toast } from '../lib/toast';
+import { Folder, Import, X } from 'lucide-react';
+import Icon from './Icon';
 import './ImportCuesDialog.css';
 
 interface Props {
@@ -82,13 +84,13 @@ export default function ImportCuesDialog({ open, projectId, songId, songName, on
     <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div className="dlg import-cues-dlg">
         <header className="dlg__header">
-          <h2>📥 匯入 Cue 到「{songName}」</h2>
-          <button className="dlg__close" onClick={onClose}>×</button>
+          <h2>匯入 Cue 到「{songName}」</h2>
+          <button className="dlg__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dlg__body">
           <p className="import-cues-dlg__hint">
             從別首歌（同專案或別專案）一鍵把所有 cue + 物件位置複製過來。<br />
-            物件用 <strong>mesh 名稱</strong>對應；對不到的會略過（會告訴你有幾個）。
+            物件用 <strong>C4D 裡的物件名稱</strong>對應；對不到的會略過（會告訴你有幾個）。
           </p>
 
           <div className="import-cues-dlg__opt">
@@ -107,7 +109,7 @@ export default function ImportCuesDialog({ open, projectId, songId, songName, on
                 if (validSongs.length === 0) return null;
                 return (
                   <div key={project.id} className="import-cues-dlg__project">
-                    <div className="import-cues-dlg__proj-name">📁 {project.name}</div>
+                    <div className="import-cues-dlg__proj-name"><Icon icon={Folder} /> {project.name}</div>
                     <ul>
                       {validSongs.map(s => (
                         <li key={s.id}>
@@ -139,7 +141,7 @@ export default function ImportCuesDialog({ open, projectId, songId, songName, on
             onClick={handleImport}
             disabled={!pickedSong || importing}
           >
-            {importing ? '匯入中…' : '📥 開始匯入'}
+            {importing ? '匯入中…' : <><Icon icon={Import} /> 開始匯入</>}
           </button>
         </footer>
       </div>

@@ -4,6 +4,8 @@ import AdminLayout from '../components/AdminLayout';
 import NewShowDialog from '../components/NewShowDialog';
 import * as api from '../lib/api';
 import type { Show } from '../lib/api';
+import Icon from '../components/Icon';
+import { LoaderCircle, Ticket, TriangleAlert } from 'lucide-react';
 import './Shows.css';
 
 export default function Shows() {
@@ -57,17 +59,17 @@ export default function Shows() {
         </p>
 
         {loading ? (
-          <div className="empty-card"><div className="empty-card__icon">⏳</div><p>載入中…</p></div>
+          <div className="empty-card"><div className="empty-card__icon"><Icon icon={LoaderCircle} size="xl" spin /></div><p>載入中…</p></div>
         ) : error ? (
           <div className="empty-card">
-            <div className="empty-card__icon">⚠️</div>
+            <div className="empty-card__icon"><Icon icon={TriangleAlert} size="xl" /></div>
             <p>載入失敗</p>
             <small style={{ color: 'var(--warn)' }}>{error}</small>
             <button className="btn btn--ghost" onClick={refresh} style={{ marginTop: 12 }}>重試</button>
           </div>
         ) : shows.length === 0 ? (
           <div className="empty-card">
-            <div className="empty-card__icon">🎫</div>
+            <div className="empty-card__icon"><Icon icon={Ticket} size="xl" /></div>
             <p>尚無任何 Show</p>
             <small>有跨多場的巡迴時，建一個 Show 把所有場次的專案歸在一起</small>
             <button className="btn btn--primary" onClick={() => setDialogOpen(true)} style={{ marginTop: 12 }}>
@@ -91,7 +93,7 @@ export default function Shows() {
                 }}
               >
                 <div className="show-card__header">
-                  <span className="show-card__icon">🎫</span>
+                  <span className="show-card__icon"><Icon icon={Ticket} size="lg" /></span>
                   <div className="show-card__count">{s.projectCount} 個專案</div>
                 </div>
                 <h3 className="show-card__title">{s.name}</h3>

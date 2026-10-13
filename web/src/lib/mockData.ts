@@ -65,7 +65,7 @@ export const MOCK_PROJECTS: Project[] = [
   {
     id: 'p2',
     name: '演唱會 X',
-    description: '巡迴第二場，待修中',
+    description: '巡迴第二場，審查中',
     status: 'in_review',
     songCount: 8,
     cueCount: 24,

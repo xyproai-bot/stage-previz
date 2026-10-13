@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import type { StageObject } from '../lib/api';
+import { ChevronDown, ChevronRight, Cog, MoveHorizontal, MoveVertical, RotateCcw } from 'lucide-react';
+import Icon from './Icon';
 
 interface Props {
   stageObjects: StageObject[];
@@ -52,7 +54,7 @@ export default function MechanismPanel({ stageObjects, offsets, onChange, onRese
           }}
           title={collapsed ? '展開機關面板' : '收起機關面板'}
         >
-          🎛️ 機關 {collapsed ? '▸' : '▾'}
+          <Icon icon={Cog} /> 機關 <Icon icon={collapsed ? ChevronRight : ChevronDown} />
         </button>
         {!collapsed && (
           <button
@@ -90,8 +92,8 @@ export default function MechanismPanel({ stageObjects, offsets, onChange, onRese
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                     fontSize: 11, marginBottom: 2,
                   }}>
-                    <span style={{ opacity: 0.8 }}>
-                      {axis === 'x' ? '←→' : '↑↓'}
+                    <span style={{ opacity: 0.8 }} title={axis === 'x' ? '左右' : '上下'}>
+                      <Icon icon={axis === 'x' ? MoveHorizontal : MoveVertical} label={axis === 'x' ? '左右' : '上下'} />
                     </span>
                     <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <span style={{ fontFamily: 'monospace', minWidth: 60, textAlign: 'right' }}>
@@ -106,7 +108,8 @@ export default function MechanismPanel({ stageObjects, offsets, onChange, onRese
                           padding: 0, fontSize: 11, width: 16,
                         }}
                         title="這個軸歸零"
-                      >↺</button>
+                        aria-label="這個軸歸零"
+                      ><Icon icon={RotateCcw} size="xs" /></button>
                     </span>
                   </div>
                   <input

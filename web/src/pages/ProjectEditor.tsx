@@ -26,6 +26,14 @@ import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneT
 import { toast } from '../lib/toast';
 import { friendlyError } from '../lib/songReview';
 import type { ProjectMember } from '../lib/mockData';
+import { SONG_STATUS_LABEL } from '../lib/songReview';
+import Icon from '../components/Icon';
+import { STAGE_CATEGORY } from '../components/stageCategories';
+import {
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
+  Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
+  Palette, Pencil, Plus, Redo2, RotateCcw, Search, Shapes, Sprout, Trash2, Undo2, Upload, X,
+} from 'lucide-react';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -38,22 +46,16 @@ type StatePatchInput = CueStatePatch | ((current: CueState['effective']) => CueS
 type SongStatus = Song['status'];
 type StatusFilter = SongStatus | 'all';
 
-const CATEGORY_INFO: Record<StageObjectCategory, { icon: string; label: string }> = {
-  led_panel:  { icon: '🟦', label: 'LED 面板' },
-  mechanism:  { icon: '⚙️', label: '機關' },
-  walk_point: { icon: '📍', label: '走位點' },
-  fixture:    { icon: '💡', label: '燈光/道具' },
-  performer:  { icon: '🧍', label: '表演者' },
-  other:      { icon: '⬜', label: '其他' },
-};
+const CATEGORY_INFO = STAGE_CATEGORY;
 
 const STATUS_INFO: Record<SongStatus, { label: string; mod: string }> = {
-  todo:          { label: 'Todo',          mod: 'todo' },
-  in_review:     { label: 'In Review',     mod: 'review' },
-  approved:      { label: 'Approved',      mod: 'approved' },
-  needs_changes: { label: 'Needs Changes', mod: 'changes' },
+  todo:          { label: SONG_STATUS_LABEL.todo,          mod: 'todo' },
+  in_review:     { label: SONG_STATUS_LABEL.in_review,     mod: 'review' },
+  approved:      { label: SONG_STATUS_LABEL.approved,      mod: 'approved' },
+  needs_changes: { label: SONG_STATUS_LABEL.needs_changes, mod: 'changes' },
 };
-const STATUS_ORDER: SongStatus[] = ['todo', 'in_review', 'approved', 'needs_changes'];
+/** 審片流程的順序：待製作 → 審查中 → 需修改 → 已通過 */
+const STATUS_ORDER: SongStatus[] = ['todo', 'in_review', 'needs_changes', 'approved'];
 
 export default function ProjectEditor() {
   const { projectId } = useParams();
@@ -466,14 +468,14 @@ export default function ProjectEditor() {
 
   async function handleSaveCueAsTemplate(cueId: string, cueName: string) {
     if (!projectId) return;
-    const name = prompt(`為這個 cue 建立模板\n\n模板名稱：`, cueName)?.trim();
+    const name = prompt(`把這個 cue 的物件位置存成「常用擺位」\n\n名稱：`, cueName)?.trim();
     if (!name) return;
-    const scope = confirm('這個模板要做成「全域」（所有專案都能用）嗎？\n\n按確定 = 全域；取消 = 只給這個專案用');
+    const scope = confirm('這個常用擺位要給「所有專案」都能用嗎？\n\n按確定 = 所有專案都能用；取消 = 只給這個專案用');
     try {
       await api.createCueTemplate(projectId, { name, description: '', fromCueId: cueId, global: scope });
-      alert(`✅ 已存為${scope ? '全域' : '本專案'}模板「${name}」`);
+      alert(`已存成${scope ? '所有專案都能用' : '這個專案'}的常用擺位「${name}」`);
     } catch (e) {
-      alert('存模板失敗：' + msg(e));
+      alert('存常用擺位失敗：' + msg(e));
     }
   }
 
@@ -488,14 +490,14 @@ export default function ProjectEditor() {
       await refreshCues();
       setRightTab('cues');
       setTemplatePickerOpen(false);
-    } catch (e) { alert('套模板失敗：' + msg(e)); }
+    } catch (e) { alert('套用常用擺位失敗：' + msg(e)); }
   }
 
   // ── Cue actions ──
   async function handleAddBlankCue() {
     if (!projectId || !selectedSongId) return;
     const defaultName = `Cue ${cues.length + 1}`;
-    const name = prompt('新增空白 cue（全部用 default）— 名稱：', defaultName)?.trim();
+    const name = prompt('新增空白 cue（全部用預設位置）\n\n名稱：', defaultName)?.trim();
     if (!name) return;
     try { await api.createCue(projectId, selectedSongId, { name, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS }); await refreshCues(); setRightTab('cues'); }
     catch (e) { alert('新增失敗：' + msg(e)); }
@@ -518,9 +520,9 @@ export default function ProjectEditor() {
   }
   async function handleSnapshotCue() {
     if (!projectId || !selectedSongId) return;
-    if (viewportStates.length === 0) { alert('沒有物件可 snapshot'); return; }
-    const defaultName = selectedCue ? `${selectedCue.name} (snapshot)` : `Cue ${cues.length + 1}`;
-    const name = prompt('從目前 3D 狀態建立 cue — 名稱：', defaultName)?.trim();
+    if (viewportStates.length === 0) { alert('沒有物件可以記下來'); return; }
+    const defaultName = selectedCue ? `${selectedCue.name}（目前狀態）` : `Cue ${cues.length + 1}`;
+    const name = prompt('從目前 3D 狀態建立 cue\n\n名稱：', defaultName)?.trim();
     if (!name) return;
     try {
       const snapshotStates = viewportStates.map(s => ({
@@ -531,7 +533,7 @@ export default function ProjectEditor() {
       await api.createCue(projectId, selectedSongId, { name, snapshotStates, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS });
       await refreshCues();
       setRightTab('cues');
-    } catch (e) { alert('snapshot 失敗：' + msg(e)); }
+    } catch (e) { alert('建立失敗：' + msg(e)); }
   }
   async function handleDuplicateCueQuick(cueId: string) {
     if (!projectId || !selectedSongId) return;
@@ -544,7 +546,7 @@ export default function ProjectEditor() {
   }
   async function handleResetCue(cueId: string, name: string) {
     if (!projectId || !selectedSongId) return;
-    if (!confirm(`重置「${name}」cue 的所有物件 override？這會把所有物件回到 default。`)) return;
+    if (!confirm(`重置「${name}」cue 裡所有物件的調整？所有物件會回到預設位置。`)) return;
     try {
       await api.resetCue(projectId, selectedSongId, cueId);
       await refreshCueStates();
@@ -666,7 +668,7 @@ export default function ProjectEditor() {
   /** askFirst = false：多選一起重置時，外面已經問過一次了 */
   async function handleResetState(objId: string, askFirst = true) {
     if (!projectId || !selectedSongId || !selectedCueId) return;
-    if (askFirst && !confirm('重置這個物件回 default？')) return;
+    if (askFirst && !confirm('把這個物件重置回預設位置？')) return;
     const pid = projectId, songId = selectedSongId, cueId = selectedCueId;
     const scope = historyScope(cueId);
     try {
@@ -699,7 +701,7 @@ export default function ProjectEditor() {
   }
   async function handleAddObject() {
     if (!projectId) return;
-    const meshName = prompt('Mesh 名稱（對應 .glb 內的 mesh）')?.trim();
+    const meshName = prompt('C4D 物件名稱（要跟 .glb 檔裡的物件名稱一樣）')?.trim();
     if (!meshName) return;
     const displayName = prompt('顯示名稱（顯示用、可留空）', meshName)?.trim() || meshName;
     try {
@@ -759,7 +761,7 @@ export default function ProjectEditor() {
   }
   async function handleDeleteObject(obj: StageObject) {
     if (!projectId) return;
-    if (!confirm(`刪除物件「${obj.displayName}」？這會連同所有 cue 對它的 override 一起刪掉。`)) return;
+    if (!confirm(`刪除物件「${obj.displayName}」？所有 cue 裡對它的調整也會一起刪掉。`)) return;
     try {
       await api.deleteStageObject(projectId, obj.id);
       await refreshStageObjects();
@@ -771,7 +773,7 @@ export default function ProjectEditor() {
     <div className="editor">
       {/* Top */}
       <header className="editor-topbar">
-        <button className="editor-back" onClick={() => navigate('/admin')} title="返回專案總覽">←</button>
+        <button className="editor-back" onClick={() => navigate('/admin')} title="返回專案總覽" aria-label="返回專案總覽"><Icon icon={ArrowLeft} size="md" /></button>
         <div className="editor-breadcrumb">
           <span className="muted">專案</span>
           <span className="sep">/</span>
@@ -797,7 +799,7 @@ export default function ProjectEditor() {
               ? `復原${selectedCueId ? '這個 cue ' : ''}的上一步（還有 ${historyCounts.undo} 步）— Cmd/Ctrl+Z`
               : `${selectedCueId ? '這個 cue ' : ''}沒有可以復原的修改`}
           >
-            ↶<span className="editor-topbar__label"> Undo</span>{historyCounts.undo > 0 && <span className="muted small"> ({historyCounts.undo})</span>}
+            <Icon icon={Undo2} /><span className="editor-topbar__label"> 復原</span>{historyCounts.undo > 0 && <span className="muted small"> ({historyCounts.undo})</span>}
           </button>
           <button
             className="editor-topbar__activity"
@@ -807,15 +809,15 @@ export default function ProjectEditor() {
               ? `重做剛剛復原的修改（還有 ${historyCounts.redo} 步）— Cmd/Ctrl+Shift+Z 或 Ctrl+Y`
               : '沒有可以重做的修改'}
           >
-            ↷<span className="editor-topbar__label"> Redo</span>{historyCounts.redo > 0 && <span className="muted small"> ({historyCounts.redo})</span>}
+            <Icon icon={Redo2} /><span className="editor-topbar__label"> 重做</span>{historyCounts.redo > 0 && <span className="muted small"> ({historyCounts.redo})</span>}
           </button>
           <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setStoryboardOpen(true)}
-            title="Cue Storyboard（縮圖一覽）"
+            title="分鏡：這首歌所有 cue 的縮圖一覽"
             disabled={!selectedSong || masterCues.length === 0}
           >
-            🎬<span className="editor-topbar__label"> Storyboard</span>
+            <Icon icon={LayoutGrid} /><span className="editor-topbar__label"> 分鏡</span>
           </button>
           <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
@@ -823,7 +825,7 @@ export default function ProjectEditor() {
             title="兩個 cue 並排對比"
             disabled={!selectedSong || masterCues.length < 2}
           >
-            🔀<span className="editor-topbar__label"> 對比</span>
+            <Icon icon={Columns2} /><span className="editor-topbar__label"> 對比</span>
           </button>
           <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
@@ -831,36 +833,36 @@ export default function ProjectEditor() {
             title="從別首歌匯入 cue（巡迴複製、跨專案沿用）"
             disabled={!selectedSong}
           >
-            📥<span className="editor-topbar__label"> 匯入 Cue</span>
+            <Icon icon={Import} /><span className="editor-topbar__label"> 匯入 Cue</span>
           </button>
           <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setCommentSearchOpen(true)}
             title="搜尋專案內所有歌的留言"
           >
-            🔍<span className="editor-topbar__label"> 搜留言</span>
+            <Icon icon={Search} /><span className="editor-topbar__label"> 搜留言</span>
           </button>
           <button
             className="editor-topbar__activity"
             onClick={() => setShareOpen(true)}
-            title="建立公開分享連結（外部人看 read-only 預覽）"
+            title="建立公開分享連結（外部的人不用登入就能看，只能看不能改）"
           >
-            🔗<span className="editor-topbar__label"> 分享</span>
+            <Icon icon={Link} /><span className="editor-topbar__label"> 分享</span>
           </button>
           <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setDriveOpen(true)}
             title="Drive 來源設定"
           >
-            ☁<span className="editor-topbar__label"> Drive</span>
-            {projectMeta?.drive_folder_id && <span className="muted small"> ●</span>}
+            <Icon icon={Cloud} /><span className="editor-topbar__label"> Drive</span>
+            {projectMeta?.drive_folder_id && <span className="editor-topbar__dot" title="已設定 Drive 資料夾" />}
           </button>
           <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setActivityOpen(true)}
             title="最近活動"
           >
-            🕒<span className="editor-topbar__label"> 最近活動</span>
+            <Icon icon={HistoryIcon} /><span className="editor-topbar__label"> 最近活動</span>
           </button>
         </div>
       </header>
@@ -901,13 +903,13 @@ export default function ProjectEditor() {
             <div className="editor-empty muted">載入中…</div>
           ) : songs.length === 0 ? (
             <div className="editor-empty">
-              <div style={{ fontSize: 36 }}>🎵</div>
+              <Icon icon={Music} size="xl" className="editor-empty__icon" />
               <div>還沒有歌曲</div>
               <small className="muted">點下方按鈕新增第一首</small>
             </div>
           ) : visibleSongs.length === 0 ? (
             <div className="editor-empty muted">
-              <div style={{ fontSize: 28 }}>🔍</div>
+              <Icon icon={Search} size="xl" className="editor-empty__icon" />
               <div>沒有「{STATUS_INFO[statusFilter as SongStatus].label}」狀態的歌</div>
               <button className="btn btn--ghost" style={{ marginTop: 8 }} onClick={() => setStatusFilter('all')}>顯示全部</button>
             </div>
@@ -925,7 +927,7 @@ export default function ProjectEditor() {
                     <div className="song-item__main">
                       <div className="song-item__name">{s.name}</div>
                       <div className="song-item__meta">
-                        <span>{s.cueCount} cues</span>
+                        <span>{s.cueCount} 個 cue</span>
                         {s.proposalCount > 0 && <span className="proposal-badge">{s.proposalCount} 提案</span>}
                       </div>
                       <label
@@ -962,10 +964,10 @@ export default function ProjectEditor() {
                       />
                     </div>
                     <div className="song-item__actions" onClick={(e) => e.stopPropagation()}>
-                      <button title="上移" onClick={() => moveSong(s.id, -1)} disabled={fullIdx === 0}>↑</button>
-                      <button title="下移" onClick={() => moveSong(s.id, 1)} disabled={fullIdx === songs.length - 1}>↓</button>
-                      <button title="改名" onClick={() => handleRenameSong(s.id, s.name)}>✎</button>
-                      <button title="刪除" onClick={() => handleDeleteSong(s.id, s.name)}>🗑</button>
+                      <button title="上移" aria-label="上移" onClick={() => moveSong(s.id, -1)} disabled={fullIdx === 0}><Icon icon={ArrowUp} /></button>
+                      <button title="下移" aria-label="下移" onClick={() => moveSong(s.id, 1)} disabled={fullIdx === songs.length - 1}><Icon icon={ArrowDown} /></button>
+                      <button title="改名" aria-label="改名" onClick={() => handleRenameSong(s.id, s.name)}><Icon icon={Pencil} /></button>
+                      <button title="刪除" aria-label="刪除" onClick={() => handleDeleteSong(s.id, s.name)}><Icon icon={Trash2} /></button>
                     </div>
                   </li>
                 );
@@ -1006,9 +1008,9 @@ export default function ProjectEditor() {
           ) : stageObjects.length === 0 ? (
             <div className="viewport-stage">
               <div className="viewport-placeholder">
-                <div style={{ fontSize: 64, opacity: 0.4 }}>📦</div>
+                <Icon icon={Shapes} size="xxl" className="editor-empty__icon" />
                 <div className="muted">這個專案還沒有物件</div>
-                <small className="muted">右側「物件」分頁 → 上傳模型或一鍵範例</small>
+                <small className="muted">到右側「物件」分頁上傳模型，或一鍵加入範例</small>
               </div>
             </div>
           ) : (
@@ -1024,7 +1026,7 @@ export default function ProjectEditor() {
               onTransform={(objId, position, rotation) =>
                 handleSetState(objId, { position, rotation }).catch(e => { toast.error('位置沒有存到：' + msg(e)); })
               }
-              cueName={selectedCue ? selectedCue.name : '(default — 改的是物件預設位置)'}
+              cueName={selectedCue ? selectedCue.name : '（沒選 cue：改的是物件預設位置）'}
               cueKey={selectedCueId}
               crossfadeSeconds={cueTransitionSeconds(selectedCue)}
               modelUrl={modelUrl}
@@ -1221,8 +1223,8 @@ export default function ProjectEditor() {
         <div className="dlg-overlay" onClick={(e) => { if (e.target === e.currentTarget) setStoryboardOpen(false); }}>
           <div className="dlg" style={{ maxWidth: 1100, width: '95vw' }}>
             <header className="dlg__header">
-              <h2>🎬 {selectedSong.name} — Storyboard</h2>
-              <button className="dlg__close" onClick={() => setStoryboardOpen(false)}>×</button>
+              <h2>{selectedSong.name} — 分鏡</h2>
+              <button className="dlg__close" onClick={() => setStoryboardOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
             </header>
             <div className="dlg__body">
               <CueStoryboard
@@ -1278,7 +1280,7 @@ function CueTemplatePickerDialog({
   if (!open) return null;
 
   async function handleDelete(t: api.CueTemplate) {
-    if (!confirm(`刪除模板「${t.name}」？`)) return;
+    if (!confirm(`刪除常用擺位「${t.name}」？`)) return;
     try { await api.deleteCueTemplate(t.id); setTemplates(prev => prev.filter(x => x.id !== t.id)); }
     catch (e) { alert('失敗：' + (e instanceof Error ? e.message : String(e))); }
   }
@@ -1287,34 +1289,34 @@ function CueTemplatePickerDialog({
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__header">
-          <h2>從模板建立 cue</h2>
-          <button className="dialog__close" onClick={onClose}>×</button>
+          <h2>從常用擺位建立 cue</h2>
+          <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dialog__body">
           {loading ? (
             <div className="editor-empty muted">載入中…</div>
           ) : templates.length === 0 ? (
             <div className="editor-empty muted">
-              <div style={{ fontSize: 28 }}>💎</div>
-              <div>還沒有任何模板</div>
-              <small>在 cue 旁邊點 💎 把該 cue 存成模板</small>
+              <Icon icon={Bookmark} size="xl" className="editor-empty__icon" />
+              <div>還沒有任何常用擺位</div>
+              <small>在 cue 旁邊按「存成常用擺位」（書籤圖示），就能把那個 cue 的物件位置存起來</small>
             </div>
           ) : (
             <ul className="versions-list">
               {templates.map(t => (
                 <li key={t.id} className="version-row">
-                  <div className="version-row__num">💎</div>
+                  <div className="version-row__num"><Icon icon={Bookmark} size="md" /></div>
                   <div className="version-row__main">
                     <div className="version-row__title">
                       {t.name}
-                      {t.global && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent)' }}>全域</span>}
+                      {t.global && <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent)' }}>所有專案</span>}
                     </div>
                     {t.description && <div className="muted small">{t.description}</div>}
-                    {t.authorName && <div className="muted small">by {t.authorName}</div>}
+                    {t.authorName && <div className="muted small">{t.authorName} 建立</div>}
                   </div>
                   <div className="version-row__actions">
                     <button className="btn btn--primary btn--sm" onClick={() => onPick(t.id)}>套用</button>
-                    <button className="btn btn--ghost btn--sm" onClick={() => handleDelete(t)} title="刪除模板">🗑</button>
+                    <button className="btn btn--ghost btn--sm" onClick={() => handleDelete(t)} title="刪除這個常用擺位" aria-label="刪除這個常用擺位"><Icon icon={Trash2} /></button>
                   </div>
                 </li>
               ))}
@@ -1355,7 +1357,7 @@ function CueList({
     <>
       {cues.length === 0 ? (
         <div className="editor-empty">
-          <div style={{ fontSize: 36 }}>🎬</div>
+          <Icon icon={Clapperboard} size="xl" className="editor-empty__icon" />
           <div className="muted">{emptyText || '還沒有 cue'}</div>
         </div>
       ) : (
@@ -1376,14 +1378,14 @@ function CueList({
               </div>
               <div className="cue-item__actions" onClick={(e) => e.stopPropagation()}>
                 {onMove && <>
-                  <button title="上移" onClick={() => onMove(c.id, -1)} disabled={i === 0}>↑</button>
-                  <button title="下移" onClick={() => onMove(c.id, 1)} disabled={i === cues.length - 1}>↓</button>
+                  <button title="上移" aria-label="上移" onClick={() => onMove(c.id, -1)} disabled={i === 0}><Icon icon={ArrowUp} /></button>
+                  <button title="下移" aria-label="下移" onClick={() => onMove(c.id, 1)} disabled={i === cues.length - 1}><Icon icon={ArrowDown} /></button>
                 </>}
-                {onDuplicateQuick && <button title="一鍵複製" onClick={() => onDuplicateQuick(c.id)}>📋</button>}
-                {onSaveTemplate && <button title="存為模板（之後可從模板建類似的 cue）" onClick={() => onSaveTemplate(c.id, c.name)}>💎</button>}
-                {onReset && <button title="重置（清掉所有 override）" onClick={() => onReset(c.id, c.name)}>↺</button>}
-                {onRename && <button title="改名" onClick={() => onRename(c.id, c.name)}>✎</button>}
-                <button title="刪除" onClick={() => onDelete(c.id, c.name)}>🗑</button>
+                {onDuplicateQuick && <button title="複製這個 cue" aria-label="複製這個 cue" onClick={() => onDuplicateQuick(c.id)}><Icon icon={Copy} /></button>}
+                {onSaveTemplate && <button title="存成常用擺位（之後可以用它建類似的 cue）" aria-label="存成常用擺位" onClick={() => onSaveTemplate(c.id, c.name)}><Icon icon={BookmarkPlus} /></button>}
+                {onReset && <button title="重置（清掉這個 cue 的所有調整）" aria-label="重置這個 cue" onClick={() => onReset(c.id, c.name)}><Icon icon={RotateCcw} /></button>}
+                {onRename && <button title="改名" aria-label="改名" onClick={() => onRename(c.id, c.name)}><Icon icon={Pencil} /></button>}
+                <button title="刪除" aria-label="刪除" onClick={() => onDelete(c.id, c.name)}><Icon icon={Trash2} /></button>
               </div>
             </li>
           ))}
@@ -1425,33 +1427,33 @@ function CueAddSplitButton({
 
   return (
     <div className="cue-split editor-cues__add" ref={ref}>
-      <button className="cue-split__main btn btn--primary" onClick={onAddBlank} title="新增空白 cue（全部用 default）">
-        ＋ 新增 cue
+      <button className="cue-split__main btn btn--primary" onClick={onAddBlank} title="新增空白 cue（全部用預設位置）">
+        <Icon icon={Plus} /> 新增 cue
       </button>
-      <button className="cue-split__caret btn btn--primary" onClick={() => setOpen(o => !o)} aria-label="更多新增方式">
-        ▾
+      <button className="cue-split__caret btn btn--primary" onClick={() => setOpen(o => !o)} aria-label="更多新增方式" title="更多新增方式">
+        <Icon icon={ChevronDown} />
       </button>
       {open && (
         <div className="cue-split__menu">
           <button onClick={() => { setOpen(false); onAddBlank(); }}>
-            <span>🆕 空白 cue</span>
-            <small>全部用 default 位置</small>
+            <span><Icon icon={Plus} /> 空白 cue</span>
+            <small>全部用預設位置</small>
           </button>
           <button
             onClick={() => { setOpen(false); onClone && onClone(); }}
             disabled={!onClone || !hasSelectedCue}
             title={!hasSelectedCue ? '先在左側選一個 cue' : ''}
           >
-            <span>📋 沿用當前 cue</span>
-            <small>{hasSelectedCue ? '複製當前 cue 的所有 override' : '需先選一個 cue'}</small>
+            <span><Icon icon={Copy} /> 沿用目前的 cue</span>
+            <small>{hasSelectedCue ? '複製目前 cue 的所有調整' : '要先選一個 cue'}</small>
           </button>
           <button onClick={() => { setOpen(false); onSnapshot && onSnapshot(); }} disabled={!onSnapshot}>
-            <span>📸 從目前 3D 狀態建立</span>
-            <small>capture 現在 viewport 看到的位置</small>
+            <span><Icon icon={Camera} /> 從目前 3D 狀態建立</span>
+            <small>記下 3D 畫面現在的物件位置</small>
           </button>
           <button onClick={() => { setOpen(false); onFromTemplate && onFromTemplate(); }} disabled={!onFromTemplate}>
-            <span>💎 從模板建立</span>
-            <small>從 cue palette 選一個常用模板套用</small>
+            <span><Icon icon={Bookmark} /> 從常用擺位建立</span>
+            <small>選一個存好的常用擺位套用</small>
           </button>
         </div>
       )}
@@ -1498,11 +1500,11 @@ function ObjectStateEditor({
   if (stageObjects.length === 0) {
     return (
       <div className="editor-empty">
-        <div style={{ fontSize: 36 }}>🧩</div>
+        <Icon icon={Shapes} size="xl" className="editor-empty__icon" />
         <div>這個專案還沒有物件</div>
-        <small className="muted">先到「物件」分頁新增 / 一鍵範例</small>
+        <small className="muted">先到「物件」分頁新增，或一鍵加入範例</small>
         <button className="btn btn--primary" style={{ marginTop: 12 }} onClick={onJumpToObjects}>
-          管理物件 →
+          管理物件 <Icon icon={ArrowRight} />
         </button>
       </div>
     );
@@ -1559,9 +1561,9 @@ function ObjectStateEditor({
                     disabled={s.locked}
                     onChange={() => onToggleSelected(s.objectId)}
                   />
-                  <span className="attribute-panel__obj-cat">{cat.icon}</span>
+                  <span className="attribute-panel__obj-cat" title={cat.label}><Icon icon={cat.icon} /></span>
                   <span className="attribute-panel__obj-name">{s.displayName}</span>
-                  {s.locked && <span className="lock-tag">🔒</span>}
+                  {s.locked && <span className="lock-tag" title="已鎖定"><Icon icon={Lock} size="xs" /></span>}
                   {s.override && <span className="override-dot" title="此 cue 已自訂" />}
                 </label>
                 {/* 這個 cue 裡顯示 / 隱藏（前面的 cue 不受影響；後面沒另外設定的 cue 會跟著，跟位置一樣） */}
@@ -1574,7 +1576,7 @@ function ObjectStateEditor({
                   aria-label={(visible ? '在這個 cue 隱藏「' : '在這個 cue 顯示「') + s.displayName + '」'}
                   title={s.locked ? '已鎖定，不能改' : visible ? '在這個 cue 隱藏（後面沒另外設定的 cue 也會跟著隱藏）' : '這個 cue 裡隱藏中 — 點一下顯示'}
                 >
-                  <EyeIcon off={!visible} />
+                  <Icon icon={visible ? Eye : EyeOff} size="md" />
                 </button>
               </li>
             );
@@ -1583,9 +1585,9 @@ function ObjectStateEditor({
 
         {selectedStates.length === 0 ? (
           <div className="attribute-panel__hint">
-            <div style={{ fontSize: 28, opacity: 0.5 }}>🖱️</div>
+            <Icon icon={MousePointerClick} size="xl" className="editor-empty__icon" />
             <div>從上方清單勾選一個或多個物件</div>
-            <small className="muted">3D viewport 點物件 = 單選；右側勾選 = 加選</small>
+            <small className="muted">在 3D 畫面點物件 = 單選；右側勾選 = 加選</small>
           </div>
         ) : selectedStates.length === 1 ? (
           <ObjectAttributePanel
@@ -1615,17 +1617,6 @@ function ObjectStateEditor({
 }
 
 /** 顯示 / 隱藏的眼睛圖示（線條 SVG，跟著文字顏色） */
-function EyeIcon({ off }: { off: boolean }) {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
-      <circle cx="12" cy="12" r="3" />
-      {off && <line x1="3" y1="3" x2="21" y2="21" />}
-    </svg>
-  );
-}
-
 const POS_AXES = ['x', 'y', 'z'] as const;
 const ROT_AXES = [
   { key: 'pitch', label: 'P', title: 'Pitch（繞 X 軸轉）' },
@@ -1743,7 +1734,7 @@ function ObjectAttributePanelMulti({
   }
 
   async function resetAll() {
-    if (!confirm(`重置 ${selectedStates.length} 個物件回 default？`)) return;
+    if (!confirm(`把 ${selectedStates.length} 個物件重置回預設位置？`)) return;
     setBusy(true);
     try {
       for (const s of selectedStates) {
@@ -1833,7 +1824,7 @@ function ObjectAttributePanelMulti({
 
       <div className="object-row__actions">
         <button className="btn btn--ghost" onClick={resetAll} disabled={busy}>
-          ↺ 全部重置 default
+          <Icon icon={RotateCcw} /> 全部重置成預設
         </button>
       </div>
     </div>
@@ -1873,7 +1864,7 @@ function CueMetaEditor({
     const n = parseCrossfadeInput(crossfade);
     if (n === null) {
       setCrossfade(String(cue.crossfadeSeconds));
-      setError('淡入淡出要填 0 或正的秒數，已還原');
+      setError('轉場秒數要填 0 或正的數字，已還原');
       return;
     }
     setCrossfade(String(n));
@@ -1907,7 +1898,7 @@ function CueMetaEditor({
         />
       </div>
       <div className="cue-meta-editor__row">
-        <label>淡入淡出時間（秒）</label>
+        <label>轉場（秒）</label>
         <input
           type="text"
           inputMode="decimal"
@@ -1932,7 +1923,7 @@ function CueMetaEditor({
           {!parsedVideoTime.ok
             ? '格式：秒數（15.5）或 分:秒（1:23）'
             : parsedVideoTime.value != null
-              ? `→ ${formatVideoTime(parsedVideoTime.value)}（導演端影片播到這秒會自動切到此 cue）`
+              ? `也就是 ${formatVideoTime(parsedVideoTime.value)}（導演那邊影片播到這一秒，會自動切到這個 cue）`
               : '空白 = 沒對應影片時間；填了之後播影片會自動切 cue'}
         </small>
       </div>
@@ -1977,15 +1968,15 @@ function ObjectAttributePanel({
   return (
     <div className={'attribute-panel__body' + (hasOverride ? ' has-override' : '') + (state.locked ? ' is-locked' : '')}>
       <div className="attribute-panel__title">
-        <span className="object-row__cat" title={cat.label}>{cat.icon}</span>
+        <span className="object-row__cat" title={cat.label}><Icon icon={cat.icon} /></span>
         <span className="object-row__name">{state.displayName}</span>
-        {state.locked && <span className="lock-tag" title="已鎖定">🔒</span>}
+        {state.locked && <span className="lock-tag" title="已鎖定"><Icon icon={Lock} size="xs" /></span>}
         {hasOverride && <span className="override-dot" title="此 cue 把它放在自訂位置（跟其他 cue 獨立）" />}
       </div>
 
       {state.locked ? (
         <div className="muted small attribute-panel__locked">
-          已鎖定，無法編輯。請到「物件」分頁解鎖（🔒 → 🔓）。
+          已鎖定，無法編輯。請到「物件」分頁按鎖頭圖示解鎖。
         </div>
       ) : (
         <>
@@ -2031,14 +2022,14 @@ function ObjectAttributePanel({
           {fieldError && <div className="field-error small" role="alert">{fieldError}</div>}
           {hasOverride && (
             <div className="object-row__actions">
-              <button className="btn btn--ghost" onClick={reset} disabled={busy} title="重置成 default">
-                ↺ 重置
+              <button className="btn btn--ghost" onClick={reset} disabled={busy} title="重置成預設位置">
+                <Icon icon={RotateCcw} /> 重置
               </button>
             </div>
           )}
           {hasOverride && (
             <div className="muted small object-row__hint">
-              這個 cue 有自己的設定（前面的 cue 不受影響；後面沒另外設定的 cue 會跟著）。原始 default 位置 ({meters(state.default.position.x)}, {meters(state.default.position.y)}, {meters(state.default.position.z)}) m
+              這個 cue 有自己的設定（前面的 cue 不受影響；後面沒另外設定的 cue 會跟著）。原本的預設位置 ({meters(state.default.position.x)}, {meters(state.default.position.y)}, {meters(state.default.position.z)}) m
             </div>
           )}
 
@@ -2080,7 +2071,7 @@ function MaterialSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: Ma
 
   return (
     <div className="material-section">
-      <div className="section-title">🎨 材質</div>
+      <div className="section-title"><Icon icon={Palette} /> 材質</div>
       <div className="form-row">
         <label>顏色</label>
         <div className="color-row">
@@ -2144,7 +2135,7 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
 
   return (
     <div className="material-section material-section--led">
-      <div className="section-title">💡 LED 屬性</div>
+      <div className="section-title"><Icon icon={Lightbulb} /> LED 屬性</div>
       <div className="form-row">
         <label>亮度: {brightness.toFixed(2)} ×</label>
         <input type="range" min={0} max={3} step={0.05}
@@ -2221,9 +2212,9 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
             <button type="button" className="link-btn" onClick={() => { setImageUrl(''); save({ imageUrl: '' }); }}>清除</button>
           )}
         </div>
-        <small className="muted">推薦：picsum.photos / imgur 直連 / 自己 R2 圖檔。Realistic 模式才會看到。</small>
+        <small className="muted">建議用可以直接打開的圖片網址（例如 imgur 的圖片連結）。3D 畫面切到「現場」模式才看得到。</small>
       </div>
-      <div className="muted small">提示：要看到 LED 投光效果，把上方 viewport 切到「🎬 Realistic」模式。</div>
+      <div className="muted small">提示：要看到 LED 投光效果，把 3D 畫面上方的模式切到「現場」。</div>
     </div>
   );
 }
@@ -2248,9 +2239,9 @@ function ObjectsManager({
   return (
     <div className="objects-manager">
       <div className="objects-manager__bar">
-        <button className="btn btn--primary" onClick={onUpload} title="從 .glb / .gltf 匯入">📦 上傳模型</button>
-        <button className="btn btn--ghost" onClick={onPickFromLibrary} title="從共用庫挑一個 model（不用重複上傳）">
-          📚 從庫選
+        <button className="btn btn--primary" onClick={onUpload} title="從 .glb / .gltf 匯入"><Icon icon={Upload} /> 上傳模型</button>
+        <button className="btn btn--ghost" onClick={onPickFromLibrary} title="從模型庫選一個模型（不用重複上傳）">
+          <Icon icon={Library} /> 模型庫
         </button>
         <button
           className="btn btn--ghost"
@@ -2258,10 +2249,10 @@ function ObjectsManager({
           disabled={!hasModel}
           title={hasModel ? '看以前上傳過的模型，可切回舊版' : '還沒上傳過模型'}
         >
-          🕒 歷史版本
+          <Icon icon={HistoryIcon} /> 歷史版本
         </button>
-        <button className="btn btn--ghost" onClick={onSeed} title="塞入 10 個常用範例">🌱 範例</button>
-        <button className="btn btn--ghost" onClick={onAdd} title="手動新增單一物件">＋ 手動</button>
+        <button className="btn btn--ghost" onClick={onSeed} title="一鍵加入 10 個常用範例物件"><Icon icon={Sprout} /> 範例</button>
+        <button className="btn btn--ghost" onClick={onAdd} title="手動新增單一物件"><Icon icon={Plus} /> 手動</button>
       </div>
 
       {status === 'loading' ? (
@@ -2270,19 +2261,19 @@ function ObjectsManager({
         <div className="editor-empty muted" role="alert">物件載入失敗，請重新整理頁面再試一次</div>
       ) : objects.length === 0 ? (
         <div className="editor-empty">
-          <div style={{ fontSize: 36 }}>🧩</div>
+          <Icon icon={Shapes} size="xl" className="editor-empty__icon" />
           <div className="muted">還沒有物件</div>
-          <small className="muted">點上方「一鍵範例」塞入 10 個常用物件</small>
+          <small className="muted">點上方「範例」一鍵加入 10 個常用物件</small>
         </div>
       ) : (
         <ul className="object-mgr-list">
           {objects.map(o => (
             <li key={o.id} className={'object-mgr-row' + (o.locked ? ' is-locked' : '')}>
-              <span className="object-row__cat">{CATEGORY_INFO[o.category].icon}</span>
+              <span className="object-row__cat" title={CATEGORY_INFO[o.category].label}><Icon icon={CATEGORY_INFO[o.category].icon} /></span>
               <div className="object-mgr-main">
                 <div className="object-mgr-name">
                   {o.displayName}
-                  {o.locked && <span className="lock-tag" title="已鎖定">🔒</span>}
+                  {o.locked && <span className="lock-tag" title="已鎖定"><Icon icon={Lock} size="xs" /></span>}
                 </div>
                 <div className="muted small object-mgr-mesh">{o.meshName}</div>
               </div>
@@ -2294,19 +2285,20 @@ function ObjectsManager({
                 disabled={o.locked}
               >
                 {(Object.keys(CATEGORY_INFO) as StageObjectCategory[]).map(c => (
-                  <option key={c} value={c}>{CATEGORY_INFO[c].icon} {CATEGORY_INFO[c].label}</option>
+                  <option key={c} value={c}>{CATEGORY_INFO[c].label}</option>
                 ))}
               </select>
               <div className="object-mgr-actions">
                 <button
                   onClick={() => onToggleLock(o)}
                   title={o.locked ? '解鎖（可編輯）' : '鎖定（3D 不可選、屬性不可改）'}
+                  aria-label={o.locked ? '解鎖' : '鎖定'}
                   className={o.locked ? 'is-locked-btn' : ''}
                 >
-                  {o.locked ? '🔒' : '🔓'}
+                  <Icon icon={o.locked ? Lock : LockOpen} />
                 </button>
-                <button onClick={() => onRename(o)} title="改名" disabled={o.locked}>✎</button>
-                <button onClick={() => onDelete(o)} title="刪除">🗑</button>
+                <button onClick={() => onRename(o)} title="改名" aria-label="改名" disabled={o.locked}><Icon icon={Pencil} /></button>
+                <button onClick={() => onDelete(o)} title="刪除" aria-label="刪除"><Icon icon={Trash2} /></button>
               </div>
             </li>
           ))}
@@ -2358,7 +2350,7 @@ function StatusBadge({ value, onChange }: { value: SongStatus; onChange: (next: 
             >
               <span className={`status-dot status-dot--${STATUS_INFO[s].mod}`} />
               <span>{STATUS_INFO[s].label}</span>
-              {s === value && <span className="status-menu__check">✓</span>}
+              {s === value && <span className="status-menu__check"><Icon icon={Check} /></span>}
             </button>
           ))}
         </div>

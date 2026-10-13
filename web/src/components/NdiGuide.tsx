@@ -9,6 +9,8 @@ import type { NdiEnv } from '../lib/ndiConnection';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
 import { helpUrl, ndiHelpAnchor } from '../lib/helpLinks';
 import { toast } from '../lib/toast';
+import { BookOpen, Circle, CircleCheck, Copy, Download, ExternalLink, Pause, Radio, TriangleAlert, X } from 'lucide-react';
+import Icon from './Icon';
 import './NdiGuide.css';
 
 interface GuideProps {
@@ -23,12 +25,12 @@ export function NdiDownloadButtons({ os, update = false }: { os: NdiEnv['os']; u
   const verb = update ? '下載新版' : '下載';
   const win = (
     <a key="win" className={'ndi-guide__btn' + (os !== 'mac' ? ' ndi-guide__btn--primary' : '')} href={NDI_HELPER_DOWNLOAD_URL}>
-      ⬇ {verb}（Windows）
+      <Icon icon={Download} /> {verb}（Windows）
     </a>
   );
   const mac = (
     <a key="mac" className={'ndi-guide__btn' + (os === 'mac' ? ' ndi-guide__btn--primary' : '')} href={NDI_HELPER_DOWNLOAD_URL_MAC}>
-      ⬇ {verb}（Mac）
+      <Icon icon={Download} /> {verb}（Mac）
     </a>
   );
   return <div className="ndi-guide__actions">{os === 'mac' ? [mac, win] : [win, mac]}</div>;
@@ -51,7 +53,7 @@ function StepActions({ guide, env, onConnect }: Omit<GuideProps, 'onSelectSource
     case 'browser_unsupported':
       return (
         <div className="ndi-guide__actions">
-          <button className="ndi-guide__btn ndi-guide__btn--primary" onClick={copyPageLink}>📋 複製這個連結</button>
+          <button className="ndi-guide__btn ndi-guide__btn--primary" onClick={copyPageLink}><Icon icon={Copy} /> 複製這個連結</button>
         </div>
       );
     case 'need_permission':
@@ -69,7 +71,7 @@ function StepActions({ guide, env, onConnect }: Omit<GuideProps, 'onSelectSource
     case 'ndi_missing':
       return (
         <div className="ndi-guide__actions">
-          <a className="ndi-guide__btn ndi-guide__btn--primary" href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">下載 NDI Tools ↗</a>
+          <a className="ndi-guide__btn ndi-guide__btn--primary" href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">下載 NDI Tools <Icon icon={ExternalLink} size="xs" /></a>
         </div>
       );
     default:
@@ -78,11 +80,11 @@ function StepActions({ guide, env, onConnect }: Omit<GuideProps, 'onSelectSource
 }
 
 /** 「看圖文說明」：開新分頁到說明頁對應的那一段（舞台不會不見）；這一步沒有說明 → 不顯示 */
-export function NdiHelpLink({ guide, label = '📖 看圖文說明' }: { guide: Guide; label?: string }) {
+export function NdiHelpLink({ guide, label = '看圖文說明' }: { guide: Guide; label?: string }) {
   const anchor = ndiHelpAnchor(guide.step);
   if (!anchor) return null;
   return (
-    <a className="ndi-guide__help" href={helpUrl(anchor)} target="_blank" rel="noopener">{label}</a>
+    <a className="ndi-guide__help" href={helpUrl(anchor)} target="_blank" rel="noopener"><Icon icon={BookOpen} /> {label}</a>
   );
 }
 
@@ -110,11 +112,11 @@ export function NdiSourcePicker({ guide, onSelectSource }: Pick<GuideProps, 'gui
 export function NdiAutostartNote({ guide }: { guide: Guide }) {
   const note = ndiAutostartNote(guide);
   if (!note) return null;
-  return <p className="ndi-guide__note" role="note"><span aria-hidden>⚠ </span>{note}</p>;
+  return <p className="ndi-guide__note" role="note"><Icon icon={TriangleAlert} /> {note}</p>;
 }
 
 /**
- * ☑ / ☐ 五格檢查清單；卡住的那一格展開說明 + 按鈕。
+ * 五格檢查清單（打勾 / 空圈）；卡住的那一格展開說明 + 按鈕。
  * 下面跟著「開機自動啟動沒設好」的提醒（showAutostartNote=false → 自己放別的地方）
  */
 export function NdiChecklist({ guide, env, onConnect, onSelectSource, showAutostartNote = true }: GuideProps & {
@@ -128,7 +130,7 @@ export function NdiChecklist({ guide, env, onConnect, onSelectSource, showAutost
         {rows.map(r => (
           <li key={r.label} className={'ndi-guide__row is-' + r.state}>
             <div className="ndi-guide__row-head">
-              <span className="ndi-guide__mark" aria-hidden>{r.state === 'done' ? '☑' : '☐'}</span>
+              <span className="ndi-guide__mark" aria-hidden><Icon icon={r.state === 'done' ? CircleCheck : Circle} /></span>
               <span className="ndi-guide__label">{r.label}</span>
             </div>
             {r.state === 'current' && (
@@ -171,9 +173,9 @@ export function NdiGuideCard({ guide, env, onConnect, onSelectSource, onCollapse
     const msg = ndiStepMessage(guide, env.browser);
     return (
       <div className="ndi-guide ndi-guide--banner" role="status">
-        <span className="ndi-guide__banner-icon" aria-hidden>⏸</span>
+        <span className="ndi-guide__banner-icon" aria-hidden><Icon icon={Pause} /></span>
         <span className="ndi-guide__banner-text">{msg.title}</span>
-        <button className="ndi-guide__close" onClick={onCollapse} title="收起" aria-label="收起">×</button>
+        <button className="ndi-guide__close" onClick={onCollapse} title="收起" aria-label="收起"><Icon icon={X} /></button>
       </div>
     );
   }
@@ -181,14 +183,14 @@ export function NdiGuideCard({ guide, env, onConnect, onSelectSource, onCollapse
   return (
     <div className="ndi-guide" role="status" aria-live="polite">
       <div className="ndi-guide__head">
-        <strong>🔴 AE 即時畫面</strong>
+        <strong><Icon icon={Radio} className="ndi-guide__live-icon" /> AE 即時畫面</strong>
         <span className="ndi-guide__count">{done} / 5</span>
         <button
           className="ndi-guide__close"
           onClick={onCollapse}
           title="收起（按上面的 NDI 標示可以再打開）"
           aria-label="收起"
-        >×</button>
+        ><Icon icon={X} /></button>
       </div>
       <NdiChecklist guide={guide} env={env} onConnect={onConnect} onSelectSource={onSelectSource} />
       {hint && <div className="ndi-guide__hint">{hint}</div>}

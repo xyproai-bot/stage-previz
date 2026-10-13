@@ -31,7 +31,9 @@
 .toast__icon {
   font-weight: 700;
   width: 16px;
-  text-align: center;
+  display: inline-flex;
+  justify-content: center;
+  flex-shrink: 0;
 }
 .toast--success .toast__icon { color: var(--accent); }
 .toast--info    .toast__icon { color: #5294ff; }
@@ -46,6 +48,10 @@
   word-break: break-word;
 }
 .toast__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   background: transparent;
   border: none;
   color: var(--text-muted);

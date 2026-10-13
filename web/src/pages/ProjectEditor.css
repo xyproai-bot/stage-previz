@@ -1306,3 +1306,32 @@
     max-height: 60vh;
   }
 }
+
+/* ─── 線條圖示（取代 emoji 後）：圖示按鈕置中、空狀態圖示顏色 ─── */
+.song-item__actions button,
+.cue-item__actions button,
+.editor-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.editor-back { padding: 0; }
+.editor-empty__icon { color: var(--text-muted); opacity: 0.8; margin-bottom: 2px; }
+.editor-topbar__dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-left: 5px;
+  vertical-align: calc(0.35em - 3px);
+}
+.attribute-panel__obj-cat,
+.object-row__cat { display: inline-flex; color: var(--text-dim); }
+.status-menu__check { display: inline-flex; }
+.lock-tag { display: inline-flex; align-items: center; vertical-align: middle; color: var(--warn); }
+.object-mgr-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}

@@ -139,17 +139,17 @@ export async function parseGlbFile(file: File): Promise<ParseResult> {
   });
 
   if (meshes.length === 0) {
-    warnings.push('找不到任何 top-level 節點 — 確認模型有匯出 group / mesh');
+    warnings.push('檔案裡找不到任何物件，請確認 C4D 匯出時有包含物件');
   }
 
   // 尺寸推測（GLB 標準 = 1 unit = 1 公尺，正常 stage 對角約 5-50 公尺）
   let unitGuess: 'normal' | 'too_big' | 'too_small' = 'normal';
   if (sceneSizeMeters > 100) {
     unitGuess = 'too_big';
-    warnings.push(`⚠️ 整個場景對角約 ${sceneSizeMeters.toFixed(1)} 公尺 — 看起來太大（單位可能是 cm / mm）。建議匯出時把單位改 1 unit = 1 公尺。`);
+    warnings.push(`整個場景對角約 ${sceneSizeMeters.toFixed(1)} 公尺，看起來太大（單位可能是公分或公釐）。建議匯出時把單位改成 1 單位 = 1 公尺。`);
   } else if (sceneSizeMeters < 0.5 && meshes.length > 0) {
     unitGuess = 'too_small';
-    warnings.push(`⚠️ 整個場景對角約 ${sceneSizeMeters.toFixed(2)} 公尺 — 看起來太小（單位可能是英呎或英吋）。`);
+    warnings.push(`整個場景對角約 ${sceneSizeMeters.toFixed(2)} 公尺，看起來太小（單位可能是英呎或英吋）。`);
   }
 
   return { meshes, warnings, sceneSizeMeters, unitGuess, scaleFactor };

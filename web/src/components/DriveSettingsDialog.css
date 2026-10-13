@@ -28,6 +28,10 @@
 }
 .dlg__header h2 { margin: 0; font-size: 17px; }
 .dlg__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
   background: transparent;
   border: none;
   color: var(--text-dim);
@@ -193,7 +197,9 @@
 .drive-file__icon {
   font-size: 22px;
   width: 32px;
-  text-align: center;
+  display: inline-flex;
+  justify-content: center;
+  color: var(--text-dim);
   flex-shrink: 0;
 }
 .drive-file__info { flex: 1; min-width: 0; }

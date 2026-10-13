@@ -19,6 +19,7 @@
   color: var(--text-muted);
 }
 .archived__empty-icon {
+  line-height: 0;
   font-size: 56px;
   opacity: 0.5;
   margin-bottom: 8px;

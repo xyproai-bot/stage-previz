@@ -44,7 +44,7 @@ export default function Login() {
         </div>
 
         <h1>輸入號碼</h1>
-        <p className="muted">用 admin 給你的號碼登入。</p>
+        <p className="muted">用製作給你的號碼登入。</p>
 
         <form onSubmit={handleLogin}>
           <label>號碼
@@ -66,7 +66,7 @@ export default function Login() {
         </form>
 
         <p className="muted small login-card__hint">
-          沒拿到號碼？請聯絡 admin。
+          沒拿到號碼？請聯絡製作。
         </p>
       </div>
     </div>

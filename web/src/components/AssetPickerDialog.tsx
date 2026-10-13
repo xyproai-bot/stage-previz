@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { SharedAsset } from '../lib/api';
+import { ArrowRight, Box, Boxes, LoaderCircle, TriangleAlert, X } from 'lucide-react';
+import Icon from './Icon';
 import './AssetPickerDialog.css';
 
 interface Props {
@@ -43,7 +45,7 @@ export default function AssetPickerDialog({ open, projectId, currentKey, onClose
   if (!open) return null;
 
   async function pick(a: SharedAsset) {
-    if (!confirm(`把這個專案的 model 切到「${a.name}」？\n\n會替換掉專案目前的 model。原本的舊版本仍會留在歷史版本內。`)) return;
+    if (!confirm(`把這個專案的模型換成「${a.name}」？\n\n會換掉專案目前的模型，原本的版本還會留在歷史版本裡。`)) return;
     setBusyId(a.id);
     try {
       await api.useAssetForProject(projectId, a.id);
@@ -61,28 +63,28 @@ export default function AssetPickerDialog({ open, projectId, currentKey, onClose
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__header">
           <div>
-            <h2>從共用庫挑 model</h2>
+            <h2>從模型庫選模型</h2>
             <p className="muted small" style={{ margin: '4px 0 0' }}>
-              選一個資產 → 這個專案的 model 會切到該資產（多個專案可共用同一份）
+              選一個模型，這個專案就會改用它（多個專案可以共用同一份）
             </p>
           </div>
-          <button className="dialog__close" onClick={onClose}>×</button>
+          <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dialog__body">
           {loading ? (
-            <div className="empty-card"><div className="empty-card__icon">⏳</div><p>載入中…</p></div>
+            <div className="empty-card"><div className="empty-card__icon"><Icon icon={LoaderCircle} size="xl" spin /></div><p>載入中…</p></div>
           ) : error ? (
             <div className="empty-card">
-              <div className="empty-card__icon">⚠️</div>
+              <div className="empty-card__icon"><Icon icon={TriangleAlert} size="xl" /></div>
               <p>{error}</p>
             </div>
           ) : assets.length === 0 ? (
             <div className="empty-card">
-              <div className="empty-card__icon">📐</div>
-              <p>共用庫還沒有任何資產</p>
-              <small className="muted">先去「模板庫」上傳，再回來挑</small>
+              <div className="empty-card__icon"><Icon icon={Boxes} size="xl" /></div>
+              <p>模型庫還沒有任何模型</p>
+              <small className="muted">先到「模型庫」上傳，再回來選</small>
               <Link to="/admin/templates" className="btn btn--primary" style={{ marginTop: 12 }}>
-                去模板庫 →
+                前往模型庫 <Icon icon={ArrowRight} />
               </Link>
             </div>
           ) : (
@@ -95,7 +97,7 @@ export default function AssetPickerDialog({ open, projectId, currentKey, onClose
                     className={'asset-picker__row' + (isCurrent ? ' is-active' : '')}
                     onClick={() => !isCurrent && !busyId && pick(a)}
                   >
-                    <span style={{ fontSize: 24 }}>📦</span>
+                    <Icon icon={Box} size="lg" className="asset-picker__row__icon" />
                     <div className="asset-picker__row__main">
                       <div className="asset-picker__row__title">
                         {a.name}
@@ -112,7 +114,7 @@ export default function AssetPickerDialog({ open, projectId, currentKey, onClose
                         disabled={busyId === a.id}
                         onClick={(e) => { e.stopPropagation(); pick(a); }}
                       >
-                        {busyId === a.id ? '切換中…' : '使用此資產'}
+                        {busyId === a.id ? '切換中…' : '使用這個模型'}
                       </button>
                     )}
                   </li>

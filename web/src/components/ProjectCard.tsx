@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project, SongStatus, SongStatusCounts } from '../lib/mockData';
 import { formatRelativeTime } from '../lib/serverTime';
+import { Archive, Copy, Download, Ellipsis, Tag, Ticket } from 'lucide-react';
+import Icon from './Icon';
 import './ProjectCard.css';
 
 const STATUS_LABELS: Record<Project['status'], { label: string; cls: string }> = {
   active: { label: '進行中', cls: 'status--active' },
-  in_review: { label: '待修', cls: 'status--review' },
+  in_review: { label: '審查中', cls: 'status--review' },
   archived: { label: '封存', cls: 'status--archived' },
 };
 
@@ -27,7 +29,7 @@ const SONG_STATUS_LABEL: Record<SongStatus, string> = {
   approved: '已通過',
   in_review: '審查中',
   needs_changes: '需修改',
-  todo: '未開始',
+  todo: '待製作',
 };
 
 export default function ProjectCard({
@@ -102,32 +104,32 @@ export default function ProjectCard({
               onClick={() => setMenuOpen(o => !o)}
               aria-label="更多動作"
               title="更多動作"
-            >⋯</button>
+            ><Icon icon={Ellipsis} size="md" /></button>
             {menuOpen && (
               <div className="project-card__menu-list">
                 {onDuplicate && (
                   <button
                     className="project-card__menu-item"
                     onClick={() => { setMenuOpen(false); onDuplicate(project); }}
-                  >📋 複製專案</button>
+                  ><Icon icon={Copy} /> 複製專案</button>
                 )}
                 {onExport && (
                   <button
                     className="project-card__menu-item"
                     onClick={() => { setMenuOpen(false); onExport(project); }}
-                  >💾 匯出 JSON</button>
+                  ><Icon icon={Download} /> 匯出 JSON</button>
                 )}
                 {onEditTags && (
                   <button
                     className="project-card__menu-item"
                     onClick={() => { setMenuOpen(false); onEditTags(project); }}
-                  >🏷 編輯標籤</button>
+                  ><Icon icon={Tag} /> 編輯標籤</button>
                 )}
                 {onArchive && (
                   <button
                     className="project-card__menu-item project-card__menu-item--danger"
                     onClick={() => { setMenuOpen(false); onArchive(project); }}
-                  >🗑 封存</button>
+                  ><Icon icon={Archive} /> 封存</button>
                 )}
               </div>
             )}
@@ -143,7 +145,7 @@ export default function ProjectCard({
             onClick={(e) => { e.stopPropagation(); if (project.showId) navigate(`/admin/shows/${project.showId}`); }}
             title={`Show: ${showName}`}
           >
-            🎫 {showName}
+            <Icon icon={Ticket} size="xs" /> {showName}
           </button>
         )}
         <h3 className="project-card__title">{project.name}</h3>
@@ -164,7 +166,7 @@ export default function ProjectCard({
         <div className="project-card__stats">
           <span>{project.songCount} 首歌</span>
           <span className="dot">·</span>
-          <span>{project.cueCount} cues</span>
+          <span>{project.cueCount} 個 cue</span>
           {project.proposalCount > 0 && (
             <>
               <span className="dot">·</span>

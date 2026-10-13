@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
 import type { ModelVersion } from '../lib/api';
 import { parseServerTime } from '../lib/serverTime';
+import { Box, RotateCcw, Trash2, TriangleAlert, X } from 'lucide-react';
+import Icon from './Icon';
 import './ModelVersionsDialog.css';
 
 interface Props {
@@ -101,7 +103,7 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
               每次上傳都會留一份。可以隨時切回舊版、或刪掉用不到的版本。
             </p>
           </div>
-          <button className="versions-dialog__close" onClick={onClose} aria-label="關閉">×</button>
+          <button className="versions-dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
 
         <div className="versions-dialog__body">
@@ -109,14 +111,14 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
             <div className="versions-empty muted">載入中…</div>
           ) : error ? (
             <div className="versions-empty">
-              <div style={{ fontSize: 36 }}>⚠️</div>
+              <Icon icon={TriangleAlert} size="xl" className="versions-empty__icon" />
               <div>載入失敗</div>
               <small style={{ color: 'var(--warn)' }}>{error}</small>
               <button className="btn btn--ghost" onClick={refresh} style={{ marginTop: 12 }}>重試</button>
             </div>
           ) : versions.length === 0 ? (
             <div className="versions-empty">
-              <div style={{ fontSize: 36 }}>📦</div>
+              <Icon icon={Box} size="xl" className="versions-empty__icon" />
               <div>還沒有任何模型版本</div>
               <small className="muted">關掉這個視窗，到「物件」分頁上傳第一個 .glb / .gltf</small>
             </div>
@@ -145,7 +147,7 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
                         onClick={() => handleActivate(v)}
                         disabled={busyKey === v.key}
                       >
-                        {busyKey === v.key ? '切換中…' : '↺ 切回此版'}
+                        {busyKey === v.key ? '切換中…' : <><Icon icon={RotateCcw} /> 切回此版</>}
                       </button>
                     )}
                     {!v.isActive && (
@@ -154,8 +156,9 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
                         onClick={() => handleDelete(v)}
                         disabled={busyKey === v.key}
                         title="刪除這個舊版本（不可復原）"
+                        aria-label="刪除這個舊版本"
                       >
-                        🗑
+                        <Icon icon={Trash2} />
                       </button>
                     )}
                   </div>
