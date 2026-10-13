@@ -4,6 +4,7 @@ import type { Project } from './mockData';
 import { saveStatus } from './saveStatus';
 import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/materialOverrides';
+import { normalizeHomeView, type HomeView } from './homeView';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -251,11 +252,13 @@ export interface ProjectViewSettings {
   mechanismOffsets: MechanismOffsets;
   lookSettings: LookSettings;
   materialOverrides: MaterialOverrides;
+  /** 🎥 重置攝影機的畫面；null = 自動正面全景 */
+  homeView: HomeView | null;
 }
 
 export async function getProjectViewSettings(projectId: string): Promise<ProjectViewSettings> {
   const data = await http<{ project: {
-    scale_correction?: number; mechanism_offsets?: string; look_settings?: string; material_overrides?: string;
+    scale_correction?: number; mechanism_offsets?: string; look_settings?: string; material_overrides?: string; home_view?: string | null;
   } }>(
     `/api/projects/${encodeURIComponent(projectId)}`
   );
@@ -274,6 +277,7 @@ export async function getProjectViewSettings(projectId: string): Promise<Project
     mechanismOffsets: offsets,
     lookSettings: normalizeLookSettings(look),
     materialOverrides: normalizeMaterialOverrides(materials),
+    homeView: normalizeHomeView(data.project?.home_view ?? null),
   };
 }
 
@@ -1160,6 +1164,7 @@ export interface SharePublicData {
   mechanismOffsets?: MechanismOffsets;
   lookSettings?: Partial<LookSettings>;
   materialOverrides?: MaterialOverrides;
+  homeView?: unknown;
 }
 
 /** 公開存取 — 無需 auth，可選 password */

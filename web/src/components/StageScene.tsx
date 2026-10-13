@@ -12,6 +12,8 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeFrontView } from '../lib/stageCamera';
+import type { HomeView } from '../lib/homeView';
+import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import { NdiClient, type NdiClientStatus } from '../lib/ndiClient';
 import LookSettingsPanel from './LookSettingsPanel';
@@ -109,6 +111,10 @@ interface Props {
   materialOverrides?: MaterialOverrides;
   /** 有傳才顯示「🎨 材質」面板 — 只有 admin；patch = null → 回到 C4D 原本 */
   onMaterialOverrideChange?: (name: string, patch: Partial<MaterialOverride> | null) => void;
+  /** 🎥 重置攝影機要回到的畫面（admin 設、全專案共用）；沒給 / null = 自動正面全景 */
+  homeView?: HomeView | null;
+  /** 有傳才顯示重置視角設定（▾）— 只有 admin */
+  onHomeViewChange?: (view: HomeView | null) => void;
   /** 本地影片（分享頁拖進來的檔案）：有給就播在 LED 上，優先於 NDI */
   ledVideo?: HTMLVideoElement | null;
 }
@@ -120,7 +126,7 @@ type Mode = 'translate' | 'rotate' | 'scale';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, ledVideo }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -130,6 +136,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const homeViewRef = useRef<{ position: THREE.Vector3; target: THREE.Vector3 } | null>(null);
   const stageObjectsRef = useRef(stageObjects);
   stageObjectsRef.current = stageObjects;
+  const homeViewPropRef = useRef(homeView);
+  homeViewPropRef.current = homeView;
+  // 使用者自己轉過鏡頭了 → 之後才讀到的重置視角就不要硬把鏡頭搬走
+  const userMovedCameraRef = useRef(false);
   const transformRef = useRef<TransformControls | null>(null);
   const meshesRef = useRef<Map<string, THREE.Object3D>>(new Map());
   const modelMeshMapRef = useRef<Map<string, THREE.Object3D>>(new Map()); // mesh_name → top-level node from .glb
@@ -246,6 +256,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     } catch { return []; }
   });
   const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false);
+  const [homeViewPanelOpen, setHomeViewPanelOpen] = useState(false);
 
   // Wireframe / X-ray 模式（debug 看穿模型結構）
   const [wireframe, setWireframe] = useState(false);
@@ -501,6 +512,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.1;
     orbit.target.set(0, 1, 0);
+    orbit.addEventListener('start', () => { userMovedCameraRef.current = true; });
     orbitRef.current = orbit;
 
     // Transform gizmo (Three.js r169+ : TransformControls 不是 Object3D，要用 getHelper)
@@ -969,13 +981,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const orb = orbitRef.current;
         if (cam && orb && finalDiag > 0) {
           // 正面全景：從 LED 面朝的那一側（觀眾席）稍微高一點看，整個舞台剛好入鏡
-          const home = computeFrontView([...map.values()], ledModelRoots(map), cam.fov, viewAspect());
-          cam.position.copy(home.position);
-          orb.target.copy(home.target);
+          // admin 有設重置視角 → 一打開就用它
+          const home = computeFrontView([...map.values()], ledModelRoots(map), DEFAULT_FOV, viewAspect());
+          homeViewRef.current = { position: home.position.clone(), target: home.target.clone() };
+          const custom = homeViewPropRef.current;
+          cam.position.copy(custom ? new THREE.Vector3(...custom.position) : home.position);
+          orb.target.copy(custom ? new THREE.Vector3(...custom.target) : home.target);
+          cam.fov = custom ? custom.fov : DEFAULT_FOV;
           cam.near = Math.max(0.01, finalDiag / 1000);
           cam.far  = Math.max(200, finalDiag * 10);
           cam.updateProjectionMatrix();
-          homeViewRef.current = { position: home.position.clone(), target: home.target.clone() };
+          userMovedCameraRef.current = false;
           stageBoundsRef.current = { center: finalCenter.clone(), radius: finalDiag / 2 };
         }
 
@@ -1760,10 +1776,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   // Reset camera
   const resetCamera = useCallback(() => {
-    const cam = cameraRef.current;
-    const orb = orbitRef.current;
-    if (!cam || !orb) return;
-    // 正面全景（用現在的畫面比例重算）；沒模型時用場上的物件；什麼都沒有才用預設位置
+    // admin 設的重置視角優先；沒有才用自動正面全景
+    const custom = homeViewPropRef.current;
+    if (custom) {
+      flyCamera(new THREE.Vector3(...custom.position), new THREE.Vector3(...custom.target), custom.fov);
+      return;
+    }
+    const home = computeAutoHome();
+    flyCamera(
+      home ? home.position : new THREE.Vector3(8, 6, 10),
+      home ? home.target : new THREE.Vector3(0, 1, 0),
+      DEFAULT_FOV,
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 自動正面全景（用現在的畫面比例重算）；沒模型時用場上的物件；什麼都沒有回傳 null */
+  function computeAutoHome(): { position: THREE.Vector3; target: THREE.Vector3 } | null {
     const modelRoots = [...modelMeshMapRef.current.values()];
     let home: { position: THREE.Vector3; target: THREE.Vector3 } | null = null;
     if (modelRoots.length > 0) {
@@ -1774,12 +1802,36 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       home = computeFrontView([...meshesRef.current.values()], leds, DEFAULT_FOV, viewAspect());
     }
     if (home) homeViewRef.current = home;
-    flyCamera(
-      home ? home.position : new THREE.Vector3(8, 6, 10),
-      home ? home.target : new THREE.Vector3(0, 1, 0),
-      DEFAULT_FOV,
-    );
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    return home;
+  }
+
+  /** 現在的鏡頭 → 重置視角 */
+  function currentCameraView(): HomeView | null {
+    const cam = cameraRef.current;
+    const orb = orbitRef.current;
+    if (!cam || !orb) return null;
+    return { position: cam.position.toArray() as [number, number, number], target: orb.target.toArray() as [number, number, number], fov: cam.fov };
+  }
+
+  /** 改數字時鏡頭直接跳過去，邊改邊看 */
+  function jumpCamera(v: HomeView) {
+    const cam = cameraRef.current;
+    const orb = orbitRef.current;
+    if (!cam || !orb) return;
+    cam.position.set(...v.position);
+    orb.target.set(...v.target);
+    cam.fov = v.fov;
+    cam.updateProjectionMatrix();
+  }
+
+  /** 面板上顯示的值：自訂的，或自動算的 */
+  function displayedHomeView(): HomeView {
+    if (homeView) return homeView;
+    const auto = homeViewRef.current;
+    return auto
+      ? { position: auto.position.toArray() as [number, number, number], target: auto.target.toArray() as [number, number, number], fov: DEFAULT_FOV }
+      : { position: [8, 6, 10], target: [0, 1, 0], fov: DEFAULT_FOV };
+  }
 
   /** 畫面寬高比：直接量容器（不靠 camera.aspect，畫面剛出現 / 分頁在背景時它可能還沒更新） */
   function viewAspect(): number {
@@ -1793,6 +1845,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const names = new Set((stageObjectsRef.current || []).filter(o => o.category === 'led_panel').map(o => o.meshName));
     return [...map].filter(([name]) => names.has(name)).map(([, o]) => o);
   }
+
+  useEffect(() => {
+    if (!homeView || userMovedCameraRef.current) return;
+    if (modelMeshMapRef.current.size === 0 && meshesRef.current.size === 0) return;  // 模型還沒好，載入時會用
+    jumpCamera(homeView);
+  }, [homeView]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 兩個模式：⚡ 快速（像素 1:1 對顏色）↔ 🎤 現場（暗場 + LED 照明 + 光暈）
   const cycleRenderMode = useCallback(() => {
@@ -1866,7 +1924,36 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           onClick={() => setShowLabels(s => !s)}
           title={showLabels ? '隱藏物件名稱 label (L)' : '顯示物件名稱 label (L)'}
         >🏷️ Label</button>
-        <button className="tool" onClick={resetCamera} title="重置攝影機">🎥</button>
+        <div className="bm-wrap" style={{ display: 'flex' }}>
+          <button className="tool" onClick={resetCamera} title={homeView ? '重置攝影機（回到設定的重置視角）' : '重置攝影機（正面全景）'}>🎥</button>
+          {onHomeViewChange && (
+            <button
+              className={'tool ' + (homeViewPanelOpen ? 'is-active' : '')}
+              onClick={() => { setHomeViewPanelOpen(o => !o); setBookmarkPanelOpen(false); }}
+              title="設定重置視角（所有人按 🎥 都會回到這裡）"
+              style={{ paddingLeft: 2, paddingRight: 4 }}
+            >▾</button>
+          )}
+          {homeViewPanelOpen && onHomeViewChange && (
+            <HomeViewPanel
+              view={displayedHomeView()}
+              isCustom={!!homeView}
+              scale={scaleCorrection}
+              onCaptureCurrent={() => { const v = currentCameraView(); if (v) onHomeViewChange(v); }}
+              onChange={v => {
+                if (v.position.every((n, i) => Math.abs(n - v.target[i]) < 1e-6)) return;  // 看向自己 → 不收
+                onHomeViewChange(v);
+                jumpCamera(v);
+              }}
+              onUseAuto={() => {
+                onHomeViewChange(null);
+                const home = computeAutoHome();
+                if (home) flyCamera(home.position, home.target, DEFAULT_FOV);
+              }}
+              onClose={() => setHomeViewPanelOpen(false)}
+            />
+          )}
+        </div>
         <button
           className={'tool ' + (walkMode ? 'is-active' : '')}
           onClick={() => setWalkMode(m => !m)}

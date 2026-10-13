@@ -274,6 +274,21 @@
   margin: 8px 10px;
   width: calc(100% - 20px);
 }
+/* 重置視角面板的數字欄（跟物件屬性欄同樣的深色樣式） */
+.home-view-num {
+  width: 100%;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-sizing: border-box;
+}
+.home-view-num:focus { border-color: var(--accent); }
 .bm-popover__empty {
   padding: 14px 10px;
   text-align: center;

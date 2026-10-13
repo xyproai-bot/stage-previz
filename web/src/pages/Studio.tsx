@@ -486,6 +486,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                   onLookReset={personalLook.reset}
                   onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
                   materialOverrides={view.materialOverrides}
+                  homeView={view.homeView}
+                  onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
                   onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                 />
               </div>

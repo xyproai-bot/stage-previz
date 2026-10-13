@@ -5,6 +5,7 @@ import type { Cue, CueState, SharePublicData, ShareVideo } from '../lib/api';
 import StageScene from '../components/StageScene';
 import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
 import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
+import { normalizeHomeView } from '../lib/homeView';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueAtTime, cueTransitionSeconds } from '../lib/cueTiming';
@@ -151,6 +152,7 @@ export default function Share() {
   const projectLook = useMemo(() => normalizeLookSettings(data?.lookSettings), [data]);
   const personalLook = usePersonalLook(data?.project.id, projectLook);
   const materialOverrides = useMemo(() => normalizeMaterialOverrides(data?.materialOverrides), [data]);
+  const homeView = useMemo(() => normalizeHomeView(data?.homeView ?? null), [data]);
 
   // ── 本地影片播到某秒 → 自動切到對應 cue（cue 有設「對應影片時間」才會動）──
   // 只在「應該的 cue」改變時才切，手動點的 cue 會保留到影片進入下一段
@@ -305,6 +307,7 @@ export default function Share() {
               lookCustomized={personalLook.customized}
               onLookReset={personalLook.reset}
               materialOverrides={materialOverrides}
+              homeView={homeView}
               enableNdi={source === 'ndi'}
               onNdiStatus={setNdiStatus}
               ledVideo={source === 'video' && local.ready ? local.video : null}

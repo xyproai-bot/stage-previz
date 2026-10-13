@@ -3,6 +3,7 @@ import * as api from '../lib/api';
 import type { Cue, CueState, MechanismOffsets, StageObject } from '../lib/api';
 import type { LookSettings } from '../lib/stageLook/lookSettings';
 import type { MaterialOverrides } from '../lib/stageLook/materialOverrides';
+import type { HomeView } from '../lib/homeView';
 import StageScene from './StageScene';
 import { toast } from '../lib/toast';
 import { exportSongStoryboardAsPdf, loadCueThumbs } from '../lib/exportPdf';
@@ -26,6 +27,7 @@ interface Props {
   mechanismOffsets?: MechanismOffsets;
   lookSettings?: LookSettings;
   materialOverrides?: MaterialOverrides;
+  homeView?: HomeView | null;
 }
 
 const STORAGE_PREFIX = 'sp-cue-thumb:';   // localStorage key prefix（小張縮圖夠存）
@@ -39,7 +41,7 @@ const STORAGE_PREFIX = 'sp-cue-thumb:';   // localStorage key prefix（小張縮
  */
 export default function CueStoryboard({
   projectId, songId, cues, stageObjects, modelUrl, selectedCueId, onSelectCue, onReordered,
-  projectName, songName, scaleCorrection, mechanismOffsets, lookSettings, materialOverrides,
+  projectName, songName, scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView,
 }: Props) {
   const [orderedCues, setOrderedCues] = useState<Cue[]>(cues);
   useEffect(() => { setOrderedCues(cues); }, [cues]);
@@ -268,6 +270,7 @@ export default function CueStoryboard({
             mechanismOffsets={mechanismOffsets}
             lookSettings={lookSettings}
             materialOverrides={materialOverrides}
+            homeView={homeView}
           />
         </div>
       )}

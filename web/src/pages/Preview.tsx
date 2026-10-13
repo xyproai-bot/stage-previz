@@ -626,6 +626,8 @@ function SongDetail({
                 onLookReset={personalLook.reset}
                 onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
                 materialOverrides={view.materialOverrides}
+                homeView={view.homeView}
+                onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
                 onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                 onAddAnchoredComment={(anchor) => {
                   // 上層存暫存的 anchor，留言區會接著用

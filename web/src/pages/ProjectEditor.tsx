@@ -827,6 +827,8 @@ export default function ProjectEditor() {
               onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
               materialOverrides={view.materialOverrides}
               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
+              homeView={view.homeView}
+              onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
             />
           )}
           {view.canEdit && (
@@ -1024,6 +1026,7 @@ export default function ProjectEditor() {
                 mechanismOffsets={view.mechanismOffsets}
                 lookSettings={personalLook.effective}
                 materialOverrides={view.materialOverrides}
+                homeView={view.homeView}
               />
             </div>
           </div>

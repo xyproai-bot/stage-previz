@@ -21,6 +21,7 @@ import { toast } from './toast';
 import { DEFAULT_LOOK_SETTINGS, normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 import { normalizeMaterialOverrides, type MaterialOverride, type MaterialOverrides } from './stageLook/materialOverrides';
 import { chooseMaterials, readMaterialCache, writeMaterialCache } from './stageLook/materialCache';
+import { chooseHomeView, readHomeViewCache, writeHomeViewCache, type HomeView } from './homeView';
 
 const SAVE_DELAY_MS = 500;  // 滑桿停手多久才存
 
@@ -57,6 +58,8 @@ export interface ProjectViewSettingsState {
   mechanismOffsets: MechanismOffsets;
   lookSettings: LookSettings;
   materialOverrides: MaterialOverrides;
+  /** 🎥 重置攝影機的畫面（null = 自動正面全景） */
+  homeView: HomeView | null;
   canEdit: boolean;
   setScaleCorrection: (n: number) => void;
   updateMechanismOffset: (objId: string, axis: 'x' | 'y', value: number) => void;
@@ -64,6 +67,8 @@ export interface ProjectViewSettingsState {
   setLookSettings: (patch: Partial<LookSettings>) => void;
   /** patch = null → 這個材質回到 C4D 原本 */
   setMaterialOverride: (name: string, patch: Partial<MaterialOverride> | null) => void;
+  /** null → 回到自動正面全景 */
+  setHomeView: (view: HomeView | null) => void;
 }
 
 export function useProjectViewSettings(projectId: string | undefined, canEdit: boolean): ProjectViewSettingsState {
@@ -71,6 +76,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   const [mechanismOffsets, setOffsets] = useState<MechanismOffsets>({});
   const [lookSettings, setLook] = useState<LookSettings>(DEFAULT_LOOK_SETTINGS);
   const [materialOverrides, setMaterials] = useState<MaterialOverrides>({});
+  const [homeView, setHomeViewState] = useState<HomeView | null>(null);
   // ref 跟 state 同步：存檔 / 失敗回滾要拿「目前值」，不想把 callback 綁在 state 上
   const scaleRef = useRef(1);
   const offsetsRef = useRef<MechanismOffsets>({});
@@ -108,8 +114,10 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     applyOffsets({});
     applyLook(DEFAULT_LOOK_SETTINGS);
     applyMaterials({});
+    setHomeViewState(null);
     // admin 調過的材質，這台電腦有留一份 → 專案上讀不到 / 還沒存上去時用這份
     const cachedMaterials = canEdit ? readMaterialCache(localStorage, projectId) : null;
+    const cachedHomeView = canEdit ? readHomeViewCache(localStorage, projectId) : null;
     (async () => {
       let settings: api.ProjectViewSettings;
       try {
@@ -117,6 +125,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       } catch {
         // 讀不到就維持預設（未校準 / 沒位移 / 預設現場設定），材質用這台電腦留的
         if (!cancelled && cachedMaterials) applyMaterials(cachedMaterials);
+        if (!cancelled && cachedHomeView) setHomeViewState(cachedHomeView);
         return;
       }
       if (cancelled) return;
@@ -152,10 +161,15 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       const materials = chooseMaterials(settings.materialOverrides, cachedMaterials);
       applyMaterials(materials.value);
       if (canEdit && !materials.fromCache) writeMaterialCache(localStorage, projectId, materials.value);
-      if (materials.fromCache) {
-        // 專案上還沒有 → 補存上去（後台還沒更新會失敗，沒關係，這台電腦還留著）
-        api.updateProjectViewSettings(projectId, { materialOverrides: materials.value }).catch(() => {});
-      }
+      const home = chooseHomeView(settings.homeView, cachedHomeView);
+      setHomeViewState(home.value);
+      if (canEdit && !home.fromCache) writeHomeViewCache(localStorage, projectId, home.value);
+
+      // 專案上還沒有、這台電腦有 → 補存上去（後台還沒更新會失敗，沒關係，這台電腦還留著）
+      const backfill: Partial<api.ProjectViewSettings> = {};
+      if (materials.fromCache) backfill.materialOverrides = materials.value;
+      if (home.fromCache) backfill.homeView = home.value;
+      if (Object.keys(backfill).length > 0) api.updateProjectViewSettings(projectId, backfill).catch(() => {});
     })();
     return () => {
       cancelled = true;
@@ -226,8 +240,15 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     scheduleSave({ materialOverrides: next });
   }, [projectId, canEdit, scheduleSave]);
 
+  const setHomeView = useCallback((view: HomeView | null) => {
+    if (!canEdit) return;
+    setHomeViewState(view);
+    if (projectId) writeHomeViewCache(localStorage, projectId, view);
+    scheduleSave({ homeView: view });
+  }, [projectId, canEdit, scheduleSave]);
+
   return {
-    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, canEdit,
-    setScaleCorrection, updateMechanismOffset, resetAllMechanismOffsets, setLookSettings, setMaterialOverride,
+    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView, canEdit,
+    setScaleCorrection, updateMechanismOffset, resetAllMechanismOffsets, setLookSettings, setMaterialOverride, setHomeView,
   };
 }
