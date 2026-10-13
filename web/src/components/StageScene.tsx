@@ -130,6 +130,11 @@ interface Props {
    * 回傳 null → 照平常（換 cue 滑過去）。用函式而不是 states，才不會每幀重跑 React。
    */
   poseAtFrame?: () => CuePoseMap | null;
+  /**
+   * 工具列：'full'（預設）= 全部工具；'viewer' = 只看（動畫師）：工具列只有 🎥 重置攝影機（有開 NDI 再加 NDI 狀態），
+   * 一律現場模式、不能調燈光 / 材質、快捷鍵關掉、不能選物件（轉視角 / 縮放照常）
+   */
+  toolbarMode?: 'full' | 'viewer';
 }
 
 // ⚡ quick：像素 1:1 對顏色；🎤 live：暗場 + LED 照明 + 光暈（取代舊的 realistic / cinematic）
@@ -139,7 +144,12 @@ type Mode = 'translate' | 'rotate' | 'scale';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full' }: Props) {
+  // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
+  const viewer = toolbarMode === 'viewer';
+  const readOnly = readOnlyProp || viewer;
+  const viewerRef = useRef(viewer);
+  viewerRef.current = viewer;
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -170,9 +180,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const [space, setSpace] = useState<'world' | 'local'>('world');
   // 物件名稱 label 預設關掉（按 L 或工具列打開）
   const [showLabels, setShowLabels] = useState(false);
-  // 大家一打開就是「現場」；只有明確指定 quick 才用快速（舊的 realistic / cinematic 也當現場）
+  // 大家一打開就是「現場」；只有明確指定 quick 才用快速（舊的 realistic / cinematic 也當現場）；只看模式一律現場
   const [renderMode, setRenderMode] = useState<RenderMode>(
-    defaultRenderMode === 'quick' ? 'quick' : 'live',
+    defaultRenderMode === 'quick' && !viewer ? 'quick' : 'live',
   );
   const [lookPanelOpen, setLookPanelOpen] = useState(false);
   const [materialPanelOpen, setMaterialPanelOpen] = useState(false);
@@ -321,6 +331,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const [walkMode, setWalkMode] = useState(false);
   const walkKeysRef = useRef<{ [k: string]: boolean }>({});
   const walkPointerLockRef = useRef(false);
+
+  // 切成只看模式：回到現場、開著的工具 / 面板都收起來
+  useEffect(() => {
+    if (!viewer) return;
+    setRenderMode('live');
+    setLookPanelOpen(false);
+    setMaterialPanelOpen(false);
+    setHomeViewPanelOpen(false);
+    setBookmarkPanelOpen(false);
+    setShowLabels(false);
+    setWireframe(false);
+    setShowScaleRef(false);
+    setWalkMode(false);
+    setMeasureMode(false);
+    setAddPinMode(false);
+  }, [viewer]);
   // Persist to localStorage
   useEffect(() => {
     if (!bookmarkScope) return;
@@ -1966,6 +1992,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
+      // 只看模式：快捷鍵全部關掉
+      if (viewerRef.current) return;
       // 唯讀模式：保留 L / X，不啟用 W/E/R/Q/Esc
       if (readOnlyRef.current) {
         if (e.key === 'l' || e.key === 'L') setShowLabels(s => !s);
@@ -2098,45 +2126,47 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             <span className="tool-sep" />
           </>
         )}
-        <button
-          className={'tool ' + (renderMode !== 'quick' ? 'is-active' : '')}
-          onClick={cycleRenderMode}
-          title={`切到 ${renderModeNext}`}
-        >{renderModeLabel}</button>
-        {renderMode === 'live' && onLookSettingsChange && (
+        {!viewer && (<>
           <button
-            className={'tool ' + (lookPanelOpen ? 'is-active' : '')}
-            onClick={() => { setLookPanelOpen(o => !o); setMaterialPanelOpen(false); }}
-            title="現場設定：底光 / 曝光 / LED 照明 / 光暈 / 倒影（調的是你自己看到的）"
-          >🎚 設定</button>
-        )}
-        {onMaterialOverrideChange && (
+            className={'tool ' + (renderMode !== 'quick' ? 'is-active' : '')}
+            onClick={cycleRenderMode}
+            title={`切到 ${renderModeNext}`}
+          >{renderModeLabel}</button>
+          {renderMode === 'live' && onLookSettingsChange && (
+            <button
+              className={'tool ' + (lookPanelOpen ? 'is-active' : '')}
+              onClick={() => { setLookPanelOpen(o => !o); setMaterialPanelOpen(false); }}
+              title="現場設定：底光 / 曝光 / LED 照明 / 光暈 / 倒影（調的是你自己看到的）"
+            >🎚 設定</button>
+          )}
+          {onMaterialOverrideChange && (
+            <button
+              className={'tool ' + (materialPanelOpen ? 'is-active' : '')}
+              onClick={() => { setMaterialPanelOpen(o => !o); setLookPanelOpen(false); }}
+              title="材質：依 C4D 材質名稱調顏色 / 亮霧面 / 金屬感 / 反射 / 透明度，指定鏡面地板（所有人共用）"
+            >🎨 材質</button>
+          )}
           <button
-            className={'tool ' + (materialPanelOpen ? 'is-active' : '')}
-            onClick={() => { setMaterialPanelOpen(o => !o); setLookPanelOpen(false); }}
-            title="材質：依 C4D 材質名稱調顏色 / 亮霧面 / 金屬感 / 反射 / 透明度，指定鏡面地板（所有人共用）"
-          >🎨 材質</button>
-        )}
-        <button
-          className={'tool ' + (wireframe ? 'is-active' : '')}
-          onClick={() => setWireframe(w => !w)}
-          title={wireframe ? '切回實心 (X)' : 'Wireframe / X-ray 模式（看穿模型）(X)'}
-        >🔳 Wire</button>
-        {showScaleButton && (
+            className={'tool ' + (wireframe ? 'is-active' : '')}
+            onClick={() => setWireframe(w => !w)}
+            title={wireframe ? '切回實心 (X)' : 'Wireframe / X-ray 模式（看穿模型）(X)'}
+          >🔳 Wire</button>
+          {showScaleButton && (
+            <button
+              className={'tool ' + (showScaleRef ? 'is-active' : '')}
+              onClick={() => setShowScaleRef(s => !s)}
+              title={showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格'}
+            >👤 比例尺</button>
+          )}
           <button
-            className={'tool ' + (showScaleRef ? 'is-active' : '')}
-            onClick={() => setShowScaleRef(s => !s)}
-            title={showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格'}
-          >👤 比例尺</button>
-        )}
-        <button
-          className={'tool ' + (showLabels ? 'is-active' : '')}
-          onClick={() => setShowLabels(s => !s)}
-          title={showLabels ? '隱藏物件名稱 label (L)' : '顯示物件名稱 label (L)'}
-        >🏷️ Label</button>
+            className={'tool ' + (showLabels ? 'is-active' : '')}
+            onClick={() => setShowLabels(s => !s)}
+            title={showLabels ? '隱藏物件名稱 label (L)' : '顯示物件名稱 label (L)'}
+          >🏷️ Label</button>
+        </>)}
         <div className="bm-wrap" style={{ display: 'flex' }}>
           <button className="tool" onClick={resetCamera} title={homeView ? '重置攝影機（回到設定的重置視角）' : '重置攝影機（正面全景）'}>🎥</button>
-          {onHomeViewChange && (
+          {onHomeViewChange && !viewer && (
             <button
               className={'tool ' + (homeViewPanelOpen ? 'is-active' : '')}
               onClick={() => { setHomeViewPanelOpen(o => !o); setBookmarkPanelOpen(false); }}
@@ -2144,7 +2174,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
               style={{ paddingLeft: 2, paddingRight: 4 }}
             >▾</button>
           )}
-          {homeViewPanelOpen && onHomeViewChange && (
+          {homeViewPanelOpen && onHomeViewChange && !viewer && (
             <HomeViewPanel
               view={displayedHomeView()}
               isCustom={!!homeView}
@@ -2164,69 +2194,71 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             />
           )}
         </div>
-        <button
-          className={'tool ' + (walkMode ? 'is-active' : '')}
-          onClick={() => setWalkMode(m => !m)}
-          title={walkMode ? '離開 Walk 模式（或按 Esc）' : 'Walk 模式 — WASD 走位、滑鼠看四周'}
-        >🚶 Walk</button>
-        {bookmarkScope && (
-          <div className="bm-wrap">
-            <button
-              className={'tool ' + (bookmarkPanelOpen ? 'is-active' : '')}
-              onClick={() => setBookmarkPanelOpen(o => !o)}
-              title={`視角書籤（${bookmarks.length}）— 儲存 / 切換常用視角`}
-            >📷 視角{bookmarks.length > 0 && <span className="muted small"> {bookmarks.length}</span>}</button>
-            {bookmarkPanelOpen && (
-              <div className="bm-popover" onClick={e => e.stopPropagation()}>
-                <div className="bm-popover__head">
-                  <span>視角書籤</span>
-                  <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)}>×</button>
-                </div>
-                <button className="btn btn--primary btn--sm bm-popover__save" onClick={saveCurrentCamera}>
-                  + 儲存目前視角
-                </button>
-                {bookmarks.length === 0 ? (
-                  <div className="bm-popover__empty">還沒儲存任何視角</div>
-                ) : (
-                  <ul className="bm-popover__list">
-                    {bookmarks.map(bm => (
-                      <li key={bm.id}>
-                        <button className="bm-row" onClick={() => loadBookmark(bm)}>
-                          <span className="bm-row__name">{bm.name}</span>
-                          <span className="bm-row__coords">({bm.pos.map(n => n.toFixed(1)).join(', ')})</span>
-                        </button>
-                        <button className="bm-row__del" onClick={() => deleteBookmark(bm.id)} title="刪除">×</button>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-        {onAddAnchoredComment && (
+        {!viewer && (<>
           <button
-            className={'tool ' + (addPinMode ? 'is-active' : '')}
-            onClick={() => setAddPinMode(m => !m)}
-            title={addPinMode ? '取消 3D 留言模式' : '在 3D 場景上某個位置 / 物件加留言'}
-          >📍 3D 留言</button>
-        )}
-        <button
-          className={'tool ' + (measureMode ? 'is-active' : '')}
-          onClick={() => {
-            const next = !measureMode;
-            setMeasureMode(next);
-            if (!next) {
-              // 關閉時清線
-              measurePointsRef.current = [];
-              setMeasureDistance(null);
-              if (measureLineRef.current) {
-                (measureLineRef.current.geometry as THREE.BufferGeometry).setFromPoints([]);
+            className={'tool ' + (walkMode ? 'is-active' : '')}
+            onClick={() => setWalkMode(m => !m)}
+            title={walkMode ? '離開 Walk 模式（或按 Esc）' : 'Walk 模式 — WASD 走位、滑鼠看四周'}
+          >🚶 Walk</button>
+          {bookmarkScope && (
+            <div className="bm-wrap">
+              <button
+                className={'tool ' + (bookmarkPanelOpen ? 'is-active' : '')}
+                onClick={() => setBookmarkPanelOpen(o => !o)}
+                title={`視角書籤（${bookmarks.length}）— 儲存 / 切換常用視角`}
+              >📷 視角{bookmarks.length > 0 && <span className="muted small"> {bookmarks.length}</span>}</button>
+              {bookmarkPanelOpen && (
+                <div className="bm-popover" onClick={e => e.stopPropagation()}>
+                  <div className="bm-popover__head">
+                    <span>視角書籤</span>
+                    <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)}>×</button>
+                  </div>
+                  <button className="btn btn--primary btn--sm bm-popover__save" onClick={saveCurrentCamera}>
+                    + 儲存目前視角
+                  </button>
+                  {bookmarks.length === 0 ? (
+                    <div className="bm-popover__empty">還沒儲存任何視角</div>
+                  ) : (
+                    <ul className="bm-popover__list">
+                      {bookmarks.map(bm => (
+                        <li key={bm.id}>
+                          <button className="bm-row" onClick={() => loadBookmark(bm)}>
+                            <span className="bm-row__name">{bm.name}</span>
+                            <span className="bm-row__coords">({bm.pos.map(n => n.toFixed(1)).join(', ')})</span>
+                          </button>
+                          <button className="bm-row__del" onClick={() => deleteBookmark(bm.id)} title="刪除">×</button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+          {onAddAnchoredComment && (
+            <button
+              className={'tool ' + (addPinMode ? 'is-active' : '')}
+              onClick={() => setAddPinMode(m => !m)}
+              title={addPinMode ? '取消 3D 留言模式' : '在 3D 場景上某個位置 / 物件加留言'}
+            >📍 3D 留言</button>
+          )}
+          <button
+            className={'tool ' + (measureMode ? 'is-active' : '')}
+            onClick={() => {
+              const next = !measureMode;
+              setMeasureMode(next);
+              if (!next) {
+                // 關閉時清線
+                measurePointsRef.current = [];
+                setMeasureDistance(null);
+                if (measureLineRef.current) {
+                  (measureLineRef.current.geometry as THREE.BufferGeometry).setFromPoints([]);
+                }
               }
-            }
-          }}
-          title={measureMode ? '關閉測距' : '測距：點兩個點看距離（m）'}
-        >📏 測距</button>
+            }}
+            title={measureMode ? '關閉測距' : '測距：點兩個點看距離（m）'}
+          >📏 測距</button>
+        </>)}
         <span className="grow" />
         {enableNdi && (
           <div className="ndi-wrap">
@@ -2302,7 +2334,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         )}
         {cueName && <span className="cue-tag">當前 cue：<strong>{cueName}</strong></span>}
       </div>
-      {lookPanelOpen && renderMode === 'live' && onLookSettingsChange && (
+      {!viewer && lookPanelOpen && renderMode === 'live' && onLookSettingsChange && (
         <LookSettingsPanel
           settings={lookSettings}
           onChange={onLookSettingsChange}
@@ -2312,7 +2344,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           onSaveAsDefault={onLookSaveAsDefault}
         />
       )}
-      {materialPanelOpen && onMaterialOverrideChange && (
+      {!viewer && materialPanelOpen && onMaterialOverrideChange && (
         <MaterialPanel
           materials={modelMaterials}
           overrides={materialOverrides || {}}
@@ -2425,7 +2457,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       )}
       {/* Help overlay */}
       <div className="stage-scene__help">
-        {readOnly
+        {viewer
+          ? <>拖拉旋轉視角 · 滾輪縮放</>
+          : readOnly
           ? <><kbd>L</kbd> label · 拖拉旋轉視角 · 滾輪縮放</>
           : <><kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>R</kbd> 縮放 · <kbd>Q</kbd> world/local · <kbd>L</kbd> label · <kbd>Esc</kbd> 取消選取</>
         }
