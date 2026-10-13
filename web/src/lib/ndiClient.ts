@@ -1,10 +1,11 @@
-// NDI WebSocket client — 連 ndi-helper.exe 拿即時 frames
+// NDI WebSocket client — 連 NDI 小程序拿即時 frames
 //
-// Server 在動畫師本機 ws://127.0.0.1:7777
-// 協議：
-//   - 連線後 server 送一次 text {"type":"hello",...}
-//   - 之後每幀：binary message = JPEG bytes
-//   - 客戶端可送 "status" → 回 {"type":"status",...}
+// Server 在動畫師本機 ws://127.0.0.1:7777（協議見 ndi-helper/README.md）
+//   - 連線後 server 送一次 text {"type":"hello",...}，接著 {"type":"status",...}（有變就推 + 每秒一次）
+//   - 每幀：binary message = JPEG bytes
+//   - 客戶端可送 "status" / {"type":"select_source"} / {"type":"pause"} / {"type":"resume"}
+//
+// 這層只管 WebSocket + 解 JPEG；「現在卡在哪一步、要不要重連」在 ndiConnection.ts
 //
 // 用法：
 //   const client = new NdiClient({
@@ -14,22 +15,6 @@
 //   client.connect();
 //   ...
 //   client.disconnect();
-
-export interface NdiHelloMessage {
-  type: 'hello';
-  version: string;
-  source: string;
-}
-
-export interface NdiStatusMessage {
-  type: 'status';
-  source: string | null;
-  fps: number;
-  frameCount: number;
-  clients: number;
-  lastError: string | null;
-  availableSources?: string[];
-}
 
 export type NdiClientStatus =
   | { kind: 'idle' }
@@ -43,7 +28,11 @@ interface Options {
   onFrame: (bitmap: ImageBitmap, ts: number) => void; // 每幀
   onStatus?: (s: NdiClientStatus) => void;
   onSources?: (sources: string[]) => void;            // 可用 source 清單（從 status 回應）
-  /** 自動 reconnect 間隔（毫秒）；0 = 不重連 */
+  /** 每一則 JSON 訊息（hello / status / select_ack / error）原樣給 */
+  onMessage?: (msg: Record<string, unknown>) => void;
+  /** 每收到一張 JPEG（還沒解）就叫一次；回 false = 這張不用解（暫停中） */
+  onBinary?: () => boolean | void;
+  /** 自動 reconnect 間隔（毫秒）；0 = 不重連（交給上層） */
   reconnectIntervalMs?: number;
 }
 
@@ -75,47 +64,50 @@ export class NdiClient {
       ws = new WebSocket(this.url);
     } catch (e) {
       this.setStatus({ kind: 'error', message: e instanceof Error ? e.message : String(e) });
+      this.setStatus({ kind: 'disconnected' });
       this.scheduleReconnect();
       return;
     }
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
 
-    ws.onopen = () => {
-      // 等 hello 才視為 connected（server 開連線後立刻送）
-    };
-
     ws.onmessage = async (ev) => {
+      if (this.ws !== ws) return;  // 舊的連線（已經換新的了）
       if (typeof ev.data === 'string') {
+        let msg: Record<string, unknown>;
         try {
-          const msg = JSON.parse(ev.data);
-          if (msg.type === 'hello') {
-            this.setStatus({ kind: 'connected', url: this.url, helperVersion: msg.version, source: msg.source || '(no source)' });
-            // 連上之後立刻問一次 status 拿 available sources
-            this.send('status');
-          } else if (msg.type === 'status') {
-            if (Array.isArray(msg.availableSources)) {
-              this.opts.onSources?.(msg.availableSources);
-            }
-            if (typeof msg.source === 'string' && msg.source && this.status.kind === 'connected') {
-              this.setStatus({ ...this.status, source: msg.source });
-            }
-          } else if (msg.type === 'select_ack') {
-            // helper 已收到切換指令
-          }
+          const parsed = JSON.parse(ev.data);
+          if (!parsed || typeof parsed !== 'object') return;
+          msg = parsed as Record<string, unknown>;
         } catch {
-          /* ignore parse errors */
+          return;  // 看不懂的不理
         }
+        if (msg.type === 'hello') {
+          const source = typeof msg.source === 'string' && msg.source ? msg.source : '(no source)';
+          this.setStatus({ kind: 'connected', url: this.url, helperVersion: String(msg.version ?? ''), source });
+          // 舊版小程序不會自己送 status → 連上之後問一次（新版會回一則，無害）
+          this.send('status');
+        } else if (msg.type === 'status') {
+          if (Array.isArray(msg.availableSources)) {
+            this.opts.onSources?.(msg.availableSources.filter((s): s is string => typeof s === 'string'));
+          }
+          if (typeof msg.source === 'string' && msg.source && this.status.kind === 'connected') {
+            this.setStatus({ ...this.status, source: msg.source });
+          }
+        }
+        this.opts.onMessage?.(msg);
       } else {
         // Binary = JPEG bytes
+        if (this.opts.onBinary?.() === false) return;
         if (this.decoding) return;          // 跳過上一幀沒解完的
         this.decoding = true;
         try {
           const blob = new Blob([ev.data as ArrayBuffer], { type: 'image/jpeg' });
           const bitmap = await createImageBitmap(blob);
-          this.opts.onFrame(bitmap, performance.now());
-        } catch (e) {
-          console.warn('[NdiClient] decode failed:', e);
+          if (this.ws === ws) this.opts.onFrame(bitmap, performance.now());
+          else bitmap.close?.();
+        } catch {
+          /* 壞掉的一張就跳過 */
         } finally {
           this.decoding = false;
         }
@@ -123,14 +115,16 @@ export class NdiClient {
     };
 
     ws.onclose = () => {
-      this.setStatus({ kind: 'disconnected' });
+      if (this.ws !== ws) return;
       this.ws = null;
+      this.setStatus({ kind: 'disconnected' });
       this.scheduleReconnect();
     };
 
     ws.onerror = () => {
-      this.setStatus({ kind: 'error', message: 'WebSocket error（NDI helper.exe 沒在跑？）' });
-      // onclose 會被觸發 → reconnect
+      if (this.ws !== ws) return;
+      this.setStatus({ kind: 'error', message: '連不到 NDI 小程序' });
+      // onclose 會接著觸發 → reconnect
     };
   }
 
@@ -139,15 +133,21 @@ export class NdiClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.ws) {
-      try { this.ws.close(); } catch { /* ignore */ }
+    const ws = this.ws;
+    if (ws) {
       this.ws = null;
+      ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+      try { ws.close(); } catch { /* ignore */ }
     }
   }
 
   destroy() {
     this.destroyed = true;
     this.disconnect();
+  }
+
+  isOpen(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 
   /** 送 text frame 給 helper */
@@ -160,10 +160,16 @@ export class NdiClient {
   /** 拉一次最新 status（含 availableSources） */
   requestStatus() { this.send('status'); }
 
-  /** 切換 NDI source（helper 收到會 restart receiver） */
-  selectSource(name: string) {
+  /** 切換 NDI source；null = 回到自動挑（這台電腦的 AE 優先） */
+  selectSource(name: string | null) {
     this.send(JSON.stringify({ type: 'select_source', name }));
   }
+
+  /** 這條連線先不要畫面（小程序沒人要畫面時就不解碼） */
+  pause() { this.send(JSON.stringify({ type: 'pause' })); }
+
+  /** 恢復收畫面 */
+  resume() { this.send(JSON.stringify({ type: 'resume' })); }
 
   private setStatus(s: NdiClientStatus) {
     this.status = s;
