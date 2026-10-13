@@ -757,7 +757,8 @@
   outline: none;
   font-family: inherit;
 }
-.cue-meta-editor__row input[type="number"] {
+.cue-meta-editor__row input[type="number"],
+.cue-meta-editor__row input[inputmode="decimal"] {
   font-family: var(--font-mono);
 }
 .cue-meta-editor__row input:focus {
@@ -766,11 +767,6 @@
 .cue-meta-editor__row small {
   font-size: 10.5px;
   margin-top: 2px;
-}
-.cue-meta-editor__save {
-  align-self: stretch;
-  padding: 7px 12px;
-  font-size: 12px;
 }
 
 /* C4D / Maya 風格固定 attribute panel — 切物件不重排 */
@@ -840,8 +836,13 @@
 }
 .attribute-panel__obj {
   font-size: 12.5px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
 .attribute-panel__obj label {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -849,6 +850,40 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   user-select: none;
+}
+/* 這個 cue 裡隱藏的物件：名字變淡 */
+.attribute-panel__obj.is-hidden-in-cue .attribute-panel__obj-name {
+  opacity: 0.45;
+}
+/* 每一列右邊的顯示 / 隱藏（這個 cue） */
+.vis-toggle {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.vis-toggle:hover:not(:disabled) {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.vis-toggle:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.vis-toggle[aria-pressed="true"] {
+  color: var(--warn);
+}
+.vis-toggle:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .attribute-panel__obj label:hover {
   background: var(--surface-2);
@@ -993,6 +1028,66 @@
 .object-row__body input[type="number"]:focus,
 .attribute-panel__body input[type="number"]:focus {
   border-color: var(--accent);
+}
+/* 數字欄位：軸名 + 輸入 + 單位（按 Enter / 點別的地方就存） */
+.num-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+  cursor: text;
+}
+.num-field:focus-within {
+  border-color: var(--accent);
+}
+.num-field.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.num-field__axis,
+.num-field__unit {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  user-select: none;
+}
+/* .form-row label 的大寫 / 字距不要套到欄位裡（不然 m 會變 M） */
+.attribute-panel__body .form-row .num-field {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.num-field input,
+.attribute-panel__body .num-field input {
+  flex: 1;
+  min-width: 0;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 6px 0;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  outline: none;
+}
+.field-error {
+  color: var(--danger);
+}
+.editor-spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--border-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: editor-spin 0.9s linear infinite;
+}
+@keyframes editor-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .editor-spinner { animation-duration: 3s; }
 }
 .object-row__actions {
   display: flex;

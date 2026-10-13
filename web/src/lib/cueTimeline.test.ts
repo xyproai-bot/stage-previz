@@ -39,10 +39,19 @@ describe('cueWindows', () => {
     ]);
     expect(w[1]).toEqual({ cueId: 'b', start: 5, arrive: 8 });
   });
-  it('淡入淡出沒設（0）→ 用預設秒數', () => {
+  it('淡入淡出 0 → 直接切換：到那一秒才一次換過去（不提早出發）', () => {
     const w = cueWindows([
       { id: 'a', videoTimeSec: 0, crossfadeSeconds: 0 },
       { id: 'b', videoTimeSec: 30, crossfadeSeconds: 0 },
+    ]);
+    expect(w[1]).toEqual({ cueId: 'b', start: 30, arrive: 30 });
+    expect(timelineAt(w, 29.99)).toEqual({ kind: 'hold', cueId: 'a' });
+    expect(timelineAt(w, 30)).toEqual({ kind: 'hold', cueId: 'b' });
+  });
+  it('淡入淡出用 cue 的秒數（新 cue 預設 1 秒）', () => {
+    const w = cueWindows([
+      { id: 'a', videoTimeSec: 0, crossfadeSeconds: 0 },
+      { id: 'b', videoTimeSec: 30, crossfadeSeconds: DEFAULT_CUE_TRANSITION_SECONDS },
     ]);
     expect(w[1]).toEqual({ cueId: 'b', start: 30 - DEFAULT_CUE_TRANSITION_SECONDS, arrive: 30 });
   });

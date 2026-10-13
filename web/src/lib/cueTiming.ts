@@ -38,11 +38,58 @@ export function videoCueSelection(
   return { selectedId: targetId, targetId };
 }
 
-// 換 cue 時舞台移動要花幾秒：cue 有設 crossfade 就用它，沒設（0）就用預設，讓切換是滑過去不是瞬間跳
+// 換 cue 時舞台移動要花幾秒 = cue 的「淡入淡出時間」，0 = 直接切換（不滑）。
+// 還沒選 cue（看的是物件預設位置）時用預設秒數。
+// 注意：2026-10 以前 0 代表「用預設 1 秒」，舊資料要先跑一次
+//   UPDATE cues SET crossfade_seconds = 1 WHERE crossfade_seconds = 0
+// 才不會從滑過去變成直接跳（交給後台那邊備份後執行）。
 export const DEFAULT_CUE_TRANSITION_SECONDS = 1;
+/** 新增 cue 時的淡入淡出秒數（後台沒給就是 0 = 直接切換，所以新增時一定要帶） */
+export const NEW_CUE_CROSSFADE_SECONDS = DEFAULT_CUE_TRANSITION_SECONDS;
 
 export function cueTransitionSeconds(cue: { crossfadeSeconds: number } | null | undefined): number {
-  return cue && cue.crossfadeSeconds > 0 ? cue.crossfadeSeconds : DEFAULT_CUE_TRANSITION_SECONDS;
+  if (!cue) return DEFAULT_CUE_TRANSITION_SECONDS;
+  const s = cue.crossfadeSeconds;
+  return Number.isFinite(s) && s > 0 ? s : 0;
+}
+
+/** 欄位裡打的淡入淡出秒數 → 要存的數字；空白 / 不是數字 / 負的 → null（不存，欄位還原） */
+export function parseCrossfadeInput(text: string): number | null {
+  const t = text.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * 「對應影片時間」欄位 → 要存的秒數：
+ *   空白 → { ok: true, value: null }（清掉對應時間）
+ *   「15.5」或「1:23」「1:23.5」（分:秒，秒要小於 60）→ 秒數
+ *   亂打 / 負的 → { ok: false }（不存，欄位還原；以前亂打會被當成清掉）
+ */
+export function parseVideoTimeInput(text: string): { ok: true; value: number | null } | { ok: false } {
+  const t = text.trim();
+  if (t === '') return { ok: true, value: null };
+  const num = (x: string) => (/^(\d+\.?\d*|\.\d+)$/.test(x) ? Number(x) : NaN);
+  let value: number;
+  if (t.includes(':')) {
+    const parts = t.split(':');
+    if (parts.length !== 2) return { ok: false };
+    const m = num(parts[0].trim());
+    const sec = num(parts[1].trim());
+    if (!Number.isInteger(m) || !(sec < 60)) return { ok: false };
+    value = m * 60 + sec;
+  } else {
+    value = num(t);
+  }
+  if (!Number.isFinite(value) || value < 0) return { ok: false };
+  return { ok: true, value: Math.round(value * 1000) / 1000 };
+}
+
+/** cue 清單上顯示的切換方式 */
+export function crossfadeLabel(seconds: number): string {
+  return Number.isFinite(seconds) && seconds > 0 ? `淡入淡出 ${seconds} 秒` : '直接切換';
 }
 
 // 換 cue 時舞台移動走到哪了（0 = 還在舊位置、1 = 到新位置）

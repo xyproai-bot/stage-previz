@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
-import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler, MaterialProps, LedProps } from '../lib/api';
+import type { Song, Cue, CueState, StageObject, StageObjectCategory, MaterialProps, LedProps } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
 import MechanismPanel from '../components/MechanismPanel';
@@ -19,10 +19,20 @@ import CommentSearchDialog from '../components/CommentSearchDialog';
 import { pushRecentProject } from '../components/CommandPalette';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
-import { cueTransitionSeconds } from '../lib/cueTiming';
+import { cueTransitionSeconds, crossfadeLabel, NEW_CUE_CROSSFADE_SECONDS, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
+import { EditHistory, historyScope } from '../lib/editHistory';
+import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
+import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
+import { toast } from '../lib/toast';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
+type LoadStatus = 'loading' | 'ready' | 'error';
+/**
+ * 改物件狀態：直接給要改的欄位，或給「從現在的樣子算出要改什麼」
+ * （排隊輪到時才算 → 連續改 X、Y 不會互相蓋掉還沒存完的值）
+ */
+type StatePatchInput = CueStatePatch | ((current: CueState['effective']) => CueStatePatch);
 type SongStatus = Song['status'];
 type StatusFilter = SongStatus | 'all';
 
@@ -63,14 +73,33 @@ export default function ProjectEditor() {
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
 
   // Stage objects (project-level)
-  const [stageObjects, setStageObjects] = useState<StageObject[]>([]);
+  const [stageObjects, setStageObjectsState] = useState<StageObject[]>([]);
+  // 第一次讀到之前是 loading：不要先跳「這個專案還沒有物件」
+  const [stageObjectsStatus, setStageObjectsStatus] = useState<LoadStatus>('loading');
+  // ref 跟 state 一起更新：排隊中的修改要拿最新的值，不能等畫面重畫
+  const stageObjectsRef = useRef<StageObject[]>([]);
+  const commitStageObjects = useCallback((list: StageObject[]) => {
+    stageObjectsRef.current = list;
+    setStageObjectsState(list);
+  }, []);
 
   // 3D 模型檔案（R2）
   const [modelUrl, setModelUrl] = useState<string | null>(null);
 
   // Cue object states (per selected cue)
-  const [cueStates, setCueStates] = useState<CueState[]>([]);
-  const [statesLoading, setStatesLoading] = useState(false);
+  const [cueStates, setCueStatesState] = useState<CueState[]>([]);
+  // 這份 cueStates 是哪個 cue 的：換 cue 後新的還沒讀到前，不能拿上一個 cue 的來編輯
+  const [cueStatesFor, setCueStatesFor] = useState<string | null>(null);
+  const [statesError, setStatesError] = useState(false);
+  const cueStatesRef = useRef<CueState[]>([]);
+  const cueStatesForRef = useRef<string | null>(null);
+  const commitCueStates = useCallback((cueId: string | null, list: CueState[]) => {
+    cueStatesRef.current = list;
+    cueStatesForRef.current = cueId;
+    setCueStatesState(list);
+    setCueStatesFor(cueId);
+  }, []);
+  const statesLoading = !!selectedCueId && cueStatesFor !== selectedCueId && !statesError;
 
   // Selected objects (multi-select supported — viewport 點選預設單選，下方清單可勾多個)
   const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
@@ -114,21 +143,53 @@ export default function ProjectEditor() {
   }, [projectId]);
   useEffect(() => { refreshProjectMeta(); }, [refreshProjectMeta]);
 
-  // ── Undo stack（限制最近 50 步，主要涵蓋 cue state 改動） ──
-  const undoStackRef = useRef<Array<() => Promise<void>>>([]);
-  const [undoCount, setUndoCount] = useState(0);
-  const pushUndo = useCallback((action: () => Promise<void>) => {
-    undoStackRef.current.push(action);
-    if (undoStackRef.current.length > 50) undoStackRef.current.shift();
-    setUndoCount(undoStackRef.current.length);
+  // ── 復原 / 重做：每個 cue 各一份（lib/editHistory.ts），換 cue 不會復原到別的 cue ──
+  const historyRef = useRef(new EditHistory());
+  const [, setHistoryVersion] = useState(0);
+  const bumpHistory = useCallback(() => setHistoryVersion(v => v + 1), []);
+  const currentHistoryScope = historyScope(selectedCueId);
+  const historyScopeRef = useRef(currentHistoryScope);
+  historyScopeRef.current = currentHistoryScope;
+  const historyCounts = historyRef.current.counts(currentHistoryScope);
+
+  // 改物件位置 / 顯示、復原、重做都排隊一個一個做：每一步都拿得到前一步存好的值（復原才記得對），
+  // 全部做完才重新讀一次（多選拖曳時物件不會一個一個跳回舊位置再跳過來）
+  const editQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingEditsRef = useRef(0);
+  const refreshNeededRef = useRef({ states: false, objects: false });
+  const refreshCueStatesRef = useRef<() => Promise<void>>(async () => {});
+  const refreshStageObjectsRef = useRef<() => Promise<void>>(async () => {});
+  const runEdit = useCallback(<T,>(job: () => Promise<T>, refresh: 'states' | 'objects'): Promise<T> => {
+    pendingEditsRef.current++;
+    const run = editQueueRef.current.then(async () => {
+      try {
+        return await job();
+      } finally {
+        refreshNeededRef.current[refresh] = true;
+        pendingEditsRef.current--;
+        if (pendingEditsRef.current === 0) {
+          const need = refreshNeededRef.current;
+          refreshNeededRef.current = { states: false, objects: false };
+          if (need.objects) await refreshStageObjectsRef.current();
+          if (need.states) await refreshCueStatesRef.current();
+        }
+      }
+    });
+    editQueueRef.current = run.then(() => undefined, () => undefined);
+    return run;
   }, []);
-  const undo = useCallback(async () => {
-    const action = undoStackRef.current.pop();
-    setUndoCount(undoStackRef.current.length);
-    if (!action) return;
-    try { await action(); }
-    catch (e) { console.warn('undo failed', e); alert('Undo 失敗：' + (e instanceof Error ? e.message : String(e))); }
-  }, []);
+  const runHistory = useCallback((kind: 'undo' | 'redo') => {
+    const scope = historyScopeRef.current;
+    const history = historyRef.current;
+    if (history.counts(scope)[kind] === 0) return;
+    runEdit(async () => {
+      // 排隊輪到時已經換到別的 cue → 不做（只復原 / 重做現在選的 cue）
+      if (historyScopeRef.current !== scope) return;
+      await history[kind](scope);
+    }, scope === historyScope(null) ? 'objects' : 'states')
+      .catch(e => { console.warn(kind + ' failed', e); toast.error((kind === 'undo' ? '復原' : '重做') + '失敗：' + msg(e)); })
+      .finally(bumpHistory);
+  }, [runEdit, bumpHistory]);
 
   // 把最新值放進 ref，給 keyboard listener 用（避免 useEffect 因 derived value 變化重綁）
   const navRef = useRef({ masterCues: [] as Cue[], visibleSongs: [] as Song[], selectedCueId: null as string | null, selectedSongId: null as string | null });
@@ -137,12 +198,17 @@ export default function ProjectEditor() {
       const t = e.target as HTMLElement | null;
       const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
 
-      // Cmd/Ctrl+Z = undo
-      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
-        if (inField) return;
-        e.preventDefault();
-        undo();
-        return;
+      // Cmd/Ctrl+Z = 復原；Cmd/Ctrl+Shift+Z 或 Ctrl+Y = 重做（在欄位裡打字時交給瀏覽器自己的復原）
+      if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+        const key = e.key.toLowerCase();
+        const isUndo = key === 'z' && !e.shiftKey;
+        const isRedo = (key === 'z' && e.shiftKey) || (key === 'y' && !e.shiftKey);
+        if (isUndo || isRedo) {
+          if (inField) return;
+          e.preventDefault();
+          runHistory(isUndo ? 'undo' : 'redo');
+          return;
+        }
       }
 
       // j/k = 切歌；Shift+J/K = 切 cue
@@ -170,7 +236,7 @@ export default function ProjectEditor() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo]);
+  }, [runHistory]);
 
   // ── Loaders ──
   const refreshSongs = useCallback(async () => {
@@ -203,11 +269,14 @@ export default function ProjectEditor() {
     if (!projectId) return;
     try {
       const list = await api.listStageObjects(projectId);
-      setStageObjects(list);
+      commitStageObjects(list);
+      setStageObjectsStatus('ready');
     } catch (e) {
       console.warn('load stage objects failed', e);
+      // 已經讀到過就留著舊的；第一次就失敗 → 顯示載入失敗（不是「還沒有物件」）
+      setStageObjectsStatus(s => (s === 'ready' ? s : 'error'));
     }
-  }, [projectId]);
+  }, [projectId, commitStageObjects]);
 
   const refreshModel = useCallback(async () => {
     if (!projectId) return;
@@ -220,19 +289,27 @@ export default function ProjectEditor() {
     }
   }, [projectId]);
 
+  // 每次讀取編號：讀的途中換了 cue / 又有更新的讀取 → 舊的結果丟掉（不然會把別的 cue 的狀態放到這個 cue）
+  const statesRequestRef = useRef(0);
   const refreshCueStates = useCallback(async () => {
-    if (!projectId || !selectedSongId || !selectedCueId) { setCueStates([]); return; }
-    setStatesLoading(true);
+    const req = ++statesRequestRef.current;
+    if (!projectId || !selectedSongId || !selectedCueId) { commitCueStates(null, []); setStatesError(false); return; }
+    const cueId = selectedCueId;
+    if (cueStatesForRef.current !== cueId) setStatesError(false);
     try {
-      const list = await api.listCueStates(projectId, selectedSongId, selectedCueId);
-      setCueStates(list);
+      const list = await api.listCueStates(projectId, selectedSongId, cueId);
+      if (req !== statesRequestRef.current) return;
+      commitCueStates(cueId, list);
+      setStatesError(false);
     } catch (e) {
       console.warn('load cue states failed', e);
-    } finally {
-      setStatesLoading(false);
+      if (req === statesRequestRef.current && cueStatesForRef.current !== cueId) setStatesError(true);
     }
-  }, [projectId, selectedSongId, selectedCueId]);
+  }, [projectId, selectedSongId, selectedCueId, commitCueStates]);
+  refreshCueStatesRef.current = refreshCueStates;
+  refreshStageObjectsRef.current = refreshStageObjects;
 
+  useEffect(() => { setStageObjectsStatus('loading'); }, [projectId]);
   useEffect(() => { refreshSongs(); refreshStageObjects(); refreshModel(); }, [refreshSongs, refreshStageObjects, refreshModel]);
 
   // 進入專案時推進 recent（Cmd+K palette 用）— 等專案 metadata 拉到才推（取真實名稱）
@@ -380,7 +457,8 @@ export default function ProjectEditor() {
     const name = prompt('新 cue 名稱：', defaultName)?.trim();
     if (!name) return;
     try {
-      await api.createCue(projectId, selectedSongId, { name, fromTemplateId: templateId });
+      // 模板有自己的淡入淡出秒數會蓋過這個預設
+      await api.createCue(projectId, selectedSongId, { name, fromTemplateId: templateId, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS });
       await refreshCues();
       setRightTab('cues');
       setTemplatePickerOpen(false);
@@ -393,7 +471,7 @@ export default function ProjectEditor() {
     const defaultName = `Cue ${cues.length + 1}`;
     const name = prompt('新增空白 cue（全部用 default）— 名稱：', defaultName)?.trim();
     if (!name) return;
-    try { await api.createCue(projectId, selectedSongId, { name }); await refreshCues(); setRightTab('cues'); }
+    try { await api.createCue(projectId, selectedSongId, { name, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS }); await refreshCues(); setRightTab('cues'); }
     catch (e) { alert('新增失敗：' + msg(e)); }
   }
   async function handleCloneCue(sourceCueId?: string) {
@@ -406,7 +484,8 @@ export default function ProjectEditor() {
     const name = prompt(`沿用「${src.name}」— 新 cue 名稱：`, defaultName)?.trim();
     if (!name) return;
     try {
-      await api.createCue(projectId, selectedSongId, { name, cloneFrom: src.id });
+      // 後台複製 cue 時不會帶淡入淡出秒數 → 自己帶原本 cue 的
+      await api.createCue(projectId, selectedSongId, { name, cloneFrom: src.id, crossfadeSeconds: src.crossfadeSeconds });
       await refreshCues();
       setRightTab('cues');
     } catch (e) { alert('沿用失敗：' + msg(e)); }
@@ -423,7 +502,7 @@ export default function ProjectEditor() {
         position: s.effective.position,
         rotation: s.effective.rotation,
       }));
-      await api.createCue(projectId, selectedSongId, { name, snapshotStates });
+      await api.createCue(projectId, selectedSongId, { name, snapshotStates, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS });
       await refreshCues();
       setRightTab('cues');
     } catch (e) { alert('snapshot 失敗：' + msg(e)); }
@@ -433,7 +512,7 @@ export default function ProjectEditor() {
     const src = cues.find(c => c.id === cueId);
     if (!src) return;
     try {
-      await api.createCue(projectId, selectedSongId, { name: `${src.name} (副本)`, cloneFrom: cueId });
+      await api.createCue(projectId, selectedSongId, { name: `${src.name} (副本)`, cloneFrom: cueId, crossfadeSeconds: src.crossfadeSeconds });
       await refreshCues();
     } catch (e) { alert('複製失敗：' + msg(e)); }
   }
@@ -459,6 +538,7 @@ export default function ProjectEditor() {
     if (!confirm(`刪除 cue「${name}」？`)) return;
     try {
       await api.deleteCue(projectId, selectedSongId, cueId);
+      historyRef.current.clear(historyScope(cueId));
       if (selectedCueId === cueId) setSelectedCueId(null);
       await refreshCues();
     } catch (e) { alert('刪除失敗：' + msg(e)); }
@@ -485,63 +565,98 @@ export default function ProjectEditor() {
   }
 
   // ── Cue state (per object override) actions ──
-  async function handleSetState(objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) {
-    if (!projectId) return;
-    // 沒選 cue 時 → 改 stage_object 的 default（影響所有 cue 預設值）
-    if (!selectedCueId) {
-      const obj = stageObjects.find(o => o.id === objId);
-      if (!obj) return;
-      const beforeDefault = {
-        defaultPosition: obj.defaultPosition,
-        defaultRotation: obj.defaultRotation,
-      };
-      const objPatch: any = {};
-      if ('position' in patch) objPatch.defaultPosition = patch.position;
-      if ('rotation' in patch) objPatch.defaultRotation = patch.rotation;
-      await api.updateStageObject(projectId, objId, objPatch);
-      await refreshStageObjects();
-      pushUndo(async () => {
-        await api.updateStageObject(projectId, objId, beforeDefault);
-        await refreshStageObjects();
-        await refreshCueStates();
-      });
-      return;
-    }
-    if (!selectedSongId) return;
-    // 改 cue state — 抓 before override 用於 undo
-    const beforeState = cueStates.find(s => s.objectId === objId);
-    const beforeOverride = beforeState?.override;
-    const songIdSnap = selectedSongId, cueIdSnap = selectedCueId;
-    await api.setCueState(projectId, songIdSnap, cueIdSnap, objId, patch);
-    await refreshCueStates();
-    pushUndo(async () => {
-      if (beforeOverride && (beforeOverride.position || beforeOverride.rotation)) {
-        await api.setCueState(projectId, songIdSnap, cueIdSnap, objId, {
-          position: beforeOverride.position || undefined,
-          rotation: beforeOverride.rotation || undefined,
-        });
-      } else {
-        await api.resetCueState(projectId, songIdSnap, cueIdSnap, objId);
-      }
-      await refreshCueStates();
-    });
+  // 這個 cue 目前的物件狀態：畫面上那份就是這個 cue 的 → 直接用；不是（還在讀）→ 去後台拿
+  async function loadCueState(pid: string, songId: string, cueId: string, objId: string): Promise<CueState | null> {
+    if (cueStatesForRef.current === cueId) return cueStatesRef.current.find(s => s.objectId === objId) ?? null;
+    const list = await api.listCueStates(pid, songId, cueId);
+    return list.find(s => s.objectId === objId) ?? null;
   }
-  async function handleResetState(objId: string) {
-    if (!projectId || !selectedSongId || !selectedCueId) return;
-    if (!confirm('重置這個物件回 default？')) return;
-    const beforeState = cueStates.find(s => s.objectId === objId);
-    const beforeOverride = beforeState?.override;
-    const songIdSnap = selectedSongId, cueIdSnap = selectedCueId;
-    await api.resetCueState(projectId, songIdSnap, cueIdSnap, objId);
-    await refreshCueStates();
-    if (beforeOverride && (beforeOverride.position || beforeOverride.rotation)) {
-      pushUndo(async () => {
-        await api.setCueState(projectId, songIdSnap, cueIdSnap, objId, {
-          position: beforeOverride.position || undefined,
-          rotation: beforeOverride.rotation || undefined,
+  // 存成功後先套到畫面上（排隊的修改全部做完會再重新讀一次）；已經換到別的 cue 就不套
+  function applyCueStateLocal(cueId: string, objId: string, patch: CueStatePatch) {
+    if (cueStatesForRef.current !== cueId) return;
+    commitCueStates(cueId, cueStatesRef.current.map(s => (s.objectId === objId ? applyCueStatePatch(s, patch) : s)));
+  }
+  function applyStageObjectLocal(objId: string, patch: Partial<StageObject>) {
+    commitStageObjects(stageObjectsRef.current.map(o => (o.id === objId ? { ...o, ...patch } : o)));
+  }
+
+  function handleSetState(objId: string, input: StatePatchInput): Promise<void> {
+    if (!projectId) return Promise.resolve();
+    const pid = projectId;
+    const songId = selectedSongId;
+    const cueId = selectedCueId;
+    const scope = historyScope(cueId);
+    const resolvePatch = (cur: CueState['effective']) => (typeof input === 'function' ? input(cur) : input);
+
+    // 沒選 cue → 改物件預設位置（影響所有沒自己設定的 cue）
+    if (!cueId) {
+      return runEdit(async () => {
+        const obj = stageObjectsRef.current.find(o => o.id === objId);
+        if (!obj) return;
+        const patch = resolvePatch({ position: obj.defaultPosition, rotation: obj.defaultRotation, scale: obj.defaultScale, visible: true });
+        const after: Partial<StageObject> = {};
+        const before: Partial<StageObject> = {};
+        if (patch.position) { after.defaultPosition = patch.position; before.defaultPosition = obj.defaultPosition; }
+        if (patch.rotation) { after.defaultRotation = patch.rotation; before.defaultRotation = obj.defaultRotation; }
+        if (Object.keys(after).length === 0) return;  // 預設位置沒有「顯示 / 隱藏」
+        await api.updateStageObject(pid, objId, after);
+        applyStageObjectLocal(objId, after);
+        historyRef.current.push(scope, {
+          undo: async () => { await api.updateStageObject(pid, objId, before); applyStageObjectLocal(objId, before); },
+          redo: async () => { await api.updateStageObject(pid, objId, after); applyStageObjectLocal(objId, after); },
         });
-        await refreshCueStates();
+        bumpHistory();
+      }, 'objects');
+    }
+    if (!songId) return Promise.resolve();
+    return runEdit(async () => {
+      const cur = await loadCueState(pid, songId, cueId, objId);
+      if (!cur) return;
+      const patch = resolvePatch(cur.effective);
+      const changed = Object.keys(patch) as CueStateField[];
+      if (changed.length === 0) return;
+      const before = cur.override;  // 改之前這個 cue 自己的設定（復原用）
+      await api.setCueState(pid, songId, cueId, objId, patch);
+      applyCueStateLocal(cueId, objId, patch);
+      historyRef.current.push(scope, {
+        undo: async () => {
+          const plan = cueStateRestorePlan(before, changed);
+          if (plan.reset) await api.resetCueState(pid, songId, cueId, objId);
+          if (plan.put) await api.setCueState(pid, songId, cueId, objId, plan.put);
+        },
+        redo: async () => {
+          await api.setCueState(pid, songId, cueId, objId, patch);
+          applyCueStateLocal(cueId, objId, patch);
+        },
       });
+      bumpHistory();
+    }, 'states');
+  }
+  /** 這個 cue 裡顯示 / 隱藏這個物件（排隊輪到時才看現在是顯示還是隱藏，連按兩下也對） */
+  function handleToggleVisible(objId: string) {
+    handleSetState(objId, cur => ({ visible: !cur.visible }))
+      .catch(e => toast.error('顯示 / 隱藏沒有存到：' + msg(e)));
+  }
+  /** askFirst = false：多選一起重置時，外面已經問過一次了 */
+  async function handleResetState(objId: string, askFirst = true) {
+    if (!projectId || !selectedSongId || !selectedCueId) return;
+    if (askFirst && !confirm('重置這個物件回 default？')) return;
+    const pid = projectId, songId = selectedSongId, cueId = selectedCueId;
+    const scope = historyScope(cueId);
+    try {
+      await runEdit(async () => {
+        const cur = await loadCueState(pid, songId, cueId, objId);
+        const restore = overridePatch(cur?.override);
+        await api.resetCueState(pid, songId, cueId, objId);
+        if (Object.keys(restore).length === 0) return;  // 本來就沒自己的設定 → 沒東西可復原
+        historyRef.current.push(scope, {
+          undo: async () => { await api.setCueState(pid, songId, cueId, objId, restore); },
+          redo: async () => { await api.resetCueState(pid, songId, cueId, objId); },
+        });
+        bumpHistory();
+      }, 'states');
+    } catch (e) {
+      toast.error('重置失敗：' + msg(e));
     }
   }
 
@@ -647,14 +762,26 @@ export default function ProjectEditor() {
         </div>
         <div className="editor-topbar__right">
           <SaveIndicator />
-          <span className="muted small editor-topbar__count">{stageObjects.length} 物件</span>
+          <span className="muted small editor-topbar__count">{stageObjectsStatus === 'ready' ? stageObjects.length : '…'} 物件</span>
           <button
             className="editor-topbar__activity"
-            onClick={undo}
-            disabled={undoCount === 0}
-            title={undoCount > 0 ? `Undo (${undoCount} 步可回退) — Cmd/Ctrl+Z` : '沒有可 undo 的動作'}
+            onClick={() => runHistory('undo')}
+            disabled={historyCounts.undo === 0}
+            title={historyCounts.undo > 0
+              ? `復原${selectedCueId ? '這個 cue ' : ''}的上一步（還有 ${historyCounts.undo} 步）— Cmd/Ctrl+Z`
+              : `${selectedCueId ? '這個 cue ' : ''}沒有可以復原的修改`}
           >
-            ↶<span className="editor-topbar__label"> Undo</span>{undoCount > 0 && <span className="muted small"> ({undoCount})</span>}
+            ↶<span className="editor-topbar__label"> Undo</span>{historyCounts.undo > 0 && <span className="muted small"> ({historyCounts.undo})</span>}
+          </button>
+          <button
+            className="editor-topbar__activity"
+            onClick={() => runHistory('redo')}
+            disabled={historyCounts.redo === 0}
+            title={historyCounts.redo > 0
+              ? `重做剛剛復原的修改（還有 ${historyCounts.redo} 步）— Cmd/Ctrl+Shift+Z 或 Ctrl+Y`
+              : '沒有可以重做的修改'}
+          >
+            ↷<span className="editor-topbar__label"> Redo</span>{historyCounts.redo > 0 && <span className="muted small"> ({historyCounts.redo})</span>}
           </button>
           <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
@@ -809,7 +936,22 @@ export default function ProjectEditor() {
 
         {/* Center — 3D viewport（永遠顯示；沒 cue 時編輯 = 改 default） */}
         <section className="editor-viewport">
-          {stageObjects.length === 0 ? (
+          {stageObjectsStatus === 'loading' ? (
+            <div className="viewport-stage">
+              <div className="viewport-placeholder" role="status" aria-live="polite">
+                <div className="editor-spinner" aria-hidden="true" />
+                <div className="muted">載入舞台中…</div>
+              </div>
+            </div>
+          ) : stageObjectsStatus === 'error' && stageObjects.length === 0 ? (
+            <div className="viewport-stage">
+              <div className="viewport-placeholder" role="alert">
+                <div className="muted">舞台物件載入失敗</div>
+                <small className="muted">可能是網路斷了，或伺服器暫時沒有回應</small>
+                <button className="btn btn--ghost" onClick={() => { setStageObjectsStatus('loading'); refreshStageObjects(); }}>重新載入</button>
+              </div>
+            </div>
+          ) : stageObjects.length === 0 ? (
             <div className="viewport-stage">
               <div className="viewport-placeholder">
                 <div style={{ fontSize: 64, opacity: 0.4 }}>📦</div>
@@ -827,9 +969,9 @@ export default function ProjectEditor() {
                 else selectSingle(id);
                 if (id) setRightTab('state');
               }}
-              onTransform={async (objId, position, rotation) => {
-                await handleSetState(objId, { position, rotation });
-              }}
+              onTransform={(objId, position, rotation) =>
+                handleSetState(objId, { position, rotation }).catch(e => { toast.error('位置沒有存到：' + msg(e)); })
+              }
               cueName={selectedCue ? selectedCue.name : '(default — 改的是物件預設位置)'}
               cueKey={selectedCueId}
               crossfadeSeconds={cueTransitionSeconds(selectedCue)}
@@ -859,7 +1001,7 @@ export default function ProjectEditor() {
               ['cues',      `Cue (${masterCues.length})`],
               ['state',     '物件狀態'],
               ['proposals', `提案${proposalCues.length > 0 ? ` (${proposalCues.length})` : ''}`],
-              ['objects',   `物件 (${stageObjects.length})`],
+              ['objects',   stageObjectsStatus === 'ready' ? `物件 (${stageObjects.length})` : '物件'],
             ] as const).map(([key, label]) => (
               <button
                 key={key}
@@ -870,7 +1012,9 @@ export default function ProjectEditor() {
           </div>
 
           <div className="editor-cues__body">
-            {!selectedSongId ? (
+            {songsLoading && !selectedSongId ? (
+              <div className="editor-empty muted">載入中…</div>
+            ) : !selectedSongId ? (
               <div className="editor-empty muted">先在左側選一首歌</div>
             ) : rightTab === 'cues' ? (
               <CueList
@@ -893,12 +1037,17 @@ export default function ProjectEditor() {
               <ObjectStateEditor
                 cue={selectedCue}
                 states={cueStates}
-                loading={statesLoading}
+                loading={statesLoading || stageObjectsStatus === 'loading'}
+                error={statesError || (stageObjectsStatus === 'error' && stageObjects.length === 0)}
+                onRetry={() => { refreshStageObjects(); refreshCueStates(); }}
                 stageObjects={stageObjects}
                 selectedObjectIds={selectedObjectIds}
                 onSelectSingle={selectSingle}
                 onToggleSelected={toggleSelected}
+                scaleCorrection={view.scaleCorrection}
+                unitsReady={view.loaded}
                 onSet={handleSetState}
+                onToggleVisible={handleToggleVisible}
                 onReset={handleResetState}
                 onUpdateCueMeta={handleUpdateCueMeta}
                 onUpdateMaterial={handleUpdateMaterial}
@@ -917,6 +1066,7 @@ export default function ProjectEditor() {
             ) : (
               <ObjectsManager
                 objects={stageObjects}
+                status={stageObjectsStatus}
                 onSeed={handleSeedObjects}
                 onAdd={handleAddObject}
                 onUpload={() => setUploadOpen(true)}
@@ -1168,7 +1318,7 @@ function CueList({
               <div className="cue-item__main">
                 <div className="cue-item__name">{c.name}</div>
                 <div className="cue-item__meta muted small">
-                  cross {c.crossfadeSeconds}s
+                  {crossfadeLabel(c.crossfadeSeconds)}
                   {c.status === 'proposal' && <span className="proposal-tag">提案</span>}
                 </div>
               </div>
@@ -1258,18 +1408,25 @@ function CueAddSplitButton({
 }
 
 function ObjectStateEditor({
-  cue, states, loading, stageObjects, selectedObjectIds, onSelectSingle, onToggleSelected,
-  onSet, onReset, onUpdateCueMeta, onUpdateMaterial, onUpdateLed, onJumpToObjects,
+  cue, states, loading, error, onRetry, stageObjects, selectedObjectIds, onSelectSingle, onToggleSelected,
+  scaleCorrection, unitsReady, onSet, onToggleVisible, onReset, onUpdateCueMeta, onUpdateMaterial, onUpdateLed, onJumpToObjects,
 }: {
   cue: Cue | null;
   states: CueState[];
   loading: boolean;
+  error: boolean;
+  onRetry: () => void;
   stageObjects: StageObject[];
   selectedObjectIds: string[];
   onSelectSingle: (id: string | null) => void;
   onToggleSelected: (id: string) => void;
-  onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
-  onReset: (objId: string) => Promise<void>;
+  /** 測距校準倍率：位置欄位用公尺顯示 */
+  scaleCorrection: number;
+  /** 專案設定（校準倍率）讀完了沒；還沒讀完先不給改位置，免得用錯倍率換算 */
+  unitsReady: boolean;
+  onSet: (objId: string, patch: StatePatchInput) => Promise<void>;
+  onToggleVisible: (objId: string) => void;
+  onReset: (objId: string, askFirst?: boolean) => Promise<void>;
   onUpdateCueMeta: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>>) => Promise<void>;
   onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
   onUpdateLed: (objId: string, patch: LedProps) => Promise<void>;
@@ -1277,6 +1434,15 @@ function ObjectStateEditor({
 }) {
   if (!cue) return <div className="editor-empty muted">先選一個 cue</div>;
   if (loading) return <div className="editor-empty muted">載入物件狀態中…</div>;
+  if (error) {
+    return (
+      <div className="editor-empty" role="alert">
+        <div className="muted">物件狀態載入失敗</div>
+        <small className="muted">可能是網路斷了，或伺服器暫時沒有回應</small>
+        <button className="btn btn--ghost" style={{ marginTop: 8 }} onClick={onRetry}>重新載入</button>
+      </div>
+    );
+  }
   if (stageObjects.length === 0) {
     return (
       <div className="editor-empty">
@@ -1328,8 +1494,12 @@ function ObjectStateEditor({
           {states.map(s => {
             const cat = CATEGORY_INFO[s.category];
             const checked = selectedObjectIds.includes(s.objectId);
+            const visible = s.effective.visible;
             return (
-              <li key={s.objectId} className={'attribute-panel__obj' + (checked ? ' is-selected' : '') + (s.locked ? ' is-locked' : '')}>
+              <li
+                key={s.objectId}
+                className={'attribute-panel__obj' + (checked ? ' is-selected' : '') + (s.locked ? ' is-locked' : '') + (visible ? '' : ' is-hidden-in-cue')}
+              >
                 <label>
                   <input
                     type="checkbox"
@@ -1342,6 +1512,18 @@ function ObjectStateEditor({
                   {s.locked && <span className="lock-tag">🔒</span>}
                   {s.override && <span className="override-dot" title="此 cue 已自訂" />}
                 </label>
+                {/* 這個 cue 裡顯示 / 隱藏（前面的 cue 不受影響；後面沒另外設定的 cue 會跟著，跟位置一樣） */}
+                <button
+                  type="button"
+                  className="vis-toggle"
+                  onClick={() => onToggleVisible(s.objectId)}
+                  disabled={s.locked}
+                  aria-pressed={!visible}
+                  aria-label={(visible ? '在這個 cue 隱藏「' : '在這個 cue 顯示「') + s.displayName + '」'}
+                  title={s.locked ? '已鎖定，不能改' : visible ? '在這個 cue 隱藏（後面沒另外設定的 cue 也會跟著隱藏）' : '這個 cue 裡隱藏中 — 點一下顯示'}
+                >
+                  <EyeIcon off={!visible} />
+                </button>
               </li>
             );
           })}
@@ -1358,6 +1540,8 @@ function ObjectStateEditor({
             key={selectedStates[0].objectId}
             state={selectedStates[0]}
             stageObject={selectedSo}
+            scaleCorrection={scaleCorrection}
+            unitsReady={unitsReady}
             onSet={onSet}
             onReset={onReset}
             onUpdateMaterial={onUpdateMaterial}
@@ -1366,11 +1550,11 @@ function ObjectStateEditor({
         ) : (
           <ObjectAttributePanelMulti
             selectedStates={selectedStates}
-            stageObjects={stageObjects}
+            scaleCorrection={scaleCorrection}
+            unitsReady={unitsReady}
             onSet={onSet}
             onReset={onReset}
             onUpdateMaterial={onUpdateMaterial}
-            onUpdateLed={onUpdateLed}
           />
         )}
       </div>
@@ -1378,78 +1562,147 @@ function ObjectStateEditor({
   );
 }
 
-/** 多選 panel — 填的欄位才套到全部，沒填就不動 */
+/** 顯示 / 隱藏的眼睛圖示（線條 SVG，跟著文字顏色） */
+function EyeIcon({ off }: { off: boolean }) {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+      strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+      <path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z" />
+      <circle cx="12" cy="12" r="3" />
+      {off && <line x1="3" y1="3" x2="21" y2="21" />}
+    </svg>
+  );
+}
+
+const POS_AXES = ['x', 'y', 'z'] as const;
+const ROT_AXES = [
+  { key: 'pitch', label: 'P', title: 'Pitch（繞 X 軸轉）' },
+  { key: 'yaw', label: 'Y', title: 'Yaw（繞 Y 軸轉）' },
+  { key: 'roll', label: 'R', title: 'Roll（繞 Z 軸轉）' },
+] as const;
+const NUMBER_INVALID_MSG = '要填數字，已還原';
+
+/**
+ * 一格數字欄位：打字不會馬上存，按 Enter 或點別的地方才存；Esc 取消；↑↓ 微調（Shift 一次 10 倍）。
+ * 不是數字 → 不存、還原（onInvalid）；跟原本一樣 → 不存。
+ */
+function NumberField({
+  axisLabel, axisTitle, unit, value, placeholder, step, disabled, disabledTitle, onCommit, onInvalid,
+}: {
+  axisLabel: string;
+  axisTitle?: string;
+  unit: string;
+  /** 目前的值（已經換好顯示單位）；null = 多選時「不改」，欄位留空 */
+  value: number | null;
+  placeholder?: string;
+  step: number;
+  disabled?: boolean;
+  disabledTitle?: string;
+  onCommit: (n: number) => Promise<unknown> | void;
+  onInvalid?: () => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  // 剛存出去、畫面還沒拿到新值的這一下，先顯示打的數字（不會閃回舊值）
+  const [pending, setPending] = useState<number | null>(null);
+  const cancelRef = useRef(false);
+  const shown = pending !== null ? formatFieldNumber(pending) : value === null ? '' : formatFieldNumber(value);
+
+  function commit() {
+    if (cancelRef.current) { cancelRef.current = false; setDraft(null); return; }
+    if (draft === null) return;
+    setDraft(null);
+    if (value === null && draft.trim() === '') return;  // 多選：沒填 → 不動
+    const n = parseNumberInput(draft);
+    if (n === null) { onInvalid?.(); return; }
+    if (value !== null && sameAsShown(n, value)) return;
+    const r = onCommit(n);
+    if (r && typeof (r as Promise<unknown>).then === 'function') {
+      setPending(n);
+      (r as Promise<unknown>).then(() => setPending(null), () => setPending(null));
+    }
+  }
+
+  return (
+    <label className={'num-field' + (disabled ? ' is-disabled' : '')} title={disabled ? disabledTitle : axisTitle}>
+      <span className="num-field__axis">{axisLabel}</span>
+      <input
+        type="text"
+        inputMode="decimal"
+        value={draft ?? shown}
+        placeholder={placeholder}
+        disabled={disabled}
+        aria-label={(axisTitle || axisLabel) + '（' + unit + '）'}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          else if (e.key === 'Escape') { cancelRef.current = true; e.currentTarget.blur(); }
+          else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            const delta = (e.key === 'ArrowUp' ? 1 : -1) * step * (e.shiftKey ? 10 : 1);
+            setDraft(stepNumberInput(draft ?? shown, value ?? 0, delta));
+          }
+        }}
+      />
+      <span className="num-field__unit" aria-hidden="true">{unit}</span>
+    </label>
+  );
+}
+
+/** 多選 panel — 填的欄位才套到全部，沒填就不動；按 Enter 或點別的地方就套用 */
 function ObjectAttributePanelMulti({
-  selectedStates, stageObjects, onSet, onReset, onUpdateMaterial, onUpdateLed,
+  selectedStates, scaleCorrection, unitsReady, onSet, onReset, onUpdateMaterial,
 }: {
   selectedStates: CueState[];
-  stageObjects: StageObject[];
-  onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
-  onReset: (objId: string) => Promise<void>;
+  scaleCorrection: number;
+  unitsReady: boolean;
+  onSet: (objId: string, patch: StatePatchInput) => Promise<void>;
+  onReset: (objId: string, askFirst?: boolean) => Promise<void>;
   onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
-  onUpdateLed: (objId: string, patch: LedProps) => Promise<void>;
 }) {
-  const [pos, setPos] = useState<Partial<Vec3>>({});
-  const [rot, setRot] = useState<Partial<Euler>>({});
   const [color, setColor] = useState<string>('');
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
 
   // 切換選中物件時清空輸入（避免上一次的殘留）
   const idsKey = selectedStates.map(s => s.objectId).join(',');
-  useEffect(() => { setPos({}); setRot({}); setColor(''); }, [idsKey]);
+  useEffect(() => { setColor(''); setFieldError(null); }, [idsKey]);
 
-  const dirty = Object.keys(pos).length > 0 || Object.keys(rot).length > 0 || color !== '';
+  // 每個物件照它自己現在的值，只換掉打的那一軸（排隊一個一個存）
+  async function applyToAll(make: (cur: CueState['effective']) => CueStatePatch) {
+    setFieldError(null);
+    const results = await Promise.allSettled(selectedStates.map(s => onSet(s.objectId, make)));
+    const failed = results.filter(r => r.status === 'rejected').length;
+    if (failed > 0) setFieldError(`有 ${failed} 個物件沒有存到，請再試一次`);
+  }
 
-  async function applyAll() {
-    setSaving(true);
+  async function applyColor() {
+    const c = color.trim();
+    if (!c) return;
+    if (!/^#[0-9a-f]{6}$/i.test(c)) { setFieldError('顏色要填像 #ff8800 這樣，已還原'); setColor(''); return; }
+    setFieldError(null);
+    setBusy(true);
     try {
-      for (const s of selectedStates) {
-        const patch: Partial<{ position: Vec3; rotation: Euler }> = {};
-        if (pos.x != null || pos.y != null || pos.z != null) {
-          patch.position = {
-            x: pos.x ?? s.effective.position.x,
-            y: pos.y ?? s.effective.position.y,
-            z: pos.z ?? s.effective.position.z,
-          };
-        }
-        if (rot.pitch != null || rot.yaw != null || rot.roll != null) {
-          patch.rotation = {
-            pitch: rot.pitch ?? s.effective.rotation.pitch,
-            yaw: rot.yaw ?? s.effective.rotation.yaw,
-            roll: rot.roll ?? s.effective.rotation.roll,
-          };
-        }
-        if (Object.keys(patch).length > 0) {
-          await onSet(s.objectId, patch);
-        }
-        if (color) {
-          await onUpdateMaterial(s.objectId, { color });
-        }
-      }
-      setPos({}); setRot({}); setColor('');
+      for (const s of selectedStates) await onUpdateMaterial(s.objectId, { color: c });
+      setColor('');
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   }
 
   async function resetAll() {
     if (!confirm(`重置 ${selectedStates.length} 個物件回 default？`)) return;
-    setSaving(true);
+    setBusy(true);
     try {
       for (const s of selectedStates) {
-        if (s.override) await onReset(s.objectId);
+        if (s.override) await onReset(s.objectId, false);
       }
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
   }
 
-  // 用 stageObjects 防止 TS 警告
-  void stageObjects;
-  void onUpdateLed;
-
-  const allLed = selectedStates.every(s => s.category === 'led_panel');
-  void allLed;
+  const invalid = () => setFieldError(NUMBER_INVALID_MSG);
 
   return (
     <div className="attribute-panel__body is-multi">
@@ -1457,41 +1710,45 @@ function ObjectAttributePanelMulti({
         <span style={{ fontWeight: 700 }}>已選 {selectedStates.length} 個物件</span>
       </div>
       <div className="muted small" style={{ marginBottom: 8 }}>
-        填的欄位才會套到全部選中的物件，沒填就不動。
+        填的欄位才會套到全部選中的物件，沒填就不動；按 Enter 或點別的地方就套用。
       </div>
 
       <div className="form-row">
-        <label>Position 套到全部 (X / Y / Z)</label>
+        <label>位置（套到全部）</label>
         <div className="vec3">
-          {(['x', 'y', 'z'] as const).map(axis => (
-            <input
+          {POS_AXES.map(axis => (
+            <NumberField
               key={axis}
-              type="number"
+              axisLabel={axis.toUpperCase()}
+              unit="m"
               step={0.1}
-              value={pos[axis] ?? ''}
-              onChange={(e) => {
-                const v = e.target.value;
-                setPos(prev => v === '' ? (() => { const c = { ...prev }; delete c[axis]; return c; })() : { ...prev, [axis]: parseFloat(v) || 0 });
+              value={null}
+              placeholder="—"
+              disabled={!unitsReady}
+              disabledTitle="載入專案設定中…"
+              onInvalid={invalid}
+              onCommit={(meters) => {
+                const v = metersToScene(meters, scaleCorrection);
+                return applyToAll(cur => ({ position: { ...cur.position, [axis]: v } }));
               }}
-              placeholder={`— ${axis.toUpperCase()} —`}
             />
           ))}
         </div>
       </div>
       <div className="form-row">
-        <label>Rotation 套到全部 (P / Y / R)</label>
+        <label>角度（套到全部）</label>
         <div className="vec3">
-          {(['pitch', 'yaw', 'roll'] as const).map(axis => (
-            <input
-              key={axis}
-              type="number"
+          {ROT_AXES.map(axis => (
+            <NumberField
+              key={axis.key}
+              axisLabel={axis.label}
+              axisTitle={axis.title}
+              unit="°"
               step={1}
-              value={rot[axis] ?? ''}
-              onChange={(e) => {
-                const v = e.target.value;
-                setRot(prev => v === '' ? (() => { const c = { ...prev }; delete c[axis]; return c; })() : { ...prev, [axis]: parseFloat(v) || 0 });
-              }}
-              placeholder={`— ${axis[0].toUpperCase()} —`}
+              value={null}
+              placeholder="—"
+              onInvalid={invalid}
+              onCommit={(deg) => applyToAll(cur => ({ rotation: { ...cur.rotation, [axis.key]: deg } }))}
             />
           ))}
         </div>
@@ -1501,25 +1758,29 @@ function ObjectAttributePanelMulti({
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <input
             type="color"
-            value={color || '#888888'}
+            value={/^#[0-9a-f]{6}$/i.test(color) ? color : '#888888'}
             onChange={(e) => setColor(e.target.value)}
+            onBlur={applyColor}
+            disabled={busy}
           />
           <input
             type="text"
             value={color}
             placeholder="— 不改 —"
             onChange={(e) => setColor(e.target.value)}
+            onBlur={applyColor}
+            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
             style={{ flex: 1, fontFamily: 'var(--font-mono)' }}
+            disabled={busy}
           />
-          {color && <button type="button" className="link-btn" onClick={() => setColor('')}>清除</button>}
+          {/* 按下去不要先讓欄位失焦（不然會先把顏色套上去） */}
+          {color && <button type="button" className="link-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => setColor('')}>清除</button>}
         </div>
       </div>
+      {fieldError && <div className="field-error small" role="alert">{fieldError}</div>}
 
       <div className="object-row__actions">
-        <button className="btn btn--primary" onClick={applyAll} disabled={!dirty || saving}>
-          {saving ? '套用中…' : `💾 套到 ${selectedStates.length} 個物件`}
-        </button>
-        <button className="btn btn--ghost" onClick={resetAll} disabled={saving}>
+        <button className="btn btn--ghost" onClick={resetAll} disabled={busy}>
           ↺ 全部重置 default
         </button>
       </div>
@@ -1533,46 +1794,51 @@ function CueMetaEditor({
   cue: Cue;
   onUpdate: (patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>>) => Promise<void>;
 }) {
+  const savedVideoTime = cue.videoTimeSec != null ? String(cue.videoTimeSec) : '';
   const [name, setName] = useState(cue.name);
-  const [crossfade, setCrossfade] = useState(cue.crossfadeSeconds);
-  const [videoTime, setVideoTime] = useState<string>(cue.videoTimeSec != null ? String(cue.videoTimeSec) : '');
-  const [saving, setSaving] = useState(false);
+  const [crossfade, setCrossfade] = useState(String(cue.crossfadeSeconds));
+  const [videoTime, setVideoTime] = useState<string>(savedVideoTime);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setName(cue.name);
-    setCrossfade(cue.crossfadeSeconds);
-    setVideoTime(cue.videoTimeSec != null ? String(cue.videoTimeSec) : '');
-  }, [cue.id, cue.name, cue.crossfadeSeconds, cue.videoTimeSec]);
+  // 各欄位分開同步：存好一個欄位時，不要把另一個正在打的欄位洗掉
+  useEffect(() => { setName(cue.name); }, [cue.id, cue.name]);
+  useEffect(() => { setCrossfade(String(cue.crossfadeSeconds)); }, [cue.id, cue.crossfadeSeconds]);
+  useEffect(() => { setVideoTime(cue.videoTimeSec != null ? String(cue.videoTimeSec) : ''); }, [cue.id, cue.videoTimeSec]);
+  useEffect(() => { setError(null); }, [cue.id]);
 
-  const parsedVideoTime: number | null = (() => {
-    const v = videoTime.trim();
-    if (!v) return null;
-    // 支援 "1:23" 格式
-    if (v.includes(':')) {
-      const [m, s] = v.split(':').map(x => parseFloat(x));
-      if (isFinite(m) && isFinite(s)) return m * 60 + s;
-      return null;
+  const parsedVideoTime = parseVideoTimeInput(videoTime);
+  const enterToBlur = (e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') e.currentTarget.blur(); };
+
+  async function saveName() {
+    const v = name.trim().slice(0, 100);
+    if (!v) { setName(cue.name); setError('名稱不能空白，已還原'); return; }
+    if (v !== name) setName(v);
+    if (v === cue.name) return;
+    setError(null);
+    await onUpdate({ name: v });
+  }
+  async function saveCrossfade() {
+    const n = parseCrossfadeInput(crossfade);
+    if (n === null) {
+      setCrossfade(String(cue.crossfadeSeconds));
+      setError('淡入淡出要填 0 或正的秒數，已還原');
+      return;
     }
-    const f = parseFloat(v);
-    return isFinite(f) ? f : null;
-  })();
-
-  const dirty = name !== cue.name
-    || crossfade !== cue.crossfadeSeconds
-    || parsedVideoTime !== cue.videoTimeSec;
-
-  async function save() {
-    if (!dirty) return;
-    setSaving(true);
-    try {
-      const patch: Partial<Pick<Cue, 'name' | 'crossfadeSeconds' | 'videoTimeSec'>> = {};
-      if (name !== cue.name) patch.name = name.trim().slice(0, 100);
-      if (crossfade !== cue.crossfadeSeconds) patch.crossfadeSeconds = Math.max(0, crossfade);
-      if (parsedVideoTime !== cue.videoTimeSec) patch.videoTimeSec = parsedVideoTime;
-      await onUpdate(patch);
-    } finally {
-      setSaving(false);
+    setCrossfade(String(n));
+    if (n === cue.crossfadeSeconds) return;
+    setError(null);
+    await onUpdate({ crossfadeSeconds: n });
+  }
+  async function saveVideoTime() {
+    const r = parseVideoTimeInput(videoTime);
+    if (!r.ok) {
+      setVideoTime(savedVideoTime);
+      setError('影片時間要填像 15.5 或 1:23 這樣，已還原');
+      return;
     }
+    if (r.value === cue.videoTimeSec) return;
+    setError(null);
+    await onUpdate({ videoTimeSec: r.value });
   }
 
   return (
@@ -1583,23 +1849,22 @@ function CueMetaEditor({
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          onBlur={saveName}
+          onKeyDown={enterToBlur}
           maxLength={100}
         />
       </div>
       <div className="cue-meta-editor__row">
         <label>淡入淡出時間（秒）</label>
         <input
-          type="number"
-          step={0.1}
-          min={0}
+          type="text"
+          inputMode="decimal"
           value={crossfade}
-          onChange={(e) => setCrossfade(parseFloat(e.target.value) || 0)}
-          onBlur={save}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          onChange={(e) => setCrossfade(e.target.value)}
+          onBlur={saveCrossfade}
+          onKeyDown={enterToBlur}
         />
-        <small className="muted">換到這個 cue 時舞台滑過去的秒數；0 = 用預設 1 秒</small>
+        <small className="muted">換到這個 cue 時舞台滑過去的秒數；0 = 直接切換（不滑）</small>
       </div>
       <div className="cue-meta-editor__row">
         <label>對應影片時間</label>
@@ -1607,60 +1872,55 @@ function CueMetaEditor({
           type="text"
           value={videoTime}
           onChange={(e) => setVideoTime(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
+          onBlur={saveVideoTime}
+          onKeyDown={enterToBlur}
           placeholder="例：15.5 或 1:23"
         />
         <small className="muted">
-          {parsedVideoTime != null
-            ? `→ ${formatVideoTime(parsedVideoTime)}（導演端影片播到這秒會自動切到此 cue）`
-            : '空白 = 沒對應影片時間；填了之後播影片會自動切 cue'}
+          {!parsedVideoTime.ok
+            ? '格式：秒數（15.5）或 分:秒（1:23）'
+            : parsedVideoTime.value != null
+              ? `→ ${formatVideoTime(parsedVideoTime.value)}（導演端影片播到這秒會自動切到此 cue）`
+              : '空白 = 沒對應影片時間；填了之後播影片會自動切 cue'}
         </small>
       </div>
-      {dirty && (
-        <button className="btn btn--primary cue-meta-editor__save" onClick={save} disabled={saving}>
-          {saving ? '儲存中…' : '💾 儲存變更'}
-        </button>
-      )}
+      {error && <div className="field-error small" role="alert">{error}</div>}
+      <small className="muted">按 Enter 或點別的地方就會存</small>
     </div>
   );
 }
 
 function ObjectAttributePanel({
-  state, stageObject, onSet, onReset, onUpdateMaterial, onUpdateLed,
+  state, stageObject, scaleCorrection, unitsReady, onSet, onReset, onUpdateMaterial, onUpdateLed,
 }: {
   state: CueState;
   stageObject?: StageObject;
-  onSet: (objId: string, patch: Partial<{ position: Vec3; rotation: Euler; visible: boolean }>) => Promise<void>;
-  onReset: (objId: string) => Promise<void>;
+  scaleCorrection: number;
+  unitsReady: boolean;
+  onSet: (objId: string, patch: StatePatchInput) => Promise<void>;
+  onReset: (objId: string, askFirst?: boolean) => Promise<void>;
   onUpdateMaterial: (objId: string, patch: MaterialProps) => Promise<void>;
   onUpdateLed: (objId: string, patch: LedProps) => Promise<void>;
 }) {
-  const [saving, setSaving] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [fieldError, setFieldError] = useState<string | null>(null);
   const cat = CATEGORY_INFO[state.category];
   const hasOverride = !!state.override;
   const eff = state.effective;
-  const [pos, setPos] = useState<Vec3>(eff.position);
-  const [rot, setRot] = useState<Euler>(eff.rotation);
+  const meters = (v: number) => formatFieldNumber(sceneToMeters(v, scaleCorrection));
 
-  useEffect(() => {
-    setPos(eff.position);
-    setRot(eff.rotation);
-  }, [state.objectId, eff.position.x, eff.position.y, eff.position.z, eff.rotation.pitch, eff.rotation.yaw, eff.rotation.roll]);
-
-  async function save() {
-    try {
-      setSaving(true);
-      await onSet(state.objectId, { position: pos, rotation: rot });
-    } finally {
-      setSaving(false);
-    }
+  // 只換掉打的那一軸，其他軸用排隊輪到時的最新值（連續改 X、Y 不會互相蓋掉）
+  function save(make: (cur: CueState['effective']) => CueStatePatch) {
+    setFieldError(null);
+    return onSet(state.objectId, make).catch(e => setFieldError('沒有存到：' + msg(e)));
   }
 
   async function reset() {
-    setSaving(true);
-    try { await onReset(state.objectId); } finally { setSaving(false); }
+    setBusy(true);
+    try { await onReset(state.objectId); } finally { setBusy(false); }
   }
+
+  const invalid = () => setFieldError(NUMBER_INVALID_MSG);
 
   return (
     <div className={'attribute-panel__body' + (hasOverride ? ' has-override' : '') + (state.locked ? ' is-locked' : '')}>
@@ -1678,48 +1938,55 @@ function ObjectAttributePanel({
       ) : (
         <>
           <div className="form-row">
-            <label>Position (X / Y / Z)</label>
+            <label>位置</label>
             <div className="vec3">
-              {(['x', 'y', 'z'] as const).map(axis => (
-                <input
+              {POS_AXES.map(axis => (
+                <NumberField
                   key={axis}
-                  type="number"
+                  axisLabel={axis.toUpperCase()}
+                  unit="m"
                   step={0.1}
-                  value={pos[axis]}
-                  onChange={(e) => setPos({ ...pos, [axis]: parseFloat(e.target.value) || 0 })}
-                  placeholder={axis.toUpperCase()}
+                  value={sceneToMeters(eff.position[axis], scaleCorrection)}
+                  disabled={!unitsReady}
+                  disabledTitle="載入專案設定中…"
+                  onInvalid={invalid}
+                  onCommit={(m) => {
+                    const v = metersToScene(m, scaleCorrection);
+                    return save(cur => ({ position: { ...cur.position, [axis]: v } }));
+                  }}
                 />
               ))}
             </div>
           </div>
           <div className="form-row">
-            <label>Rotation (P / Y / R)</label>
+            <label>角度</label>
             <div className="vec3">
-              {(['pitch', 'yaw', 'roll'] as const).map(axis => (
-                <input
-                  key={axis}
-                  type="number"
+              {ROT_AXES.map(axis => (
+                <NumberField
+                  key={axis.key}
+                  axisLabel={axis.label}
+                  axisTitle={axis.title}
+                  unit="°"
                   step={1}
-                  value={rot[axis]}
-                  onChange={(e) => setRot({ ...rot, [axis]: parseFloat(e.target.value) || 0 })}
-                  placeholder={axis[0].toUpperCase()}
+                  value={eff.rotation[axis.key]}
+                  onInvalid={invalid}
+                  onCommit={(deg) => save(cur => ({ rotation: { ...cur.rotation, [axis.key]: deg } }))}
                 />
               ))}
             </div>
           </div>
-          <div className="object-row__actions">
-            <button className="btn btn--primary" onClick={save} disabled={saving}>
-              {saving ? '儲存中…' : '💾 儲存'}
-            </button>
-            {hasOverride && (
-              <button className="btn btn--ghost" onClick={reset} disabled={saving} title="重置成 default">
+          <div className="muted small">改完按 Enter 或點別的地方就會存；Esc 取消；↑↓ 微調（按住 Shift 一次 10 倍）</div>
+          {fieldError && <div className="field-error small" role="alert">{fieldError}</div>}
+          {hasOverride && (
+            <div className="object-row__actions">
+              <button className="btn btn--ghost" onClick={reset} disabled={busy} title="重置成 default">
                 ↺ 重置
               </button>
-            )}
-          </div>
+            </div>
+          )}
           {hasOverride && (
             <div className="muted small object-row__hint">
-              📍 已在此 cue 設定位置（其他 cue 不受影響）。原始 default 位置 ({state.default.position.x}, {state.default.position.y}, {state.default.position.z})
+              這個 cue 有自己的設定（前面的 cue 不受影響；後面沒另外設定的 cue 會跟著）。原始 default 位置 ({meters(state.default.position.x)}, {meters(state.default.position.y)}, {meters(state.default.position.z)}) m
             </div>
           )}
 
@@ -1910,10 +2177,11 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
 }
 
 function ObjectsManager({
-  objects, onSeed, onAdd, onUpload, onShowVersions, onPickFromLibrary, hasModel,
+  objects, status, onSeed, onAdd, onUpload, onShowVersions, onPickFromLibrary, hasModel,
   onRename, onChangeCategory, onToggleLock, onDelete,
 }: {
   objects: StageObject[];
+  status: LoadStatus;
   onSeed: () => void;
   onAdd: () => void;
   onUpload: () => void;
@@ -1944,7 +2212,11 @@ function ObjectsManager({
         <button className="btn btn--ghost" onClick={onAdd} title="手動新增單一物件">＋ 手動</button>
       </div>
 
-      {objects.length === 0 ? (
+      {status === 'loading' ? (
+        <div className="editor-empty muted">載入中…</div>
+      ) : status === 'error' && objects.length === 0 ? (
+        <div className="editor-empty muted" role="alert">物件載入失敗，請重新整理頁面再試一次</div>
+      ) : objects.length === 0 ? (
         <div className="editor-empty">
           <div style={{ fontSize: 36 }}>🧩</div>
           <div className="muted">還沒有物件</div>

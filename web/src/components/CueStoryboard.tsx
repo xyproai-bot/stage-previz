@@ -86,6 +86,8 @@ export default function CueStoryboard({
         await api.createCue(projectId, songId, {
           name: `${src.name} (複製)`,
           cloneFrom: src.id,
+          // 後台複製 cue 時不會帶淡入淡出秒數（沒帶 = 0 = 直接切換）→ 自己帶原本 cue 的
+          crossfadeSeconds: src.crossfadeSeconds,
         });
         toast.success(`已複製 cue「${src.name}」`);
         onReordered?.();
