@@ -1,0 +1,35 @@
+/* 全站線條圖示：跟文字放在同一行時，圖示中心對齊文字的視覺中心（約 0.35em 高）。
+   放在 flex 容器裡時 vertical-align 不作用，由容器的 align-items 處理。 */
+.ui-icon {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: calc(0.35em - var(--ui-icon-size, 14px) / 2);
+}
+.ui-icon--xs { --ui-icon-size: 12px; }
+.ui-icon--sm { --ui-icon-size: 14px; }
+.ui-icon--md { --ui-icon-size: 16px; }
+.ui-icon--lg { --ui-icon-size: 20px; }
+.ui-icon--xl { --ui-icon-size: 32px; }
+.ui-icon--xxl { --ui-icon-size: 44px; }
+
+/* 會轉的載入圖示 */
+.ui-icon--spin { animation: ui-icon-spin 1s linear infinite; }
+@keyframes ui-icon-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .ui-icon--spin { animation: none; }
+}
+
+/* 審片狀態色點 */
+.review-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: calc(0.35em - 4px);
+  background: var(--text-muted);
+}
+.review-dot--todo          { background: var(--text-muted); }
+.review-dot--in_review     { background: var(--warn); }
+.review-dot--needs_changes { background: var(--danger); }
+.review-dot--approved      { background: var(--accent); }
