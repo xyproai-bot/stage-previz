@@ -1188,6 +1188,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         if (liveTex.canvas.width !== bitmap.width || liveTex.canvas.height !== bitmap.height) {
           liveTex.canvas.width = bitmap.width;
           liveTex.canvas.height = bitmap.height;
+          // three.js 第一次上傳就把 GPU 貼圖大小固定（texStorage2D），之後只會覆蓋左上角。
+          // AE 切 Full ↔ Half / Third 時 frame 大小會變 → 一定要 dispose，下次使用才會用新尺寸重建，
+          // 不然畫面只更新左上角一塊、其他 LED 變黑或卡舊畫面。
+          liveTex.texture.dispose();
         }
         liveTex.ctx.drawImage(bitmap, 0, 0);
         liveTex.texture.needsUpdate = true;
