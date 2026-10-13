@@ -24,9 +24,13 @@ import { EditHistory, historyScope } from '../lib/editHistory';
 import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
-import { friendlyError } from '../lib/songReview';
+import { friendlyError, staleStatusMessage } from '../lib/songReview';
 import type { ProjectMember } from '../lib/mockData';
 import { SONG_STATUS_LABEL } from '../lib/songReview';
+import SongCodeField from '../components/SongCodeField';
+import AddVideoDialog from '../components/AddVideoDialog';
+import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
+import { songTitle } from '../lib/songCode';
 import Icon from '../components/Icon';
 import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
@@ -402,6 +406,23 @@ export default function ProjectEditor() {
     }));
   }, [selectedCueId, cueStates, stageObjects]);
 
+  // ── 歌曲影片（＋加影片）：上傳中切到別首歌也會繼續；好了歌單上的「影片 V3」跟著更新 ──
+  const [addVideoSongId, setAddVideoSongId] = useState<string | null>(null);
+  const addVideoSong = addVideoSongId ? songs.find(s => s.id === addVideoSongId) ?? null : null;
+  const videoJobs = useVideoJobs(projectId ?? null);
+  const videoJobsBySong = useMemo(() => {
+    const m = new Map<string, VideoJob[]>();
+    for (const j of videoJobs) m.set(j.songId, [...(m.get(j.songId) ?? []), j]);
+    return m;
+  }, [videoJobs]);
+  useWarnBeforeUnloadWhileUploading();
+  const onVideoJobDone = useCallback((job: VideoJob) => {
+    if (!projectId || job.projectId !== projectId) return;
+    toast.success(`${job.songLabel}：${job.result?.label || '新的一版'} 好了`);
+    api.listSongs(projectId).then(setSongs).catch(() => { /* 下次重新整理就有 */ });
+  }, [projectId]);
+  useVideoJobDone(onVideoJobDone);
+
   // ── Song actions ──
   async function handleAddSong() {
     if (!projectId) return;
@@ -426,16 +447,31 @@ export default function ProjectEditor() {
       await refreshSongs();
     } catch (e) { alert('刪除失敗：' + msg(e)); }
   }
+  /**
+   * 管理頁的狀態選單：帶上畫面上以為的目前狀態（expectedStatus）→ 導演 / 動畫師剛改過的話後台回 409，
+   * 不會蓋掉別人的決定；這時重新讀歌單、用白話說現在是什麼狀態（跟動畫師頁、導演頁一樣）
+   */
   async function handleUpdateSongStatus(songId: string, status: SongStatus) {
     if (!projectId) return;
-    const prev = songs;
-    // optimistic
-    setSongs(prev.map(s => s.id === songId ? { ...s, status } : s));
+    const expected = songs.find(s => s.id === songId)?.status;
+    if (!expected || expected === status) return;
+    const setStatus = (to: SongStatus) => setSongs(list => list.map(s => s.id === songId ? { ...s, status: to } : s));
+    setStatus(status);  // 先改畫面
     try {
-      await api.updateSong(projectId, songId, { status });
+      await api.updateSong(projectId, songId, { status, expectedStatus: expected });
     } catch (e) {
-      setSongs(prev);
-      alert('狀態更新失敗：' + msg(e));
+      if (api.errorStatus(e) === 409) {
+        const stale = staleStatusMessage((e as api.ApiError).data?.currentStatus, expected);
+        try {
+          setSongs(await api.listSongs(projectId));
+        } catch {
+          setStatus(expected);
+        }
+        toast.warn(stale ?? friendlyError(e));
+      } else {
+        setStatus(expected);
+        toast.error('狀態沒有改成：' + friendlyError(e));
+      }
     }
   }
   // 指派負責的動畫師（動畫師工作站「我的」清單就是看這個）
@@ -925,10 +961,21 @@ export default function ProjectEditor() {
                   >
                     <div className="song-item__order">{String(fullIdx + 1).padStart(2, '0')}</div>
                     <div className="song-item__main">
-                      <div className="song-item__name">{s.name}</div>
+                      <div className="song-item__name">
+                        {projectId && (
+                          <SongCodeField
+                            projectId={projectId}
+                            song={s}
+                            songs={songs}
+                            onSaved={(code) => setSongs(list => list.map(x => x.id === s.id ? { ...x, code } : x))}
+                          />
+                        )}
+                        {s.name}
+                      </div>
                       <div className="song-item__meta">
                         <span>{s.cueCount} 個 cue</span>
                         {s.proposalCount > 0 && <span className="proposal-badge">{s.proposalCount} 提案</span>}
+                        <SongVideoMeta song={s} jobs={videoJobsBySong.get(s.id)} onAdd={() => setAddVideoSongId(s.id)} />
                       </div>
                       <label
                         className="song-item__assign"
@@ -1181,10 +1228,20 @@ export default function ProjectEditor() {
         projectId={projectId || ''}
         songs={songs}
         initialFolderId={projectMeta?.drive_folder_id || ''}
-        initialPattern={projectMeta?.drive_filename_pattern || '^S(\\d+)_'}
         initialAccountId={projectMeta?.drive_oauth_token_id || ''}
         onChanged={() => { refreshProjectMeta(); }}
       />
+
+      {addVideoSong && projectId && (
+        <AddVideoDialog
+          open
+          onClose={() => setAddVideoSongId(null)}
+          projectId={projectId}
+          song={addVideoSong}
+          jobs={videoJobsBySong.get(addVideoSong.id) ?? []}
+          canUpload
+        />
+      )}
 
       <ShareLinksDialog
         open={shareOpen}
@@ -2314,6 +2371,33 @@ function formatVideoTime(s: number): string {
   const m = Math.floor(s / 60);
   const sec = (s % 60).toFixed(1);
   return `${String(m).padStart(2, '0')}:${sec.padStart(4, '0')}`;
+}
+
+/** 歌單上每首歌的影片：最新是哪一版、正在交的進度、＋加影片 */
+function SongVideoMeta({ song, jobs, onAdd }: { song: Song; jobs: VideoJob[] | undefined; onAdd: () => void }) {
+  const active = (jobs ?? []).filter(isJobActive);
+  const failed = (jobs ?? []).find(j => j.phase === 'failed');
+  return (
+    <span className="song-item__video" onClick={(e) => e.stopPropagation()}>
+      {active.length > 0 ? (
+        <span className="song-item__video-job" title={active.map(j => `${j.name}：${jobStatusText(j)}`).join('\n')}>{jobStatusText(active[0])}</span>
+      ) : failed ? (
+        <span className="song-item__video-job is-error" title={failed.error ?? ''}>影片沒交成功</span>
+      ) : song.latestVideoVersion ? (
+        <span className="song-item__video-label" title="最新的影片版本">影片 V{song.latestVideoVersion}</span>
+      ) : (
+        <span className="song-item__video-none">還沒有影片</span>
+      )}
+      <button
+        type="button"
+        className="song-item__video-add"
+        onClick={onAdd}
+        title={`幫「${songTitle(song)}」加影片（上傳檔案或貼連結，好了變成下一個版本）`}
+      >
+        <Icon icon={Plus} size="xs" /> 加影片
+      </button>
+    </span>
+  );
 }
 
 function StatusBadge({ value, onChange }: { value: SongStatus; onChange: (next: SongStatus) => void }) {

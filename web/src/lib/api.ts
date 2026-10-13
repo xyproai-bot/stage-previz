@@ -6,6 +6,7 @@ import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettin
 import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/materialOverrides';
 import { normalizeHomeView, type HomeView } from './homeView';
 import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
+import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -372,7 +373,8 @@ export async function importProject(payload: object & { newName?: string }): Pro
 
 // ─── Songs ────────────────────────────────
 
-export interface Song {
+/** 歌單上的一首歌；code（歌曲代號 S01…）、latestVideoId / latestVideoVersion（最新可播的影片版本）見 videoApi.ts */
+export interface Song extends SongVideoFields {
   id: string;
   name: string;
   order: number;
@@ -1210,7 +1212,8 @@ function shareApiPath(ref: ShareRef): string {
 export interface SharePublicData {
   project: { id: string; name: string; description: string };
   modelUrl: string | null;
-  songs: { id: string; name: string; order: number; status: string }[];
+  /** code / latestVideo：舊版 worker 沒有 → undefined */
+  songs: ({ id: string; name: string; order: number; status: string } & Partial<ShareSongVideoFields>)[];
   stageObjects: StageObject[];
   restrictedToSongId: string | null;
   /** 舊版 worker 沒有這兩個欄位 → undefined */

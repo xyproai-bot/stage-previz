@@ -3,10 +3,10 @@
 //   addMediaItems / removeMediaItem / selectMediaItem / moveMediaItem / stepMediaItem / updateMediaItem
 //     — 清單操作（純函式，回傳新的清單）
 //   thumbnailTime / fitSize / makeMediaThumbnail — 清單縮圖（影片抓一格、圖片縮小；一次做一個）
-//   useLocalMedia — 管清單 + 影片播放器（useLocalVideo）+ 正在放的圖片
+//   useLocalMedia — 管清單 + 正在放的圖片；影片用頁面那一個播放器（useLocalVideo，跟歌曲影片版本共用同一個 <video>）
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { isVideoFile, useLocalVideo, type LocalVideoState } from './localVideo';
+import { isVideoFile, type LocalVideoState } from './localVideo';
 
 export type LocalMediaKind = 'video' | 'image';
 
@@ -262,16 +262,18 @@ export interface LocalMediaState {
   move: (id: string, insertAt: number) => void;
   /** 換上一個（-1）/ 下一個（+1）；有換回 true */
   step: (delta: number) => boolean;
+  /** 從別的來源（歌曲影片、AE 即時）切回本地檔案：正在放的影片如果被換掉了就重新載入 */
+  reshow: () => void;
 }
 
-export function useLocalMedia(): LocalMediaState {
-  const player = useLocalVideo();
-  const { video, load: loadVideo, clear: clearVideo } = player;
+/** 播放器裡載的是清單裡哪一個（跟歌曲影片版本的 key 分開） */
+export const localMediaKey = (id: string) => `local:${id}`;
+
+export function useLocalMedia(player: LocalVideoState): LocalMediaState {
+  const { video, load: loadVideo, clear: clearVideo, getSrcKey } = player;
   const [list, setList] = useState<LocalMediaList>(EMPTY_MEDIA_LIST);
   const listRef = useRef(list);
   const seqRef = useRef(0);
-  // 播放器裡現在載著哪一支（切去圖片時影片只暫停、不卸掉，切回來接著播）
-  const loadedVideoIdRef = useRef<string | null>(null);
 
   const commit = useCallback((next: LocalMediaList) => {
     listRef.current = next;
@@ -279,15 +281,15 @@ export function useLocalMedia(): LocalMediaState {
   }, []);
 
   // 換成正在放的檔案：影片 → 載入（新的從頭播、同一支接著播）；圖片 / 沒有 → 影片暫停
+  // （切去圖片時影片只暫停、不卸掉，切回來接著播）
   const show = useCallback((item: LocalMediaItem | null) => {
     if (!item || item.kind !== 'video') { video.pause(); return; }
-    if (loadedVideoIdRef.current !== item.id) {
-      loadedVideoIdRef.current = item.id;
-      loadVideo(item.file);
+    if (getSrcKey() !== localMediaKey(item.id)) {
+      loadVideo(item.file, localMediaKey(item.id));
     } else {
       video.play().catch(() => { /* 自動播放被擋就等使用者按播放 */ });
     }
-  }, [video, loadVideo]);
+  }, [video, loadVideo, getSrcKey]);
 
   // 縮圖：排隊一次做一個（不跟 LED 正在播的影片搶解碼），做好填回清單；已經拿掉的就跳過
   const thumbQueueRef = useRef<LocalMediaItem[]>([]);
@@ -345,11 +347,8 @@ export function useLocalMedia(): LocalMediaState {
     if (!removed) return;
     commit(next);
     if (removed.url) URL.revokeObjectURL(removed.url);
-    if (loadedVideoIdRef.current === removed.id) {
-      loadedVideoIdRef.current = null;
-      clearVideo();
-    }
-  }, [commit, clearVideo]);
+    if (getSrcKey() === localMediaKey(removed.id)) clearVideo();
+  }, [commit, clearVideo, getSrcKey]);
 
   const move = useCallback((id: string, insertAt: number) => {
     const prev = listRef.current;
@@ -363,6 +362,11 @@ export function useLocalMedia(): LocalMediaState {
     select(id);
     return true;
   }, [select]);
+
+  const reshow = useCallback(() => {
+    const item = activeMediaItem(listRef.current);
+    if (item?.kind === 'video' && getSrcKey() !== localMediaKey(item.id)) loadVideo(item.file, localMediaKey(item.id));
+  }, [getSrcKey, loadVideo]);
 
   // 離開頁面 → 收掉所有圖片網址（影片的由 useLocalVideo 收）、縮圖不再做
   useEffect(() => {
@@ -397,5 +401,5 @@ export function useLocalMedia(): LocalMediaState {
     return () => { cancelled = true; };
   }, [activeImageUrl]);
 
-  return { items: list.items, active, player, image, imageError, add, select, remove, move, step };
+  return { items: list.items, active, player, image, imageError, add, select, remove, move, step, reshow };
 }

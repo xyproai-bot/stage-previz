@@ -9,6 +9,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import Icon from './Icon';
+import { DRIVE_MATCH_RULE } from '../lib/songCode';
 import './DriveSettingsDialog.css';
 
 interface Props {
@@ -16,16 +17,15 @@ interface Props {
   onClose: () => void;
   projectId: string;
   songs: Song[];
-  /** 從 worker 抓回來的當前 project meta — 含 drive_folder_id / drive_filename_pattern / drive_oauth_token_id */
+  /** 從 worker 抓回來的當前 project meta — 含 drive_folder_id / drive_oauth_token_id */
   initialFolderId: string;
-  initialPattern: string;
   initialAccountId: string;
   onChanged: () => void;
 }
 
 export default function DriveSettingsDialog({
   open, onClose, projectId, songs,
-  initialFolderId, initialPattern, initialAccountId, onChanged,
+  initialFolderId, initialAccountId, onChanged,
 }: Props) {
   const [accounts, setAccounts] = useState<DriveAccount[] | null>(null);
   const [accountsConfigured, setAccountsConfigured] = useState(true);
@@ -33,7 +33,6 @@ export default function DriveSettingsDialog({
 
   const [accountId, setAccountId] = useState<string>(initialAccountId);
   const [folderInput, setFolderInput] = useState<string>(initialFolderId);
-  const [pattern, setPattern] = useState<string>(initialPattern || '^S(\\d+)_');
 
   const [savingSettings, setSavingSettings] = useState(false);
   const [syncing, setSyncing] = useState(false);
@@ -73,40 +72,18 @@ export default function DriveSettingsDialog({
     if (!open) return;
     setAccountId(initialAccountId);
     setFolderInput(initialFolderId);
-    setPattern(initialPattern || '^S(\\d+)_');
     refreshFiles();
     refreshSyncLog();
-  }, [open, initialAccountId, initialFolderId, initialPattern, refreshFiles, refreshSyncLog]);
+  }, [open, initialAccountId, initialFolderId, refreshFiles, refreshSyncLog]);
 
   // 接受多種輸入：folder ID / Drive URL / shareable URL
   const folderId = useMemo(() => extractFolderId(folderInput), [folderInput]);
-
-  // pattern preview：用目前 songs 跑 regex 試試
-  const patternPreview = useMemo(() => {
-    const examples = ['S01_主題曲.mp4', 'S03_副歌爆破_v2.mp4', 'opening_v3.mp4'];
-    let regex: RegExp | null = null;
-    let regexErr: string | null = null;
-    try { regex = new RegExp(pattern); } catch (e) { regexErr = e instanceof Error ? e.message : String(e); }
-    return {
-      regex,
-      regexErr,
-      examples: examples.map(name => {
-        if (!regex) return { name, songIdx: null as number | null, song: null as string | null };
-        const m = regex.exec(name);
-        if (!m || !m[1]) return { name, songIdx: null, song: null };
-        const num = parseInt(m[1], 10);
-        const song = (songs || []).find((_, i) => i + 1 === num) || null;
-        return { name, songIdx: num, song: song?.name || null };
-      }),
-    };
-  }, [pattern, songs]);
 
   async function handleSaveSettings() {
     setSavingSettings(true);
     try {
       await api.updateProjectDriveSettings(projectId, {
         drive_folder_id: folderId || null,
-        drive_filename_pattern: pattern,
         drive_oauth_token_id: accountId || null,
       });
       onChanged();
@@ -128,7 +105,6 @@ export default function DriveSettingsDialog({
       // 設定還沒存就先存
       await api.updateProjectDriveSettings(projectId, {
         drive_folder_id: folderId,
-        drive_filename_pattern: pattern,
         drive_oauth_token_id: accountId,
       });
       const r = await api.syncDriveProject(projectId);
@@ -223,36 +199,16 @@ export default function DriveSettingsDialog({
 
           <section>
             <label className="drive-dlg__label">
-              <span>檔名規則（regex，第 1 個 capture group 對應歌曲序號）</span>
+              <span>檔案怎麼對到歌</span>
             </label>
-            <input
-              type="text"
-              className="drive-dlg__input drive-dlg__input--mono"
-              value={pattern}
-              onChange={e => setPattern(e.target.value)}
-              placeholder="^S(\d+)_"
-            />
-            {patternPreview.regexErr && (
-              <div className="drive-dlg__err">regex 錯誤：{patternPreview.regexErr}</div>
-            )}
-            {!patternPreview.regexErr && (
-              <div className="drive-dlg__preview">
-                <div className="drive-dlg__preview-title">範例對應：</div>
-                <ul>
-                  {patternPreview.examples.map(ex => (
-                    <li key={ex.name}>
-                      <code>{ex.name}</code>
-                      {' → '}
-                      {ex.songIdx === null
-                        ? <span className="muted">不符合</span>
-                        : ex.song
-                          ? <strong>第 {ex.songIdx} 首：{ex.song}</strong>
-                          : <span className="muted">第 {ex.songIdx} 首（不存在）</span>}
-                    </li>
-                  ))}
-                </ul>
+            <div className="drive-dlg__rule">{DRIVE_MATCH_RULE}</div>
+            {songsArr.some(s => s.code) && (
+              <div className="drive-dlg__hint">
+                這個專案的歌曲代號：{songsArr.filter(s => s.code).slice(0, 8).map(s => `${s.code} ${s.name}`).join('、')}
+                {songsArr.filter(s => s.code).length > 8 ? ' …' : ''}（在歌單上點代號可以改）
               </div>
             )}
+            <div className="drive-dlg__hint">只收影片檔。對不到的檔案會放在下面的「未分類」，可以手動選是哪首歌。新的或改過的影片會自動變成那首歌的下一個版本（V1、V2…）。</div>
           </section>
 
           <div className="drive-dlg__actions">
@@ -309,7 +265,7 @@ export default function DriveSettingsDialog({
                   return (
                     <div key={s.id} className="drive-files__group">
                       <div className="drive-files__group-title">
-                        <Icon icon={Music} /> {s.name}（{songFiles.length}）
+                        <Icon icon={Music} /> {s.code ? `${s.code} ` : ''}{s.name}（{songFiles.length}）
                       </div>
                       {songFiles.map(f => (
                         <DriveFileRow key={f.id} file={f} songs={songsArr} onAssign={handleAssign} />
@@ -341,7 +297,7 @@ function DriveFileRow({ file, songs, onAssign }: {
           {file.sizeBytes && <span>{formatSize(file.sizeBytes)}</span>}
           {file.modifiedTime && <span>{formatRelativeTime(file.modifiedTime)}</span>}
           <span className={'drive-file__badge drive-file__badge--' + file.classifiedBy}>
-            {file.classifiedBy === 'manual' ? <><Icon icon={Lock} size="xs" /> 手動</> : <><Icon icon={Settings2} size="xs" /> 規則</>}
+            {file.classifiedBy === 'manual' ? <><Icon icon={Lock} size="xs" /> 手動</> : <><Icon icon={Settings2} size="xs" /> 檔名代號</>}
           </span>
         </div>
       </div>
@@ -353,7 +309,7 @@ function DriveFileRow({ file, songs, onAssign }: {
       >
         <option value="">未分類</option>
         {songs.map(s => (
-          <option key={s.id} value={s.id}>{s.name}</option>
+          <option key={s.id} value={s.id}>{s.code ? `${s.code} ` : ''}{s.name}</option>
         ))}
       </select>
     </div>

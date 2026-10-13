@@ -1,0 +1,53 @@
+/* LED 畫面來源（影片 / AE 即時 / 本地檔案）：分享頁、動畫師工作站共用 */
+.led-source {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+  flex-shrink: 0;
+  min-width: 0;
+}
+.led-source__grow { flex: 1; }
+.led-source__switch {
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.led-source__switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 5px 12px;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.led-source__switch button + button { border-left: 1px solid var(--border-strong); }
+.led-source__switch button:hover:not(.is-active) { color: var(--text); }
+.led-source__switch button.is-active {
+  background: var(--accent);
+  color: #000;
+  font-weight: 600;
+}
+.led-source__status {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .led-source { flex-wrap: wrap; row-gap: 6px; }
+  .led-source__switch button { padding: 6px 9px; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .led-source__switch button { padding: 9px 12px; }
+}

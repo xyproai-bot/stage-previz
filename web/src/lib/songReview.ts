@@ -140,7 +140,7 @@ export function projectGoneMessage(e: unknown): string | null {
 
 // ─── 自動更新用：新舊資料一樣就不換（畫面不重畫、不閃） ───
 
-const SONG_KEYS = ['id', 'name', 'order', 'status', 'animatorUserId', 'cueCount', 'proposalCount'] as const;
+const SONG_KEYS = ['id', 'name', 'order', 'status', 'animatorUserId', 'cueCount', 'proposalCount', 'code', 'latestVideoId', 'latestVideoVersion'] as const;
 
 export function sameSongs(a: readonly Song[], b: readonly Song[]): boolean {
   if (a === b) return true;

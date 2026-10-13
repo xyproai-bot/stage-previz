@@ -1,16 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
-import type { Cue, CueState, DriveFile, Song, SongComment, StageObject } from '../lib/api';
+import type { Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import type { ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
-import VideoTimeline from '../components/VideoTimeline';
+import MiniPlayer from '../components/MiniPlayer';
+import SongVersionBar, { versionByline } from '../components/SongVersionBar';
+import AddVideoDialog from '../components/AddVideoDialog';
 import ActivityDrawer from '../components/ActivityDrawer';
 import { CommentSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { cueTransitionSeconds } from '../lib/cueTiming';
+import { useLocalVideo } from '../lib/localVideo';
+import { useVideoCueTimeline } from '../lib/videoCueSync';
+import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
+import { canAddVideo, canModifyVideo, deleteVersionMessage, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
+import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
+import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions } from '../lib/mentions';
@@ -22,8 +30,8 @@ import {
 import Icon, { StatusDot } from '../components/Icon';
 import { roleLabel } from '../lib/roleLabels';
 import {
-  ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, HistoryIcon, LoaderCircle, MapPin, Pause, Play, RefreshCw,
-  RotateCcw, Square, TriangleAlert, Video, X,
+  ArrowLeft, Check, ChevronLeft, ChevronRight, Clock, HistoryIcon, LoaderCircle, MapPin, Pause, Play,
+  RotateCcw, Square, X,
 } from 'lucide-react';
 import './Preview.css';
 
@@ -35,6 +43,8 @@ const STATUS_COLUMNS: { key: Status; label: string }[] = [
   { key: 'needs_changes', label: STATUS_LABEL.needs_changes },
   { key: 'approved',      label: STATUS_LABEL.approved },
 ];
+
+const EMPTY_CUES: Cue[] = [];
 
 export default function Preview() {
   const { projectId } = useParams();
@@ -323,25 +333,8 @@ function PreviewInner({ projectId }: { projectId: string }) {
     }
   }
 
-  // 鍵盤：Shift+J/K 切 cue（在預覽區）
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (!e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
-      const k = e.key.toLowerCase();
-      if (k !== 'j' && k !== 'k') return;
-      if (!masterCues.length) return;
-      e.preventDefault();
-      const idx = masterCues.findIndex(c => c.id === selectedCueId);
-      const next = k === 'j'
-        ? (idx < 0 ? 0 : Math.min(idx + 1, masterCues.length - 1))
-        : (idx <= 0 ? 0 : idx - 1);
-      setSelectedCueId(masterCues[next].id);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [masterCues, selectedCueId]);
+  // 上傳影片中關分頁 → 先問一聲（admin 在這頁也可以交影片）
+  useWarnBeforeUnloadWhileUploading();
 
   return (
     <div className="preview">
@@ -496,7 +489,10 @@ function StatusBoard({
                       className="status-card__open"
                       onClick={() => onPickSong(s.id)}
                     >
-                      <div className="status-card__name">{s.name}</div>
+                      <div className="status-card__name">
+                        {s.code && <span className="song-code" title="歌曲代號">{s.code}</span>}
+                        {s.name}
+                      </div>
                       <div className="status-card__meta">
                         {s.cueCount} 個 cue{s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
                       </div>
@@ -535,7 +531,7 @@ function SongDetail({
   /** 這首歌的 cue 讀完了沒（還在讀時不要說「沒有 cue」） */
   cuesReady: boolean;
   selectedCueId: string | null;
-  onSelectCue: (id: string) => void;
+  onSelectCue: (id: string | null) => void;
   autoStep: boolean;
   onToggleAutoStep: () => void;
   stageObjects: StageObject[];
@@ -619,13 +615,145 @@ function SongDetail({
 
   const noCues = cuesReady && cues.length === 0;
 
+  // ── 影片（V3、V2、V1…）：放在 LED 上；小播放器浮在 3D 畫面上 ──
+  // 一頁只有一個 <video>：同時是 LED 的貼圖、也是小視窗的畫面
+  const player = useLocalVideo();
+  const fetchVersions = useMemo(() => memberVersionFetcher(projectId), [projectId]);
+  const viewerId = user?.id ?? 'anon';
+  const versionStorageKey = useCallback(
+    (sid: string) => versionChoiceStorageKey(viewerId, projectId, sid),
+    [viewerId, projectId],
+  );
+  // 歌單上的最新版本換了（動畫師交了新版、有人刪了）→ 重抓這首歌的版本
+  const versions = useSongVersions({ songId: song.id, fetcher: fetchVersions, storageKey: versionStorageKey, reloadKey: song.latestVideoId });
+  const selected = versions.selected;
+  const { loadUrl, getSrcKey, clear: clearPlayer } = player;
+  useEffect(() => {
+    // 這首歌（還）沒有影片 → 上一首的影片不要繼續放
+    if (!selected?.url) { if (getSrcKey()) clearPlayer(); return; }
+    if (getSrcKey() === selected.key) return;
+    loadUrl(selected.url, { key: selected.key, name: selected.label, crossOrigin: selected.crossOrigin });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected?.key, loadUrl, getSrcKey, clearPlayer]);
+  // 播放網址過期（開著超過幾小時）/ 網路斷掉 → 拿新網址接著同一秒播
+  const retryVersion = useCallback(async () => {
+    const r = await versions.reload();
+    const it = r?.items.find(x => x.key === selected?.key) ?? selected;
+    if (it?.url) player.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
+  }, [versions, selected, player]);
+  const videoMode = !!selected && player.srcKey === selected.key;
+
+  // 影片時間軸要每個 cue 的位置（放影片時才抓；抓過的留著）
+  const statesCacheRef = useRef(new Map<string, Promise<CueState[]>>());
+  useEffect(() => { statesCacheRef.current = new Map(); }, [song.id]);
+  const statesFor = useCallback((cueId: string) => {
+    const cache = statesCacheRef.current;
+    let p = cache.get(cueId);
+    if (!p) {
+      p = api.listCueStates(projectId, song.id, cueId);
+      p.catch(() => cache.delete(cueId));  // 失敗就丟掉，下次再抓
+      cache.set(cueId, p);
+    }
+    return p;
+  }, [projectId, song.id]);
+  // 舞台、cue 列跟著影片時間走（cue 在「對應影片時間」到位，提前「轉場」秒數等速出發）
+  const { poseAtFrame, selectCueByUser } = useVideoCueTimeline({
+    cues: cuesReady ? cues : EMPTY_CUES,
+    statesFor,
+    resetKey: song.id,
+    active: videoMode,
+    ready: player.ready,
+    video: player.video,
+    time: player.time,
+    selectedCueId,
+    onSelectCue,
+    seek: player.seek,
+  });
+
+  // 鍵盤：Shift+J/K 切 cue（有在放影片的話影片跟著跳到那個 cue 的時間）
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (!e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k !== 'j' && k !== 'k') return;
+      if (!cues.length) return;
+      e.preventDefault();
+      const idx = cues.findIndex(c => c.id === selectedCueId);
+      const next = k === 'j'
+        ? (idx < 0 ? 0 : Math.min(idx + 1, cues.length - 1))
+        : (idx <= 0 ? 0 : idx - 1);
+      selectCueByUser(cues[next]);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [cues, selectedCueId, selectCueByUser]);
+
+  // 點時間軸上的留言點 → 影片跳過去、捲到那則留言
+  const handlePinClick = useCallback((c: SongComment) => {
+    player.seek(c.time);
+    const el = document.getElementById(`comment-${c.id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.classList.add('song-comment--flash');
+      setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
+    }
+  }, [player]);
+
+  // ── 交影片（admin / 負責的動畫師；導演只能看）──
+  const perm = { accountRole: user?.role ?? null, projectRole, userId: user?.id ?? null, song };
+  const canAdd = canAddVideo(perm);
+  const [addOpen, setAddOpen] = useState(false);
+  const allJobs = useVideoJobs(projectId);
+  const songJobs = useMemo(() => allJobs.filter(j => j.songId === song.id), [allJobs, song.id]);
+  const reloadVersions = versions.reload;
+  const selectVersionRef = useRef(versions.select);
+  selectVersionRef.current = versions.select;
+  // 交的影片好了 → 這首歌選到新的一版開始播（在別首歌的話，回去那首就是新的一版）
+  const onJobDone = useCallback((job: VideoJob) => {
+    if (job.projectId !== projectId) return;
+    const here = job.songId === song.id;
+    toast.success(`${job.songLabel}：${job.result?.label || '新的一版'} 好了${here ? '，正在播' : ''}`);
+    if (here) {
+      // 選到新的那一版（正在看的版本平常會固定住，自己交的要換過去）
+      void reloadVersions().then(() => { if (job.result) selectVersionRef.current(versionKey(job.result.id)); });
+    }
+  }, [projectId, song.id, reloadVersions]);
+  useVideoJobDone(onJobDone);
+
+  async function handleDeleteVersion(item: VersionItem) {
+    if (!confirm(deleteVersionMessage(item))) return;
+    try {
+      await deleteSongVideo(projectId, song.id, item.id);
+      toast.success(`已刪除 ${item.label}`);
+      await versions.reload();
+    } catch (e) {
+      toast.error('刪除失敗：' + friendlyError(e));
+    }
+  }
+  const canModifyPending = (v: SongVideo) => canModifyVideo({ ...perm, item: { kind: 'version', byId: v.createdBy?.id ?? null } });
+  async function handleRetryPending(v: SongVideo) {
+    try { await retrySongVideo(projectId, song.id, v.id); await versions.reload(); }
+    catch (e) { toast.error('重試失敗：' + friendlyError(e)); }
+  }
+  async function handleRemovePending(v: SongVideo) {
+    const name = v.title || '這一版';
+    if (!confirm(v.status === 'failed' ? `把「${name}」從清單拿掉？` : `取消「${name}」？已經傳的部分會丟掉。`)) return;
+    try { await deleteSongVideo(projectId, song.id, v.id); await versions.reload(); }
+    catch (e) { toast.error('沒有成功：' + friendlyError(e)); }
+  }
+
   return (
     <div className="song-detail">
       <div className="song-detail__sub-top">
         <button className="link-btn" onClick={onClose}><Icon icon={ArrowLeft} /> 回總覽</button>
         <span className="song-detail__nav">
           {prev && <button className="link-btn" onClick={() => onPickSong(prev.id)}><Icon icon={ChevronLeft} /> {prev.name}</button>}
-          <span className="song-detail__title">{song.name}</span>
+          <span className="song-detail__title">
+            {song.code && <span className="song-code" title="歌曲代號">{song.code}</span>}
+            {song.name}
+          </span>
           {next && <button className="link-btn" onClick={() => onPickSong(next.id)}>{next.name} <Icon icon={ChevronRight} /></button>}
         </span>
         <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>
@@ -646,60 +774,86 @@ function SongDetail({
 
       <div className="song-detail__body">
         <main className="song-detail__main">
-          <SongVideoPane
-            projectId={projectId}
-            songId={song.id}
-            comments={comments}
-            onAddCommentAtTime={(t) => setPendingCommentTime(t)}
-            cuesWithTime={cues.map(c => ({ id: c.id, videoTimeSec: c.videoTimeSec }))}
-            selectedCueId={selectedCueId}
-            onSelectCueByTime={onSelectCue}
+          {/* 影片版本：V3、V2、V1…（誰交的、什麼時候、說明）；選哪一版 LED 就放哪一版 */}
+          <SongVersionBar
+            status={versions.status}
+            error={versions.error}
+            items={versions.items}
+            selectedKey={selected?.key ?? null}
+            onSelect={versions.select}
+            pending={versions.pending}
+            jobs={songJobs}
+            onRetryLoad={() => { void versions.reload(); }}
+            onAdd={canAdd ? () => setAddOpen(true) : undefined}
+            canDelete={(it) => canModifyVideo({ ...perm, item: it })}
+            onDelete={handleDeleteVersion}
+            canModifyPending={canModifyPending}
+            onRetryPending={handleRetryPending}
+            onRemovePending={handleRemovePending}
+            emptyText={canAdd ? '這首歌還沒有影片，按右邊「加影片」交第一版' : '這首歌還沒有影片（動畫師交了之後會自動出現）'}
           />
 
           <div className="song-detail__stage">
-            {/* 沒有 cue 也照樣顯示舞台（物件在預設位置），導演才看得到模型 */}
-            <StageScene
-              key={`${projectId}:${song.id}`}
-              states={viewportStates}
-              stageObjects={stageObjects}
-              selectedObjectIds={[]}
-              onSelect={() => {}}
-              onTransform={() => {}}
-              cueName={noCues ? '預設位置（還沒有 cue）' : cueName}
-              modelUrl={modelUrl}
-              readOnly
-              defaultRenderMode="live"
-              cueKey={selectedCueId}
-              crossfadeSeconds={cueTransitionSeconds(cues.find(c => c.id === selectedCueId))}
-              comments={comments}
-              onCommentPinClick={(c) => {
-                const el = document.getElementById(`comment-${c.id}`);
-                if (el) {
-                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  el.classList.add('song-comment--flash');
-                  setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
-                }
-              }}
-              bookmarkScope={projectId}
-              scaleCorrection={view.scaleCorrection}
-              onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
-              mechanismOffsets={view.mechanismOffsets}
-              lookSettings={personalLook.effective}
-              onLookSettingsChange={personalLook.set}
-              lookCustomized={personalLook.customized}
-              onLookReset={personalLook.reset}
-              onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
-              materialOverrides={view.materialOverrides}
-              homeView={view.homeView}
-              onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
-              onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
-              onAddAnchoredComment={(anchor) => {
-                // 上層存暫存的 anchor，留言區會接著用
-                pendingAnchorRef.current = anchor;
-                // 觸發留言區「需要 anchor 模式」 — 用 pendingCommentTime 0 + 一個 flag
-                setPendingCommentAnchor(anchor);
-              }}
-            />
+            <div className="song-detail__scene">
+              {/* 沒有 cue 也照樣顯示舞台（物件在預設位置），導演才看得到模型 */}
+              <StageScene
+                key={`${projectId}:${song.id}`}
+                states={viewportStates}
+                stageObjects={stageObjects}
+                selectedObjectIds={[]}
+                onSelect={() => {}}
+                onTransform={() => {}}
+                cueName={noCues ? '預設位置（還沒有 cue）' : cueName}
+                modelUrl={modelUrl}
+                readOnly
+                defaultRenderMode="live"
+                cueKey={selectedCueId}
+                crossfadeSeconds={cueTransitionSeconds(cues.find(c => c.id === selectedCueId))}
+                comments={comments}
+                onCommentPinClick={(c) => {
+                  const el = document.getElementById(`comment-${c.id}`);
+                  if (el) {
+                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    el.classList.add('song-comment--flash');
+                    setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
+                  }
+                }}
+                bookmarkScope={projectId}
+                scaleCorrection={view.scaleCorrection}
+                onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+                mechanismOffsets={view.mechanismOffsets}
+                lookSettings={personalLook.effective}
+                onLookSettingsChange={personalLook.set}
+                lookCustomized={personalLook.customized}
+                onLookReset={personalLook.reset}
+                onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
+                materialOverrides={view.materialOverrides}
+                homeView={view.homeView}
+                onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
+                onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
+                onAddAnchoredComment={(anchor) => {
+                  // 上層存暫存的 anchor，留言區會接著用
+                  pendingAnchorRef.current = anchor;
+                  // 觸發留言區「需要 anchor 模式」 — 用 pendingCommentTime 0 + 一個 flag
+                  setPendingCommentAnchor(anchor);
+                }}
+                ledVideo={videoMode && player.ready ? player.video : null}
+                poseAtFrame={poseAtFrame}
+              />
+              {/* 小播放器（子母畫面）：可以拖、可以收起來；在 3D 畫面裡面，不會蓋到下面的 cue 列 */}
+              {selected && (
+                <MiniPlayer
+                  player={player}
+                  label={selected.label}
+                  detail={versionByline(selected) || selected.title}
+                  storageKey="sp_mini_player:preview"
+                  comments={comments}
+                  onCommentPinClick={handlePinClick}
+                  onAddCommentAtTime={(t) => setPendingCommentTime(t)}
+                  onRetry={retryVersion}
+                />
+              )}
+            </div>
             {noCues && (
               <div className="song-detail__cuebar">
                 <span className="cuebar-hint">這首歌還沒有 cue，3D 顯示的是物件的預設位置</span>
@@ -718,8 +872,8 @@ function SongDetail({
                     <button
                       key={c.id}
                       className={'cuebar-cue' + (c.id === selectedCueId ? ' is-active' : '')}
-                      onClick={() => onSelectCue(c.id)}
-                      title={c.name}
+                      onClick={() => selectCueByUser(c)}
+                      title={c.videoTimeSec != null ? `${c.name}（影片 ${formatTimeMS(c.videoTimeSec)}）` : c.name}
                     >
                       <span className="cuebar-cue__num">{i + 1}</span>
                       <span className="cuebar-cue__name">{c.name}</span>
@@ -752,6 +906,17 @@ function SongDetail({
           />
         </aside>
       </div>
+
+      {addOpen && (
+        <AddVideoDialog
+          open
+          onClose={() => setAddOpen(false)}
+          projectId={projectId}
+          song={song}
+          jobs={songJobs}
+          canUpload={canAdd}
+        />
+      )}
     </div>
   );
 }
@@ -1148,356 +1313,6 @@ function SongComments({
             );
           })}
         </ul>
-      )}
-    </div>
-  );
-}
-
-/* ──────────── Video Pane（從 Drive 拉影片） ──────────── */
-
-function SongVideoPane({
-  projectId, songId, comments, onAddCommentAtTime,
-  cuesWithTime, selectedCueId, onSelectCueByTime,
-}: {
-  projectId: string;
-  songId: string;
-  comments: SongComment[];
-  onAddCommentAtTime: (time: number) => void;
-  /** Cue 列表（含 videoTimeSec），用來算「影片播到 X 秒應該是哪個 cue」 */
-  cuesWithTime: { id: string; videoTimeSec: number | null }[];
-  selectedCueId: string | null;
-  onSelectCueByTime: (cueId: string) => void;
-}) {
-  const [files, setFiles] = useState<DriveFile[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // 主版本 + 比較版本（V1/V2 並排對比模式）
-  const [primaryFid, setPrimaryFid] = useState<string | null>(null);
-  const [compareFid, setCompareFid] = useState<string | null>(null);   // null = 不開對比
-  const [collapsed, setCollapsed] = useState(false);
-
-  const videoARef = useRef<HTMLVideoElement>(null);
-  const videoBRef = useRef<HTMLVideoElement>(null);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  // 影片載入失敗 retry（最多 3 次）— Drive proxy 偶爾 5xx
-  const [videoRetryA, setVideoRetryA] = useState(0);
-  const [videoRetryB, setVideoRetryB] = useState(0);
-  const [videoErrorA, setVideoErrorA] = useState<string | null>(null);
-  const [videoErrorB, setVideoErrorB] = useState<string | null>(null);
-  useEffect(() => {
-    setVideoRetryA(0);
-    setVideoErrorA(null);
-  }, [primaryFid]);
-  useEffect(() => {
-    setVideoRetryB(0);
-    setVideoErrorB(null);
-  }, [compareFid]);
-  // 對比模式 sync 用：避免 onTimeUpdate / play / pause 互相觸發無限迴圈
-  const syncingRef = useRef(false);
-
-  const refresh = useCallback(async () => {
-    try {
-      const all = await api.listDriveProjectFiles(projectId);
-      const mine = all.filter(f => f.songId === songId).sort((a, b) => {
-        const ta = a.modifiedTime || a.cachedAt;
-        const tb = b.modifiedTime || b.cachedAt;
-        return tb.localeCompare(ta);
-      });
-      setFiles(mine);
-      if (mine.length > 0 && !primaryFid) setPrimaryFid(mine[0].driveFileId);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [projectId, songId, primaryFid]);
-
-  useEffect(() => {
-    setPrimaryFid(null);
-    setCompareFid(null);
-    setCurrentTime(0);
-    setDuration(0);
-  }, [songId]);
-  useEffect(() => { refresh(); }, [refresh]);
-
-  // ── 主 video 事件 → time/duration ──
-  useEffect(() => {
-    const v = videoARef.current;
-    if (!v) return;
-    const onTime = () => setCurrentTime(v.currentTime);
-    const onMeta = () => setDuration(v.duration || 0);
-    v.addEventListener('timeupdate', onTime);
-    v.addEventListener('loadedmetadata', onMeta);
-    v.addEventListener('durationchange', onMeta);
-    return () => {
-      v.removeEventListener('timeupdate', onTime);
-      v.removeEventListener('loadedmetadata', onMeta);
-      v.removeEventListener('durationchange', onMeta);
-    };
-  }, [primaryFid]);
-
-  // ── 雙向同步用的 refs（必須在 effect 之前宣告以避開 TDZ）──
-  const prevCueIdRef = useRef(selectedCueId);
-  const ignoreNextCueChangeRef = useRef(false);
-
-  // ── 影片時間 → 自動切 cue ──
-  // 找 videoTimeSec ≤ currentTime 的最後一個 cue（依 time 升冪），跟現在 selectedCueId 不同就 callback
-  useEffect(() => {
-    if (!cuesWithTime || cuesWithTime.length === 0) return;
-    const timed = cuesWithTime
-      .filter(c => c.videoTimeSec != null)
-      .sort((a, b) => (a.videoTimeSec || 0) - (b.videoTimeSec || 0));
-    if (timed.length === 0) return;
-    let target = timed[0];
-    for (const c of timed) {
-      if ((c.videoTimeSec || 0) <= currentTime) target = c;
-      else break;
-    }
-    if (target.id !== selectedCueId) {
-      ignoreNextCueChangeRef.current = true; // 防止 seek 影片造成反向迴圈
-      onSelectCueByTime(target.id);
-    }
-  }, [currentTime, cuesWithTime, selectedCueId, onSelectCueByTime]);
-
-  // ── Cue 切換（手動）→ 影片自動 seek 到對應時間（只在用戶手動切時做） ──
-  useEffect(() => {
-    if (selectedCueId === prevCueIdRef.current) return;
-    if (ignoreNextCueChangeRef.current) {
-      ignoreNextCueChangeRef.current = false;
-      prevCueIdRef.current = selectedCueId;
-      return;
-    }
-    const cue = cuesWithTime.find(c => c.id === selectedCueId);
-    if (cue && cue.videoTimeSec != null) {
-      const v = videoARef.current;
-      if (v && Math.abs(v.currentTime - cue.videoTimeSec) > 0.5) {
-        v.currentTime = cue.videoTimeSec;
-      }
-    }
-    prevCueIdRef.current = selectedCueId;
-  }, [selectedCueId, cuesWithTime]);
-
-  // ── 對比模式：A ↔ B sync（time + play/pause + rate）──
-  useEffect(() => {
-    const a = videoARef.current;
-    const b = videoBRef.current;
-    if (!a || !b || !compareFid) return;
-
-    function sync(from: HTMLVideoElement, to: HTMLVideoElement) {
-      if (syncingRef.current) return;
-      // diff 太小不動（節流）
-      if (Math.abs(to.currentTime - from.currentTime) > 0.15) {
-        syncingRef.current = true;
-        try { to.currentTime = from.currentTime; } catch {}
-        setTimeout(() => { syncingRef.current = false; }, 50);
-      }
-      if (to.paused !== from.paused) {
-        syncingRef.current = true;
-        try { from.paused ? to.pause() : void to.play().catch(() => {}); } catch {}
-        setTimeout(() => { syncingRef.current = false; }, 50);
-      }
-      if (Math.abs(to.playbackRate - from.playbackRate) > 0.01) {
-        to.playbackRate = from.playbackRate;
-      }
-    }
-    const onA = () => sync(a, b);
-    const onB = () => sync(b, a);
-    const events = ['play', 'pause', 'seeked', 'ratechange', 'timeupdate'];
-    events.forEach(ev => { a.addEventListener(ev, onA); b.addEventListener(ev, onB); });
-    return () => {
-      events.forEach(ev => { a.removeEventListener(ev, onA); b.removeEventListener(ev, onB); });
-    };
-  }, [compareFid, primaryFid]);
-
-  function handleSeek(t: number) {
-    const v = videoARef.current;
-    if (v) v.currentTime = Math.max(0, Math.min(duration || 1e9, t));
-  }
-
-  function handlePinClick(c: SongComment) {
-    handleSeek(c.time);
-    const el = document.getElementById(`comment-${c.id}`);
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      el.classList.add('song-comment--flash');
-      setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
-    }
-  }
-
-  if (files === null && !error) {
-    return <div className="video-pane video-pane--empty"><Icon icon={LoaderCircle} spin /> 載入影片清單…</div>;
-  }
-  if (error) {
-    return <div className="video-pane video-pane--empty video-pane--err"><Icon icon={TriangleAlert} /> {error}</div>;
-  }
-  if (files && files.length === 0) {
-    return (
-      <div className="video-pane video-pane--empty">
-        <span><Icon icon={Video} /> 這首歌沒有 Drive 影片</span>
-        <span className="muted small">（在 Drive 上傳檔名符合規則的檔案後，5 分鐘內自動同步）</span>
-      </div>
-    );
-  }
-
-  const primary = files?.find(f => f.driveFileId === primaryFid) || files?.[0] || null;
-  const compare = compareFid ? files?.find(f => f.driveFileId === compareFid) || null : null;
-  const primaryUrl = primary ? api.driveStreamUrl(primary.driveFileId) : null;
-  const compareUrl = compare ? api.driveStreamUrl(compare.driveFileId) : null;
-  const srcKey = primary ? primary.driveFileId : '';
-
-  function versionLabel(f: DriveFile, idx: number, total: number): string {
-    return idx === 0 ? `最新 · ${f.filename}` : `V${total - idx} · ${f.filename}`;
-  }
-
-  const canCompare = (files?.length ?? 0) >= 2;
-
-  return (
-    <div className={'video-pane' + (collapsed ? ' video-pane--collapsed' : '')}>
-      <div className="video-pane__head">
-        <button className="video-pane__toggle" onClick={() => setCollapsed(c => !c)} title={collapsed ? '展開' : '收起'} aria-label={collapsed ? '展開動畫稿' : '收起動畫稿'}>
-          <Icon icon={collapsed ? ChevronRight : ChevronDown} />
-        </button>
-        <span className="video-pane__title">
-          <Icon icon={Video} /> 動畫稿{files && files.length > 1 ? `（${files.length} 版）` : ''}
-        </span>
-        {primary && !compareFid && (
-          <span className="video-pane__filename">{primary.filename}</span>
-        )}
-        {files && files.length > 1 && (
-          <select
-            className="video-pane__version"
-            value={primaryFid || ''}
-            onChange={e => setPrimaryFid(e.target.value)}
-            title="切換主版本"
-          >
-            {files.map((f, i) => (
-              <option key={f.driveFileId} value={f.driveFileId}>
-                {versionLabel(f, i, files.length)}
-                {f.modifiedTime ? ` · ${formatRelativeTime(f.modifiedTime)}` : ''}
-              </option>
-            ))}
-          </select>
-        )}
-        {canCompare && (
-          <button
-            className={'btn btn--sm ' + (compareFid ? 'btn--primary' : 'btn--ghost')}
-            onClick={() => {
-              if (compareFid) {
-                setCompareFid(null);
-              } else {
-                // 預設挑跟 primary 不一樣的版本
-                const other = files!.find(f => f.driveFileId !== primaryFid);
-                setCompareFid(other?.driveFileId || null);
-              }
-            }}
-            title={compareFid ? '關掉對比' : '開啟並排對比兩個版本'}
-          >
-            {compareFid ? '⊞ 關閉對比' : '⊞ 並排對比'}
-          </button>
-        )}
-        {compareFid && files && (
-          <select
-            className="video-pane__version"
-            value={compareFid}
-            onChange={e => setCompareFid(e.target.value)}
-            title="切換對比版本"
-          >
-            {files.filter(f => f.driveFileId !== primaryFid).map((f, _i) => {
-              const idx = files.findIndex(x => x.driveFileId === f.driveFileId);
-              return (
-                <option key={f.driveFileId} value={f.driveFileId}>
-                  對比 {versionLabel(f, idx, files.length)}
-                </option>
-              );
-            })}
-          </select>
-        )}
-        <button className="link-btn" onClick={refresh} title="重新整理" aria-label="重新整理"><Icon icon={RefreshCw} /></button>
-      </div>
-      {!collapsed && primaryUrl && (
-        <>
-          {compareUrl ? (
-            <div className="video-pane__compare">
-              <div className="video-pane__compare-side">
-                <div className="video-pane__compare-label">A · {primary?.filename}</div>
-                <video
-                  ref={videoARef}
-                  key={`${primaryUrl}#${videoRetryA}`}
-                  className="video-pane__video"
-                  src={primaryUrl}
-                  controls
-                  preload="metadata"
-                  onError={() => {
-                    if (videoRetryA < 3) {
-                      const next = videoRetryA + 1;
-                      setVideoRetryA(next);
-                      toast.warn(`A 影片載入失敗，自動重試（${next}/3）…`);
-                    } else {
-                      setVideoErrorA('A 影片重試 3 次都失敗');
-                    }
-                  }}
-                />
-                {videoErrorA && <div className="video-pane__err"><Icon icon={TriangleAlert} /> {videoErrorA}</div>}
-              </div>
-              <div className="video-pane__compare-side">
-                <div className="video-pane__compare-label">B · {compare?.filename}</div>
-                <video
-                  ref={videoBRef}
-                  key={`${compareUrl}#${videoRetryB}`}
-                  className="video-pane__video"
-                  src={compareUrl}
-                  controls
-                  preload="metadata"
-                  muted
-                  onError={() => {
-                    if (videoRetryB < 3) {
-                      const next = videoRetryB + 1;
-                      setVideoRetryB(next);
-                      toast.warn(`B 影片載入失敗，自動重試（${next}/3）…`);
-                    } else {
-                      setVideoErrorB('B 影片重試 3 次都失敗');
-                    }
-                  }}
-                />
-                {videoErrorB && <div className="video-pane__err"><Icon icon={TriangleAlert} /> {videoErrorB}</div>}
-              </div>
-            </div>
-          ) : (
-            <>
-              <video
-                ref={videoARef}
-                key={`${primaryUrl}#${videoRetryA}`}
-                className="video-pane__video"
-                src={primaryUrl}
-                controls
-                preload="metadata"
-                onError={() => {
-                  if (videoRetryA < 3) {
-                    const next = videoRetryA + 1;
-                    setVideoRetryA(next);
-                    toast.warn(`影片載入失敗，自動重試（${next}/3）…`);
-                  } else {
-                    setVideoErrorA('影片重試 3 次都失敗，請手動重試');
-                  }
-                }}
-              />
-              {videoErrorA && (
-                <div className="video-pane__err-row">
-                  <Icon icon={TriangleAlert} /> {videoErrorA}
-                  <button className="link-btn" onClick={() => { setVideoRetryA(0); setVideoErrorA(null); }}>重新整理</button>
-                </div>
-              )}
-            </>
-          )}
-          <VideoTimeline
-            videoEl={videoARef.current}
-            duration={duration}
-            currentTime={currentTime}
-            comments={comments}
-            srcKey={srcKey}
-            onSeek={handleSeek}
-            onCommentPinClick={handlePinClick}
-            onAddCommentHere={onAddCommentAtTime}
-          />
-        </>
       )}
     </div>
   );

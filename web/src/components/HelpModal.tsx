@@ -103,9 +103,10 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
             <h3>Google Drive</h3>
             <ul>
               <li>製作先在「Drive 來源」連接 Google 帳號（只要一次）</li>
-              <li>專案編輯頁上方的「Drive」設定要抓哪個資料夾、檔名規則</li>
-              <li>每 5 分鐘自動同步，新版本的影片會自動分到對應的歌</li>
-              <li>導演頁會自動顯示最新的影片，有好幾版時可以切換、並排對比</li>
+              <li>專案編輯頁上方的「Drive」設定要抓哪個資料夾</li>
+              <li>檔名開頭寫歌曲代號（例如 S03_xxx.mp4）就會自動對到那首歌；代號在歌單上看得到、可以改</li>
+              <li>每 5 分鐘自動同步，新的或改過的影片會變成那首歌的下一個版本（V1、V2…）</li>
+              <li>導演頁會把最新的一版放到 LED 上，有好幾版時可以切換</li>
             </ul>
           </section>
 

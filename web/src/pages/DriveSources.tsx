@@ -120,7 +120,7 @@ export default function DriveSources() {
           <ol className="drive-sources__guide">
             <li>連接你的 Google 帳號（上方按鈕）— 平台只要 <strong>讀取權限</strong></li>
             <li>進入專案編輯頁 → Drive 來源區塊 → 選擇此 Google 帳號 + 貼上資料夾連結</li>
-            <li>設定檔名規則（預設 <code>^S(\d+)_</code>，例如 <code>S03_主題曲.mp4</code> 自動分到第 3 首歌）</li>
+            <li>影片檔名開頭寫歌曲代號（例如 <code>S03_主題曲.mp4</code>）就會自動對到那首歌；歌曲代號在專案編輯頁的歌單上看得到、可以改</li>
             <li>每 5 分鐘自動同步；也可隨時手動同步</li>
             <li>動畫師在 Drive 上傳新版本影片 → 5 分鐘內導演端就看得到</li>
           </ol>

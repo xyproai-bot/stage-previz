@@ -105,6 +105,7 @@ describe('留言：誰能改 / 刪', () => {
 describe('自動更新的比對', () => {
   const s = (id: string, status: Song['status']): Song => ({
     id, name: id, order: 0, animatorUserId: null, status, createdAt: '', cueCount: 0, proposalCount: 0,
+    code: null, latestVideoId: null, latestVideoVersion: null,
   });
   it('sameSongs：內容一樣就算一樣，狀態變了就不一樣', () => {
     expect(sameSongs([s('a', 'todo')], [s('a', 'todo')])).toBe(true);

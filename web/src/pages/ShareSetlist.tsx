@@ -3,6 +3,7 @@ import { formatClock } from '../lib/localVideo';
 import type { LocalMediaItem } from '../lib/localMedia';
 import Icon from '../components/Icon';
 import { Film, Image, Pause, Play, Plus, X } from 'lucide-react';
+import './Share.css';  // 清單的樣子在分享頁的 CSS（動畫師工作站也用這個清單）
 
 /** 清單裡拖曳排順序用的資料型別（跟從電腦拖檔案進來分開：檔案的 types 會有 'Files'） */
 const ROW_DRAG_TYPE = 'application/x-stage-previz-media';

@@ -74,6 +74,16 @@
   font-size: 12px;
   margin-top: 4px;
 }
+/* 檔案怎麼對到歌（一句話） */
+.drive-dlg__rule {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--accent-dim);
+  border: 1px solid rgba(16, 199, 138, 0.35);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+}
 .drive-dlg__hint code {
   background: var(--surface-2);
   padding: 1px 6px;

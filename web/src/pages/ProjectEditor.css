@@ -219,6 +219,43 @@
   font-size: 10px;
 }
 
+/* ─── 每首歌的影片：最新版本 / 交影片進度 / ＋加影片 ─── */
+.song-item__meta { flex-wrap: wrap; align-items: center; row-gap: 3px; }
+.song-item__video {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-family: var(--font-ui);
+}
+.song-item__video-label { color: var(--accent); font-family: var(--font-mono); font-weight: 600; }
+.song-item__video-none { color: var(--text-muted); }
+.song-item__video-job {
+  color: var(--warn);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-item__video-job.is-error { color: var(--danger); }
+.song-item__video-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.song-item__video-add:hover { color: var(--accent); border-color: var(--accent); }
+@media (hover: none) and (pointer: coarse) {
+  .song-item__video-add { height: 30px; padding: 0 10px; }
+}
+
 /* ─── Song status badge / filter chips / dropdown ─── */
 .status-badge-wrap {
   position: relative;

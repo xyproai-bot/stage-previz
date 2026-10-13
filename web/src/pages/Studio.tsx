@@ -5,28 +5,45 @@ import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } fro
 import type { ProjectMember, ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
+import MiniPlayer from '../components/MiniPlayer';
+import SongVersionBar, { versionByline } from '../components/SongVersionBar';
+import AddVideoDialog from '../components/AddVideoDialog';
+import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
+import ShareSetlist from './ShareSetlist';
 import { toast } from '../lib/toast';
-import { markSeen, songUnread } from '../lib/unreadComments';
+import { getLastSeen, markSeen, newFromOthersSince, songsToFetch, unreadFromSummary } from '../lib/unreadComments';
+import { formatClock, useLocalVideo } from '../lib/localVideo';
+import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
+import { useVideoCueTimeline } from '../lib/videoCueSync';
+import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
+import { canAddVideo, canModifyVideo, deleteVersionMessage, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
+import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
+import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { crossfadeLabel, cueTransitionSeconds } from '../lib/cueTiming';
 import { helpUrl } from '../lib/helpLinks';
+import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions } from '../lib/mentions';
 import { formatRelativeTime } from '../lib/serverTime';
 import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
-  friendlyError, projectGoneMessage, canModifyComment, sameSongs, sameComments, newCommentsFromOthers,
+  friendlyError, projectGoneMessage, canModifyComment, sameSongs, sameComments,
 } from '../lib/songReview';
 import Icon from '../components/Icon';
 import { roleLabel } from '../lib/roleLabels';
 import {
-  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, HistoryIcon, LoaderCircle, Music, RefreshCw, TriangleAlert, X,
+  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, HistoryIcon, Image, LoaderCircle, Music, Pause, Play, RefreshCw, Repeat,
+  TriangleAlert, Volume2, VolumeX, X,
 } from 'lucide-react';
 import './Studio.css';
 
 type Tab = 'cues' | 'review' | 'activity';
 type SongFilter = 'mine' | 'all';
+/** 記住這台電腦上次選的 LED 來源（沒選過 = AE 即時，跟以前一樣） */
+const SOURCE_KEY = 'sp_led_source:studio';
+const EMPTY_CUES: Cue[] = [];
 
 export default function Studio() {
   const { projectId } = useParams();
@@ -123,44 +140,64 @@ function StudioInner({ projectId }: { projectId: string }) {
     setCommentsBySong(next);
   }, []);
 
-  // 抓每首歌的留言（4 個一起抓）。notify = 有別人的新留言就跳提示（第一次載入不跳）
-  const fetchAllComments = useCallback(async (list: Song[], notify: boolean) => {
-    const results = new Map<string, SongComment[]>();
-    const queue = [...list];
-    const work = async () => {
-      while (queue.length > 0) {
-        const s = queue.shift();
-        if (!s) return;
-        try { results.set(s.id, await api.listSongComments(projectId, s.id)); }
-        catch { /* 這首抓不到就沿用上次的 */ }
-      }
+  // 留言：每次更新只叫一次「留言摘要」（每首歌幾則、最新一則）算未讀，只抓需要的那幾首歌的整串
+  // （正在看的那首、有比上次看的還新的別人留言的）。docs/comments-api.md
+  const summaryRef = useRef<Map<string, CommentSummary> | null>(null);
+  const [summary, setSummary] = useState<Map<string, CommentSummary> | null>(null);
+  const refreshComments = useCallback(async (notify: boolean) => {
+    if (!user) return;
+    const fetchSongs = async (ids: string[]) => {
+      const results = new Map<string, SongComment[]>();
+      const queue = [...ids];
+      const work = async () => {
+        while (queue.length > 0) {
+          const sid = queue.shift();
+          if (!sid) return;
+          try { results.set(sid, await api.listSongComments(projectId, sid)); }
+          catch { /* 這首抓不到就沿用上次的 */ }
+        }
+      };
+      await Promise.all([work(), work(), work(), work()]);
+      return results;
     };
-    await Promise.all([work(), work(), work(), work()]);
+    let rows: CommentSummary[] | null = null;
+    try { rows = await getCommentsSummary(projectId); } catch { /* 網路一時不通 → 至少更新正在看的這首 */ }
+    const prev = summaryRef.current;
+    const ids = rows
+      ? songsToFetch(rows, prev, (sid) => getLastSeen(user.id, projectId, sid), (sid) => commentsRef.current.has(sid), selectedSongIdRef.current)
+      : (selectedSongIdRef.current ? [selectedSongIdRef.current] : []);
+    const results = await fetchSongs(ids);
 
     const current = commentsRef.current;  // 等待期間自己留言 / 刪除過的話，以最新的為準
-    const next = new Map<string, SongComment[]>();
-    let changed = false;
-    for (const s of list) {
-      const old = current.get(s.id);
-      const got = results.get(s.id);
-      if (!got || sameComments(old, got)) {
-        if (old) next.set(s.id, old);
-        continue;
-      }
-      changed = true;
-      next.set(s.id, got);
-      if (notify) {
-        const fresh = newCommentsFromOthers(old, got, user);
-        if (fresh.length > 0) {
-          const c = fresh[fresh.length - 1];
-          const more = fresh.length > 1 ? `（共 ${fresh.length} 則新留言）` : '';
-          toast.info(`${s.name}：${c.author} 留言「${c.text.slice(0, 40)}${c.text.length > 40 ? '…' : ''}」${more}`);
-        }
-      }
+    let next: Map<string, SongComment[]> | null = null;
+    for (const [sid, got] of results) {
+      if (sameComments(current.get(sid), got)) continue;
+      next ??= new Map(current);
+      next.set(sid, got);
     }
-    if (!changed && next.size === current.size) return;
-    commentsRef.current = next;
-    setCommentsBySong(next);
+    if (next) {
+      commentsRef.current = next;
+      setCommentsBySong(next);
+    }
+    if (!rows) return;
+    const map = new Map(rows.map(r => [r.songId, r]));
+    summaryRef.current = map;
+    setSummary(map);
+
+    // 有別人的新留言 → 跳提示（第一次載入不跳）
+    if (!notify || !prev) return;
+    for (const r of rows) {
+      const before = prev.get(r.songId);
+      if (!before || (r.latestFromOthersAt ?? '') <= (before.latestFromOthersAt ?? '')) continue;
+      const list = results.get(r.songId);
+      if (!list) continue;
+      const fresh = newFromOthersSince(list, before.latestFromOthersAt, user);
+      if (fresh.length === 0) continue;
+      const c = fresh[fresh.length - 1];
+      const songName = songsRef.current.find(x => x.id === r.songId)?.name ?? '';
+      const more = fresh.length > 1 ? `（共 ${fresh.length} 則新留言）` : '';
+      toast.info(`${songName}：${c.author} 留言「${c.text.slice(0, 40)}${c.text.length > 40 ? '…' : ''}」${more}`);
+    }
   }, [projectId, user]);
 
   // 專案名 + 我的角色 + 成員
@@ -202,7 +239,7 @@ function StudioInner({ projectId }: { projectId: string }) {
       applySongs(list);
       setStageObjects(objs);
       setModelUrl(model ? api.modelDownloadUrl(model.key) : null);
-      void fetchAllComments(list, false);
+      void refreshComments(false);
     } catch (e) {
       const gone = projectGoneMessage(e);
       if (gone) setGoneMessage(gone);
@@ -211,7 +248,7 @@ function StudioInner({ projectId }: { projectId: string }) {
       setSongsLoading(false);
     }
     await metaDone;
-  }, [projectId, loadMeta, applySongs, fetchAllComments]);
+  }, [projectId, loadMeta, applySongs, refreshComments]);
 
   useEffect(() => { refreshAll(); }, [refreshAll]);
 
@@ -230,19 +267,29 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   useLiveRefresh(async () => {
     if (goneRef.current) return;
-    const list = await reloadSongs();
+    await reloadSongs();
     // 歌單這次沒讀到（網路一時不穩）也照樣更新留言；專案不見了就不用了
-    if (!goneRef.current) await fetchAllComments(list ?? songsRef.current, true);
+    if (!goneRef.current) await refreshComments(true);
   }, { enabled: !goneMessage && !songsLoading });
 
   // 審查分頁開著時，看到的留言算已讀（在 cue 分頁時新留言要留著未讀數字）
+  const [, setSeenRev] = useState(0);
   useEffect(() => {
     if (!user || !selectedSongId || tab !== 'review') return;
     const list = commentsBySong.get(selectedSongId);
     if (!list || list.length === 0) return;
     const latest = list.reduce((acc, c) => c.createdAt > acc ? c.createdAt : acc, '');
+    if (getLastSeen(user.id, projectId, selectedSongId) === latest) return;
     markSeen(user.id, projectId, selectedSongId, latest);
+    setSeenRev(n => n + 1);  // 歌單上的未讀數字跟著歸零
   }, [user, projectId, selectedSongId, commentsBySong, tab]);
+
+  // 換歌 → 這首的留言還沒抓過就抓（審查分頁要顯示整串）
+  useEffect(() => {
+    if (!selectedSongId || commentsRef.current.has(selectedSongId)) return;
+    const sid = selectedSongId;
+    api.listSongComments(projectId, sid).then(list => setSongComments(sid, list)).catch(() => { /* 下次自動更新再抓 */ });
+  }, [projectId, selectedSongId, setSongComments]);
 
   // 切歌 → 拉 cues
   useEffect(() => {
@@ -321,9 +368,162 @@ function StudioInner({ projectId }: { projectId: string }) {
   }, [selectedCueId, cueStates, stageObjects]);
 
   const selectedComments = selectedSongId ? commentsBySong.get(selectedSongId) : undefined;
-  const selectedUnread = user && selectedSongId && selectedComments
-    ? songUnread(user.id, projectId, selectedSongId, selectedComments, user)
-    : 0;
+  /** 一首歌的未讀留言數（摘要 + 抓到的留言；docs/comments-api.md 的做法） */
+  const unreadOf = (songId: string) => (user
+    ? unreadFromSummary(summary?.get(songId), getLastSeen(user.id, projectId, songId), commentsBySong.get(songId), user)
+    : 0);
+  const selectedUnread = selectedSongId ? unreadOf(selectedSongId) : 0;
+
+  // ── LED 畫面：歌曲影片（V3…）/ AE 即時 / 本地檔案 ──
+  // 一頁只有一個 <video>：歌曲影片、本地檔案輪流用它（同時是 LED 貼圖、也是小視窗的畫面）
+  const player = useLocalVideo();
+  const media = useLocalMedia(player);
+  // 上次選的來源；沒選過 = AE 即時（跟以前一樣）
+  const [sourcePref, setSourcePref] = useState<LedSource | null>(() => readLedSource(SOURCE_KEY));
+  const source: LedSource = sourcePref ?? 'ndi';
+  const chooseSource = useCallback((next: LedSource) => {
+    setSourcePref(next);
+    saveLedSource(SOURCE_KEY, next);
+  }, []);
+  const [ndiGuide, setNdiGuide] = useState<NdiGuide | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const fetchVersions = useMemo(() => memberVersionFetcher(projectId), [projectId]);
+  const viewerId = user?.id ?? 'anon';
+  const versionStorageKey = useCallback(
+    (sid: string) => versionChoiceStorageKey(viewerId, projectId, sid),
+    [viewerId, projectId],
+  );
+  // 歌單上的最新版本換了（交了新版、有人刪了）→ 重抓這首歌的版本
+  const versions = useSongVersions({
+    songId: selectedSongId, fetcher: fetchVersions, storageKey: versionStorageKey, reloadKey: selectedSong?.latestVideoId ?? null,
+  });
+  const selectedVersion = source === 'version' ? versions.selected : null;
+  const { loadUrl, getSrcKey, pause: pausePlayer, clear: clearPlayer } = player;
+  useEffect(() => {
+    if (!selectedVersion?.url) {
+      // 選了「影片」但這首歌（還）沒有 → 上一首的影片不要繼續放
+      const k = getSrcKey();
+      if (source === 'version' && k && !k.startsWith('local:')) clearPlayer();
+      return;
+    }
+    if (getSrcKey() === selectedVersion.key) return;
+    loadUrl(selectedVersion.url, { key: selectedVersion.key, name: selectedVersion.label, crossOrigin: selectedVersion.crossOrigin });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVersion?.key, source, loadUrl, getSrcKey, clearPlayer]);
+
+  // 切來源：AE 即時 → 影片先暫停（不然聲音還會在背景播）；
+  // 回到本地檔案 → 正在放的那支被換掉了就重新載入；清單裡沒有影片 → 歌曲影片也先暫停
+  const { reshow: reshowMedia } = media;
+  useEffect(() => {
+    if (source === 'ndi') pausePlayer();
+    else if (source === 'file') {
+      reshowMedia();
+      if (!getSrcKey()?.startsWith('local:')) pausePlayer();
+    }
+  }, [source, pausePlayer, reshowMedia, getSrcKey]);
+
+  // 播放網址過期（開著超過幾小時）/ 網路斷掉 → 拿新網址接著同一秒播
+  const retryVersion = useCallback(async () => {
+    const r = await versions.reload();
+    const it = r?.items.find(x => x.key === selectedVersion?.key) ?? selectedVersion;
+    if (it?.url) player.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
+  }, [versions, selectedVersion, player]);
+
+  // 正在 LED 上放影片（歌曲影片 / 本地影片；不是圖片 / AE）→ 舞台、cue 列跟著影片時間走
+  const fileVideoMode = source === 'file' && media.active?.kind === 'video' && player.srcKey === localMediaKey(media.active.id);
+  const versionVideoMode = !!selectedVersion && player.srcKey === selectedVersion.key;
+  const videoMode = fileVideoMode || versionVideoMode;
+
+  // 拖進來 / 選的檔案加進本地檔案清單，第一個馬上放在 LED 上（只在這台電腦播，不上傳）
+  const addFiles = useCallback((files: FileList | File[] | null | undefined) => {
+    if (!files || files.length === 0) return;
+    const { rejected, shown } = media.add(Array.from(files));
+    const skipped = skippedFilesMessage(rejected);
+    if (skipped) toast.warn(skipped);
+    if (shown) chooseSource('file');
+  }, [media, chooseSource]);
+
+  // 影片時間軸要每個 cue 的位置（放影片時才抓；抓過的留著）
+  const statesCacheRef = useRef(new Map<string, Promise<CueState[]>>());
+  useEffect(() => { statesCacheRef.current = new Map(); }, [selectedSongId]);
+  const statesFor = useCallback((cueId: string) => {
+    if (!selectedSongId) return null;
+    const cache = statesCacheRef.current;
+    let p = cache.get(cueId);
+    if (!p) {
+      p = api.listCueStates(projectId, selectedSongId, cueId);
+      p.catch(() => cache.delete(cueId));  // 失敗就丟掉，下次再抓
+      cache.set(cueId, p);
+    }
+    return p;
+  }, [projectId, selectedSongId]);
+  const { poseAtFrame, selectCueByUser } = useVideoCueTimeline({
+    cues: cuesFor === selectedSongId ? masterCues : EMPTY_CUES,
+    statesFor,
+    resetKey: selectedSongId,
+    active: videoMode,
+    ready: player.ready,
+    video: player.video,
+    time: player.time,
+    selectedCueId,
+    onSelectCue: setSelectedCueId,
+    seek: player.seek,
+  });
+  /** 點 cue（cue 列、右邊清單、Shift+J/K）：有在放影片的話影片跳到那個 cue 的時間 */
+  const selectCueById = useCallback((id: string) => {
+    const c = masterCues.find(x => x.id === id);
+    if (c) selectCueByUser(c);
+  }, [masterCues, selectCueByUser]);
+
+  // ── 交影片（admin / 負責這首歌的動畫師；歌沒指派人 = 專案裡的動畫師都可以）──
+  const videoPerm = { accountRole: user?.role ?? null, projectRole, userId: user?.id ?? null, song: selectedSong };
+  const canAdd = canAddVideo(videoPerm);
+  const [addOpen, setAddOpen] = useState(false);
+  const allJobs = useVideoJobs(projectId);
+  const songJobs = useMemo(() => allJobs.filter(j => j.songId === selectedSongId), [allJobs, selectedSongId]);
+  useWarnBeforeUnloadWhileUploading();
+  const reloadVersions = versions.reload;
+  const selectVersionRef = useRef(versions.select);
+  selectVersionRef.current = versions.select;
+  // 交的影片好了 → 這首歌選到新的一版、放到 LED 上開始播（在別首歌的話，回去那首就是新的一版）
+  const onJobDone = useCallback((job: VideoJob) => {
+    if (job.projectId !== projectId) return;
+    const here = job.songId === selectedSongIdRef.current;
+    toast.success(`${job.songLabel}：${job.result?.label || '新的一版'} 好了${here ? '，正在 LED 上播' : ''}`);
+    if (here) {
+      chooseSource('version');
+      // 選到新的那一版（正在看的版本平常會固定住，自己交的要換過去）
+      void reloadVersions().then(() => { if (job.result) selectVersionRef.current(versionKey(job.result.id)); });
+    }
+    void reloadSongs();
+  }, [projectId, chooseSource, reloadVersions, reloadSongs]);
+  useVideoJobDone(onJobDone);
+
+  async function handleDeleteVersion(item: VersionItem) {
+    if (!selectedSong || !confirm(deleteVersionMessage(item))) return;
+    try {
+      await deleteSongVideo(projectId, selectedSong.id, item.id);
+      toast.success(`已刪除 ${item.label}`);
+      await versions.reload();
+      void reloadSongs();
+    } catch (e) {
+      toast.error('刪除失敗：' + friendlyError(e));
+    }
+  }
+  const canModifyPending = (v: SongVideo) => canModifyVideo({ ...videoPerm, item: { kind: 'version', byId: v.createdBy?.id ?? null } });
+  async function handleRetryPending(v: SongVideo) {
+    if (!selectedSong) return;
+    try { await retrySongVideo(projectId, selectedSong.id, v.id); await versions.reload(); }
+    catch (e) { toast.error('重試失敗：' + friendlyError(e)); }
+  }
+  async function handleRemovePending(v: SongVideo) {
+    if (!selectedSong) return;
+    const name = v.title || '這一版';
+    if (!confirm(v.status === 'failed' ? `把「${name}」從清單拿掉？` : `取消「${name}」？已經傳的部分會丟掉。`)) return;
+    try { await deleteSongVideo(projectId, selectedSong.id, v.id); await versions.reload(); }
+    catch (e) { toast.error('沒有成功：' + friendlyError(e)); }
+  }
 
   // ── Actions ──
 
@@ -365,22 +565,22 @@ function StudioInner({ projectId }: { projectId: string }) {
   async function handleSubmitForReview(song: Song, note: string): Promise<boolean> {
     if (!user) return false;
 
-    // Pre-flight check：強制觸發 Drive 同步一次，然後檢查這首歌有沒有影片
-    let hasVideo = false;
-    try {
-      toast.info('檢查 Drive 影片中…');
-      // 先試強制同步（worker 端如果該 project 沒設 Drive 會 500，吞掉繼續）
-      try { await api.syncDriveProject(projectId); } catch { /* 沒設 Drive 也 OK */ }
-      const allFiles = await api.listDriveProjectFiles(projectId);
-      hasVideo = allFiles.some(f => f.songId === song.id && (f.mimeType?.startsWith('video/')));
-    } catch { /* 抓失敗就不擋 */ }
+    // 先確認這首歌有影片：有交過版本（V1、V2…）就好；沒有的話看舊的 Drive 影片（先同步一次）
+    let hasVideo = !!song.latestVideoId;
+    if (!hasVideo) {
+      try {
+        // 先試強制同步（worker 端如果該 project 沒設 Drive 會 500，吞掉繼續）
+        try { await api.syncDriveProject(projectId); } catch { /* 沒設 Drive 也 OK */ }
+        const allFiles = await api.listDriveProjectFiles(projectId);
+        hasVideo = allFiles.some(f => f.songId === song.id && (f.mimeType?.startsWith('video/')));
+      } catch { /* 抓失敗就不擋 */ }
+    }
 
     if (!hasVideo) {
       const ok = confirm(
-        `這首歌「${song.name}」目前還沒有影片在平台上。\n\n` +
-        `導演看到的可能會是空的。\n\n` +
-        `你確定要繼續提交嗎？\n\n` +
-        `（如果你剛上傳到 Drive，可能需要再等 5 分鐘讓平台同步，或關掉這個視窗等一下再試）`
+        `這首歌「${song.name}」還沒有影片。\n\n` +
+        `導演看到的會是空的，建議先按「加影片」交一版。\n\n` +
+        `還是要提交嗎？`
       );
       if (!ok) return false;
     }
@@ -426,7 +626,7 @@ function StudioInner({ projectId }: { projectId: string }) {
         const next = k === 'j'
           ? (idx < 0 ? 0 : Math.min(idx + 1, masterCues.length - 1))
           : (idx <= 0 ? 0 : idx - 1);
-        setSelectedCueId(masterCues[next].id);
+        selectCueByUser(masterCues[next]);
       } else {
         if (!visibleSongs.length) return;
         const idx = visibleSongs.findIndex(s => s.id === selectedSongId);
@@ -438,7 +638,7 @@ function StudioInner({ projectId }: { projectId: string }) {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [masterCues, visibleSongs, selectedCueId, selectedSongId]);
+  }, [masterCues, visibleSongs, selectedCueId, selectedSongId, selectCueByUser]);
 
   const topBar = (
     <header className="studio-top">
@@ -530,8 +730,7 @@ function StudioInner({ projectId }: { projectId: string }) {
 
           <ul className="studio-songs__list">
             {visibleSongs.map(s => {
-              const list = commentsBySong.get(s.id) || [];
-              const unread = user ? songUnread(user.id, projectId, s.id, list, user) : 0;
+              const unread = unreadOf(s.id);
               return (
                 <li key={s.id}>
                   <button
@@ -539,7 +738,10 @@ function StudioInner({ projectId }: { projectId: string }) {
                     onClick={() => setSelectedSongId(s.id)}
                   >
                     <span className={'status-dot status-dot--' + s.status} title={STATUS_LABEL[s.status]} />
-                    <span className="studio-songs__item-name">{s.name}</span>
+                    <span className="studio-songs__item-name">
+                      {s.code && <span className="song-code" title="歌曲代號">{s.code}</span>}
+                      {s.name}
+                    </span>
                     {unread > 0 && (
                       <span className="studio-songs__item-unread" title={`${unread} 則新留言`}>
                         <CommentIcon />{unread}
@@ -555,11 +757,72 @@ function StudioInner({ projectId }: { projectId: string }) {
           <div className="studio-songs__hint">
             <kbd>J</kbd>/<kbd>K</kbd> 切歌 · <kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd> 切 cue
           </div>
+
+          {/* 本地檔案清單（選了「本地檔案」才有）：跟分享頁一樣，點哪個 LED 就放哪個，只在這台電腦播 */}
+          {source === 'file' && (
+            <ShareSetlist
+              items={media.items}
+              activeId={media.active?.id ?? null}
+              activePlaying={player.playing}
+              activeDuration={player.duration}
+              fileDragOver={dragOver}
+              onSelect={media.select}
+              onRemove={media.remove}
+              onMove={media.move}
+              onAddFiles={addFiles}
+            />
+          )}
         </aside>
 
-        <main className="studio-stage">
+        <main
+          className="studio-stage"
+          onDragOver={(e) => { if (selectedSong && e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragOver(true); } }}
+          onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); }}
+          onDrop={(e) => {
+            if (!e.dataTransfer.types.includes('Files')) return;
+            e.preventDefault();
+            setDragOver(false);
+            addFiles(e.dataTransfer.files);
+          }}
+        >
           {selectedSong ? (
             <>
+              <LedSourceSwitch
+                source={source}
+                onChange={chooseSource}
+                showVersion
+                versionLabel={versions.items[0]?.label ?? (selectedSong.latestVideoVersion ? `V${selectedSong.latestVideoVersion}` : null)}
+                status={source === 'ndi'
+                  ? (!ndiGuide ? '連線中…'
+                    : ndiGuide.step === 'live'
+                    ? <><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiGuide.source ?? 'AE'}{ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}</>
+                    : ndiShortLabel(ndiGuide))
+                  : source === 'version'
+                  ? (selectedVersion
+                    ? `${player.playing ? '播放中' : '暫停'} · ${selectedVersion.label}${selectedVersion.title ? ` · ${selectedVersion.title}` : ''}`
+                    : versions.status === 'loading' ? '讀取影片中…' : '這首歌還沒有影片')
+                  : media.active?.kind === 'video' ? <><Icon icon={player.playing ? Play : Pause} size="xs" /> {media.active.name}</>
+                  : media.active ? <><Icon icon={Image} size="xs" /> {media.active.name}</>
+                  : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
+              />
+              {/* 這首歌交上來的影片：V3、V2、V1…（點哪一版就放到 LED 上）＋ 加影片 */}
+              <SongVersionBar
+                status={versions.status}
+                error={versions.error}
+                items={versions.items}
+                selectedKey={source === 'version' ? (versions.selected?.key ?? null) : null}
+                onSelect={(key) => { versions.select(key); chooseSource('version'); }}
+                pending={versions.pending}
+                jobs={songJobs}
+                onRetryLoad={() => { void versions.reload(); }}
+                onAdd={canAdd ? () => setAddOpen(true) : undefined}
+                canDelete={(it) => canModifyVideo({ ...videoPerm, item: it })}
+                onDelete={handleDeleteVersion}
+                canModifyPending={canModifyPending}
+                onRetryPending={handleRetryPending}
+                onRemovePending={handleRemovePending}
+                emptyText={canAdd ? '還沒有影片，按右邊「加影片」交第一版給導演看' : '這首歌還沒有影片'}
+              />
               <div className="studio-stage__scene">
                 <StageScene
                   key={`${projectId}:${selectedSongId}`}
@@ -572,8 +835,13 @@ function StudioInner({ projectId }: { projectId: string }) {
                   modelUrl={modelUrl}
                   readOnly
                   defaultRenderMode="live"
-                  enableNdi
+                  enableNdi={source === 'ndi'}
+                  onNdiStatus={setNdiGuide}
                   ndiGuide
+                  ndiGuideHint="沒有 AE？按上面的「本地檔案」把影片放到 LED 上，或按「加影片」交給導演看"
+                  ledVideo={videoMode && player.ready ? player.video : null}
+                  ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
+                  poseAtFrame={poseAtFrame}
                   cueKey={selectedCueId}
                   crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                   bookmarkScope={projectId}
@@ -591,7 +859,80 @@ function StudioInner({ projectId }: { projectId: string }) {
                   onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
                   onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                 />
+                {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
+                {selectedVersion && (
+                  <MiniPlayer
+                    player={player}
+                    label={selectedVersion.label}
+                    detail={versionByline(selectedVersion) || selectedVersion.title}
+                    storageKey="sp_mini_player:studio"
+                    onRetry={retryVersion}
+                  />
+                )}
+                {dragOver && (
+                  <div className="share-overlay share-overlay--drop">放開，影片 / 圖片會加進本地檔案清單、放在 LED 上（只在這台電腦播，不會上傳）</div>
+                )}
+                {!dragOver && source === 'version' && versions.status === 'ready' && versions.items.length === 0 && (
+                  <div className="share-overlay">
+                    <strong>這首歌還沒有影片</strong>
+                    {canAdd ? (
+                      <>
+                        <span>交一版影片，導演就能在 LED 上看到（V1、V2… 會自動編號）。</span>
+                        <button type="button" className="btn btn--primary" onClick={() => setAddOpen(true)} style={{ alignSelf: 'flex-start' }}>加影片</button>
+                      </>
+                    ) : (
+                      <span>負責這首歌的動畫師交了影片之後，這裡會自動出現。</span>
+                    )}
+                  </div>
+                )}
+                {!dragOver && source === 'file' && media.items.length === 0 && (
+                  <div className="share-overlay">
+                    <strong>把影片或圖片拖進來，或按左邊「加入影片 / 圖片…」</strong>
+                    <span>只在這台電腦放到 LED 上，不會上傳、別人看不到。要給導演看請按「加影片」。</span>
+                    <span className="share-overlay__hint">畫面要是跟 AE 送 NDI 時一樣的整張畫布，才會對到每一片 LED。</span>
+                  </div>
+                )}
+                {!dragOver && source === 'file' && media.active && (media.active.kind === 'video' ? player.error : media.imageError) && (
+                  <div className="share-overlay share-overlay--error">
+                    <strong><Icon icon={TriangleAlert} /> {media.active.kind === 'video' ? player.error : media.imageError}</strong>
+                  </div>
+                )}
               </div>
+              {/* 本地影片的播放列（跟分享頁一樣） */}
+              {fileVideoMode && media.active && (
+                <div className="share-player">
+                  <button className="share-player__btn" onClick={player.togglePlay} title={player.playing ? '暫停' : '播放'} aria-label={player.playing ? '暫停' : '播放'}>
+                    <Icon icon={player.playing ? Pause : Play} />
+                  </button>
+                  <span className="share-player__time">{formatClock(player.time)} / {formatClock(player.duration)}</span>
+                  <input
+                    className="share-player__seek"
+                    type="range" min={0} max={player.duration || 0} step={0.01}
+                    value={Math.min(player.time, player.duration || 0)}
+                    onChange={(e) => player.seek(parseFloat(e.target.value))}
+                    aria-label="影片時間"
+                  />
+                  <button
+                    className={'share-player__btn' + (player.loop ? ' is-active' : '')}
+                    onClick={() => player.setLoop(!player.loop)}
+                    title={player.loop ? '循環播放：開' : '循環播放：關'}
+                    aria-label={player.loop ? '循環播放：開' : '循環播放：關'}
+                  ><Icon icon={Repeat} /></button>
+                  <button
+                    className="share-player__btn"
+                    onClick={() => player.setMuted(!player.muted)}
+                    title={player.muted ? '開聲音' : '靜音'}
+                    aria-label={player.muted ? '開聲音' : '靜音'}
+                  ><Icon icon={player.muted ? VolumeX : Volume2} /></button>
+                  <span className="share-player__name" title={media.active.name}>{media.active.name}</span>
+                  <button
+                    className="share-player__btn"
+                    onClick={() => { if (media.active) media.remove(media.active.id); }}
+                    title="從清單移除這支影片"
+                    aria-label="從清單移除這支影片"
+                  ><Icon icon={X} /></button>
+                </div>
+              )}
               {masterCues.length > 0 && (
                 <div className="studio-cuebar">
                   <span className="studio-cuebar__label">Cue</span>
@@ -600,7 +941,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     onClick={() => {
                       const idx = masterCues.findIndex(c => c.id === selectedCueId);
                       const next = idx <= 0 ? masterCues.length - 1 : idx - 1;
-                      setSelectedCueId(masterCues[next].id);
+                      selectCueByUser(masterCues[next]);
                     }}
                     title="上一個 cue (Shift+K)"
                     aria-label="上一個 cue"
@@ -610,8 +951,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                       <button
                         key={c.id}
                         className={'studio-cuebar__cue' + (c.id === selectedCueId ? ' is-active' : '')}
-                        onClick={() => setSelectedCueId(c.id)}
-                        title={c.name}
+                        onClick={() => selectCueByUser(c)}
+                        title={c.videoTimeSec != null ? `${c.name}（影片 ${formatClock(c.videoTimeSec)}）` : c.name}
                       >
                         <span className="studio-cuebar__num">{i + 1}</span>
                         <span className="studio-cuebar__name">{c.name}</span>
@@ -623,7 +964,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     onClick={() => {
                       const idx = masterCues.findIndex(c => c.id === selectedCueId);
                       const next = idx < 0 ? 0 : (idx + 1) % masterCues.length;
-                      setSelectedCueId(masterCues[next].id);
+                      selectCueByUser(masterCues[next]);
                     }}
                     title="下一個 cue (Shift+J)"
                     aria-label="下一個 cue"
@@ -666,7 +1007,7 @@ function StudioInner({ projectId }: { projectId: string }) {
               <CuesTab
                 cues={masterCues}
                 selectedCueId={selectedCueId}
-                onSelectCue={setSelectedCueId}
+                onSelectCue={selectCueById}
                 emptyHint={
                   !selectedSong ? '先挑一首歌'
                   : cuesStatus === 'loading' ? <><Icon icon={LoaderCircle} spin /> 載入 cue 中…</>
@@ -703,6 +1044,18 @@ function StudioInner({ projectId }: { projectId: string }) {
           </div>
         </aside>
       </div>
+
+      {addOpen && selectedSong && (
+        <AddVideoDialog
+          open
+          onClose={() => setAddOpen(false)}
+          projectId={projectId}
+          song={selectedSong}
+          jobs={songJobs}
+          canUpload={canAdd}
+          onLocalFiles={(files) => addFiles(files)}
+        />
+      )}
     </div>
   );
 }

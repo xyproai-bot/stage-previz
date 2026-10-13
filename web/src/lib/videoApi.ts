@@ -326,6 +326,9 @@ export function readVideoFileMeta(file: Blob, timeoutMs = 8000): Promise<{ width
     const finish = (v: { width?: number; height?: number; durationSec?: number }) => {
       if (done) return;
       done = true;
+      // 先停掉這個暫時的播放器再收網址（不然它還會去讀已經收掉的網址，主控台會跳錯）
+      el.removeAttribute('src');
+      el.load();
       URL.revokeObjectURL(url);
       resolve(v);
     };

@@ -155,34 +155,19 @@
   min-height: 0;
 }
 .share-stage > .stage-scene { flex: 1; }
-.share-video-pane {
-  background: #000;
-  border-bottom: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  flex-shrink: 0;
-  max-height: 45vh;
+/* 3D 畫面（小播放器浮在這裡面，不會蓋到下面的 cue 列） */
+.share-stage__scene {
+  flex: 1;
   position: relative;
+  min-height: 0;
 }
-.share-video-pane__select {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 5;
-  background: rgba(0, 0, 0, 0.7);
-  color: var(--text);
-  border: 1px solid var(--border-strong);
-  padding: 4px 10px;
-  border-radius: 4px;
-  font-size: 12px;
+.share-songs__code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-right: 6px;
 }
-.share-video {
-  width: 100%;
-  max-height: 45vh;
-  display: block;
-  background: #000;
-}
-
+.share-songs__item.is-active .share-songs__code { color: inherit; opacity: 0.75; }
 .share-empty {
   flex: 1;
   display: flex;
@@ -249,45 +234,6 @@
   /* 沒有左邊欄（只有一首歌、沒選本地檔案）：舞台吃滿高度（不然會被塞進上面那一列） */
   .share-body:not(:has(> .share-side)),
   .share-body:has(> .share-side:empty) { grid-template-rows: minmax(0, 1fr); }
-}
-
-/* ── LED 畫面來源（AE 即時 / 本地影片）── */
-.share-source {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 14px;
-  background: var(--surface-1);
-  border-bottom: 1px solid var(--border);
-  font-size: 12.5px;
-  flex-shrink: 0;
-}
-.share-source .grow { flex: 1; }
-.share-source__switch {
-  display: flex;
-  border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.share-source__switch button {
-  background: transparent;
-  border: none;
-  color: var(--text-dim);
-  padding: 5px 12px;
-  font-size: 12.5px;
-}
-.share-source__switch button + button { border-left: 1px solid var(--border-strong); }
-.share-source__switch button.is-active {
-  background: var(--accent);
-  color: #000;
-  font-weight: 600;
-}
-.share-source__status {
-  color: var(--text-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
 }
 
 /* ── 左邊「本地檔案」清單（像演唱會歌單：1、2、3… 縮圖 + 檔名，點哪個 LED 就放哪個，拖曳排順序）── */
@@ -598,7 +544,6 @@
 }
 
 @media (max-width: 640px) {
-  .share-source { flex-wrap: wrap; }
   .share-top { gap: 10px; padding: 8px 12px; }
   .share-top__hint { display: none; }
   .share-player__name { display: none; }

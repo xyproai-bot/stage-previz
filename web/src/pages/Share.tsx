@@ -1,27 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import * as api from '../lib/api';
-import type { Cue, CueState, SharePublicData, ShareRef, ShareVideo } from '../lib/api';
+import type { Cue, CueState, SharePublicData, ShareRef } from '../lib/api';
 import StageScene from '../components/StageScene';
+import MiniPlayer from '../components/MiniPlayer';
+import SongVersionBar, { versionByline } from '../components/SongVersionBar';
+import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
 import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
 import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import { normalizeHomeView } from '../lib/homeView';
-import { formatClock } from '../lib/localVideo';
-import { skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
+import { formatClock, useLocalVideo } from '../lib/localVideo';
+import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { toast } from '../lib/toast';
-import { cueTransitionSeconds, videoCueSelection } from '../lib/cueTiming';
-import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
+import { cueTransitionSeconds } from '../lib/cueTiming';
+import { useVideoCueTimeline } from '../lib/videoCueSync';
+import { shareVersionFetcher, useSongVersions, type VersionFetcher } from '../lib/useSongVersions';
+import { versionChoiceStorageKey } from '../lib/songVersions';
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { helpUrl } from '../lib/helpLinks';
 import ShareSetlist from './ShareSetlist';
 import Icon from '../components/Icon';
 import {
-  BookOpen, FolderOpen, Image, LoaderCircle, Lock, Pause, Play, Radio, Repeat, TriangleAlert, Volume2, VolumeX, X,
+  BookOpen, Image, LoaderCircle, Lock, Pause, Play, Repeat, TriangleAlert, Volume2, VolumeX, X,
 } from 'lucide-react';
 import './Share.css';
 
-/** LED 畫面來源：AE 即時（NDI 小程序）或本地檔案（拖進來的影片 / 圖片，只在這台電腦播） */
-type LedSource = 'ndi' | 'file';
+/** 記住這台電腦上次選的來源（影片 / AE 即時 / 本地檔案） */
+const SOURCE_KEY = 'sp_led_source:share';
 
 /** 這首歌每個 cue 的舞台位置先全部開始抓（點 cue / 影片走到那裡時馬上有） */
 function prefetchCueStates(ref: ShareRef, songId: string, list: Cue[], access: string | undefined) {
@@ -39,7 +44,8 @@ const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringif
 /**
  * 公開分享連結 viewer — 無需登入。
  * 路由：/share/:token（舊式網址）或 /s/:slug（好讀網址），畫面一模一樣
- * 動畫師拿到這個連結：開著 AE → LED 顯示 AE 即時畫面；沒開 AE → 拖影片 / 圖片進來放在 LED 上
+ * 有交影片的歌 → LED 放最新的一版（V3…）；動畫師開著 AE → 按「AE 即時」看即時畫面；
+ * 沒開 AE → 拖影片 / 圖片進來放在 LED 上（本地檔案）
  */
 export default function Share() {
   const { token, slug } = useParams();
@@ -58,42 +64,32 @@ export default function Share() {
   const [accessToken, setAccessToken] = useState<string | null>(null);
   /** 密碼框下面的提示（密碼不對 / 錯太多次被擋） */
   const [pwdError, setPwdError] = useState<string | null>(null);
+  // 抓影片清單時也要能換通行證（下面才定義，先用 ref 接）
+  const onShareFetchErrorRef = useRef<(e: unknown) => void>(() => {});
 
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [cueStates, setCueStates] = useState<CueState[]>([]);
-  const [videos, setVideos] = useState<ShareVideo[]>([]);
-  const [selectedVideoFid, setSelectedVideoFid] = useState<string | null>(null);
 
   // ── LED 畫面來源 ──
-  const media = useLocalMedia();
-  const local = media.player;
-  const [source, setSource] = useState<LedSource>('ndi');
+  // 一頁只有一個 <video>：歌曲影片、本地檔案輪流用它（同時是 LED 貼圖、也是小視窗的畫面）
+  const local = useLocalVideo();
+  const media = useLocalMedia(local);
+  // 上次選的來源；沒選過 = 有影片就放影片，沒有就 AE 即時
+  const [sourcePref, setSourcePref] = useState<LedSource | null>(() => readLedSource(SOURCE_KEY));
   // AE 即時現在卡在哪一步（3D 畫面上的檢查清單卡片會帶著做；這裡只顯示一句狀態）
   const [ndiGuide, setNdiGuide] = useState<NdiGuide | null>(null);
   const [dragOver, setDragOver] = useState(false);
-  const lastAutoCueRef = useRef<string | null>(null);
   // 這首歌每個 cue 的舞台位置先全部抓好 → 點 cue 馬上開始動，不用等網路
   const cueStatesCacheRef = useRef<Map<string, Promise<CueState[]>>>(new Map());
   // 分頁切回來重抓 cue 時 +1 → 舞台位置、影片時間軸跟著換新的
   const [cueRefresh, setCueRefresh] = useState(0);
-  // 影片時間軸：有影片時間的 cue 的移動時段 + 每個 cue 的物件位置（先算好，每幀直接拿）
-  const timelineRef = useRef<{ windows: CueWindow[]; poses: Map<string, CuePoseMap>; timedIds: Set<string> } | null>(null);
-  // 每幀要讀的值（不經過 React）
-  // 正在 LED 上放本地影片（不是圖片 / AE）→ 影片時間軸、自動切 cue 才開
-  const videoMode = source === 'file' && media.active?.kind === 'video' && !!local.fileName;
-  const videoModeRef = useRef(videoMode);
-  videoModeRef.current = videoMode;
-  const videoReadyRef = useRef(local.ready);
-  videoReadyRef.current = local.ready;
-  const selectedCueIdRef = useRef(selectedCueId);
-  selectedCueIdRef.current = selectedCueId;
 
-  // 切到 AE 即時 → 本地影片先暫停（不然聲音還會在背景播）
-  useEffect(() => {
-    if (source === 'ndi') local.video.pause();
-  }, [source, local.video]);
+  const chooseSource = useCallback((s: LedSource) => {
+    setSourcePref(s);
+    saveLedSource(SOURCE_KEY, s);
+  }, []);
 
   // 拖進來 / 選的檔案加進清單，第一個馬上放在 LED 上；不是影片或圖片的略過
   const addFiles = useCallback((files: FileList | null | undefined) => {
@@ -101,8 +97,65 @@ export default function Share() {
     const { rejected, shown } = media.add(Array.from(files));
     const skipped = skippedFilesMessage(rejected);
     if (skipped) toast.warn(skipped);
-    if (shown) setSource('file');
-  }, [media]);
+    if (shown) chooseSource('file');
+  }, [media, chooseSource]);
+
+  // ── 歌曲影片（最新的可播版本；沒有的話舊的 Drive 影片）──
+  const fetchVersions = useMemo<VersionFetcher | null>(() => {
+    if (!shareRef) return null;
+    const f = shareVersionFetcher(shareRef, accessToken ?? undefined);
+    return (songId) => f(songId).catch((e) => { onShareFetchErrorRef.current(e); throw e; });
+  }, [shareRef, accessToken]);
+  const projectIdForKey = data?.project.id ?? '';
+  const versionStorageKey = useCallback(
+    (songId: string) => versionChoiceStorageKey(`share:${shareRef?.key ?? ''}`, projectIdForKey, songId),
+    [shareRef, projectIdForKey],
+  );
+  const versions = useSongVersions({
+    songId: data ? selectedSongId : null,
+    fetcher: fetchVersions,
+    storageKey: versionStorageKey,
+    reloadKey: cueRefresh,
+  });
+  const hasVideo = versions.items.length > 0;
+  const versionsSettled = versions.status !== 'loading';
+  // 選了「影片」（或沒選過）但這首歌沒有影片 → AE 即時；還在讀清單時先不要跳（不然 AE 即時的卡片會閃一下）
+  const source: LedSource = sourcePref === 'ndi' || sourcePref === 'file'
+    ? sourcePref
+    : (hasVideo || !versionsSettled ? 'version' : 'ndi');
+  const selectedVersion = source === 'version' ? versions.selected : null;
+
+  // 切到某一版 → 載進播放器（同一版不重載，不會從頭播）
+  useEffect(() => {
+    if (!selectedVersion?.url) return;
+    if (local.getSrcKey() === selectedVersion.key) return;
+    local.loadUrl(selectedVersion.url, { key: selectedVersion.key, name: selectedVersion.label, crossOrigin: selectedVersion.crossOrigin });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedVersion?.key, local.loadUrl, local.getSrcKey]);
+
+  // 切來源：AE 即時 → 影片先暫停（不然聲音還會在背景播）；
+  // 回到本地檔案 → 正在放的那支被換掉了就重新載入；清單裡沒有影片 → 歌曲影片也先暫停
+  const { pause: pausePlayer, getSrcKey } = local;
+  const { reshow: reshowMedia } = media;
+  useEffect(() => {
+    if (source === 'ndi') pausePlayer();
+    else if (source === 'file') {
+      reshowMedia();
+      if (!getSrcKey()?.startsWith('local:')) pausePlayer();
+    }
+  }, [source, pausePlayer, reshowMedia, getSrcKey]);
+
+  // 影片播放網址過期 / 網路斷掉 → 拿新網址接著同一秒播
+  const retryVersion = useCallback(async () => {
+    const r = await versions.reload();
+    const it = r?.items.find(x => x.key === selectedVersion?.key) ?? versions.selected;
+    if (it?.url) local.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
+  }, [versions, selectedVersion?.key, local]);
+
+  // 正在 LED 上放影片（歌曲影片 / 本地影片；不是圖片 / AE）→ 影片時間軸、自動切 cue 才開
+  const fileVideoMode = source === 'file' && media.active?.kind === 'video' && local.srcKey === localMediaKey(media.active.id);
+  const versionVideoMode = !!selectedVersion && local.srcKey === selectedVersion.key;
+  const videoMode = fileVideoMode || versionVideoMode;
 
   // 本地檔案：↑ / ↓ 換清單上一個 / 下一個（焦點在輸入框、拉桿、走路模式時不搶方向鍵）
   const stepMedia = media.step;
@@ -173,26 +226,20 @@ export default function Share() {
       })
       .finally(() => { renewingRef.current = false; });
   }, [shareRef]);
+  onShareFetchErrorRef.current = onShareFetchError;
 
-  // 切歌 → 拉 cues + videos
+  // 切歌 → 拉 cues（影片清單在 useSongVersions）
   useEffect(() => {
     if (!shareRef || !selectedSongId) return;
     let cancelled = false;
     const access = accessToken ?? undefined;
     cueStatesCacheRef.current = new Map();
-    timelineRef.current = null;  // 上一首歌的時間軸不要套到這首
     api.getShareSongCues(shareRef, selectedSongId, access).then(list => {
       if (cancelled) return;
       cueStatesCacheRef.current = prefetchCueStates(shareRef, selectedSongId, list, access);
-      lastAutoCueRef.current = null;  // 新的一首歌 → 影片時間重新對 cue
-      setCues(list);
+      setCues(list);  // 新的一首歌 → 影片時間重新對 cue（useVideoCueTimeline）
       setSelectedCueId(list[0]?.id ?? null);
     }).catch((e) => { if (!cancelled) { setCues([]); onShareFetchError(e); } });
-    api.getShareSongVideos(shareRef, selectedSongId, access).then(list => {
-      if (cancelled) return;
-      setVideos(list);
-      setSelectedVideoFid(list[0]?.driveFileId ?? null);
-    }).catch((e) => { if (!cancelled) { setVideos([]); onShareFetchError(e); } });
     return () => { cancelled = true; };
   }, [shareRef, selectedSongId, accessToken, onShareFetchError]);
 
@@ -241,24 +288,6 @@ export default function Share() {
     return () => { cancelled = true; };
   }, [shareRef, selectedSongId, selectedCueId, accessToken, cueRefresh, onShareFetchError]);
 
-  // 影片時間軸要用的：每個有影片時間的 cue 的物件位置（用先抓好的；全部到了才換上，換之前沿用舊的）
-  useEffect(() => {
-    const windows = cueWindows(cues);
-    if (windows.length === 0) { timelineRef.current = null; return; }
-    let cancelled = false;
-    const cache = cueStatesCacheRef.current;
-    Promise.all(windows.map(w => {
-      const p = cache.get(w.cueId);
-      return p ? p.then(states => [w.cueId, cuePoses(states)] as const, () => null) : null;
-    })).then(entries => {
-      if (cancelled) return;
-      const poses = new Map<string, CuePoseMap>();
-      for (const e of entries) if (e) poses.set(e[0], e[1]);
-      timelineRef.current = { windows, poses, timedIds: new Set(windows.map(w => w.cueId)) };
-    });
-    return () => { cancelled = true; };
-  }, [cues, cueRefresh]);
-
   // 沒選 cue 時用 default
   const viewportStates: CueState[] = useMemo(() => {
     if (selectedCueId && cueStates.length > 0) return cueStates;
@@ -283,35 +312,23 @@ export default function Share() {
   const materialOverrides = useMemo(() => normalizeMaterialOverrides(data?.materialOverrides), [data]);
   const homeView = useMemo(() => normalizeHomeView(data?.homeView ?? null), [data]);
 
-  // ── 本地影片播到某秒 → cue 列亮的跟著影片時間（cue 有設「對應影片時間」才會動）──
-  // 亮的永遠跟舞台一致：舞台照時間軸擺時亮 cueAtTime；手動點了沒設時間的 cue → 舞台照那個 cue，
-  // 留到影片走進下一段才回到時間軸（規則在 videoCueSelection）
-  useEffect(() => {
-    if (!videoMode) return;
-    const next = videoCueSelection(cues, local.time, selectedCueId, lastAutoCueRef.current);
-    lastAutoCueRef.current = next.targetId;
-    if (next.selectedId !== selectedCueId) setSelectedCueId(next.selectedId);
-  }, [videoMode, local.time, cues, selectedCueId]);
-
-  // 手動點 cue → 有影片的話跳到那個 cue 的時間
-  const selectCue = useCallback((cue: Cue) => {
-    setSelectedCueId(cue.id);
-    if (videoMode && cue.videoTimeSec != null) {
-      lastAutoCueRef.current = cue.id;
-      local.seek(cue.videoTimeSec);
-    }
-  }, [videoMode, local]);
-
-  // 播本地影片時，舞台每一幀照影片時間擺：cue 在「對應影片時間」剛好到位，提前「淡入淡出時間」等速出發。
-  // 暫停就停在半路、拉時間軸就跟著退。AE 即時 / 放圖片 / 沒影片 / 沒有 cue 設影片時間 / 點了沒設時間的 cue → null（照舊點 cue 滑過去）
-  const poseAtFrame = useCallback((): CuePoseMap | null => {
-    if (!videoModeRef.current || !videoReadyRef.current) return null;
-    const tl = timelineRef.current;
-    if (!tl) return null;
-    const sel = selectedCueIdRef.current;
-    if (sel && !tl.timedIds.has(sel)) return null;
-    return poseAtTime(tl.windows, tl.poses, local.video.currentTime);
-  }, [local.video]);
+  // ── LED 上在放影片（歌曲影片 / 本地影片）→ 舞台、cue 列跟著影片時間走 ──
+  // cue 在「對應影片時間」剛好到位，提前「轉場」秒數等速出發；暫停就停在半路、拉時間軸就跟著退。
+  // 手動點了沒設時間的 cue → 舞台照那個 cue，留到影片走進下一段才回到時間軸（規則在 videoCueSync）
+  const statesFor = useCallback((id: string) => cueStatesCacheRef.current.get(id) ?? null, []);
+  const { poseAtFrame, selectCueByUser: selectCue } = useVideoCueTimeline({
+    cues,
+    statesFor,
+    refreshKey: cueRefresh,
+    resetKey: selectedSongId,
+    active: videoMode,
+    ready: local.ready,
+    video: local.video,
+    time: local.time,
+    selectedCueId,
+    onSelectCue: setSelectedCueId,
+    seek: local.seek,
+  });
 
   if (loading) return <div className="share-loading"><Icon icon={LoaderCircle} size="lg" spin /> 載入中…</div>;
 
@@ -380,7 +397,10 @@ export default function Share() {
                       <button
                         className={'share-songs__item' + (s.id === selectedSongId ? ' is-active' : '')}
                         onClick={() => setSelectedSongId(s.id)}
-                      >{s.name}</button>
+                      >
+                        {s.code && <span className="share-songs__code">{s.code}</span>}
+                        {s.name}
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -403,73 +423,76 @@ export default function Share() {
         )}
 
         <main className="share-stage">
-          <div className="share-source">
-            <div className="share-source__switch">
-              <button className={source === 'ndi' ? 'is-active' : ''} onClick={() => setSource('ndi')}><Icon icon={Radio} /> AE 即時</button>
-              <button className={source === 'file' ? 'is-active' : ''} onClick={() => setSource('file')}><Icon icon={FolderOpen} /> 本地檔案</button>
-            </div>
-            <span className="share-source__status">
-              {source === 'ndi'
-                ? (!ndiGuide ? '連線中…'
-                  : ndiGuide.step === 'live'
-                  ? <><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiGuide.source ?? 'AE'}{ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}</>
-                  : ndiShortLabel(ndiGuide))
-                : media.active?.kind === 'video' ? <><Icon icon={local.playing ? Play : Pause} size="xs" /> {media.active.name}</>
-                : media.active ? <><Icon icon={Image} size="xs" /> {media.active.name}</>
-                : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
-            </span>
-          </div>
+          <LedSourceSwitch
+            source={source}
+            onChange={chooseSource}
+            showVersion={hasVideo}
+            versionLabel={versions.items[0]?.label ?? null}
+            status={source === 'ndi'
+              ? (!ndiGuide ? '連線中…'
+                : ndiGuide.step === 'live'
+                ? <><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiGuide.source ?? 'AE'}{ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}</>
+                : ndiShortLabel(ndiGuide))
+              : source === 'version'
+              ? (selectedVersion
+                ? `${local.playing ? '播放中' : '暫停'} · ${selectedVersion.label}${selectedVersion.title ? ` · ${selectedVersion.title}` : ''}`
+                : versions.status === 'loading' ? '讀取影片中…' : '這首歌還沒有影片')
+              : media.active?.kind === 'video' ? <><Icon icon={local.playing ? Play : Pause} size="xs" /> {media.active.name}</>
+              : media.active ? <><Icon icon={Image} size="xs" /> {media.active.name}</>
+              : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
+          />
 
-          {videos.length > 0 && selectedVideoFid && (
-            <div className="share-video-pane">
-              {videos.length > 1 && (
-                <select
-                  className="share-video-pane__select"
-                  value={selectedVideoFid}
-                  onChange={e => setSelectedVideoFid(e.target.value)}
-                >
-                  {videos.map((v, i) => (
-                    <option key={v.driveFileId} value={v.driveFileId}>
-                      {i === 0 ? '最新 · ' : `V${videos.length - i} · `}{v.filename}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <video
-                key={selectedVideoFid}
-                className="share-video"
-                src={api.apiBase() + videos.find(v => v.driveFileId === selectedVideoFid)!.streamUrl}
-                controls
-                preload="metadata"
-              />
-            </div>
-          )}
-          {selectedSongId && data.stageObjects.length > 0 ? (
-            <StageScene
-              key={selectedSongId}
-              states={viewportStates}
-              stageObjects={data.stageObjects}
-              selectedObjectIds={[]}
-              onSelect={() => {}}
-              onTransform={() => {}}
-              cueName={selectedCue?.name}
-              modelUrl={data.modelUrl ? api.apiBase() + data.modelUrl : null}
-              toolbarMode="viewer"
-              cueKey={selectedCueId}
-              crossfadeSeconds={cueTransitionSeconds(selectedCue)}
-              scaleCorrection={data.scaleCorrection ?? 1}
-              mechanismOffsets={data.mechanismOffsets}
-              lookSettings={projectLook}
-              materialOverrides={materialOverrides}
-              homeView={homeView}
-              enableNdi={source === 'ndi'}
-              onNdiStatus={setNdiGuide}
-              ndiGuide
-              ndiGuideHint="沒有 AE？按上面的「本地檔案」把影片或圖片拖進來"
-              ledVideo={videoMode && local.ready ? local.video : null}
-              ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
-              poseAtFrame={poseAtFrame}
+          {/* 分享連結看得到最新的一版；舊的 Drive 影片有好幾個時可以選 */}
+          {source === 'version' && hasVideo && (
+            <SongVersionBar
+              status={versions.status}
+              error={versions.error}
+              items={versions.items}
+              selectedKey={selectedVersion?.key ?? null}
+              onSelect={versions.select}
+              pending={[]}
+              jobs={[]}
             />
+          )}
+
+          {selectedSongId && data.stageObjects.length > 0 ? (
+            <div className="share-stage__scene">
+              <StageScene
+                key={selectedSongId}
+                states={viewportStates}
+                stageObjects={data.stageObjects}
+                selectedObjectIds={[]}
+                onSelect={() => {}}
+                onTransform={() => {}}
+                cueName={selectedCue?.name}
+                modelUrl={data.modelUrl ? api.apiBase() + data.modelUrl : null}
+                toolbarMode="viewer"
+                cueKey={selectedCueId}
+                crossfadeSeconds={cueTransitionSeconds(selectedCue)}
+                scaleCorrection={data.scaleCorrection ?? 1}
+                mechanismOffsets={data.mechanismOffsets}
+                lookSettings={projectLook}
+                materialOverrides={materialOverrides}
+                homeView={homeView}
+                enableNdi={source === 'ndi'}
+                onNdiStatus={setNdiGuide}
+                ndiGuide
+                ndiGuideHint="沒有 AE？按上面的「本地檔案」把影片或圖片拖進來"
+                ledVideo={videoMode && local.ready ? local.video : null}
+                ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
+                poseAtFrame={poseAtFrame}
+              />
+              {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
+              {selectedVersion && (
+                <MiniPlayer
+                  player={local}
+                  label={selectedVersion.label}
+                  detail={versionByline(selectedVersion) || selectedVersion.title}
+                  storageKey="sp_mini_player:share"
+                  onRetry={retryVersion}
+                />
+              )}
+            </div>
           ) : (
             <div className="share-empty">這個專案沒有可預覽的內容</div>
           )}
@@ -491,7 +514,7 @@ export default function Share() {
             </div>
           )}
 
-          {videoMode && media.active && (
+          {fileVideoMode && media.active && (
             <div className="share-player">
               <button className="share-player__btn" onClick={local.togglePlay} title={local.playing ? '暫停' : '播放'} aria-label={local.playing ? '暫停' : '播放'}>
                 <Icon icon={local.playing ? Pause : Play} size="md" />

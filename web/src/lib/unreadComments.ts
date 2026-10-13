@@ -46,3 +46,62 @@ export function songUnread(
 ): number {
   return unreadCount(comments, getLastSeen(userId, projectId, songId), me);
 }
+
+// ─── 用留言摘要算未讀（docs/comments-api.md；工作站每 25 秒只叫一次摘要，不用一首一首抓留言）───
+
+/** 摘要裡一首歌的資料（videoApi.ts 的 CommentSummary） */
+export interface SummaryLike {
+  songId: string;
+  count: number;
+  openCount: number;
+  latestAt: string | null;
+  fromOthersCount: number;
+  latestFromOthersAt: string | null;
+}
+
+/**
+ * 一首歌的未讀數：
+ *   從沒看過 → 別人留的都算（fromOthersCount）
+ *   別人最新一則沒有比上次看的新 → 0
+ *   比較新 → 用那首歌的留言算準的（還沒抓到 / 抓到的是舊的 → 至少 1）
+ */
+export function unreadFromSummary(
+  s: SummaryLike | undefined, lastSeenIso: string | null, comments: SongComment[] | undefined, me: Me,
+): number {
+  if (!s) return comments ? unreadCount(comments, lastSeenIso, me) : 0;
+  if (!lastSeenIso) return s.fromOthersCount;
+  if (!s.latestFromOthersAt || s.latestFromOthersAt <= lastSeenIso) return 0;
+  return comments ? Math.max(1, unreadCount(comments, lastSeenIso, me)) : 1;
+}
+
+/**
+ * 這次要抓哪幾首歌的留言（其他的只看摘要就夠了）：
+ *   - always（正在看的那首：審查分頁要顯示整串，留言改字 / 解決摘要看不出來，每次都抓）
+ *   - 有別人的新留言、比上次看的還新，而且摘要變了或還沒抓過（要算準未讀）
+ *   - 跟上一次摘要比，多了別人的新留言（跳提示要知道內容）
+ */
+export function songsToFetch(
+  curr: SummaryLike[],
+  prev: Map<string, SummaryLike> | null,
+  lastSeenFor: (songId: string) => string | null,
+  loaded: (songId: string) => boolean,
+  always: string | null,
+): string[] {
+  const out: string[] = [];
+  for (const s of curr) {
+    const p = prev?.get(s.songId);
+    const changed = !p || p.count !== s.count || p.openCount !== s.openCount || p.latestAt !== s.latestAt;
+    const ls = lastSeenFor(s.songId);
+    const unseenNew = !!s.latestFromOthersAt && !!ls && s.latestFromOthersAt > ls;
+    const newSincePrev = !!p && (s.latestFromOthersAt ?? '') > (p.latestFromOthersAt ?? '');
+    if (s.songId === always || (unseenNew && (changed || !loaded(s.songId))) || newSincePrev) out.push(s.songId);
+  }
+  return out;
+}
+
+/** 上一次摘要之後別人新留的（跳提示用）；sinceIso = 上一次摘要的 latestFromOthersAt */
+export function newFromOthersSince(comments: SongComment[], sinceIso: string | null, me: Me): SongComment[] {
+  return comments
+    .filter(c => !isMine(c, me) && (!sinceIso || c.createdAt > sinceIso))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
