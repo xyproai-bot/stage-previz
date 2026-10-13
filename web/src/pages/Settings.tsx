@@ -52,8 +52,8 @@ function AccountSection() {
       </div>
       <p className="settings-hint">
         {user.role === 'admin'
-          ? <>要改名字或登入號碼，到 <Link to="/admin/users">用戶</Link> 頁。</>
-          : '要改名字或登入號碼，請找製作。'}
+          ? <>要改名字或登入碼，到 <Link to="/admin/users">用戶</Link> 頁。</>
+          : '要改名字或登入碼，請找製作。'}
       </p>
     </section>
   );

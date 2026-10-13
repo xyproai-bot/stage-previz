@@ -131,7 +131,10 @@ export interface UserAdmin {
   name: string;
   role: UserRole;
   avatarColor: string;
+  /** 後台還是明文存法才有；雜湊存法 = null（只在建立 / 重設時拿得到一次） */
   accessCode: string | null;
+  /** 有沒有登入碼（用邀請連結進來的人可能沒有）；舊版後台沒有這個欄位 */
+  hasAccessCode?: boolean;
   deactivated: boolean;
   createdAt: string;
   lastSeenAt: string | null;
@@ -149,7 +152,7 @@ export async function createUserAdmin(input: {
   accessCode?: string;       // 留空就 server 自動產生
   avatarColor?: string;
   projectIds?: string[];
-}): Promise<{ id: string; accessCode: string }> {
+}): Promise<{ id: string; accessCode: string; shownOnce?: boolean }> {
   return http('/api/users', { method: 'POST', body: JSON.stringify(input) });
 }
 
@@ -159,7 +162,7 @@ export async function updateUserAdmin(id: string, patch: Partial<{
   await http(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
-export async function setAccessCode(id: string, accessCode?: string): Promise<{ ok: true; accessCode: string }> {
+export async function setAccessCode(id: string, accessCode?: string): Promise<{ ok: true; accessCode: string; shownOnce?: boolean }> {
   return http(`/api/users/${encodeURIComponent(id)}/access-code`, {
     method: 'POST',
     body: JSON.stringify({ accessCode: accessCode ?? '' }),
@@ -1320,4 +1323,106 @@ export async function getProjectFull(projectId: string): Promise<ProjectFull | n
     if ((e as { status?: number }).status === 404) return null;
     throw e;
   }
+}
+
+// ─── 邀請連結（invites）────────────────────────
+// 後台：cf-worker/worker.js handleInvitesRouter / createInvite；規則在 cf-worker/invites.mjs
+// 建立、清單、撤銷只有製作；打開（peek / redeem）不用登入
+
+export type InviteRole = 'animator' | 'director';
+
+export interface Invite {
+  id: string;
+  projectId: string;
+  projectName: string | null;
+  role: InviteRole;
+  userId: string | null;
+  personName: string;
+  /** 新的人（打開時才建帳號） */
+  isNewPerson: boolean;
+  createdAt: string | null;
+  expiresAt: string | null;
+  maxUses: number;
+  useCount: number;
+  usesLeft: number;
+  createdByName: string | null;
+  lastUsedAt: string | null;
+}
+
+export interface CreateInviteInput {
+  role: InviteRole;
+  /** 已經有帳號的人 */
+  userId?: string;
+  /** 新的人的名字 */
+  name?: string;
+  /** 幾天內有效（預設 7） */
+  expiresInDays?: number;
+  /** 只能用一次（預設 true；false = 最多 10 次） */
+  singleUse?: boolean;
+}
+
+/** 這個專案還能用的邀請 */
+export async function listProjectInvites(projectId: string): Promise<Invite[]> {
+  const data = await http<{ invites: Invite[] }>(`/api/projects/${encodeURIComponent(projectId)}/invites`);
+  return data.invites;
+}
+
+/** 所有專案還能用的邀請（用戶頁） */
+export async function listAllInvites(): Promise<Invite[]> {
+  const data = await http<{ invites: Invite[] }>('/api/invites');
+  return data.invites;
+}
+
+/** 建立邀請：token 只有這一次拿得到（後台只存雜湊）→ 用 siteUrl.inviteUrl(token) 組成連結 */
+export async function createInvite(projectId: string, input: CreateInviteInput): Promise<{ invite: Invite; token: string }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/invites`, { method: 'POST', body: JSON.stringify(input) });
+}
+
+export async function revokeInvite(projectId: string, inviteId: string): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/invites/${encodeURIComponent(inviteId)}`, { method: 'DELETE' });
+}
+
+export interface InvitePeek {
+  projectName: string;
+  role: InviteRole;
+  personName: string;
+  expiresAt: string;
+}
+
+/** 不能用的原因（後台的 reason） */
+export type InviteProblemReason =
+  'not_found' | 'revoked' | 'expired' | 'used' | 'used_up' | 'archived' | 'deactivated' | 'admin_account';
+
+/** 打開邀請的錯誤：status / reason / 後台給的中文說明（message） */
+export type InviteError = Error & { status?: number; reason?: InviteProblemReason };
+
+// peek / redeem 不用登入、也不是「存檔」→ 不走 http()（不帶登入、不跳存檔狀態）
+async function invitePost<T>(path: string, token: string): Promise<T> {
+  const r = await fetch(apiBase() + path, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ token }),
+  });
+  const data = await r.json().catch(() => ({})) as Record<string, unknown>;
+  if (!r.ok) {
+    const e: InviteError = new Error(typeof data.error === 'string' ? data.error : `HTTP ${r.status}`);
+    e.status = r.status;
+    if (typeof data.reason === 'string') e.reason = data.reason as InviteProblemReason;
+    throw e;
+  }
+  return data as T;
+}
+
+/** 打開前先看：給誰、哪個專案、什麼角色（不會用掉邀請） */
+export async function peekInvite(token: string): Promise<InvitePeek> {
+  const data = await invitePost<{ invite: InvitePeek }>('/api/invites/peek', token);
+  return data.invite;
+}
+
+/** 用掉邀請：登入（跟一般登入一樣記在這台裝置）+ 加進專案；回要去的頁面 */
+export async function redeemInvite(token: string): Promise<{ user: AuthUser; landingPath: string; projectId: string; projectRole: InviteRole }> {
+  const data = await invitePost<{ user: AuthUser; token?: string; landingPath: string; projectId: string; projectRole: InviteRole }>('/api/invites/redeem', token);
+  if (data.token) setSessionToken(data.token);
+  return { user: data.user, landingPath: data.landingPath, projectId: data.projectId, projectRole: data.projectRole };
 }

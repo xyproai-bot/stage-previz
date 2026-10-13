@@ -149,8 +149,8 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
           <section>
             <h3>用戶與權限</h3>
             <ul>
-              <li>每個人用一組「號碼」登入，沒有密碼</li>
-              <li>製作可以新增用戶、改名、改號碼、指派專案</li>
+              <li>每個人用一組「登入碼」登入，或點製作傳的「邀請連結」直接進專案</li>
+              <li>製作可以新增用戶、改名、重設登入碼、指派專案、建立邀請連結</li>
               <li>動畫師和導演只看得到被指派的專案</li>
               <li>重要的操作都會記在「最近活動」</li>
             </ul>

@@ -15,6 +15,7 @@ import SaveIndicator from '../components/SaveIndicator';
 import CueDiffDialog from '../components/CueDiffDialog';
 import ImportCuesDialog from '../components/ImportCuesDialog';
 import ShareLinksDialog from '../components/ShareLinksDialog';
+import InviteDialog from '../components/InviteDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import { pushRecentProject } from '../components/CommandPalette';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
@@ -36,7 +37,7 @@ import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
   Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
-  Palette, Pencil, Plus, Redo2, RotateCcw, Search, Shapes, Sprout, Trash2, Undo2, Upload, X,
+  Palette, Pencil, Plus, Redo2, RotateCcw, Search, Shapes, Sprout, Trash2, Undo2, Upload, UserPlus, X,
 } from 'lucide-react';
 import './ProjectEditor.css';
 
@@ -144,6 +145,8 @@ export default function ProjectEditor() {
   const [driveOpen, setDriveOpen] = useState(false);
   const [storyboardOpen, setStoryboardOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // 邀請連結（幫這個專案加導演 / 動畫師）
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [commentSearchOpen, setCommentSearchOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [importCuesOpen, setImportCuesOpen] = useState(false);
@@ -886,6 +889,14 @@ export default function ProjectEditor() {
             <Icon icon={Link} /><span className="editor-topbar__label"> 分享</span>
           </button>
           <button
+            className="editor-topbar__activity"
+            onClick={() => setInviteOpen(true)}
+            title="邀請連結：傳給導演 / 動畫師，點開就加進這個專案（不用登入碼）"
+            aria-label="邀請連結"
+          >
+            <Icon icon={UserPlus} /><span className="editor-topbar__label"> 邀請</span>
+          </button>
+          <button
             className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setDriveOpen(true)}
             title="Drive 來源設定"
@@ -1249,6 +1260,13 @@ export default function ProjectEditor() {
         projectName={projectMeta?.name}
         songs={songs}
         onClose={() => setShareOpen(false)}
+      />
+
+      <InviteDialog
+        open={inviteOpen}
+        projectId={projectId || ''}
+        projectName={projectMeta?.name}
+        onClose={() => setInviteOpen(false)}
       />
 
       <CommentSearchDialog

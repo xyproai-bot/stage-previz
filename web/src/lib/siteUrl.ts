@@ -37,3 +37,13 @@ export function shareTokenUrl(token: string, origin?: string): string {
 export function shareSlugUrl(slug: string, origin?: string): string {
   return `${publicSiteOrigin(origin)}/s/${encodeURIComponent(slug)}`;
 }
+
+/** 邀請連結：/invite/<邀請碼>（測試站建的邀請開到測試站） */
+export function inviteUrl(token: string, origin?: string): string {
+  return `${publicSiteOrigin(origin)}/invite/${encodeURIComponent(token)}`;
+}
+
+/** 登入頁（傳登入碼給別人時附上） */
+export function loginPageUrl(origin?: string): string {
+  return `${publicSiteOrigin(origin)}/login`;
+}

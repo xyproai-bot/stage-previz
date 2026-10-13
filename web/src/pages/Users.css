@@ -233,3 +233,14 @@
 }
 
 .mono { font-family: var(--font-mono); }
+
+/* 登入碼只顯示一次之後的說明 / 還沒用的邀請連結 */
+.user-row__code-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.users-invites {
+  margin-top: 24px;
+  max-width: 720px;
+}

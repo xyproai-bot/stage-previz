@@ -24,7 +24,7 @@ export default function Login() {
     e.preventDefault();
     setError(null);
     const trimmed = code.trim().toUpperCase().replace(/\s+/g, '');
-    if (!trimmed) { setError('請輸入號碼'); return; }
+    if (!trimmed) { setError('請輸入登入碼'); return; }
     setSubmitting(true);
     try {
       await login(trimmed);  // 登入成功 → user 變了，上面的 effect 會帶去對的頁面
@@ -43,16 +43,16 @@ export default function Login() {
           <span>STAGE <strong>PREVIZ</strong></span>
         </div>
 
-        <h1>輸入號碼</h1>
-        <p className="muted">用製作給你的號碼登入。</p>
+        <h1>輸入登入碼</h1>
+        <p className="muted">用製作給你的登入碼登入。</p>
 
         <form onSubmit={handleLogin}>
-          <label>號碼
+          <label>登入碼
             <input
               type="text"
               value={code}
               onChange={(e) => setCode(e.target.value)}
-              placeholder="例：A7K3MN9X"
+              placeholder="例：K7MNP3XQ2R"
               autoFocus
               autoComplete="off"
               spellCheck={false}
@@ -66,7 +66,7 @@ export default function Login() {
         </form>
 
         <p className="muted small login-card__hint">
-          沒拿到號碼？請聯絡製作。
+          沒有登入碼？請聯絡製作，或直接點製作傳給你的邀請連結。
         </p>
       </div>
     </div>

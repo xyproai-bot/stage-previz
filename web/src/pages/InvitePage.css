@@ -1,0 +1,46 @@
+/* 邀請連結頁（版面跟登入頁同一套：login-page / login-card） */
+.invite-card {
+  max-width: 420px;
+}
+.invite-card h1 {
+  font-size: 22px;
+  margin: 0 0 10px;
+}
+.invite-card__lead {
+  font-size: 14.5px;
+  line-height: 1.7;
+  margin: 0 0 16px;
+  color: var(--text);
+}
+.invite-card__note {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--warn);
+  background: var(--warn-dim);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  margin: 0 0 14px;
+}
+.invite-card__enter {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 15px;
+  padding: 12px 18px;
+}
+.invite-card__hint {
+  margin-top: 16px;
+  line-height: 1.6;
+}
+.invite-card__status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.invite-card__problem-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

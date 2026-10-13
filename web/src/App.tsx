@@ -23,6 +23,8 @@ const Preview = lazy(() => import('./pages/Preview'));
 const Share   = lazy(() => import('./pages/Share'));
 // 線上使用說明（公開，不用登入）
 const Help    = lazy(() => import('./pages/Help'));
+// 邀請連結（公開，不用登入；按「進入」才登入 + 加進專案）
+const InvitePage = lazy(() => import('./pages/InvitePage'));
 
 function PageLoading() {
   return <RouteLoading text="載入頁面…" />;
@@ -59,6 +61,7 @@ export default function App() {
             {/* 好讀分享網址（/s/jinma2026-k7p2），同一個分享頁 */}
             <Route path="/s/:slug" element={<ErrorBoundary><Share /></ErrorBoundary>} />
             <Route path="/help" element={<ErrorBoundary><Help /></ErrorBoundary>} />
+            <Route path="/invite/:token" element={<ErrorBoundary><InvitePage /></ErrorBoundary>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

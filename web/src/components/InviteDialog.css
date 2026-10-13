@@ -1,0 +1,256 @@
+/* 邀請連結 / 登入碼的對話框和清單（InviteDialog、OpenInvitesList、LoginCodeDialog 共用） */
+
+.acct-dialog {
+  max-width: 560px;
+  max-height: calc(100vh - 40px);
+}
+.acct-dialog .dialog__body {
+  overflow-y: auto;
+}
+
+.acct-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.acct-field > label,
+.acct-field > .acct-field__label {
+  font-size: 12px;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.acct-field input[type='text'],
+.acct-field select {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  padding: 9px 12px;
+  font-size: 13.5px;
+  outline: none;
+  font-family: inherit;
+}
+.acct-field input[type='text']:focus,
+.acct-field select:focus {
+  border-color: var(--accent);
+}
+.acct-field__hint {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.acct-field__warn {
+  font-size: 12px;
+  color: var(--warn);
+  line-height: 1.5;
+}
+
+/* 兩個選項並排的選擇（新的人 / 已經有帳號的人、導演 / 動畫師） */
+.acct-choice {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.acct-choice__item {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 9px 11px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.acct-choice__item.is-active {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.acct-choice__item input {
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.acct-choice__item small {
+  display: block;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  margin-top: 2px;
+}
+
+.acct-inline {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.acct-inline select {
+  width: auto;
+}
+.acct-check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+  cursor: pointer;
+}
+.acct-check input {
+  accent-color: var(--accent);
+}
+
+/* 建好之後：訊息 + 複製 */
+.acct-result {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+.acct-result__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--accent);
+  font-size: 13.5px;
+}
+.acct-result textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  padding: 9px 11px;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: inherit;
+}
+.acct-result__row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.acct-result__link {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  word-break: break-all;
+  flex: 1 1 200px;
+}
+.acct-result__note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.acct-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 登入碼本身 */
+.acct-code {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  text-align: center;
+  user-select: all;
+}
+
+/* 還沒用的邀請連結清單 */
+.acct-invites {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.acct-invites__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 0;
+}
+.acct-invites ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.acct-invites li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  font-size: 12.5px;
+}
+.acct-invites__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.acct-invites__who {
+  font-weight: 600;
+}
+.acct-invites__meta {
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+.acct-invites__revoke {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  padding: 4px 9px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.acct-invites__revoke:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.acct-invites__revoke:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.acct-invites__empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0;
+}
+.acct-error {
+  background: rgba(255, 84, 112, 0.1);
+  border: 1px solid rgba(255, 84, 112, 0.4);
+  color: var(--danger);
+  font-size: 12.5px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+}
+
+@media (max-width: 560px) {
+  .acct-choice { grid-template-columns: 1fr; }
+}

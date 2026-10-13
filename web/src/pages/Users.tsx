@@ -6,8 +6,14 @@ import { parseServerTime } from '../lib/serverTime';
 import type { Project } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import { ROLE_LABEL } from '../lib/roleLabels';
+import { formatLoginCodeForDisplay, loginCodeDisplay, LOGIN_CODE_HIDDEN_TEXT } from '../lib/inviteMessage';
+import { copyToClipboard } from '../lib/clipboard';
+import { toast } from '../lib/toast';
 import Icon from '../components/Icon';
-import { Copy, FolderPlus, LoaderCircle, Pencil, RefreshCw, Trash2, TriangleAlert, UserCheck, UserX, X } from 'lucide-react';
+import InviteDialog from '../components/InviteDialog';
+import OpenInvitesList from '../components/OpenInvitesList';
+import LoginCodeDialog from '../components/LoginCodeDialog';
+import { Copy, FolderPlus, KeyRound, Link, LoaderCircle, RefreshCw, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
 import './Users.css';
 
 const PALETTE = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];
@@ -26,9 +32,8 @@ function formatTime(iso: string | null) {
   return d.toLocaleDateString('zh-TW');
 }
 
-async function copyText(text: string) {
-  try { await navigator.clipboard.writeText(text); return true; } catch { return false; }
-}
+/** 剛建立 / 重設的登入碼（只顯示這一次） */
+interface ShownCode { name: string; code: string; shownOnce: boolean; isReset: boolean }
 
 export default function Users() {
   const { user: me } = useAuth();
@@ -38,6 +43,10 @@ export default function Users() {
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserAdmin | null>(null);
+  const [shownCode, setShownCode] = useState<ShownCode | null>(null);
+  // 邀請連結對話框：null = 關著；userId = 先選好的人（某個人旁邊的「邀請連結」）
+  const [invite, setInvite] = useState<{ userId?: string } | null>(null);
+  const [invitesReload, setInvitesReload] = useState(0);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -55,35 +64,26 @@ export default function Users() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  async function handleRegenCode(u: UserAdmin) {
-    if (!confirm(`重新產生「${u.name}」的號碼？\n\n舊號碼會失效，對方下次要用新的號碼。`)) return;
+  // 重設登入碼（還沒有的人 = 產生一組）：新的只顯示這一次，舊的馬上不能用
+  async function handleResetCode(u: UserAdmin) {
+    const hasCode = loginCodeDisplay(u).kind !== 'none';
+    const question = hasCode
+      ? `重設「${u.name}」的登入碼？\n\n舊的登入碼會馬上不能用，對方下次要用新的。`
+      : `幫「${u.name}」產生一組登入碼？`;
+    if (!confirm(question)) return;
     try {
-      const { accessCode } = await api.setAccessCode(u.id);
-      const ok = await copyText(accessCode);
-      alert(`新號碼：${accessCode}\n\n${ok ? '已複製到剪貼簿，' : ''}請傳給對方。`);
+      const { accessCode, shownOnce } = await api.setAccessCode(u.id);
+      setShownCode({ name: u.name, code: accessCode, shownOnce: !!shownOnce, isReset: hasCode });
       await refresh();
     } catch (e) {
-      alert('失敗：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('重設失敗：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
-  async function handleSetCustomCode(u: UserAdmin) {
-    const code = prompt(`為「${u.name}」設自訂號碼\n\n（4-32 字，英數字、Dash 都行；舊號碼會失效）`, '');
-    if (!code) return;
-    try {
-      const { accessCode } = await api.setAccessCode(u.id, code);
-      await copyText(accessCode);
-      alert(`號碼設定為：${accessCode}\n\n已複製到剪貼簿，請傳給對方。`);
-      await refresh();
-    } catch (e) {
-      alert('失敗：' + (e instanceof Error ? e.message : String(e)));
-    }
-  }
-
-  async function handleCopyCode(u: UserAdmin) {
-    if (!u.accessCode) { alert('此用戶還沒有號碼'); return; }
-    const ok = await copyText(u.accessCode);
-    alert(ok ? `已複製：${u.accessCode}` : `號碼是：${u.accessCode}（請手動複製）`);
+  async function handleCopyCode(code: string) {
+    const ok = await copyToClipboard(code);
+    if (ok) toast.success('已複製登入碼');
+    else toast.error('瀏覽器不讓我們複製，請自己選起來複製');
   }
 
   async function handleToggleActive(u: UserAdmin) {
@@ -126,14 +126,15 @@ export default function Users() {
       <header className="admin-topbar">
         <h1>用戶</h1>
         <div className="admin-topbar__actions">
-          <button className="btn btn--primary" onClick={() => setDialogOpen(true)}>＋ 新增用戶</button>
+          <button className="btn btn--ghost acct-btn" onClick={() => setInvite({})}><Icon icon={Link} /> 邀請連結</button>
+          <button className="btn btn--primary acct-btn" onClick={() => setDialogOpen(true)}><Icon icon={UserPlus} /> 新增用戶</button>
         </div>
       </header>
 
       <div className="admin-content">
         <p className="muted small" style={{ marginTop: 0 }}>
-          每個用戶用一組「號碼」登入。建好用戶後系統會自動產生號碼，你也可以改成自訂的（例：DAMING-2026）。
-          號碼私訊給對方，他到 <code>/login</code> 輸入即可。每個用戶可指派多個專案，他登入後只看得到那些專案。
+          最簡單的方式是傳「邀請連結」：選專案和角色，把訊息貼到 LINE / 微信，對方點開就直接進專案（不用記登入碼，新的人也會自動建帳號）。
+          也可以用「登入碼」：新增用戶時系統會產生一組，對方到 <code>/login</code> 輸入就能登入。每個人只看得到被加入的專案。
         </p>
 
         {loading ? (
@@ -168,12 +169,7 @@ export default function Users() {
                       : <span className="users-table__active">啟用中</span>}
                   </div>
 
-                  <div className="user-row__code-row">
-                    <code className="user-row__code">{u.accessCode || '— 還沒有號碼 —'}</code>
-                    <button className="user-row__btn" onClick={() => handleCopyCode(u)} title="複製號碼"><Icon icon={Copy} /> 複製</button>
-                    <button className="user-row__btn" onClick={() => handleRegenCode(u)} title="重新產生"><Icon icon={RefreshCw} /> 重新產生</button>
-                    <button className="user-row__btn" onClick={() => handleSetCustomCode(u)} title="自訂號碼"><Icon icon={Pencil} /> 自訂</button>
-                  </div>
+                  <LoginCodeRow user={u} onCopy={handleCopyCode} onReset={() => handleResetCode(u)} />
 
                   <div className="user-row__projects">
                     <span className="muted small">可看的專案：</span>
@@ -195,6 +191,11 @@ export default function Users() {
 
                 <div className="user-row__actions">
                   <button onClick={() => setEditingUser(u)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
+                  {u.role !== 'admin' && !u.deactivated && (
+                    <button onClick={() => setInvite({ userId: u.id })} title="傳一個邀請連結給他（例如換了手機、忘記登入碼）">
+                      <Icon icon={Link} /> 邀請連結
+                    </button>
+                  )}
                   <button onClick={() => handleToggleActive(u)} title={u.deactivated ? '重新啟用' : '停用'}>
                     {u.deactivated ? <><Icon icon={UserCheck} /> 啟用</> : <><Icon icon={UserX} /> 停用</>}
                   </button>
@@ -204,13 +205,37 @@ export default function Users() {
             ))}
           </div>
         )}
+
+        {!loading && !error && (
+          <div className="users-invites">
+            <OpenInvitesList reloadKey={invitesReload} showProject onChanged={refresh} />
+          </div>
+        )}
       </div>
 
       <NewUserDialog
         open={dialogOpen}
         allProjects={allProjects}
         onClose={() => setDialogOpen(false)}
-        onCreated={async () => { setDialogOpen(false); await refresh(); }}
+        onCreated={async (shown) => { setDialogOpen(false); setShownCode(shown); await refresh(); }}
+      />
+
+      {shownCode && (
+        <LoginCodeDialog
+          open
+          name={shownCode.name}
+          code={shownCode.code}
+          shownOnce={shownCode.shownOnce}
+          isReset={shownCode.isReset}
+          onClose={() => setShownCode(null)}
+        />
+      )}
+
+      <InviteDialog
+        open={!!invite}
+        presetUserId={invite?.userId}
+        onClose={() => setInvite(null)}
+        onChanged={() => { setInvitesReload(k => k + 1); void refresh(); }}
       />
 
       {editingUser && (
@@ -229,12 +254,11 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
   open: boolean;
   allProjects: Project[];
   onClose: () => void;
-  onCreated: () => void;
+  onCreated: (shown: ShownCode) => void;
 }) {
   const [name, setName] = useState('');
   const [role, setRole] = useState<UserRole>('animator');
   const [color, setColor] = useState(PALETTE[0]);
-  const [code, setCode] = useState('');
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -242,7 +266,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
   useEffect(() => {
     if (open) {
       setName(''); setRole('animator'); setColor(PALETTE[0]);
-      setCode(''); setProjectIds([]); setError(null);
+      setProjectIds([]); setError(null);
     }
   }, [open]);
 
@@ -253,15 +277,13 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
     setError(null);
     setSubmitting(true);
     try {
-      const { accessCode } = await api.createUserAdmin({
+      // 登入碼一律系統產生（10 個字，沒有 0 / O / 1 / I 這種容易看錯的字）
+      const { accessCode, shownOnce } = await api.createUserAdmin({
         name: name.trim(), role,
-        accessCode: code.trim() || undefined,
         avatarColor: color,
         projectIds,
       });
-      await copyText(accessCode);
-      alert(`用戶「${name.trim()}」已建立。\n\n號碼：${accessCode}\n\n（已複製到剪貼簿，請私訊給對方）`);
-      onCreated();
+      onCreated({ name: name.trim(), code: accessCode, shownOnce: !!shownOnce, isReset: false });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -293,11 +315,6 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
               <option value="admin">{ROLE_LABEL.admin}（看得到全部專案、可以管用戶）</option>
             </select>
             <small className="form-hint">這是預設角色。指派到某個專案時，可以在那個專案改成別的角色。</small>
-          </div>
-          <div className="form-row">
-            <label htmlFor="u-code">號碼（留空自動產生）</label>
-            <input id="u-code" type="text" value={code} onChange={(e) => setCode(e.target.value)} placeholder="留空自動產生 8 位英數字" />
-            <small className="form-hint">想自訂可填，例：DAMING-2026。建好後也可隨時改 / 重產生。</small>
           </div>
           {role !== 'admin' && (
             <div className="form-row">
@@ -337,7 +354,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
           <footer className="dialog__footer">
             <button type="button" className="btn btn--ghost" onClick={onClose} disabled={submitting}>取消</button>
             <button type="submit" className="btn btn--primary" disabled={submitting || !name}>
-              {submitting ? '建立中…' : '建立並產生號碼'}
+              {submitting ? '建立中…' : '建立並產生登入碼'}
             </button>
           </footer>
         </form>
@@ -430,6 +447,34 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
           </footer>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 用戶清單上的登入碼：後台還是明文 → 照以前顯示；改成只顯示一次之後 → 只說「忘記了請按重設」 */
+function LoginCodeRow({ user, onCopy, onReset }: { user: UserAdmin; onCopy: (code: string) => void; onReset: () => void }) {
+  const d = loginCodeDisplay(user);
+  return (
+    <div className="user-row__code-row" data-testid="login-code-row">
+      {d.kind === 'plain' && (
+        <>
+          <code className="user-row__code">{formatLoginCodeForDisplay(d.code)}</code>
+          <button className="user-row__btn" onClick={() => onCopy(d.code)} title="複製登入碼"><Icon icon={Copy} /> 複製</button>
+          <button className="user-row__btn" onClick={onReset} title="重設：產生新的登入碼，舊的馬上不能用"><Icon icon={RefreshCw} /> 重設</button>
+        </>
+      )}
+      {d.kind === 'hidden' && (
+        <>
+          <span className="muted small user-row__code-hidden"><Icon icon={KeyRound} /> {LOGIN_CODE_HIDDEN_TEXT}</span>
+          <button className="user-row__btn" onClick={onReset} title="重設：產生新的登入碼，舊的馬上不能用"><Icon icon={RefreshCw} /> 重設</button>
+        </>
+      )}
+      {d.kind === 'none' && (
+        <>
+          <span className="muted small user-row__code-hidden"><Icon icon={KeyRound} /> 還沒有登入碼（用邀請連結進來的）</span>
+          <button className="user-row__btn" onClick={onReset} title="產生一組登入碼"><Icon icon={KeyRound} /> 產生登入碼</button>
+        </>
+      )}
     </div>
   );
 }
