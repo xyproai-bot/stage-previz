@@ -1,17 +1,24 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Cue, CueState, DriveFile, Song, SongComment, StageObject } from '../lib/api';
-import type { Project } from '../lib/mockData';
+import type { ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
 import VideoTimeline from '../components/VideoTimeline';
 import ActivityDrawer from '../components/ActivityDrawer';
-import { ProjectCardSkeleton, CommentSkeleton } from '../components/Skeleton';
+import { CommentSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { cueTransitionSeconds } from '../lib/cueTiming';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
+import { useLiveRefresh } from '../lib/liveRefresh';
+import { extractMentions } from '../lib/mentions';
+import { formatRelativeTime } from '../lib/serverTime';
+import {
+  SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
+  friendlyError, projectGoneMessage, canModifyComment, isOwnComment, sameSongs, sameComments,
+} from '../lib/songReview';
 import './Preview.css';
 
 type Status = Song['status'];
@@ -23,104 +30,12 @@ const STATUS_COLUMNS: { key: Status; label: string; emoji: string }[] = [
   { key: 'approved',      label: '已通過', emoji: '✅' },
 ];
 
-const STATUS_LABEL: Record<Status, string> = {
-  todo:          '待製作',
-  in_review:     '審查中',
-  approved:      '已通過',
-  needs_changes: '需修改',
-};
-
 export default function Preview() {
   const { projectId } = useParams();
-  if (!projectId) return <ProjectPicker />;
-  return <PreviewInner projectId={projectId} />;
-}
-
-/* ──────────── Project Picker ──────────── */
-
-function ProjectPicker() {
-  const navigate = useNavigate();
-  const { user, logout } = useAuth();
-  const [projects, setProjects] = useState<Project[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.listProjects()
-      .then(list => { if (!cancelled) setProjects(list); })
-      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
-    return () => { cancelled = true; };
-  }, []);
-
-  if (!user) return <div className="preview-loading">⏳ 請先登入</div>;
-
-  return (
-    <div className="preview-picker">
-      <header className="preview-picker__hero">
-        <button className="preview-picker__back" onClick={() => navigate('/')} title="回首頁">←</button>
-        <div className="role-icon">🎬</div>
-        <div>
-          <h1>Director · 動畫進度</h1>
-          <p>看每首歌的審查狀態、留言、3D 預覽</p>
-        </div>
-        <span className="grow" />
-        <span className="preview-picker__user">
-          <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
-          <span>{user.name}</span>
-          <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
-        </span>
-      </header>
-
-      {error && <div className="preview-error">載入失敗：{error}</div>}
-      {!projects && !error && (
-        <div className="preview-picker__grid">
-          {Array.from({ length: 4 }).map((_, i) => <ProjectCardSkeleton key={i} />)}
-        </div>
-      )}
-
-      {projects && projects.length === 0 && (
-        <div className="preview-empty">
-          <h2>還沒有可看的專案</h2>
-          <p>請聯絡製作主管把你加入專案。</p>
-        </div>
-      )}
-
-      {projects && projects.length > 0 && (
-        <div className="preview-picker__grid">
-          {projects.map(p => {
-            const counts = p.songStatusCounts || { todo: 0, in_review: 0, approved: 0, needs_changes: 0 };
-            const total = counts.todo + counts.in_review + counts.approved + counts.needs_changes;
-            const pct = total > 0 ? Math.round((counts.approved / total) * 100) : 0;
-            return (
-              <Link key={p.id} to={`/preview/${p.id}`} className="preview-picker__card">
-                <div className="preview-picker__card-name">{p.name}</div>
-                {p.description && <div className="preview-picker__card-desc">{p.description}</div>}
-                <div className="preview-picker__card-progress">
-                  <div className="preview-picker__bar">
-                    {total > 0 && (
-                      <>
-                        <span style={{ width: `${(counts.approved / total) * 100}%` }} className="preview-picker__bar-segment preview-picker__bar-segment--approved" />
-                        <span style={{ width: `${(counts.in_review / total) * 100}%` }} className="preview-picker__bar-segment preview-picker__bar-segment--review" />
-                        <span style={{ width: `${(counts.needs_changes / total) * 100}%` }} className="preview-picker__bar-segment preview-picker__bar-segment--changes" />
-                        <span style={{ width: `${(counts.todo / total) * 100}%` }} className="preview-picker__bar-segment preview-picker__bar-segment--todo" />
-                      </>
-                    )}
-                  </div>
-                  <div className="preview-picker__pct">{pct}%</div>
-                </div>
-                <div className="preview-picker__card-stats">
-                  <span title="待製作">⏳ {counts.todo}</span>
-                  <span title="審查中">👀 {counts.in_review}</span>
-                  <span title="需修改">✏️ {counts.needs_changes}</span>
-                  <span title="已通過">✅ {counts.approved}</span>
-                </div>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
+  // 沒有專案 id 的 /preview 由「我的專案」頁處理（App 路由），這裡不會走到
+  if (!projectId) return null;
+  // key：換專案時整個重來（不會把上一個專案的歌 / 留言帶過來）
+  return <PreviewInner key={projectId} projectId={projectId} />;
 }
 
 /* ──────────── Preview Inner ──────────── */
@@ -132,12 +47,19 @@ function PreviewInner({ projectId }: { projectId: string }) {
   const [projectName, setProjectName] = useState<string>('');
   // 專案名讀不到時不能一直停在「…」，要顯示讀取失敗 + 重試
   const [nameStatus, setNameStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [projectArchived, setProjectArchived] = useState(false);
   const [projectMembers, setProjectMembers] = useState<{ id: string; name: string }[]>([]);
+  // 我在這個專案的角色（通過 / 需修改按鈕看這個，不是帳號的預設角色）；undefined = 還沒讀到
+  const [myRole, setMyRole] = useState<ProjectRole | null | undefined>(undefined);
+  // 專案整個看不到了（封存 / 刪除 / 被移出專案）→ 整頁換成說明
+  const [goneMessage, setGoneMessage] = useState<string | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
   const [songsLoading, setSongsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
+  // cues 是哪首歌的（切歌後新的還沒讀到前，不能拿上一首的 cue 來顯示 / 自動播放）
+  const [cuesFor, setCuesFor] = useState<string | null>(null);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [cueStates, setCueStates] = useState<CueState[]>([]);
   const [stageObjects, setStageObjects] = useState<StageObject[]>([]);
@@ -150,53 +72,129 @@ function PreviewInner({ projectId }: { projectId: string }) {
   const [showMode, setShowMode] = useState(false);
   const [showCueIntervalSec, setShowCueIntervalSec] = useState(3);  // 每 cue 停留秒數
 
+  const projectRole: ProjectRole | null = myRole === undefined ? (user?.role ?? null) : myRole;
+
+  // 非同步回來時要拿「現在」的值
+  const songsRef = useRef<Song[]>([]);
+  const selectedSongIdRef = useRef<string | null>(null);
+  selectedSongIdRef.current = selectedSongId;
+  const goneRef = useRef(false);
+  goneRef.current = !!goneMessage;
+
+  // 換上新的歌單；一樣就不換（自動更新時畫面不閃）。正在看的歌被刪了 → 講一聲、回總覽
+  const applySongs = useCallback((list: Song[]) => {
+    const prev = songsRef.current;
+    const sel = selectedSongIdRef.current;
+    const was = sel ? prev.find(s => s.id === sel) : undefined;
+    if (was && !list.some(s => s.id === sel)) {
+      toast.warn(`你正在看的「${was.name}」已經被刪除了（可能是製作主管剛刪的），已回到總覽`);
+      setSelectedSongId(null);
+    }
+    if (sameSongs(prev, list)) return;
+    songsRef.current = list;
+    setSongs(list);
+  }, []);
+
+  const loadMeta = useCallback(async () => {
+    try {
+      const meta = await api.getProjectMeta(projectId);
+      if (meta) {
+        setProjectName(meta.name);
+        setMyRole(meta.myRole ?? null);
+        setProjectMembers(meta.members?.map(m => ({ id: m.id, name: m.name })) || []);
+        setProjectArchived(false);
+        setNameStatus('ready');
+        return;
+      }
+      // 清單裡沒有（封存的專案只有 admin 看得到 / 不是成員）→ 直接問這個專案
+      const info = await api.getProjectInfo(projectId);
+      setProjectName(info.project.name);
+      setMyRole(info.myRole);
+      setProjectArchived(info.project.status === 'archived');
+      setNameStatus('ready');
+    } catch (e) {
+      const gone = projectGoneMessage(e);
+      if (gone) setGoneMessage(gone);
+      setNameStatus('error');
+    }
+  }, [projectId]);
+
   const refresh = useCallback(async () => {
     setSongsLoading(true);
     setError(null);
     setNameStatus('loading');
+    const metaDone = loadMeta();
     try {
-      const [list, objs, model, meta] = await Promise.all([
+      const [list, objs, model] = await Promise.all([
         api.listSongs(projectId),
         api.listStageObjects(projectId).catch(() => [] as StageObject[]),
         api.getModelInfo(projectId).catch(() => null),
-        api.getProjectMeta(projectId).catch(() => null),
       ]);
-      setSongs(list);
+      applySongs(list);
       setStageObjects(objs);
       setModelUrl(model ? api.modelDownloadUrl(model.key) : null);
-      setProjectName(meta?.name || '');
-      setProjectMembers(meta?.members?.map(m => ({ id: m.id, name: m.name })) || []);
-      setNameStatus(meta?.name ? 'ready' : 'error');
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-      setNameStatus('error');
+      const gone = projectGoneMessage(e);
+      if (gone) setGoneMessage(gone);
+      else setError('歌曲讀取失敗：' + friendlyError(e));
     } finally {
       setSongsLoading(false);
     }
-  }, [projectId]);
+    await metaDone;
+  }, [projectId, loadMeta, applySongs]);
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  // 自動更新歌曲狀態：每 25 秒 + 切回分頁時（動畫師提交了，這邊 30 秒內看得到）
+  const reloadSongs = useCallback(async (): Promise<Song[] | null> => {
+    try {
+      const list = await api.listSongs(projectId);
+      applySongs(list);
+      return list;
+    } catch (e) {
+      const gone = projectGoneMessage(e);
+      if (gone) setGoneMessage(gone);
+      return null;
+    }
+  }, [projectId, applySongs]);
+
+  useLiveRefresh(async () => {
+    if (!goneRef.current) await reloadSongs();
+  }, { enabled: !goneMessage && !songsLoading });
+
   useEffect(() => {
-    if (!selectedSongId) { setCues([]); setSelectedCueId(null); return; }
+    // 切歌時馬上清掉上一首的 cue / 位置，不然載入期間會閃一下上一首的 cue
+    setCues([]);
+    setCuesFor(null);
+    setSelectedCueId(null);
+    setCueStates([]);
+    if (!selectedSongId) return;
     let cancelled = false;
     api.listCues(projectId, selectedSongId).then(list => {
       if (cancelled) return;
       setCues(list);
+      setCuesFor(selectedSongId);
       const masters = list.filter(c => c.status === 'master');
       setSelectedCueId(masters[0]?.id ?? null);
-    }).catch(() => { if (!cancelled) setCues([]); });
+    }).catch(() => {
+      if (cancelled) return;
+      setCues([]);
+      setCuesFor(selectedSongId);
+    });
     return () => { cancelled = true; };
   }, [projectId, selectedSongId]);
 
+  const cuesReady = !!selectedSongId && cuesFor === selectedSongId;
+
   useEffect(() => {
-    if (!selectedSongId || !selectedCueId) { setCueStates([]); return; }
+    // 還在讀這首歌的 cue 時不要拿上一首的 cue id 去問
+    if (!selectedSongId || !selectedCueId || cuesFor !== selectedSongId) { setCueStates([]); return; }
     let cancelled = false;
     api.listCueStates(projectId, selectedSongId, selectedCueId).then(list => {
       if (!cancelled) setCueStates(list);
     }).catch(() => { if (!cancelled) setCueStates([]); });
     return () => { cancelled = true; };
-  }, [projectId, selectedSongId, selectedCueId]);
+  }, [projectId, selectedSongId, selectedCueId, cuesFor]);
 
   // Auto-step：每 2 秒切下一個 cue
   useEffect(() => {
@@ -215,12 +213,14 @@ function PreviewInner({ projectId }: { projectId: string }) {
   // Show mode：每 N 秒切 cue；最後一個 cue 後切下一首歌（保留進入 detail 視圖）
   useEffect(() => {
     if (!showMode) return;
-    const masters = cues.filter(c => c.status === 'master');
     // 沒選歌就從第一首開始
     if (!selectedSongId && songs.length > 0) {
       setSelectedSongId(songs[0].id);
       return;
     }
+    // 這首的 cue 還在讀 → 等讀完再算
+    if (!cuesReady) return;
+    const masters = cues.filter(c => c.status === 'master');
     if (masters.length === 0) {
       // 這首沒 cue → 直接切下一首
       const t = setTimeout(() => advanceToNextSong(), 2000);
@@ -240,7 +240,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
     }, showCueIntervalSec * 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showMode, cues, selectedSongId, showCueIntervalSec]);
+  }, [showMode, cues, cuesReady, selectedSongId, showCueIntervalSec]);
 
   function advanceToNextSong() {
     setSelectedSongId(prev => {
@@ -254,7 +254,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
     });
   }
 
-  const masterCues = useMemo(() => cues.filter(c => c.status === 'master'), [cues]);
+  const masterCues = useMemo(() => cuesReady ? cues.filter(c => c.status === 'master') : [], [cues, cuesReady]);
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId) || null, [cues, selectedCueId]);
   const selectedSong = useMemo(() => songs.find(s => s.id === selectedSongId) || null, [songs, selectedSongId]);
   const songsByStatus = useMemo(() => {
@@ -267,7 +267,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
   const approvedCount = songsByStatus.approved.length;
   const overallPct = totalCount > 0 ? Math.round((approvedCount / totalCount) * 100) : 0;
 
-  // 沒選 cue 時 viewport 顯示 stage objects 的 default
+  // 沒選 cue（或這首歌還沒有 cue）時 viewport 顯示 stage objects 的 default
   const viewportStates: CueState[] = useMemo(() => {
     if (selectedCueId && cueStates.length > 0) return cueStates;
     return stageObjects.map(o => ({
@@ -283,14 +283,37 @@ function PreviewInner({ projectId }: { projectId: string }) {
     }));
   }, [selectedCueId, cueStates, stageObjects]);
 
-  async function changeStatus(songId: string, status: Status) {
-    const prev = songs;
-    setSongs(prev.map(s => s.id === songId ? { ...s, status } : s));
+  /** 改狀態。帶上畫面上以為的目前狀態 → 別人剛改過的話後台回 409，不會蓋掉 */
+  async function changeStatus(songId: string, to: Status) {
+    const song = songsRef.current.find(s => s.id === songId);
+    if (!song) return;
+    const expected = song.status;
+    const setStatus = (status: Status) => {
+      const next = songsRef.current.map(s => s.id === songId ? { ...s, status } : s);
+      songsRef.current = next;
+      setSongs(next);
+    };
+    setStatus(to);
     try {
-      await api.updateSong(projectId, songId, { status });
+      await api.updateSong(projectId, songId, { status: to, expectedStatus: expected });
     } catch (e) {
-      setSongs(prev);
-      toast.error('狀態更新失敗：' + msg(e));
+      const status = api.errorStatus(e);
+      if (status === 409) {
+        const stale = staleStatusMessage((e as api.ApiError).data?.currentStatus, expected);
+        const list = await reloadSongs();
+        if (!list) setStatus(expected);
+        toast.warn(stale ?? friendlyError(e));
+      } else if (status === 404) {
+        // 歌被刪了（reloadSongs 會講）或整個專案不見了（會換成說明頁）
+        const list = await reloadSongs();
+        if (list && list.some(s => s.id === songId)) {
+          setStatus(expected);
+          toast.error('狀態沒有改成：' + friendlyError(e));
+        }
+      } else {
+        setStatus(expected);
+        toast.error('狀態沒有改成：' + friendlyError(e));
+      }
     }
   }
 
@@ -320,33 +343,40 @@ function PreviewInner({ projectId }: { projectId: string }) {
         <button className="preview-top__back" onClick={() => navigate('/preview')} title="所有專案">←</button>
         <span className="preview-top__role">🎬 DIRECTOR</span>
         <span className="preview-top__project">
-          {projectName || (nameStatus === 'error' ? (
+          {projectName || (nameStatus === 'error' && !goneMessage ? (
             <>
               {projectId}（讀取失敗）
               <button className="btn btn--ghost btn--sm" onClick={() => refresh()} style={{ marginLeft: 8 }}>重試</button>
             </>
-          ) : '…')}
+          ) : goneMessage ? '' : '…')}
+          {projectArchived && <span className="status-pill status-pill--needs_changes" style={{ marginLeft: 8 }}>已封存，只能看</span>}
         </span>
-        <div className="preview-top__progress">
-          <div className="preview-top__progress-bar">
-            <span style={{ width: `${overallPct}%` }} />
+        {!goneMessage && (
+          <div className="preview-top__progress">
+            <div className="preview-top__progress-bar">
+              <span style={{ width: `${overallPct}%` }} />
+            </div>
+            <span className="preview-top__progress-text">{approvedCount}/{totalCount} · {overallPct}%</span>
           </div>
-          <span className="preview-top__progress-text">{approvedCount}/{totalCount} · {overallPct}%</span>
-        </div>
+        )}
         <span className="grow" />
-        <button
-          className="btn btn--sm btn--ghost"
-          onClick={() => setActivityOpen(true)}
-          title="最近活動"
-        >🕒 活動</button>
-        <button
-          className={'btn btn--sm ' + (showMode ? 'btn--primary' : 'btn--ghost')}
-          onClick={() => setShowMode(m => !m)}
-          title={showMode ? '停止整場串播' : '從目前歌曲開始整場依序自動播放'}
-          disabled={songs.length === 0}
-        >
-          {showMode ? '⏸ 停止整場' : '🎤 整場串播'}
-        </button>
+        {!goneMessage && (
+          <>
+            <button
+              className="btn btn--sm btn--ghost"
+              onClick={() => setActivityOpen(true)}
+              title="最近活動"
+            >🕒 活動</button>
+            <button
+              className={'btn btn--sm ' + (showMode ? 'btn--primary' : 'btn--ghost')}
+              onClick={() => setShowMode(m => !m)}
+              title={showMode ? '停止整場串播' : '從目前歌曲開始整場依序自動播放'}
+              disabled={songs.length === 0}
+            >
+              {showMode ? '⏸ 停止整場' : '🎤 整場串播'}
+            </button>
+          </>
+        )}
         {showMode && (
           <select
             className="preview-top__interval"
@@ -369,9 +399,15 @@ function PreviewInner({ projectId }: { projectId: string }) {
         )}
       </header>
 
-      {error && <div className="preview-error">{error}</div>}
+      {error && !goneMessage && <div className="preview-error">{error}</div>}
 
-      {songsLoading ? (
+      {goneMessage ? (
+        <div className="preview-empty">
+          <h2>看不到這個專案</h2>
+          <p>{goneMessage}</p>
+          <button className="btn btn--primary" onClick={() => navigate('/preview')} style={{ marginTop: 16 }}>回專案清單</button>
+        </div>
+      ) : songsLoading ? (
         <div className="preview-loading">⏳ 載入中…</div>
       ) : songs.length === 0 ? (
         <div className="preview-empty">
@@ -383,6 +419,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
           projectId={projectId}
           song={selectedSong}
           cues={masterCues}
+          cuesReady={cuesReady}
           selectedCueId={selectedCueId}
           onSelectCue={setSelectedCueId}
           autoStep={autoStep}
@@ -392,6 +429,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
           modelUrl={modelUrl}
           cueName={selectedCue?.name}
           user={user}
+          projectRole={projectRole}
           onChangeStatus={changeStatus}
           onClose={() => setSelectedSongId(null)}
           onPickSong={setSelectedSongId}
@@ -403,7 +441,8 @@ function PreviewInner({ projectId }: { projectId: string }) {
           songsByStatus={songsByStatus}
           onPickSong={setSelectedSongId}
           onChangeStatus={changeStatus}
-          canApprove={user?.role === 'director' || user?.role === 'admin'}
+          projectRole={projectRole}
+          userId={user?.id ?? null}
         />
       )}
 
@@ -419,12 +458,13 @@ function PreviewInner({ projectId }: { projectId: string }) {
 /* ──────────── Status Board (overview) ──────────── */
 
 function StatusBoard({
-  songsByStatus, onPickSong, onChangeStatus, canApprove,
+  songsByStatus, onPickSong, onChangeStatus, projectRole, userId,
 }: {
   songsByStatus: Record<Status, Song[]>;
   onPickSong: (id: string) => void;
   onChangeStatus: (id: string, status: Status) => void;
-  canApprove: boolean;
+  projectRole: ProjectRole | null;
+  userId: string | null;
 }) {
   return (
     <div className="status-board">
@@ -439,31 +479,36 @@ function StatusBoard({
             {songsByStatus[col.key].length === 0 ? (
               <div className="status-col__empty">—</div>
             ) : (
-              songsByStatus[col.key].map(s => (
-                <div key={s.id} className="status-card">
-                  <button
-                    className="status-card__open"
-                    onClick={() => onPickSong(s.id)}
-                  >
-                    <div className="status-card__name">{s.name}</div>
-                    <div className="status-card__meta">
-                      {s.cueCount} cue{s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
-                    </div>
-                  </button>
-                  {canApprove && col.key === 'in_review' && (
-                    <div className="status-card__actions">
-                      <button
-                        className="btn btn--primary btn--sm"
-                        onClick={() => onChangeStatus(s.id, 'approved')}
-                      >通過</button>
-                      <button
-                        className="btn btn--ghost btn--sm"
-                        onClick={() => onChangeStatus(s.id, 'needs_changes')}
-                      >需修改</button>
-                    </div>
-                  )}
-                </div>
-              ))
+              songsByStatus[col.key].map(s => {
+                // 總覽只放審查中的快速按鈕（通過 / 需修改）；撤回通過請點進歌曲
+                const actions = col.key === 'in_review'
+                  ? songStatusActions({ role: projectRole, userId, song: s, flow: 'director' })
+                  : [];
+                return (
+                  <div key={s.id} className="status-card">
+                    <button
+                      className="status-card__open"
+                      onClick={() => onPickSong(s.id)}
+                    >
+                      <div className="status-card__name">{s.name}</div>
+                      <div className="status-card__meta">
+                        {s.cueCount} cue{s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
+                      </div>
+                    </button>
+                    {actions.length > 0 && (
+                      <div className="status-card__actions">
+                        {actions.map(a => (
+                          <button
+                            key={a.kind}
+                            className={'btn btn--sm ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
+                            onClick={() => onChangeStatus(s.id, a.to)}
+                          >{a.label}</button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
@@ -475,12 +520,14 @@ function StatusBoard({
 /* ──────────── Song Detail ──────────── */
 
 function SongDetail({
-  projectId, song, cues, selectedCueId, onSelectCue, autoStep, onToggleAutoStep,
-  stageObjects, viewportStates, modelUrl, cueName, user, onChangeStatus, onClose, onPickSong, songs, members,
+  projectId, song, cues, cuesReady, selectedCueId, onSelectCue, autoStep, onToggleAutoStep,
+  stageObjects, viewportStates, modelUrl, cueName, user, projectRole, onChangeStatus, onClose, onPickSong, songs, members,
 }: {
   projectId: string;
   song: Song;
   cues: Cue[];
+  /** 這首歌的 cue 讀完了沒（還在讀時不要說「沒有 cue」） */
+  cuesReady: boolean;
   selectedCueId: string | null;
   onSelectCue: (id: string) => void;
   autoStep: boolean;
@@ -490,13 +537,15 @@ function SongDetail({
   modelUrl: string | null;
   cueName?: string;
   user: ReturnType<typeof useAuth>['user'];
+  projectRole: ProjectRole | null;
   onChangeStatus: (songId: string, status: Status) => void | Promise<void>;
   onClose: () => void;
   onPickSong: (id: string) => void;
   songs: Song[];
   members: { id: string; name: string }[];
 }) {
-  const canApprove = user?.role === 'director' || user?.role === 'admin';
+  const actions = songStatusActions({ role: projectRole, userId: user?.id, song, flow: 'director' });
+  const actionsHint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user?.id, song, flow: 'director' }) : null;
   // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，導演這邊只看）
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
@@ -516,45 +565,53 @@ function SongDetail({
   const [pendingCommentAnchor, setPendingCommentAnchor] = useState<import('../lib/api').CommentAnchor | null>(null);
   const pendingAnchorRef = useRef<import('../lib/api').CommentAnchor | null>(null);
 
-  const refreshComments = useCallback(async () => {
-    setCommentsLoading(true);
+  // 留言是哪首歌的、那首歌已經看過哪些留言 —— 切歌後第一次讀到的不算「新留言」
+  // （以前切歌後第一次輪詢會把那首歌的舊留言全部當成新的跳出來）
+  const songIdRef = useRef(song.id);
+  songIdRef.current = song.id;
+  const knownRef = useRef<{ songId: string; ids: Set<string> } | null>(null);
+
+  const loadComments = useCallback(async (notify: boolean) => {
+    const sid = song.id;
     try {
-      const list = await api.listSongComments(projectId, song.id);
-      setComments(list);
+      const list = await api.listSongComments(projectId, sid);
+      if (songIdRef.current !== sid) return;  // 已經換到別首歌，丟掉
+      const known = knownRef.current;
+      if (notify && known && known.songId === sid) {
+        const fresh = list.filter(c => !known.ids.has(c.id) && !isOwnComment(c, user));
+        for (const c of fresh.slice(-3)) {
+          toast.info(`${c.author} 留言「${c.text.slice(0, 40)}${c.text.length > 40 ? '…' : ''}」`);
+        }
+      }
+      knownRef.current = { songId: sid, ids: new Set(list.map(c => c.id)) };
+      setComments(prevList => sameComments(prevList, list) ? prevList : list);
     } catch (e) {
-      console.warn('load comments failed', e);
+      if (!notify) console.warn('load comments failed', e);
     } finally {
-      setCommentsLoading(false);
+      if (songIdRef.current === sid) setCommentsLoading(false);
     }
+  }, [projectId, song.id, user]);
+  const loadCommentsRef = useRef(loadComments);
+  loadCommentsRef.current = loadComments;
+
+  // 切歌：先清掉上一首的留言，再讀這首的
+  useEffect(() => {
+    setComments([]);
+    setCommentsLoading(true);
+    knownRef.current = null;
+    void loadCommentsRef.current(false);
   }, [projectId, song.id]);
 
-  useEffect(() => { refreshComments(); }, [refreshComments]);
+  // 自動更新留言：每 25 秒 + 切回分頁時；有別人的新留言就跳提示
+  useLiveRefresh(() => loadComments(true));
 
-  // 每 60 秒輪詢一次（導演端）— 比對新增彈 toast
-  const lastSeenIdsRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const id = window.setInterval(async () => {
-      try {
-        const list = await api.listSongComments(projectId, song.id);
-        const knownIds = lastSeenIdsRef.current;
-        if (knownIds.size === 0) {
-          // 第一次：記下既有 id，不通知
-          lastSeenIdsRef.current = new Set(list.map(c => c.id));
-        } else {
-          const fresh = list.filter(c => !knownIds.has(c.id) && c.author !== user?.name);
-          if (fresh.length > 0) {
-            for (const c of fresh.slice(-3)) {
-              toast.info(`💬 ${c.author}「${c.text.slice(0, 40)}${c.text.length > 40 ? '…' : ''}」`);
-            }
-            lastSeenIdsRef.current = new Set(list.map(c => c.id));
-          }
-        }
-        setComments(list);
-      } catch { /* swallow */ }
-    }, 60_000);
-    return () => clearInterval(id);
-  }, [projectId, song.id, user?.name]);
-  useEffect(() => { lastSeenIdsRef.current = new Set(comments.map(c => c.id)); }, [song.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 自己留言 / 刪除 / 標已解決後拿到的最新整串
+  const handleCommentsChange = useCallback((list: SongComment[]) => {
+    knownRef.current = { songId: songIdRef.current, ids: new Set(list.map(c => c.id)) };
+    setComments(list);
+  }, []);
+
+  const noCues = cuesReady && cues.length === 0;
 
   return (
     <div className="song-detail">
@@ -567,25 +624,18 @@ function SongDetail({
         </span>
         <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>
         <span className="grow" />
-        {canApprove && (
+        {actions.length > 0 && (
           <div className="song-detail__approve">
-            {song.status !== 'approved' && (
-              <button className="btn btn--primary btn--sm" onClick={() => onChangeStatus(song.id, 'approved')}>
-                ✓ 通過
-              </button>
-            )}
-            {song.status !== 'needs_changes' && song.status !== 'approved' && (
-              <button className="btn btn--ghost btn--sm" onClick={() => onChangeStatus(song.id, 'needs_changes')}>
-                ✏️ 需修改
-              </button>
-            )}
-            {song.status === 'approved' && (
-              <button className="btn btn--ghost btn--sm" onClick={() => onChangeStatus(song.id, 'in_review')}>
-                撤回通過
-              </button>
-            )}
+            {actions.map(a => (
+              <button
+                key={a.kind}
+                className={'btn btn--sm ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
+                onClick={() => onChangeStatus(song.id, a.to)}
+              >{a.label}</button>
+            ))}
           </div>
         )}
+        {actionsHint && <span className="muted small">{actionsHint}</span>}
       </div>
 
       <div className="song-detail__body">
@@ -601,54 +651,53 @@ function SongDetail({
           />
 
           <div className="song-detail__stage">
-            {cues.length === 0 ? (
-              <div className="song-detail__no-cue">
-                <div className="empty-icon">🎬</div>
-                <p>這首歌還沒有 cue</p>
+            {/* 沒有 cue 也照樣顯示舞台（物件在預設位置），導演才看得到模型 */}
+            <StageScene
+              key={`${projectId}:${song.id}`}
+              states={viewportStates}
+              stageObjects={stageObjects}
+              selectedObjectIds={[]}
+              onSelect={() => {}}
+              onTransform={() => {}}
+              cueName={noCues ? '預設位置（還沒有 cue）' : cueName}
+              modelUrl={modelUrl}
+              readOnly
+              defaultRenderMode="live"
+              cueKey={selectedCueId}
+              crossfadeSeconds={cueTransitionSeconds(cues.find(c => c.id === selectedCueId))}
+              comments={comments}
+              onCommentPinClick={(c) => {
+                const el = document.getElementById(`comment-${c.id}`);
+                if (el) {
+                  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  el.classList.add('song-comment--flash');
+                  setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
+                }
+              }}
+              bookmarkScope={projectId}
+              scaleCorrection={view.scaleCorrection}
+              onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+              mechanismOffsets={view.mechanismOffsets}
+              lookSettings={personalLook.effective}
+              onLookSettingsChange={personalLook.set}
+              lookCustomized={personalLook.customized}
+              onLookReset={personalLook.reset}
+              onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
+              materialOverrides={view.materialOverrides}
+              homeView={view.homeView}
+              onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
+              onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
+              onAddAnchoredComment={(anchor) => {
+                // 上層存暫存的 anchor，留言區會接著用
+                pendingAnchorRef.current = anchor;
+                // 觸發留言區「需要 anchor 模式」 — 用 pendingCommentTime 0 + 一個 flag
+                setPendingCommentAnchor(anchor);
+              }}
+            />
+            {noCues && (
+              <div className="song-detail__cuebar">
+                <span className="cuebar-hint">這首歌還沒有 cue，3D 顯示的是物件的預設位置</span>
               </div>
-            ) : (
-              <StageScene
-                key={`${projectId}:${song.id}`}
-                states={viewportStates}
-                stageObjects={stageObjects}
-                selectedObjectIds={[]}
-                onSelect={() => {}}
-                onTransform={() => {}}
-                cueName={cueName}
-                modelUrl={modelUrl}
-                readOnly
-                defaultRenderMode="live"
-                cueKey={selectedCueId}
-                crossfadeSeconds={cueTransitionSeconds(cues.find(c => c.id === selectedCueId))}
-                comments={comments}
-                onCommentPinClick={(c) => {
-                  const el = document.getElementById(`comment-${c.id}`);
-                  if (el) {
-                    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    el.classList.add('song-comment--flash');
-                    setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
-                  }
-                }}
-                bookmarkScope={projectId}
-                scaleCorrection={view.scaleCorrection}
-                onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
-                mechanismOffsets={view.mechanismOffsets}
-                lookSettings={personalLook.effective}
-                onLookSettingsChange={personalLook.set}
-                lookCustomized={personalLook.customized}
-                onLookReset={personalLook.reset}
-                onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
-                materialOverrides={view.materialOverrides}
-                homeView={view.homeView}
-                onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
-                onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
-                onAddAnchoredComment={(anchor) => {
-                  // 上層存暫存的 anchor，留言區會接著用
-                  pendingAnchorRef.current = anchor;
-                  // 觸發留言區「需要 anchor 模式」 — 用 pendingCommentTime 0 + 一個 flag
-                  setPendingCommentAnchor(anchor);
-                }}
-              />
             )}
             {cues.length > 0 && (
               <div className="song-detail__cuebar">
@@ -683,10 +732,11 @@ function SongDetail({
             projectId={projectId}
             song={song}
             user={user}
+            projectRole={projectRole}
             comments={comments}
             loading={commentsLoading}
-            onChange={setComments}
-            onRefresh={refreshComments}
+            onChange={handleCommentsChange}
+            onRefresh={() => loadComments(false)}
             pendingTime={pendingCommentTime}
             onConsumedPendingTime={() => setPendingCommentTime(null)}
             pendingAnchor={pendingCommentAnchor}
@@ -702,12 +752,13 @@ function SongDetail({
 /* ──────────── Comments ──────────── */
 
 function SongComments({
-  projectId, song, user, comments, loading, onChange, onRefresh,
+  projectId, song, user, projectRole, comments, loading, onChange, onRefresh,
   pendingTime, onConsumedPendingTime, pendingAnchor, onConsumedPendingAnchor, members,
 }: {
   projectId: string;
   song: Song;
   user: ReturnType<typeof useAuth>['user'];
+  projectRole: ProjectRole | null;
   comments: SongComment[];
   loading: boolean;
   onChange: (next: SongComment[]) => void;
@@ -724,10 +775,19 @@ function SongComments({
   const [attachTime, setAttachTime] = useState<number | null>(null);
   const [attachAnchor, setAttachAnchor] = useState<import('../lib/api').CommentAnchor | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // 修改留言（自己的，或 admin）
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
   // @-mention 自動完成
   const [mentionState, setMentionState] = useState<{
     open: boolean; query: string; startIdx: number; activeIdx: number;
   }>({ open: false, query: '', startIdx: 0, activeIdx: 0 });
+
+  // 切歌：清掉打到一半的修改 / 多選
+  useEffect(() => {
+    setEditingId(null);
+    setSelectedIds(new Set());
+  }, [song.id]);
 
   function handleTextChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     const v = e.target.value;
@@ -756,17 +816,6 @@ function SongComments({
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
-  function extractMentions(t: string): { userId: string; name: string }[] {
-    const names = (members || []).map(m => m.name).filter(Boolean);
-    const found = new Map<string, { userId: string; name: string }>();
-    for (const m of members || []) {
-      const re = new RegExp('@' + escapeRegExp(m.name) + '\\b', 'g');
-      if (re.test(t)) found.set(m.id, { userId: m.id, name: m.name });
-    }
-    void names;
-    return Array.from(found.values());
-  }
-
   const filteredMembers = (members || []).filter(m =>
     m.name.toLowerCase().includes(mentionState.query.toLowerCase())
   ).slice(0, 6);
@@ -782,6 +831,9 @@ function SongComments({
     });
   }
   function clearSelection() { setSelectedIds(new Set()); }
+  const canModify = (c: SongComment) => canModifyComment(c, user, projectRole);
+  // 多選裡面可以刪的（自己的，或 admin）
+  const deletableSelected = comments.filter(c => selectedIds.has(c.id) && canModify(c));
   // Filter / sort
   const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'resolved'>(() => {
     try { return (localStorage.getItem('sp_comment_filter') as 'all' | 'open' | 'resolved') || 'open'; } catch { return 'open'; }
@@ -814,20 +866,19 @@ function SongComments({
     if (!t) return;
     setPosting(true);
     try {
+      // 作者 / 身分由後台依登入的人填
       const updated = await api.postSongComment(projectId, song.id, {
         text: t,
-        author: user.name,
-        role: user.role === 'director' ? 'director' : (user.role === 'animator' ? 'animator' : 'designer'),
         time: attachTime ?? 0,
         anchor: attachAnchor ?? undefined,
-        mentions: extractMentions(t),
+        mentions: extractMentions(t, members),
       });
       onChange(updated);
       setText('');
       setAttachTime(null);
       setAttachAnchor(null);
     } catch (e) {
-      toast.error('留言失敗：' + msg(e));
+      toast.error('留言失敗：' + friendlyError(e));
     } finally {
       setPosting(false);
     }
@@ -838,7 +889,16 @@ function SongComments({
     try {
       const updated = await api.deleteSongComment(projectId, song.id, id);
       onChange(updated);
-    } catch (e) { toast.error('刪除失敗：' + msg(e)); }
+    } catch (e) { toast.error('刪除失敗：' + friendlyError(e)); }
+  }
+
+  async function handleSaveEdit(id: string) {
+    const t = editText.trim();
+    if (!t) return;
+    try {
+      onChange(await api.patchSongComment(projectId, song.id, id, { text: t }));
+      setEditingId(null);
+    } catch (e) { toast.error('修改失敗：' + friendlyError(e)); }
   }
 
   async function bulkMarkResolved() {
@@ -849,11 +909,8 @@ function SongComments({
     let lastList: SongComment[] | null = null;
     for (const id of ids) {
       try {
-        const updated = await api.patchSongComment(projectId, song.id, id, {
-          status: 'resolved',
-          resolvedBy: user?.name || '',
-          resolvedAt: new Date().toISOString(),
-        });
+        // 誰解決、什麼時候由後台記
+        const updated = await api.patchSongComment(projectId, song.id, id, { status: 'resolved' });
         lastList = updated;
         okCount++;
       } catch { /* swallow per-item, continue */ }
@@ -864,9 +921,11 @@ function SongComments({
   }
 
   async function bulkDelete() {
-    const ids = Array.from(selectedIds);
+    const ids = deletableSelected.map(c => c.id);
     if (ids.length === 0) return;
-    if (!confirm(`刪除 ${ids.length} 則留言？無法復原。`)) return;
+    const skipped = selectedIds.size - ids.length;
+    const note = skipped > 0 ? `\n\n（另外 ${skipped} 則是別人的留言，只有留言的人或 admin 能刪，會跳過）` : '';
+    if (!confirm(`刪除 ${ids.length} 則留言？無法復原。${note}`)) return;
     let okCount = 0;
     let lastList: SongComment[] | null = null;
     for (const id of ids) {
@@ -884,13 +943,9 @@ function SongComments({
   async function handleToggleResolved(c: SongComment) {
     const next = c.status === 'resolved' ? 'open' : 'resolved';
     try {
-      const updated = await api.patchSongComment(projectId, song.id, c.id, {
-        status: next,
-        resolvedBy: next === 'resolved' && user ? user.name : '',
-        resolvedAt: next === 'resolved' ? new Date().toISOString() : '',
-      });
+      const updated = await api.patchSongComment(projectId, song.id, c.id, { status: next });
       onChange(updated);
-    } catch (e) { toast.error('狀態切換失敗：' + msg(e)); }
+    } catch (e) { toast.error('狀態切換失敗：' + friendlyError(e)); }
   }
 
   // Filter + sort
@@ -917,8 +972,12 @@ function SongComments({
       {selectedIds.size > 0 && (
         <div className="song-comments__bulk">
           <span>已選 <strong>{selectedIds.size}</strong> 則</span>
-          <button className="btn btn--sm btn--primary" onClick={bulkMarkResolved}>✓ 標已解決</button>
-          <button className="btn btn--sm btn--ghost" onClick={bulkDelete}>🗑 刪除</button>
+          <button className="btn btn--sm btn--primary" onClick={bulkMarkResolved}>標已解決</button>
+          {deletableSelected.length > 0 && (
+            <button className="btn btn--sm btn--ghost" onClick={bulkDelete}>
+              刪除{deletableSelected.length < selectedIds.size ? `（${deletableSelected.length} 則可刪）` : ''}
+            </button>
+          )}
           <button className="link-btn" onClick={clearSelection}>取消</button>
         </div>
       )}
@@ -966,8 +1025,8 @@ function SongComments({
             <textarea
               ref={textareaRef}
               placeholder={attachTime !== null
-                ? `在 ${formatTimeMS(attachTime)} 留言（@ 提及人會通知 TA）`
-                : '留言給動畫師（例：第 3 個 cue 機關升起來太慢；@ 開頭可提及成員）'}
+                ? `在 ${formatTimeMS(attachTime)} 留言（打 @ 可以提及成員）`
+                : '留言給動畫師（例：第 3 個 cue 機關升起來太慢；打 @ 可以提及成員）'}
               value={text}
               onChange={handleTextChange}
               onKeyDown={(e) => {
@@ -1020,6 +1079,7 @@ function SongComments({
           {filteredComments.map(c => {
             const isResolved = c.status === 'resolved';
             const isSelected = selectedIds.has(c.id);
+            const editing = editingId === c.id;
             return (
               <li
                 key={c.id}
@@ -1043,9 +1103,9 @@ function SongComments({
                     <span className="song-comment__attach" title="3D 位置">📌</span>
                   )}
                   {isResolved && (
-                    <span className="song-comment__resolved-pill" title={c.resolvedBy ? `${c.resolvedBy} 解決於 ${formatTime(c.resolvedAt || '')}` : '已解決'}>✓ 已解決</span>
+                    <span className="song-comment__resolved-pill" title={c.resolvedBy ? `${c.resolvedBy} 解決於 ${formatRelativeTime(c.resolvedAt || '')}` : '已解決'}>✓ 已解決</span>
                   )}
-                  <span className="song-comment__time">{formatTime(c.createdAt)}</span>
+                  <span className="song-comment__time">{formatRelativeTime(c.createdAt)}</span>
                   {user && (
                     <button
                       className="song-comment__del"
@@ -1053,11 +1113,29 @@ function SongComments({
                       title={isResolved ? '標為未解決' : '標為已解決'}
                     >{isResolved ? '↺' : '✓'}</button>
                   )}
-                  {user && c.author === user.name && (
-                    <button className="song-comment__del" onClick={() => handleDelete(c.id)} title="刪除">×</button>
+                  {canModify(c) && !editing && (
+                    <>
+                      <button
+                        className="song-comment__del"
+                        style={{ fontSize: 11.5 }}
+                        onClick={() => { setEditingId(c.id); setEditText(c.text); }}
+                        title="修改"
+                      >修改</button>
+                      <button className="song-comment__del" onClick={() => handleDelete(c.id)} title="刪除">×</button>
+                    </>
                   )}
                 </div>
-                <div className="song-comment__text">{c.text}</div>
+                {editing ? (
+                  <div className="song-comments__compose">
+                    <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3} autoFocus />
+                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                      <button className="btn btn--ghost btn--sm" onClick={() => setEditingId(null)}>取消</button>
+                      <button className="btn btn--primary btn--sm" onClick={() => handleSaveEdit(c.id)} disabled={!editText.trim()}>儲存</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="song-comment__text">{c.text}</div>
+                )}
               </li>
             );
           })}
@@ -1424,34 +1502,8 @@ function formatTimeMS(s: number): string {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 }
 
-function formatRelativeTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const diff = (Date.now() - d.getTime()) / 1000;
-    if (diff < 60) return '剛剛';
-    if (diff < 3600) return `${Math.floor(diff / 60)}m`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
-    return d.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' });
-  } catch { return iso; }
-}
-
 function roleLabel(r: SongComment['role']): string {
   if (r === 'animator') return '動畫師';
   if (r === 'director') return '導演';
   return '製作';
 }
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const min = Math.floor(diffMs / 60000);
-    if (min < 1) return '剛剛';
-    if (min < 60) return `${min} 分鐘前`;
-    const h = Math.floor(min / 60);
-    if (h < 24) return `${h} 小時前`;
-    return d.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' });
-  } catch { return iso; }
-}
-function msg(e: unknown): string { return e instanceof Error ? e.message : String(e); }
-function escapeRegExp(s: string): string { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }

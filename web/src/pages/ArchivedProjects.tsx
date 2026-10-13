@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import * as api from '../lib/api';
 import type { Project } from '../lib/mockData';
+import { parseServerTime } from '../lib/serverTime';
 import { toast } from '../lib/toast';
 import './ArchivedProjects.css';
 
@@ -84,6 +85,6 @@ export default function ArchivedProjects() {
 
 function formatDate(iso: string): string {
   try {
-    return new Date(iso).toLocaleDateString('zh-TW', { year: 'numeric', month: 'numeric', day: 'numeric' });
+    return new Date(parseServerTime(iso)).toLocaleDateString('zh-TW', { year: 'numeric', month: 'numeric', day: 'numeric' });
   } catch { return iso; }
 }

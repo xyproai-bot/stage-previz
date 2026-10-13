@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
 import type { ActivityEntry, ActivityAction, ActivityTargetType } from '../lib/api';
+import { parseServerTime } from '../lib/serverTime';
 import './ActivityDrawer.css';
 
 interface Props {
@@ -28,7 +29,7 @@ const ACTION_ICON: Record<ActivityAction, string> = {
 };
 
 function formatTime(iso: string) {
-  const d = new Date(iso + (iso.includes('Z') ? '' : 'Z'));
+  const d = new Date(parseServerTime(iso));  // 手動加 Z 的寫法 Safari 讀不懂（中間是空白不是 T）
   const ms = Date.now() - d.getTime();
   const sec = Math.floor(ms / 1000);
   if (sec < 60) return '剛才';

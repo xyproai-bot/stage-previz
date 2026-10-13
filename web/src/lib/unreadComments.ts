@@ -7,6 +7,12 @@
 
 import type { SongComment } from './api';
 import { songCommentSession } from './api';
+import { isOwnComment } from './songReview';
+
+/** 我是誰：有 id 就用 id 比（後台會在留言記 authorUserId）；只有名字的舊寫法也還能用 */
+type Me = { id: string; name: string } | string | null;
+const isMine = (c: SongComment, me: Me) =>
+  typeof me === 'string' ? c.author === me : isOwnComment(c, me);
 
 function key(userId: string, projectId: string, songId: string): string {
   return `sp_seen:${userId}:${songCommentSession(projectId, songId)}`;
@@ -25,18 +31,18 @@ export function getLastSeen(userId: string, projectId: string, songId: string): 
 }
 
 /** 算未讀數：comments 中 createdAt > lastSeen 且作者不是自己（自己留言不算未讀） */
-export function unreadCount(comments: SongComment[], lastSeenIso: string | null, ownAuthor: string | null): number {
+export function unreadCount(comments: SongComment[], lastSeenIso: string | null, me: Me): number {
   if (comments.length === 0) return 0;
   if (!lastSeenIso) {
     // 從沒看過 → 都算未讀（但排除自己留的）
-    return comments.filter(c => c.author !== ownAuthor).length;
+    return comments.filter(c => !isMine(c, me)).length;
   }
-  return comments.filter(c => c.author !== ownAuthor && c.createdAt > lastSeenIso).length;
+  return comments.filter(c => !isMine(c, me) && c.createdAt > lastSeenIso).length;
 }
 
 /** 算給定 song / 整個 comments map 的未讀（用 getLastSeen） */
 export function songUnread(
-  userId: string, projectId: string, songId: string, comments: SongComment[], ownAuthor: string | null
+  userId: string, projectId: string, songId: string, comments: SongComment[], me: Me
 ): number {
-  return unreadCount(comments, getLastSeen(userId, projectId, songId), ownAuthor);
+  return unreadCount(comments, getLastSeen(userId, projectId, songId), me);
 }

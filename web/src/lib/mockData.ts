@@ -2,6 +2,15 @@
 
 export type ProjectStatus = 'active' | 'in_review' | 'archived';
 export type SongStatus = 'todo' | 'in_review' | 'approved' | 'needs_changes';
+/** 在「這個專案」裡的角色（跟帳號的預設角色可能不一樣；審查按鈕看這個） */
+export type ProjectRole = 'admin' | 'animator' | 'director';
+
+export interface ProjectMember {
+  id: string;
+  name: string;
+  avatarColor: string;
+  role?: ProjectRole;                    // 後台有給；舊的 mock 可省略
+}
 
 export interface SongStatusCounts {
   todo: number;
@@ -23,7 +32,9 @@ export interface Project {
   cueCount: number;
   proposalCount: number;
   updatedAt: string; // ISO
-  members: { id: string; name: string; avatarColor: string }[];
+  members: ProjectMember[];
+  /** 我在這個專案的角色（全站 admin 一律 admin；不是成員 = null） */
+  myRole?: ProjectRole | null;
 }
 
 const palette = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];

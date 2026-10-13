@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api';
 import type { StageObjectCategory } from '../lib/api';
 import { parseGlbFile, classifyMeshName, prettifyName, type ParsedMesh } from '../lib/parseGlb';
+import { friendlyError } from '../lib/songReview';
 import './UploadModelDialog.css';
 
 const CATEGORY_OPTIONS: Array<[StageObjectCategory, string, string]> = [
@@ -20,7 +21,17 @@ interface Props {
   onImported: () => void;
 }
 
-type Stage = 'pick' | 'parsing' | 'review' | 'importing' | 'done' | 'error';
+type Stage = 'pick' | 'parsing' | 'review' | 'confirmReplace' | 'importing' | 'done' | 'error';
+
+/** 「清除現有物件」會刪掉的東西（後台算的） */
+interface WillDelete { stageObjects: number; cueStates: number; cuesAffected: number }
+
+function readWillDelete(v: unknown): WillDelete | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  const n = (x: unknown) => (typeof x === 'number' && isFinite(x) ? x : 0);
+  return { stageObjects: n(o.stageObjects), cueStates: n(o.cueStates), cuesAffected: n(o.cuesAffected) };
+}
 
 export default function UploadModelDialog({ open, projectId, onClose, onImported }: Props) {
   const [stage, setStage] = useState<Stage>('pick');
@@ -38,6 +49,8 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   const [fetchingUrl, setFetchingUrl] = useState(false);
   // 3D pin 留言會被影響的 mesh 名稱（current 模型有但新模型沒有的）
   const [orphanedMeshes, setOrphanedMeshes] = useState<string[]>([]);
+  // 勾了「清除現有物件」：後台先回會刪掉多少，給使用者在這個視窗裡確認
+  const [replaceInfo, setReplaceInfo] = useState<{ message: string; willDelete: WillDelete } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -50,6 +63,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       setFilename('');
       setPickedFile(null);
       setUploadProgress('');
+      setReplaceInfo(null);
     }
   }, [open]);
 
@@ -130,36 +144,77 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
     setMeshes(prev => prev.map((m, i) => i === idx ? { ...m, ...patch } : m));
   }
 
-  async function doImport() {
-    setStage('importing');
-    setError(null);
-    try {
-      // Step 1：把 .glb 真檔上傳到 R2（如果有 file）
-      if (pickedFile) {
-        setUploadProgress(`上傳 ${(pickedFile.size / 1024 / 1024).toFixed(1)} MB 中…`);
-        setUploadPct(0);
-        await api.uploadModel(projectId, pickedFile, (loaded, total) => {
-          if (total > 0) setUploadPct(Math.min(100, Math.round((loaded / total) * 100)));
-        });
-        setUploadPct(100);
-      }
+  function importItems() {
+    return meshes.map(m => ({
+      meshName: m.meshName,
+      displayName: m.displayName || m.meshName,
+      category: m.category,
+      defaultPosition: m.defaultPosition,
+      defaultRotation: m.defaultRotation,
+      defaultScale: m.defaultScale,
+    }));
+  }
 
-      // Step 2：bulk insert stage_objects metadata
+  // 把 .glb 真檔上傳到 R2（如果有 file）
+  async function uploadPickedFile() {
+    if (!pickedFile) return;
+    setUploadProgress(`上傳 ${(pickedFile.size / 1024 / 1024).toFixed(1)} MB 中…`);
+    setUploadPct(0);
+    await api.uploadModel(projectId, pickedFile, (loaded, total) => {
+      if (total > 0) setUploadPct(Math.min(100, Math.round((loaded / total) * 100)));
+    });
+    setUploadPct(100);
+  }
+
+  function finishImport() {
+    setStage('done');
+    setTimeout(() => { onImported(); onClose(); }, 1500);
+  }
+
+  /**
+   * withReplace：這次要不要清除現有物件（預設照勾選框）
+   * confirmed：使用者已經在確認畫面看過會刪掉多少、按了確定
+   */
+  async function doImport(opts: { withReplace?: boolean; confirmed?: boolean } = {}): Promise<void> {
+    const withReplace = opts.withReplace ?? replace;
+    const items = importItems();
+    setError(null);
+    setStage('importing');
+    setUploadPct(0);
+
+    // 要清除現有物件：先問後台會刪掉多少（沒帶確認的話後台一律回 409、什麼都不刪），
+    // 在上傳模型檔之前問 → 使用者按「回上一步」的話什麼都沒動
+    if (withReplace && !opts.confirmed) {
+      setUploadProgress('確認清除會影響哪些 cue…');
+      try {
+        await api.bulkCreateStageObjects(projectId, items, { replace: true });
+        // 舊版後台不會先問，直接清除並匯入了 → 物件已經換好，接著上傳模型檔就好
+        await uploadPickedFile();
+        finishImport();
+      } catch (e) {
+        const willDelete = readWillDelete((e as api.ApiError).data?.willDelete);
+        if (api.errorStatus(e) === 409 && willDelete) {
+          if (willDelete.stageObjects === 0) {
+            // 本來就沒有物件，沒東西會被刪 → 不用問
+            return doImport({ withReplace: true, confirmed: true });
+          }
+          setReplaceInfo({ message: e instanceof Error ? e.message : '', willDelete });
+          setStage('confirmReplace');
+          return;
+        }
+        setError(friendlyError(e));
+        setStage('error');
+      }
+      return;
+    }
+
+    try {
+      await uploadPickedFile();
       setUploadProgress('匯入物件清單…');
-      const items = meshes.map(m => ({
-        meshName: m.meshName,
-        displayName: m.displayName || m.meshName,
-        category: m.category,
-        defaultPosition: m.defaultPosition,
-        defaultRotation: m.defaultRotation,
-        defaultScale: m.defaultScale,
-      }));
-      const r = await api.bulkCreateStageObjects(projectId, items, { replace });
-      setStage('done');
-      setTimeout(() => { onImported(); onClose(); }, 1500);
-      void r;
+      await api.bulkCreateStageObjects(projectId, items, withReplace ? { replace: true, confirmReplace: true } : undefined);
+      finishImport();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(friendlyError(e));
       setStage('error');
     }
   }
@@ -172,7 +227,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   const otherCount = counts.other;
 
   return (
-    <div className="upload-overlay" onClick={() => stage !== 'parsing' && stage !== 'importing' && onClose()}>
+    <div className="upload-overlay" onClick={() => stage !== 'parsing' && stage !== 'importing' && stage !== 'confirmReplace' && onClose()}>
       <div className="upload-dialog" onClick={(e) => e.stopPropagation()}>
         <header className="upload-dialog__header">
           <h2>上傳 3D 模型（.glb / .gltf）</h2>
@@ -348,14 +403,44 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
                   checked={replace}
                   onChange={(e) => setReplace(e.target.checked)}
                 />
-                <span>清除這個專案現有的物件後再匯入</span>
+                <span>清除這個專案現有的物件後再匯入（每個 cue 裡這些物件的位置也會一起刪掉，匯入前會再跟你確認一次）</span>
               </label>
             </div>
 
             <footer className="upload-dialog__footer">
               <button className="btn btn--ghost" onClick={onClose}>取消</button>
-              <button className="btn btn--primary" onClick={doImport}>
+              <button className="btn btn--primary" onClick={() => doImport()}>
                 匯入 {meshes.length} 個物件
+              </button>
+            </footer>
+          </>
+        )}
+
+        {stage === 'confirmReplace' && replaceInfo && (
+          <>
+            <div className="upload-replace-confirm">
+              <strong>確定要清除現有的物件嗎？</strong>
+              {replaceInfo.message && <p>{replaceInfo.message}</p>}
+              <ul>
+                <li>會刪掉 <b>{replaceInfo.willDelete.stageObjects}</b> 個物件</li>
+                {replaceInfo.willDelete.cueStates > 0 ? (
+                  <li>影響 <b>{replaceInfo.willDelete.cuesAffected}</b> 個 cue，共 <b>{replaceInfo.willDelete.cueStates}</b> 筆物件位置（不能復原）</li>
+                ) : (
+                  <li>目前沒有 cue 調過這些物件的位置</li>
+                )}
+                <li>模型檔還沒上傳，按「回上一步」什麼都不會改</li>
+              </ul>
+              <p className="muted">
+                只是換新版模型、物件名稱沒變的話，不用清除：選「不清除，直接匯入」，各個 cue 的位置都會留著。
+              </p>
+            </div>
+            <footer className="upload-dialog__footer">
+              <button className="btn btn--ghost" onClick={() => setStage('review')}>回上一步</button>
+              <button className="btn btn--ghost" onClick={() => { setReplace(false); void doImport({ withReplace: false }); }}>
+                不清除，直接匯入
+              </button>
+              <button className="btn btn--primary upload-replace-confirm__danger" onClick={() => doImport({ withReplace: true, confirmed: true })}>
+                確定清除並匯入
               </button>
             </footer>
           </>

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import AdminLayout from '../components/AdminLayout';
 import * as api from '../lib/api';
 import type { SharedAsset } from '../lib/api';
+import { parseServerTime } from '../lib/serverTime';
 import { useAuth } from '../lib/auth';
 import './Templates.css';
 
@@ -11,7 +12,7 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 function formatTime(iso: string) {
-  const d = new Date(iso + (iso.includes('Z') ? '' : 'Z'));
+  const d = new Date(parseServerTime(iso));  // 手動加 Z 的寫法 Safari 讀不懂（中間是空白不是 T）
   return d.toLocaleDateString('zh-TW') + ' ' + d.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
 }
 

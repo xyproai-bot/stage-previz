@@ -1,6 +1,6 @@
 // API client — 對接 cf-worker 在 proxy.haimiaan.com 的 endpoints
 
-import type { Project } from './mockData';
+import type { Project, ProjectRole } from './mockData';
 import { saveStatus } from './saveStatus';
 import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/materialOverrides';
@@ -56,7 +56,7 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
         if (err?.error) msg = err.error;
       } catch { /* ignore */ }
       // data = 後台回的整個錯誤內容（例如 409 時的 currentStatus / willDelete），畫面需要時可以讀
-      const e: Error & { status?: number; data?: Record<string, unknown> } = new Error(msg);
+      const e: ApiError = new Error(msg);
       e.status = resp.status;
       e.data = errBody;
       throw e;
@@ -71,6 +71,15 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw e;
   }
+}
+
+/** http() 丟出來的錯誤：status = HTTP 狀態碼；data = 後台回的整個錯誤內容 */
+export type ApiError = Error & { status?: number; data?: Record<string, unknown> };
+
+/** 錯誤的 HTTP 狀態碼（不是 API 錯誤 / 網路斷線 → undefined） */
+export function errorStatus(e: unknown): number | undefined {
+  const s = (e as { status?: unknown } | null)?.status;
+  return typeof s === 'number' ? s : undefined;
 }
 
 // ─── Auth ───
@@ -901,6 +910,7 @@ export interface SongComment {
   email: string | null;
   role: 'designer' | 'director' | 'animator';
   createdAt: string;
+  authorUserId?: string;   // 留言的人（後台依登入的人填；很舊的留言沒有）
   anchor?: CommentAnchor;  // 3D 錨點
   status?: 'open' | 'resolved';
   resolvedBy?: string;
@@ -926,9 +936,15 @@ async function commentsFetch<T>(session: string, init?: RequestInit, extraQuery 
   const resp = await fetch(url, { credentials: 'include', ...init, headers });
   if (!resp.ok) {
     let msg = `HTTP ${resp.status}`;
-    try { const e = await resp.json(); if (e?.error) msg = e.error; } catch {}
-    const err: Error & { status?: number } = new Error(msg);
+    let errBody: Record<string, unknown> | undefined;
+    try {
+      const e = await resp.json();
+      if (e && typeof e === 'object') errBody = e;
+      if (e?.error) msg = e.error;
+    } catch {}
+    const err: ApiError = new Error(msg);
     err.status = resp.status;
+    err.data = errBody;
     throw err;
   }
   return resp.json() as Promise<T>;
@@ -945,15 +961,14 @@ export async function listSongComments(projectId: string, songId: string): Promi
   }
 }
 
+// 作者 / 身分 / 誰解決的：後台依登入的人填（前端送的名字不算數），所以這裡不用帶
 export async function postSongComment(
   projectId: string, songId: string,
-  comment: { text: string; author: string; role: SongComment['role']; time?: number; x?: number; y?: number; email?: string | null; anchor?: CommentAnchor; mentions?: { userId: string; name: string }[] }
+  comment: { text: string; time?: number; x?: number; y?: number; email?: string | null; anchor?: CommentAnchor; mentions?: { userId: string; name: string }[] }
 ): Promise<SongComment[]> {
   const c: Record<string, unknown> = {
     id: 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
     text: comment.text,
-    author: comment.author,
-    role: comment.role,
     time: comment.time ?? 0,
     x: comment.x ?? 0.5,
     y: comment.y ?? 0.5,
@@ -978,9 +993,10 @@ export async function deleteSongComment(projectId: string, songId: string, comme
   return Array.isArray(data.comments) ? data.comments : [];
 }
 
+// 改文字：留言的人自己或 admin；標已解決 / 重新打開：成員都可以（誰、什麼時候由後台記）
 export async function patchSongComment(
   projectId: string, songId: string, commentId: string,
-  patch: Partial<{ status: 'open' | 'resolved'; text: string; resolvedBy: string; resolvedAt: string }>
+  patch: Partial<{ status: 'open' | 'resolved'; text: string }>
 ): Promise<SongComment[]> {
   const data = await commentsFetch<{ comments: SongComment[] }>(
     songCommentSession(projectId, songId),
@@ -994,6 +1010,12 @@ export async function patchSongComment(
 export async function getProjectMeta(projectId: string): Promise<Project | null> {
   const list = await listProjects();
   return list.find(p => p.id === projectId) || null;
+}
+
+/** 單一專案 + 我在這個專案的角色（封存的只有 admin 拿得到；找不到 / 沒權限會丟錯誤，status 404 / 403） */
+export async function getProjectInfo(projectId: string): Promise<{ project: ProjectFull; myRole: ProjectRole | null }> {
+  const data = await http<{ project: ProjectFull; myRole?: ProjectRole | null }>(`/api/projects/${encodeURIComponent(projectId)}`);
+  return { project: data.project, myRole: data.myRole ?? null };
 }
 
 // ─── Drive integration（OAuth + 同步） ────────

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
 import type { ModelVersion } from '../lib/api';
+import { parseServerTime } from '../lib/serverTime';
 import './ModelVersionsDialog.css';
 
 interface Props {
@@ -13,7 +14,7 @@ interface Props {
 
 function formatTime(iso: string | null) {
   if (!iso) return '—';
-  const d = new Date(iso);
+  const d = new Date(parseServerTime(iso));  // 後台時間是 UTC 沒寫時區，不轉會差 8 小時
   const ms = Date.now() - d.getTime();
   const min = Math.floor(ms / 60000);
   if (min < 1) return '剛才';

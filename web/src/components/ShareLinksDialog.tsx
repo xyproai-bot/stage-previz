@@ -6,6 +6,7 @@ import {
   composeSlug, randomSlugSuffix, slugBaseFromName, slugProblem, slugProblemMessage, splitSlug,
 } from '../lib/shareSlug';
 import { shareSlugUrl, shareTokenUrl } from '../lib/siteUrl';
+import { parseServerTime } from '../lib/serverTime';
 import './ShareLinksDialog.css';
 
 interface Props {
@@ -36,13 +37,6 @@ function draftSlug(d: SlugDraft): string {
 /** 打字時就整理：大寫轉小寫、全形轉半形、空白 / 底線變「-」（不去頭尾，免得打到一半的空白被吃掉） */
 function tidyTyping(raw: string): string {
   return raw.normalize('NFKC').toLowerCase().replace(/[\s_]+/g, '-');
-}
-
-/** 伺服器的時間字串：有時區（toISOString 的 Z）照讀；沒有（SQLite datetime）當 UTC */
-function parseServerTime(s: string | null | undefined): number {
-  if (!s) return NaN;
-  const t = s.trim();
-  return Date.parse(/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(t) ? t : t.replace(' ', 'T') + 'Z');
 }
 
 export default function ShareLinksDialog({ open, projectId, projectName, songs, onClose }: Props) {

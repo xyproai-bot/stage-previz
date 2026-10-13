@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import AdminLayout from '../components/AdminLayout';
 import * as api from '../lib/api';
 import type { UserAdmin, UserRole } from '../lib/api';
+import { parseServerTime } from '../lib/serverTime';
 import type { Project } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import './Users.css';
@@ -16,7 +17,7 @@ const PALETTE = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a
 
 function formatTime(iso: string | null) {
   if (!iso) return '從未登入';
-  const d = new Date(iso + (iso.includes('Z') ? '' : 'Z'));
+  const d = new Date(parseServerTime(iso));  // 手動加 Z 的寫法 Safari 讀不懂（中間是空白不是 T）
   const ms = Date.now() - d.getTime();
   const min = Math.floor(ms / 60000);
   if (min < 1) return '剛才';

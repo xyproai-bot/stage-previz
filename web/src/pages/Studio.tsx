@@ -2,110 +2,42 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
-import type { Project } from '../lib/mockData';
+import type { ProjectMember, ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
-import { ProjectCardSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { markSeen, songUnread } from '../lib/unreadComments';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { cueTransitionSeconds } from '../lib/cueTiming';
 import { helpUrl } from '../lib/helpLinks';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
+import { useLiveRefresh } from '../lib/liveRefresh';
+import { extractMentions } from '../lib/mentions';
+import { formatRelativeTime } from '../lib/serverTime';
+import {
+  SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
+  friendlyError, projectGoneMessage, canModifyComment, sameSongs, sameComments, newCommentsFromOthers,
+} from '../lib/songReview';
 import './Studio.css';
 
 type Tab = 'cues' | 'review' | 'activity';
 type SongFilter = 'mine' | 'all';
-
-const STATUS_LABEL: Record<Song['status'], string> = {
-  todo:          '待製作',
-  in_review:     '審查中',
-  approved:      '已通過',
-  needs_changes: '需修改',
-};
 
 export default function Studio() {
   const { projectId } = useParams();
   const navigate = useNavigate();
   const { user, loading: authLoading } = useAuth();
 
-  // 沒有 projectId 時 → 顯示我可進的專案清單
-  if (!projectId) return <ProjectPicker />;
+  // 沒有專案 id 的 /studio 由「我的專案」頁處理（App 路由），這裡不會走到
+  if (!projectId) return null;
   if (authLoading) return <div className="studio-loading">⏳ 載入中…</div>;
   if (!user) {
     navigate('/login', { replace: true });
     return null;
   }
 
-  return <StudioInner projectId={projectId} />;
-}
-
-/* ──────────── Project Picker（無 projectId 時的入口） ──────────── */
-
-function ProjectPicker() {
-  const navigate = useNavigate();
-  const { user, logout } = useAuth();
-  const [projects, setProjects] = useState<Project[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api.listProjects()
-      .then(list => { if (!cancelled) setProjects(list); })
-      .catch(e => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)); });
-    return () => { cancelled = true; };
-  }, []);
-
-  if (!user) return <div className="studio-loading">⏳ 請先登入</div>;
-
-  return (
-    <div className="studio-picker">
-      <header className="studio-picker__hero">
-        <button className="studio-picker__back" onClick={() => navigate('/')} title="回首頁">←</button>
-        <div className="role-icon">🎨</div>
-        <div>
-          <h1>Animator · 動畫師工作站</h1>
-          <p>挑一個專案進去看你被指派的歌曲與 cue</p>
-        </div>
-        <span className="grow" />
-        <span className="studio-picker__user">
-          <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
-          <span className="studio-picker__user-name">{user.name}</span>
-          <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
-        </span>
-      </header>
-
-      {error && <div className="studio-error">載入失敗：{error}</div>}
-
-      {!projects && !error && (
-        <div className="studio-picker__grid">
-          {Array.from({ length: 4 }).map((_, i) => <ProjectCardSkeleton key={i} />)}
-        </div>
-      )}
-
-      {projects && projects.length === 0 && (
-        <div className="studio-empty">
-          <h2>還沒有被指派任何專案</h2>
-          <p>請聯絡製作主管把你加入專案。</p>
-        </div>
-      )}
-
-      {projects && projects.length > 0 && (
-        <div className="studio-picker__grid">
-          {projects.map(p => (
-            <Link key={p.id} to={`/studio/${p.id}`} className="studio-picker__card">
-              <div className="studio-picker__card-name">{p.name}</div>
-              {p.description && <div className="studio-picker__card-desc">{p.description}</div>}
-              <div className="studio-picker__card-stats">
-                <span>{p.songCount} 首歌</span>
-                {p.proposalCount > 0 && <span className="badge badge--warn">{p.proposalCount} 個提案</span>}
-              </div>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  // key：換專案時整個重來（不會把上一個專案的歌 / 留言帶過來）
+  return <StudioInner key={projectId} projectId={projectId} />;
 }
 
 /* ──────────── Studio Inner（projectId 存在時） ──────────── */
@@ -117,15 +49,23 @@ function StudioInner({ projectId }: { projectId: string }) {
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
-  // 動畫師只看：3D 工具列只剩重置攝影機、燈光照專案預設（不能自己調）
-  const isAnimatorViewer = user?.role === 'animator';
 
   const [projectName, setProjectName] = useState<string>('');
   // 專案名讀不到時不能一直停在「…」，要顯示讀取失敗 + 重試
   const [nameStatus, setNameStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [projectArchived, setProjectArchived] = useState(false);
+  // 我在這個專案的角色（審查按鈕看這個，不是帳號的預設角色）；undefined = 還沒讀到
+  const [myRole, setMyRole] = useState<ProjectRole | null | undefined>(undefined);
+  const [members, setMembers] = useState<ProjectMember[]>([]);
+  // 專案整個看不到了（封存 / 刪除 / 被移出專案）→ 整頁換成說明
+  const [goneMessage, setGoneMessage] = useState<string | null>(null);
   const [songs, setSongs] = useState<Song[]>([]);
   const [songsLoading, setSongsLoading] = useState(true);
   const [songsError, setSongsError] = useState<string | null>(null);
+
+  const projectRole: ProjectRole | null = myRole === undefined ? (user?.role ?? null) : myRole;
+  // 動畫師只看：3D 工具列只剩重置攝影機、燈光照專案預設（不能自己調）
+  const isAnimatorViewer = projectRole === 'animator';
 
   const [songFilter, setSongFilter] = useState<SongFilter>(() => {
     try { return (localStorage.getItem('sp_studio_filter') as SongFilter) || 'mine'; } catch { return 'mine'; }
@@ -138,101 +78,166 @@ function StudioInner({ projectId }: { projectId: string }) {
   // 載入中 / 失敗時不能顯示「這首歌還沒有 cue」，會讓動畫師以為真的沒 cue
   const [cuesStatus, setCuesStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [cuesReloadKey, setCuesReloadKey] = useState(0);
+  // cues 是哪首歌的：切歌後新的還沒讀到前，不能拿上一首的 cue id 去問位置
+  const [cuesFor, setCuesFor] = useState<string | null>(null);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [cueStates, setCueStates] = useState<CueState[]>([]);
   const [stageObjects, setStageObjects] = useState<StageObject[]>([]);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('cues');
-  // 全專案留言 cache（給未讀 badge 用）— 開啟 Studio 時批次抓一次
+  // 全專案留言（歌單的未讀數字 + 審查分頁的留言清單共用同一份；自動更新）
   const [commentsBySong, setCommentsBySong] = useState<Map<string, SongComment[]>>(new Map());
 
+  // 非同步回來時要拿「現在」的值（不是發出請求那時候的）
+  const songsRef = useRef<Song[]>([]);
+  const commentsRef = useRef<Map<string, SongComment[]>>(new Map());
+  const selectedSongIdRef = useRef<string | null>(null);
+  selectedSongIdRef.current = selectedSongId;
+  const goneRef = useRef(false);
+  goneRef.current = !!goneMessage;
+
   // ── Loaders ──
+
+  // 換上新的歌單；跟現在的一樣就不換（自動更新時畫面不會閃）。正在看的歌被刪了要講
+  const applySongs = useCallback((list: Song[]) => {
+    const prev = songsRef.current;
+    const sel = selectedSongIdRef.current;
+    const was = sel ? prev.find(s => s.id === sel) : undefined;
+    if (was && !list.some(s => s.id === sel)) {
+      toast.warn(`你正在看的「${was.name}」已經被刪除了（可能是製作主管剛刪的），畫面已更新`);
+    }
+    if (sameSongs(prev, list)) return;
+    songsRef.current = list;
+    setSongs(list);
+  }, []);
+
+  const setSongComments = useCallback((songId: string, list: SongComment[]) => {
+    const next = new Map(commentsRef.current);
+    next.set(songId, list);
+    commentsRef.current = next;
+    setCommentsBySong(next);
+  }, []);
+
+  // 抓每首歌的留言（4 個一起抓）。notify = 有別人的新留言就跳提示（第一次載入不跳）
+  const fetchAllComments = useCallback(async (list: Song[], notify: boolean) => {
+    const results = new Map<string, SongComment[]>();
+    const queue = [...list];
+    const work = async () => {
+      while (queue.length > 0) {
+        const s = queue.shift();
+        if (!s) return;
+        try { results.set(s.id, await api.listSongComments(projectId, s.id)); }
+        catch { /* 這首抓不到就沿用上次的 */ }
+      }
+    };
+    await Promise.all([work(), work(), work(), work()]);
+
+    const current = commentsRef.current;  // 等待期間自己留言 / 刪除過的話，以最新的為準
+    const next = new Map<string, SongComment[]>();
+    let changed = false;
+    for (const s of list) {
+      const old = current.get(s.id);
+      const got = results.get(s.id);
+      if (!got || sameComments(old, got)) {
+        if (old) next.set(s.id, old);
+        continue;
+      }
+      changed = true;
+      next.set(s.id, got);
+      if (notify) {
+        const fresh = newCommentsFromOthers(old, got, user);
+        if (fresh.length > 0) {
+          const c = fresh[fresh.length - 1];
+          const more = fresh.length > 1 ? `（共 ${fresh.length} 則新留言）` : '';
+          toast.info(`${s.name}：${c.author} 留言「${c.text.slice(0, 40)}${c.text.length > 40 ? '…' : ''}」${more}`);
+        }
+      }
+    }
+    if (!changed && next.size === current.size) return;
+    commentsRef.current = next;
+    setCommentsBySong(next);
+  }, [projectId, user]);
+
+  // 專案名 + 我的角色 + 成員
+  const loadMeta = useCallback(async () => {
+    try {
+      const meta = await api.getProjectMeta(projectId);
+      if (meta) {
+        setProjectName(meta.name);
+        setMyRole(meta.myRole ?? null);
+        setMembers(meta.members || []);
+        setProjectArchived(false);
+        setNameStatus('ready');
+        return;
+      }
+      // 清單裡沒有（封存的專案只有 admin 看得到 / 不是成員）→ 直接問這個專案
+      const info = await api.getProjectInfo(projectId);
+      setProjectName(info.project.name);
+      setMyRole(info.myRole);
+      setProjectArchived(info.project.status === 'archived');
+      setNameStatus('ready');
+    } catch (e) {
+      const gone = projectGoneMessage(e);
+      if (gone) setGoneMessage(gone);
+      setNameStatus('error');
+    }
+  }, [projectId]);
+
   const refreshAll = useCallback(async () => {
     setSongsLoading(true);
     setSongsError(null);
     setNameStatus('loading');
+    const metaDone = loadMeta();
     try {
-      const [list, objs, model, meta] = await Promise.all([
+      const [list, objs, model] = await Promise.all([
         api.listSongs(projectId),
         api.listStageObjects(projectId).catch(() => [] as StageObject[]),
         api.getModelInfo(projectId).catch(() => null),
-        api.getProjectMeta(projectId).catch(() => null),
       ]);
-      setSongs(list);
+      applySongs(list);
       setStageObjects(objs);
       setModelUrl(model ? api.modelDownloadUrl(model.key) : null);
-      setProjectName(meta?.name || '');
-      setNameStatus(meta?.name ? 'ready' : 'error');
+      void fetchAllComments(list, false);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setSongsError(msg);
-      setNameStatus('error');
+      const gone = projectGoneMessage(e);
+      if (gone) setGoneMessage(gone);
+      else setSongsError('歌曲讀取失敗：' + friendlyError(e));
     } finally {
       setSongsLoading(false);
     }
-  }, [projectId]);
+    await metaDone;
+  }, [projectId, loadMeta, applySongs, fetchAllComments]);
 
   useEffect(() => { refreshAll(); }, [refreshAll]);
 
-  // 批次抓所有歌的留言（給未讀 badge）— 4 個併發 + 每 60 秒輪詢
-  useEffect(() => {
-    if (songs.length === 0) return;
-    let cancelled = false;
-    let pollTimer: number | null = null;
-
-    async function fetchAll() {
-      const newMap = new Map<string, SongComment[]>();
-      const queue = [...songs];
-      const work = async () => {
-        while (queue.length > 0 && !cancelled) {
-          const s = queue.shift();
-          if (!s) return;
-          try {
-            const list = await api.listSongComments(projectId, s.id);
-            if (!cancelled) newMap.set(s.id, list);
-          } catch { /* 略過 */ }
-        }
-      };
-      await Promise.all([work(), work(), work(), work()]);
-      if (cancelled) return;
-
-      // 比對舊 commentsBySong → 新留言出現就 toast 通知
-      setCommentsBySong(prev => {
-        if (user && prev.size > 0) {
-          for (const s of songs) {
-            const before = prev.get(s.id) || [];
-            const after = newMap.get(s.id) || [];
-            if (after.length > before.length) {
-              const beforeIds = new Set(before.map(c => c.id));
-              const fresh = after.filter(c => !beforeIds.has(c.id) && c.author !== user.name);
-              if (fresh.length > 0) {
-                const c = fresh[fresh.length - 1];
-                toast.info(`💬 ${s.name}：${c.author}「${c.text.slice(0, 40)}${c.text.length > 40 ? '…' : ''}」`);
-              }
-            }
-          }
-        }
-        return newMap;
-      });
+  // 自動更新：每 25 秒 + 切回分頁時，重抓歌曲狀態 + 留言（導演改了狀態 / 留了言，這邊 30 秒內看得到）
+  const reloadSongs = useCallback(async (): Promise<Song[] | null> => {
+    try {
+      const list = await api.listSongs(projectId);
+      applySongs(list);
+      return list;
+    } catch (e) {
+      const gone = projectGoneMessage(e);
+      if (gone) setGoneMessage(gone);
+      return null;
     }
+  }, [projectId, applySongs]);
 
-    fetchAll();
-    pollTimer = window.setInterval(fetchAll, 60_000);
-    return () => {
-      cancelled = true;
-      if (pollTimer !== null) clearInterval(pollTimer);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [songs, projectId, user?.id]);
+  useLiveRefresh(async () => {
+    if (goneRef.current) return;
+    const list = await reloadSongs();
+    // 歌單這次沒讀到（網路一時不穩）也照樣更新留言；專案不見了就不用了
+    if (!goneRef.current) await fetchAllComments(list ?? songsRef.current, true);
+  }, { enabled: !goneMessage && !songsLoading });
 
-  // 進入某首歌時自動標已讀
+  // 審查分頁開著時，看到的留言算已讀（在 cue 分頁時新留言要留著未讀數字）
   useEffect(() => {
-    if (!user || !selectedSongId) return;
+    if (!user || !selectedSongId || tab !== 'review') return;
     const list = commentsBySong.get(selectedSongId);
     if (!list || list.length === 0) return;
     const latest = list.reduce((acc, c) => c.createdAt > acc ? c.createdAt : acc, '');
     markSeen(user.id, projectId, selectedSongId, latest);
-  }, [user, projectId, selectedSongId, commentsBySong]);
+  }, [user, projectId, selectedSongId, commentsBySong, tab]);
 
   // 切歌 → 拉 cues
   useEffect(() => {
@@ -241,11 +246,14 @@ function StudioInner({ projectId }: { projectId: string }) {
     // 切歌時先清掉上一首的 cue，不然載入期間會顯示舊歌的 cue
     setCues([]);
     setSelectedCueId(null);
+    setCueStates([]);
+    setCuesFor(null);
     setCuesStatus('loading');
     api.listCues(projectId, selectedSongId).then(list => {
       if (cancelled) return;
       const masters = list.filter(c => c.status === 'master');
       setCues(list);
+      setCuesFor(selectedSongId);
       setSelectedCueId(masters[0]?.id ?? null);
       setCuesStatus('ready');
     }).catch(() => {
@@ -258,20 +266,20 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   // 切 cue → 拉 states
   useEffect(() => {
-    if (!selectedSongId || !selectedCueId) { setCueStates([]); return; }
+    if (!selectedSongId || !selectedCueId || cuesFor !== selectedSongId) { setCueStates([]); return; }
     let cancelled = false;
     api.listCueStates(projectId, selectedSongId, selectedCueId).then(list => {
       if (!cancelled) setCueStates(list);
     }).catch(() => { if (!cancelled) setCueStates([]); });
     return () => { cancelled = true; };
-  }, [projectId, selectedSongId, selectedCueId]);
+  }, [projectId, selectedSongId, selectedCueId, cuesFor]);
 
   // ── Derived ──
   const masterCues = useMemo(() => cues.filter(c => c.status === 'master'), [cues]);
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId) || null, [cues, selectedCueId]);
   const selectedSong = useMemo(() => songs.find(s => s.id === selectedSongId) || null, [songs, selectedSongId]);
 
-  const isAdmin = user?.role === 'admin';
+  const isAdmin = projectRole === 'admin';
   // mine 篩選對 admin 沒意義（所以 admin 預設看全部）
   const effectiveFilter: SongFilter = isAdmin ? 'all' : songFilter;
   const visibleSongs = useMemo(() => {
@@ -307,21 +315,50 @@ function StudioInner({ projectId }: { projectId: string }) {
     }));
   }, [selectedCueId, cueStates, stageObjects]);
 
+  const selectedComments = selectedSongId ? commentsBySong.get(selectedSongId) : undefined;
+  const selectedUnread = user && selectedSongId && selectedComments
+    ? songUnread(user.id, projectId, selectedSongId, selectedComments, user)
+    : 0;
+
   // ── Actions ──
-  async function changeStatus(status: Song['status']) {
-    if (!selectedSong) return;
-    const prev = songs;
-    setSongs(prev.map(s => s.id === selectedSong.id ? { ...s, status } : s));
+
+  /** 改狀態；成功回 true。帶上畫面上以為的目前狀態 → 別人剛改過的話後台回 409，不會蓋掉 */
+  async function changeStatus(song: Song, to: Song['status']): Promise<boolean> {
+    const expected = song.status;
+    const setStatus = (status: Song['status']) => {
+      const next = songsRef.current.map(s => s.id === song.id ? { ...s, status } : s);
+      songsRef.current = next;
+      setSongs(next);
+    };
+    setStatus(to);
     try {
-      await api.updateSong(projectId, selectedSong.id, { status });
+      await api.updateSong(projectId, song.id, { status: to, expectedStatus: expected });
+      return true;
     } catch (e) {
-      setSongs(prev);
-      toast.error('狀態更新失敗：' + msg(e));
+      const status = api.errorStatus(e);
+      if (status === 409) {
+        const stale = staleStatusMessage((e as api.ApiError).data?.currentStatus, expected);
+        const list = await reloadSongs();
+        if (!list) setStatus(expected);
+        toast.warn(stale ?? friendlyError(e));
+      } else if (status === 404) {
+        // 歌被刪了（reloadSongs 會講）或整個專案不見了（會換成說明頁）
+        const list = await reloadSongs();
+        if (list && list.some(s => s.id === song.id)) {
+          setStatus(expected);
+          toast.error('狀態沒有改成：' + friendlyError(e));
+        }
+      } else {
+        setStatus(expected);
+        toast.error('狀態沒有改成：' + friendlyError(e));
+      }
+      return false;
     }
   }
 
-  async function handleSubmitForReview(note: string) {
-    if (!selectedSong || !user) return;
+  /** 提交審查（附一段話給導演）；成功回 true */
+  async function handleSubmitForReview(song: Song, note: string): Promise<boolean> {
+    if (!user) return false;
 
     // Pre-flight check：強制觸發 Drive 同步一次，然後檢查這首歌有沒有影片
     let hasVideo = false;
@@ -330,32 +367,41 @@ function StudioInner({ projectId }: { projectId: string }) {
       // 先試強制同步（worker 端如果該 project 沒設 Drive 會 500，吞掉繼續）
       try { await api.syncDriveProject(projectId); } catch { /* 沒設 Drive 也 OK */ }
       const allFiles = await api.listDriveProjectFiles(projectId);
-      hasVideo = allFiles.some(f => f.songId === selectedSong.id && (f.mimeType?.startsWith('video/')));
+      hasVideo = allFiles.some(f => f.songId === song.id && (f.mimeType?.startsWith('video/')));
     } catch { /* 抓失敗就不擋 */ }
 
     if (!hasVideo) {
       const ok = confirm(
-        `這首歌「${selectedSong.name}」目前還沒有影片在平台上。\n\n` +
+        `這首歌「${song.name}」目前還沒有影片在平台上。\n\n` +
         `導演看到的可能會是空的。\n\n` +
         `你確定要繼續提交嗎？\n\n` +
         `（如果你剛上傳到 Drive，可能需要再等 5 分鐘讓平台同步，或關掉這個視窗等一下再試）`
       );
-      if (!ok) return;
+      if (!ok) return false;
     }
 
+    // 先改狀態（被導演搶先改掉的話，就不要送出「提交審查」的留言）
+    const ok = await changeStatus(song, 'in_review');
+    if (!ok) return false;
+
     if (note.trim()) {
+      const text = `[提交審查] ${note.trim()}`;
       try {
-        await api.postSongComment(projectId, selectedSong.id, {
-          text: `[提交審查] ${note.trim()}`,
-          author: user.name,
-          role: 'animator',
-        });
+        const updated = await api.postSongComment(projectId, song.id, { text, mentions: extractMentions(text, members) });
+        setSongComments(song.id, updated);
       } catch (e) {
-        toast.warn('留言發送失敗（但會繼續變更狀態）：' + msg(e));
+        toast.warn('已提交審查，但附的那段話沒送出去：' + friendlyError(e));
+        return true;
       }
     }
-    await changeStatus('in_review');
-    toast.success('已提交審查 ✓ 導演會收到通知');
+    // 目前沒有站內通知 → 不要說「導演會收到通知」
+    toast.success('已提交審查。導演的畫面 30 秒內會自動更新（目前不會另外通知導演，急的話請直接跟導演說）', 7000);
+    return true;
+  }
+
+  async function refreshSongComments(songId: string) {
+    try { setSongComments(songId, await api.listSongComments(projectId, songId)); }
+    catch (e) { toast.error('留言讀取失敗：' + friendlyError(e)); }
   }
 
   /* ──────────── UI ──────────── */
@@ -389,30 +435,50 @@ function StudioInner({ projectId }: { projectId: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [masterCues, visibleSongs, selectedCueId, selectedSongId]);
 
+  const topBar = (
+    <header className="studio-top">
+      <button className="studio-top__back" onClick={() => navigate('/studio')} title="所有專案">←</button>
+      <span className="studio-top__role">🎨 ANIMATOR</span>
+      <span className="studio-top__project">
+        {projectName || (nameStatus === 'error' && !goneMessage ? (
+          <>
+            {projectId}（讀取失敗）
+            <button className="btn btn--ghost" onClick={() => refreshAll()} style={{ marginLeft: 8, padding: '3px 10px', fontSize: 12 }}>重試</button>
+          </>
+        ) : goneMessage ? '' : '…')}
+        {projectArchived && <span className="studio-top__archived">已封存，只能看</span>}
+      </span>
+      <span className="grow" />
+      {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
+      <a className="studio-top__help" href={helpUrl()} target="_blank" rel="noopener">📖 使用說明</a>
+      {/* 設定頁有 NDI / AE 連線檢查 */}
+      <Link className="studio-top__help" to="/settings">設定</Link>
+      {user && (
+        <span className="studio-top__user">
+          <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
+          <span>{user.name}</span>
+          <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
+        </span>
+      )}
+    </header>
+  );
+
+  if (goneMessage) {
+    return (
+      <div className="studio">
+        {topBar}
+        <div className="studio-empty studio-gone">
+          <h2>看不到這個專案</h2>
+          <p>{goneMessage}</p>
+          <button className="btn btn--primary" onClick={() => navigate('/studio')} style={{ marginTop: 16 }}>回專案清單</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="studio">
-      <header className="studio-top">
-        <button className="studio-top__back" onClick={() => navigate('/studio')} title="所有專案">←</button>
-        <span className="studio-top__role">🎨 ANIMATOR</span>
-        <span className="studio-top__project">
-          {projectName || (nameStatus === 'error' ? (
-            <>
-              {projectId}（讀取失敗）
-              <button className="btn btn--ghost" onClick={() => refreshAll()} style={{ marginLeft: 8, padding: '3px 10px', fontSize: 12 }}>重試</button>
-            </>
-          ) : '…')}
-        </span>
-        <span className="grow" />
-        {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
-        <a className="studio-top__help" href={helpUrl()} target="_blank" rel="noopener">📖 使用說明</a>
-        {user && (
-          <span className="studio-top__user">
-            <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
-            <span>{user.name}</span>
-            <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
-          </span>
-        )}
-      </header>
+      {topBar}
 
       <div className="studio-body">
         <aside className="studio-songs">
@@ -440,17 +506,27 @@ function StudioInner({ projectId }: { projectId: string }) {
           </div>
 
           {songsLoading && <div className="studio-songs__empty">⏳ 載入中…</div>}
-          {songsError && <div className="studio-songs__empty studio-songs__empty--err">{songsError}</div>}
+          {songsError && (
+            <div className="studio-songs__empty studio-songs__empty--err">
+              {songsError}
+              <div><button className="btn btn--ghost" onClick={() => refreshAll()} style={{ marginTop: 8 }}>重試</button></div>
+            </div>
+          )}
           {!songsLoading && !songsError && visibleSongs.length === 0 && (
             <div className="studio-songs__empty">
-              {songFilter === 'mine' ? '沒有指派給你的歌' : '這個專案沒有歌'}
+              {songSearch.trim() ? '沒有符合的歌'
+                : effectiveFilter === 'mine'
+                  ? (songs.length > 0
+                    ? <>還沒有指派給你的歌（製作主管會在編輯器指派）。<br />可以先按「全部」看所有歌。</>
+                    : '這個專案還沒有歌')
+                  : '這個專案還沒有歌'}
             </div>
           )}
 
           <ul className="studio-songs__list">
             {visibleSongs.map(s => {
               const list = commentsBySong.get(s.id) || [];
-              const unread = user ? songUnread(user.id, projectId, s.id, list, user.name) : 0;
+              const unread = user ? songUnread(user.id, projectId, s.id, list, user) : 0;
               return (
                 <li key={s.id}>
                   <button
@@ -461,7 +537,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     <span className="studio-songs__item-name">{s.name}</span>
                     {unread > 0 && (
                       <span className="studio-songs__item-unread" title={`${unread} 則新留言`}>
-                        💬{unread}
+                        <CommentIcon />{unread}
                       </span>
                     )}
                     <span className="studio-songs__item-count">{s.cueCount}</span>
@@ -568,7 +644,11 @@ function StudioInner({ projectId }: { projectId: string }) {
             <button
               className={'tab' + (tab === 'review' ? ' is-active' : '')}
               onClick={() => setTab('review')}
-            >審查 / 留言</button>
+              title={selectedUnread > 0 ? `${selectedUnread} 則新留言` : undefined}
+            >
+              審查 / 留言
+              {selectedUnread > 0 && tab !== 'review' && <span className="studio-right__tab-badge">{selectedUnread}</span>}
+            </button>
             <button
               className={'tab' + (tab === 'activity' ? ' is-active' : '')}
               onClick={() => setTab('activity')}
@@ -598,8 +678,13 @@ function StudioInner({ projectId }: { projectId: string }) {
                 projectId={projectId}
                 song={selectedSong}
                 user={user}
-                onChangeStatus={changeStatus}
-                onSubmitForReview={handleSubmitForReview}
+                projectRole={projectRole}
+                members={members}
+                comments={selectedComments}
+                onCommentsChange={(list) => setSongComments(selectedSong.id, list)}
+                onRefreshComments={() => refreshSongComments(selectedSong.id)}
+                onChangeStatus={(to) => changeStatus(selectedSong, to)}
+                onSubmitForReview={(note) => handleSubmitForReview(selectedSong, note)}
               />
             )}
             {tab === 'review' && !selectedSong && (
@@ -612,6 +697,15 @@ function StudioInner({ projectId }: { projectId: string }) {
         </aside>
       </div>
     </div>
+  );
+}
+
+/** 留言小圖示（未讀數字旁邊） */
+function CommentIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 16 16" aria-hidden="true" style={{ marginRight: 3, verticalAlign: '-1px' }}>
+      <path d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6A1.5 1.5 0 0 1 12.5 11H7l-3.2 2.6c-.33.27-.8.03-.8-.39V11h-.5A1.5 1.5 0 0 1 1 9.5z" fill="currentColor" />
+    </svg>
   );
 }
 
@@ -649,39 +743,37 @@ function CuesTab({
 /* ──────────── Review Tab ──────────── */
 
 function ReviewTab({
-  projectId, song, user, onChangeStatus, onSubmitForReview,
+  projectId, song, user, projectRole, members, comments, onCommentsChange, onRefreshComments,
+  onChangeStatus, onSubmitForReview,
 }: {
   projectId: string;
   song: Song;
   user: { id: string; name: string; role: api.UserRole; avatarColor: string };
-  onChangeStatus: (status: Song['status']) => Promise<void>;
-  onSubmitForReview: (note: string) => Promise<void>;
+  projectRole: ProjectRole | null;
+  members: ProjectMember[];
+  /** 跟歌單未讀數字同一份（自動更新）；undefined = 還沒讀到 */
+  comments: SongComment[] | undefined;
+  onCommentsChange: (list: SongComment[]) => void;
+  onRefreshComments: () => Promise<void>;
+  onChangeStatus: (status: Song['status']) => Promise<boolean>;
+  onSubmitForReview: (note: string) => Promise<boolean>;
 }) {
-  const [comments, setComments] = useState<SongComment[]>([]);
-  const [loading, setLoading] = useState(true);
   const [note, setNote] = useState('');
   const [posting, setPosting] = useState(false);
-  const isAnimator = user.role === 'animator';
+  const [refreshing, setRefreshing] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editText, setEditText] = useState('');
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    try {
-      const list = await api.listSongComments(projectId, song.id);
-      setComments(list);
-    } catch (e) {
-      console.warn('load comments failed', e);
-    } finally {
-      setLoading(false);
-    }
-  }, [projectId, song.id]);
+  const actions = songStatusActions({ role: projectRole, userId: user.id, song, flow: 'animator' });
+  const hint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user.id, song, flow: 'animator' }) : null;
+  const canSubmit = actions.some(a => a.to === 'in_review');
 
-  useEffect(() => { refresh(); }, [refresh]);
-
-  // 切歌時清空 note
+  // 切歌時清空 note / 編輯中的留言
   const lastSongIdRef = useRef(song.id);
   useEffect(() => {
     if (lastSongIdRef.current !== song.id) {
       setNote('');
+      setEditingId(null);
       lastSongIdRef.current = song.id;
     }
   }, [song.id]);
@@ -691,15 +783,11 @@ function ReviewTab({
     if (!text) return;
     setPosting(true);
     try {
-      const updated = await api.postSongComment(projectId, song.id, {
-        text,
-        author: user.name,
-        role: isAnimator ? 'animator' : (user.role === 'director' ? 'director' : 'designer'),
-      });
-      setComments(updated);
+      const updated = await api.postSongComment(projectId, song.id, { text, mentions: extractMentions(text, members) });
+      onCommentsChange(updated);
       setNote('');
     } catch (e) {
-      toast.error('留言失敗：' + msg(e));
+      toast.error('留言失敗：' + friendlyError(e));
     } finally {
       setPosting(false);
     }
@@ -708,21 +796,37 @@ function ReviewTab({
   async function handleDelete(id: string) {
     if (!confirm('刪除這則留言？')) return;
     try {
-      const updated = await api.deleteSongComment(projectId, song.id, id);
-      setComments(updated);
-    } catch (e) { toast.error('刪除失敗：' + msg(e)); }
+      onCommentsChange(await api.deleteSongComment(projectId, song.id, id));
+    } catch (e) { toast.error('刪除失敗：' + friendlyError(e)); }
   }
 
-  async function handleSubmit() {
-    if (!confirm(`把「${song.name}」狀態改為「審查中」？\n\n留言會一起送出。`)) return;
+  async function handleSaveEdit(id: string) {
+    const text = editText.trim();
+    if (!text) return;
+    try {
+      onCommentsChange(await api.patchSongComment(projectId, song.id, id, { text }));
+      setEditingId(null);
+    } catch (e) { toast.error('修改失敗：' + friendlyError(e)); }
+  }
+
+  async function handleAction(to: Song['status']) {
     setPosting(true);
     try {
-      await onSubmitForReview(note);
-      setNote('');
-      await refresh();
+      if (to === 'in_review') {
+        if (!confirm(`把「${song.name}」狀態改為「審查中」？\n\n留言框裡的話會一起送出。`)) return;
+        const ok = await onSubmitForReview(note);
+        if (ok) setNote('');
+      } else {
+        await onChangeStatus(to);
+      }
     } finally {
       setPosting(false);
     }
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try { await onRefreshComments(); } finally { setRefreshing(false); }
   }
 
   return (
@@ -732,36 +836,29 @@ function ReviewTab({
         <div className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</div>
 
         <div className="studio-review__actions">
-          {song.status === 'todo' && (
-            <button className="btn btn--primary" onClick={handleSubmit} disabled={posting}>
-              提交審查 →
+          {actions.map(a => (
+            <button
+              key={a.kind}
+              className={'btn ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
+              onClick={() => handleAction(a.to)}
+              disabled={posting}
+            >
+              {a.label}
             </button>
-          )}
-          {song.status === 'needs_changes' && (
-            <button className="btn btn--primary" onClick={handleSubmit} disabled={posting}>
-              修改完成 → 重新提交
-            </button>
-          )}
-          {song.status === 'in_review' && (
-            <button className="btn btn--ghost" onClick={() => onChangeStatus('todo')}>
-              撤回（改回待製作）
-            </button>
-          )}
-          {song.status === 'approved' && (
-            <span className="studio-review__hint">這首歌已通過 ✓</span>
-          )}
+          ))}
+          {hint && <span className="studio-review__hint">{hint}</span>}
         </div>
       </section>
 
       <section className="studio-review__notes">
         <div className="studio-review__notes-head">
           <span>留言／備註</span>
-          <button className="link-btn" onClick={refresh}>重新整理</button>
+          <button className="link-btn" onClick={handleRefresh} disabled={refreshing}>{refreshing ? '更新中…' : '重新整理'}</button>
         </div>
 
         <div className="studio-review__compose">
           <textarea
-            placeholder={song.status === 'todo' || song.status === 'needs_changes'
+            placeholder={canSubmit
               ? '寫一段給導演 / 製作主管的話，按「提交審查」會一起送出'
               : '在這裡留言（給協作者看）'}
             value={note}
@@ -775,25 +872,46 @@ function ReviewTab({
           </div>
         </div>
 
-        {loading ? (
+        {comments === undefined ? (
           <div className="studio-review__loading">載入中…</div>
         ) : comments.length === 0 ? (
           <div className="studio-review__empty">還沒有留言</div>
         ) : (
           <ul className="studio-review__list">
-            {[...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(c => (
-              <li key={c.id} className={'studio-comment studio-comment--' + c.role}>
-                <div className="studio-comment__head">
-                  <span className="studio-comment__author">{c.author}</span>
-                  <span className="studio-comment__role">{roleLabel(c.role)}</span>
-                  <span className="studio-comment__time">{formatTime(c.createdAt)}</span>
-                  {c.author === user.name && (
-                    <button className="studio-comment__del" onClick={() => handleDelete(c.id)} title="刪除">×</button>
+            {[...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(c => {
+              const canModify = canModifyComment(c, user, projectRole);
+              const editing = editingId === c.id;
+              return (
+                <li key={c.id} className={'studio-comment studio-comment--' + c.role}>
+                  <div className="studio-comment__head">
+                    <span className="studio-comment__author">{c.author}</span>
+                    <span className="studio-comment__role">{roleLabel(c.role)}</span>
+                    <span className="studio-comment__time">{formatRelativeTime(c.createdAt)}</span>
+                    {canModify && !editing && (
+                      <>
+                        <button
+                          className="studio-comment__del studio-comment__edit"
+                          onClick={() => { setEditingId(c.id); setEditText(c.text); }}
+                          title="修改"
+                        >修改</button>
+                        <button className="studio-comment__del" onClick={() => handleDelete(c.id)} title="刪除">×</button>
+                      </>
+                    )}
+                  </div>
+                  {editing ? (
+                    <div className="studio-comment__editbox">
+                      <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3} autoFocus />
+                      <div className="studio-review__compose-actions">
+                        <button className="btn btn--ghost" onClick={() => setEditingId(null)}>取消</button>
+                        <button className="btn btn--primary" onClick={() => handleSaveEdit(c.id)} disabled={!editText.trim()}>儲存</button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="studio-comment__text">{c.text}</div>
                   )}
-                </div>
-                <div className="studio-comment__text">{c.text}</div>
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         )}
       </section>
@@ -807,22 +925,6 @@ function roleLabel(r: SongComment['role']): string {
   return '製作';
 }
 
-function formatTime(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const now = new Date();
-    const diffMs = now.getTime() - d.getTime();
-    const min = Math.floor(diffMs / 60000);
-    if (min < 1) return '剛剛';
-    if (min < 60) return `${min} 分鐘前`;
-    const h = Math.floor(min / 60);
-    if (h < 24) return `${h} 小時前`;
-    return d.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' });
-  } catch { return iso; }
-}
-
-function msg(e: unknown): string { return e instanceof Error ? e.message : String(e); }
-
 /* ──────────── Activity feed (read-only viewer) ──────────── */
 
 function ActivityList({ projectId }: { projectId: string }) {
@@ -832,7 +934,7 @@ function ActivityList({ projectId }: { projectId: string }) {
   const refresh = useCallback(() => {
     api.listActivity(projectId, 30)
       .then(setItems)
-      .catch(e => setError(e instanceof Error ? e.message : String(e)));
+      .catch(e => setError(friendlyError(e)));
   }, [projectId]);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -856,7 +958,8 @@ function ActivityList({ projectId }: { projectId: string }) {
                 <strong>{a.userName}</strong> {actionLabel(a.action)} {targetLabel(a.targetType)}
                 {(a.payload?.name as string) && <span className="muted small"> · {a.payload.name as string}</span>}
               </div>
-              <div className="activity-list__time">{formatRelativeShort(a.createdAt)}</div>
+              {/* 後台時間是 UTC、沒寫時區 → 用 serverTime 轉成本地時間（以前會差 8 小時） */}
+              <div className="activity-list__time">{formatRelativeTime(a.createdAt)}</div>
             </div>
           </li>
         ))}
@@ -877,14 +980,4 @@ function targetLabel(t: string): string {
     project: '專案', song: '歌曲', cue: 'cue', cue_state: 'cue 狀態',
     stage_object: '物件', model: '模型', drive_file: 'Drive 檔',
   } as Record<string, string>)[t] || t;
-}
-function formatRelativeShort(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const diff = (Date.now() - d.getTime()) / 1000;
-    if (diff < 60) return '剛剛';
-    if (diff < 3600) return Math.floor(diff / 60) + 'm';
-    if (diff < 86400) return Math.floor(diff / 3600) + 'h';
-    return d.toLocaleDateString('zh-TW', { month: 'numeric', day: 'numeric' });
-  } catch { return iso; }
 }

@@ -24,6 +24,8 @@ import { EditHistory, historyScope } from '../lib/editHistory';
 import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
+import { friendlyError } from '../lib/songReview';
+import type { ProjectMember } from '../lib/mockData';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -66,6 +68,17 @@ export default function ProjectEditor() {
   // 「我改過的」filter — 用 activity log 算出當前用戶有動過的 song id
   const [mineOnly, setMineOnly] = useState(false);
   const [mineSongIds, setMineSongIds] = useState<Set<string>>(new Set());
+  // 專案成員（「負責動畫師」選單只列這個專案裡角色是動畫師的人）
+  const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    api.getProjectMeta(projectId)
+      .then(p => { if (!cancelled) setProjectMembers(p?.members || []); })
+      .catch(() => { /* 讀不到就只顯示「還沒指派」 */ });
+    return () => { cancelled = true; };
+  }, [projectId]);
+  const animatorMembers = useMemo(() => projectMembers.filter(m => m.role === 'animator'), [projectMembers]);
 
   // Cues
   const [cues, setCues] = useState<Cue[]>([]);
@@ -421,6 +434,19 @@ export default function ProjectEditor() {
     } catch (e) {
       setSongs(prev);
       alert('狀態更新失敗：' + msg(e));
+    }
+  }
+  // 指派負責的動畫師（動畫師工作站「我的」清單就是看這個）
+  async function handleAssignAnimator(songId: string, userId: string | null) {
+    if (!projectId) return;
+    const before = songs.find(s => s.id === songId)?.animatorUserId ?? null;
+    if (before === userId) return;
+    setSongs(list => list.map(s => s.id === songId ? { ...s, animatorUserId: userId } : s));
+    try {
+      await api.updateSong(projectId, songId, { animator_user_id: userId });
+    } catch (e) {
+      setSongs(list => list.map(s => s.id === songId ? { ...s, animatorUserId: before } : s));
+      toast.error('指派沒有存到：' + friendlyError(e));
     }
   }
   async function moveSong(songId: string, direction: -1 | 1) {
@@ -902,6 +928,32 @@ export default function ProjectEditor() {
                         <span>{s.cueCount} cues</span>
                         {s.proposalCount > 0 && <span className="proposal-badge">{s.proposalCount} 提案</span>}
                       </div>
+                      <label
+                        className="song-item__assign"
+                        onClick={(e) => e.stopPropagation()}
+                        style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}
+                      >
+                        <span style={{ flexShrink: 0 }}>負責動畫師</span>
+                        <select
+                          value={s.animatorUserId ?? ''}
+                          onChange={(e) => handleAssignAnimator(s.id, e.target.value || null)}
+                          disabled={animatorMembers.length === 0 && !s.animatorUserId}
+                          title={animatorMembers.length === 0 ? '這個專案還沒有動畫師：先到「用戶」把動畫師加進這個專案' : '指派後，動畫師在工作站的「我的」就看得到這首歌'}
+                          style={{
+                            flex: 1, minWidth: 0, fontSize: 11, padding: '1px 4px',
+                            background: 'var(--bg)', color: 'var(--text)',
+                            border: '1px solid var(--border)', borderRadius: 4,
+                          }}
+                        >
+                          <option value="">{animatorMembers.length === 0 ? '專案裡還沒有動畫師' : '還沒指派'}</option>
+                          {animatorMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                          {s.animatorUserId && !animatorMembers.some(m => m.id === s.animatorUserId) && (
+                            <option value={s.animatorUserId}>
+                              {(projectMembers.find(m => m.id === s.animatorUserId)?.name || '已不在專案的人') + '（不是這個專案的動畫師）'}
+                            </option>
+                          )}
+                        </select>
+                      </label>
                     </div>
                     <div onClick={(e) => e.stopPropagation()}>
                       <StatusBadge
