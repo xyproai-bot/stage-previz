@@ -48,6 +48,11 @@ export default function Share() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAutoCueRef = useRef<string | null>(null);
 
+  // 切到 AE 即時 → 本地影片先暫停（不然聲音還會在背景播）
+  useEffect(() => {
+    if (source === 'ndi') local.video.pause();
+  }, [source, local.video]);
+
   useEffect(() => {
     setNdiGraceOver(false);
     if (source !== 'ndi') return;
