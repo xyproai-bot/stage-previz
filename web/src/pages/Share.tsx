@@ -11,6 +11,7 @@ import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueAtTime, cueTransitionSeconds } from '../lib/cueTiming';
 import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
 import type { NdiClientStatus } from '../lib/ndiClient';
+import { NDI_HELPER_DOWNLOAD_URL, NDI_TOOLS_URL } from '../lib/downloads';
 import './Share.css';
 
 /** LED 畫面來源：AE 即時（NDI 小程序）或本地影片（拖進來的檔案，只在這台電腦播） */
@@ -28,10 +29,6 @@ function prefetchCueStates(token: string, songId: string, list: Cue[], pwd: stri
 }
 
 const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
-
-// NDI 小程序安裝檔（跟模型放同一個公開儲存空間；上線時上傳）
-const NDI_HELPER_DOWNLOAD_PATH = '/r2/assets/downloads/stage-previz-ndi-helper-0.1.7.msi';
-const NDI_TOOLS_URL = 'https://ndi.video/tools/';
 
 /**
  * 公開分享連結 viewer — 無需登入。
@@ -412,7 +409,7 @@ export default function Share() {
               <strong>要在 LED 上看 AE 即時畫面</strong>
               <ol>
                 <li>安裝 <a href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">NDI Tools</a>（官方免費）</li>
-                <li>下載並打開 NDI 小程序：<a className="btn btn--sm" href={api.apiBase() + NDI_HELPER_DOWNLOAD_PATH}>⬇ 下載安裝檔</a></li>
+                <li>下載並打開 NDI 小程序：<a className="btn btn--sm" href={NDI_HELPER_DOWNLOAD_URL}>⬇ 下載安裝檔</a></li>
                 <li>AE 的「視訊預覽」輸出選 NDI（NDI Tools 裡的 Adobe 外掛）</li>
               </ol>
               <span className="share-overlay__hint">接上後這裡會自動變成 LIVE。沒有 AE？按上面「🎬 本地影片」把影片拖進來。</span>
