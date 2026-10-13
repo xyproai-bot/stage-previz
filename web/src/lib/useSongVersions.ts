@@ -73,6 +73,8 @@ export function shareVersionFetcher(ref: ShareRef, access: string | undefined): 
 
 export interface SongVersionsState {
   status: 'idle' | 'loading' | 'ready' | 'error';
+  /** 清單是哪首歌的（剛換歌、還沒抓到 = null）；要等「這首歌」的清單時看這個 */
+  loadedSongId: string | null;
   error: string | null;
   items: VersionItem[];
   pending: SongVideo[];
@@ -191,6 +193,7 @@ export function useSongVersions(o: {
 
   return {
     status: songId ? status : 'idle',
+    loadedSongId: data.songId === songId && status !== 'loading' ? songId : null,
     error,
     items: result.items,
     pending: result.pending,

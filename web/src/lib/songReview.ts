@@ -140,15 +140,17 @@ export function projectGoneMessage(e: unknown): string | null {
 
 // ─── 自動更新用：新舊資料一樣就不換（畫面不重畫、不閃） ───
 
-const SONG_KEYS = ['id', 'name', 'order', 'status', 'animatorUserId', 'cueCount', 'proposalCount', 'code', 'latestVideoId', 'latestVideoVersion'] as const;
+const SONG_KEYS = ['id', 'name', 'order', 'status', 'animatorUserId', 'cueCount', 'proposalCount', 'code', 'latestVideoId', 'latestVideoVersion', 'reviewedVersion'] as const;
 
 export function sameSongs(a: readonly Song[], b: readonly Song[]): boolean {
   if (a === b) return true;
   if (a.length !== b.length) return false;
-  return a.every((s, i) => SONG_KEYS.every(k => s[k] === b[i][k]));
+  // 最近一次通過 / 需修改：看時間和版本就知道有沒有換
+  const review = (s: Song) => s.lastReview ? `${s.lastReview.at}|${s.lastReview.status}|${s.lastReview.version ?? ''}` : '';
+  return a.every((s, i) => SONG_KEYS.every(k => s[k] === b[i][k]) && review(s) === review(b[i]));
 }
 
-const COMMENT_KEYS = ['id', 'text', 'status', 'resolvedBy', 'resolvedAt', 'time', 'author'] as const;
+const COMMENT_KEYS = ['id', 'text', 'status', 'resolvedBy', 'resolvedAt', 'time', 'author', 'resolvedVersion', 'parentId', 'videoVersion'] as const;
 
 export function sameComments(a: readonly SongComment[] | undefined, b: readonly SongComment[] | undefined): boolean {
   if (a === b) return true;

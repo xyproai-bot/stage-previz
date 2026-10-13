@@ -10,9 +10,14 @@
 //   看專案內容（歌、cue、位置、物件、模型、活動紀錄、Drive 檔案清單、留言）  所有成員
 //   改專案內容（歌名 / 順序、cue、位置、物件、模型、模板、匯出）              admin
 //   歌曲狀態                                                                  見 songStatusDecision
-//   留言：看、發、標已解決 / 重新打開                                          所有成員
+//   留言：看                                                                    所有成員
+//   留言：發、回覆                                                              admin、導演；動畫師只能在自己的歌或還沒指派的歌（commentPostDecision）
+//   留言：標「已改好（V3）」                                                    admin、負責的動畫師（沒指派 = 專案裡的動畫師）、留言的人自己（commentResolveDecision）
+//   留言：重新打開                                                              admin、導演、負責的動畫師、留言的人自己（commentReopenDecision）
 //   留言：改文字、刪除                                                         留言的人自己，或 admin
 //   留言：每首歌幾則 / 最新一則（comments/summary）                            所有成員
+//   審片紀錄（songs/:id/reviews）                                              所有成員
+//   站內通知（/api/notifications）                                             登入的人看自己的（describeNotificationRoute）；分享連結的訪客沒有
 //   分享連結：看清單、建立、改網址、刪除                                       admin、導演
 //   歌曲影片：看版本、播放                                                     所有成員
 //   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
@@ -243,6 +248,8 @@ export function describeProjectRoute(method, segs) {
       }
       if (b === 'import-cues' && !c) return m === 'POST' ? r('songs.importCues', 'editor', { songId }) : bad('songs.importCues');
       if (b === 'videos') return describeVideoRoute(m, read, songId, c, d, e);
+      // 審片紀錄（V2 需修改、V3 已通過…），新的在前
+      if (b === 'reviews' && !c) return read ? r('reviews.list', 'member', { songId }) : bad('reviews.list');
       if (b !== 'cues') return null;
       if (!c) {
         if (read) return r('cues.list', 'member', { songId });
@@ -435,6 +442,64 @@ export function isCommentAuthor(comment, userId) {
 /** 能不能改文字 / 刪除（自己的留言，或專案 admin） */
 export function canModifyComment(comment, userId, role) {
   return role === 'admin' || isCommentAuthor(comment, userId);
+}
+
+// ─────────────────────────────────────────────
+// 審片 v2：發留言 / 回覆、「已改好（V3）」、重新打開（handler 在 reviews.mjs）
+// ─────────────────────────────────────────────
+
+const allow = { ok: true };
+const deny = (error, status = 403) => ({ ok: false, status, error });
+
+/** 動畫師能不能動這首歌：指派給自己，或還沒指派（跟交影片、提交審查一樣） */
+export function animatorCanWorkOnSong(song, userId) {
+  return !song?.animator_user_id || song.animator_user_id === userId;
+}
+
+/** 發留言 / 回覆：admin、導演都可以；動畫師只能在自己的歌或還沒指派的歌 */
+export function commentPostDecision({ role, userId, song }) {
+  if (!role) return deny('沒有權限存取此專案');
+  if (role === 'admin' || role === 'director') return allow;
+  if (role === 'animator') {
+    return animatorCanWorkOnSong(song, userId)
+      ? allow
+      : deny('這首歌指派給其他動畫師，只有他、導演和製作可以在這首歌留言');
+  }
+  return deny('沒有權限留言');
+}
+
+/** 標「已改好（V3）」：admin、負責這首歌的動畫師、留言的人自己（收回自己的意見） */
+export function commentResolveDecision({ role, userId, song, comment }) {
+  if (!role) return deny('沒有權限存取此專案');
+  if (role === 'admin') return allow;
+  if (role === 'animator' && animatorCanWorkOnSong(song, userId)) return allow;
+  if (isCommentAuthor(comment, userId)) return allow;
+  if (role === 'director') return deny('「已改好」由動畫師改完後標；看過新版覺得還沒改好，可以按「重新打開」');
+  return deny('這首歌指派給其他動畫師，只有他或製作可以標「已改好」');
+}
+
+/** 重新打開（已改好 → 還沒改好）：admin、導演、負責的動畫師（標錯了收回）、留言的人自己 */
+export function commentReopenDecision({ role, userId, song, comment }) {
+  if (!role) return deny('沒有權限存取此專案');
+  if (role === 'admin' || role === 'director') return allow;
+  if (role === 'animator' && animatorCanWorkOnSong(song, userId)) return allow;
+  if (isCommentAuthor(comment, userId)) return allow;
+  return deny('只有導演、製作或負責這首歌的動畫師可以重新打開');
+}
+
+/**
+ * /api/notifications[...]（站內通知，只看得到自己的；要登入，分享連結的訪客沒有）
+ *   GET  /api/notifications         清單 + 未讀數（一個請求）
+ *   POST /api/notifications/read    標為已讀（{ ids: [...] } 或 { all: true }）
+ * @returns {{kind: string} | {kind: string, methodNotAllowed: true} | null}
+ */
+export function describeNotificationRoute(method, segs) {
+  const m = (method || 'GET').toUpperCase();
+  const [, , sub = null, extra = null] = segs;
+  if (extra !== null) return null;
+  if (!sub) return (m === 'GET' || m === 'HEAD') ? { kind: 'notifications.list' } : { kind: 'notifications.list', methodNotAllowed: true };
+  if (sub === 'read') return m === 'POST' ? { kind: 'notifications.read' } : { kind: 'notifications.read', methodNotAllowed: true };
+  return null;
 }
 
 // ─────────────────────────────────────────────

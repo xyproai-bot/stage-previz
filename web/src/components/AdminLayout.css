@@ -199,6 +199,14 @@
     padding-top: 0;
     padding-left: 16px;
   }
+  /* 側欄變成上方一條（可以左右捲）→ 通知面板改成固定在畫面右上（不會被裁掉） */
+  .admin-sidebar__bell .notif__panel {
+    position: fixed;
+    top: 64px;
+    right: 12px;
+    left: auto;
+    bottom: auto;
+  }
 }
 
 /* ── 非製作（動畫師 / 導演）看設定頁：沒有管理側欄 ── */

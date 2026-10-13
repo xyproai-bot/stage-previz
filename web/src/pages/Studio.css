@@ -874,3 +874,35 @@
   border-top: 1px solid var(--border);
 }
 .studio-songs:has(> .share-setlist) > .studio-songs__list { flex: 1 1 45%; }
+
+/* ── 審片 v2：有新版、導演看過哪一版 ── */
+.studio-songs__item-newer {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--warn);
+  background: var(--warn-dim);
+  padding: 1px 6px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.studio-songs__item.is-active .studio-songs__item-newer { background: rgba(0, 0, 0, 0.2); color: inherit; }
+.studio-review__last {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  overflow-wrap: anywhere;
+}
+.studio-review__last .review-dot { margin-top: 6px; flex-shrink: 0; }
+.studio-review__last--needs_changes { border-left: 3px solid var(--danger); }
+.studio-review__last--approved { border-left: 3px solid var(--accent); }
+.studio-review > .review-history { margin: 0; }

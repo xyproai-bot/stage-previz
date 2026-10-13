@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import type { ProjectRole } from '../lib/mockData';
@@ -9,6 +9,15 @@ import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import AddVideoDialog from '../components/AddVideoDialog';
 import ActivityDrawer from '../components/ActivityDrawer';
+import NotificationBell from '../components/NotificationBell';
+import DecisionDialog from '../components/DecisionDialog';
+import ReviewHistory from '../components/ReviewHistory';
+import HelpModal from '../components/HelpModal';
+import CommentThreadList from '../components/CommentThreadList';
+import { buildThreads, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, canPostComment, canResolveComment, type CommentScope } from '../lib/commentThreads';
+import { compareOptions, defaultCompareKey, flipTarget, isCompareShortcut, otherKey, startCompare, syncPair, type AbPair } from '../lib/abCompare';
+import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
+import { parseDeepLink, type DeepLink } from '../lib/notifications';
 import { CommentSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
@@ -22,16 +31,14 @@ import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type 
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions } from '../lib/mentions';
-import { formatRelativeTime } from '../lib/serverTime';
 import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
   friendlyError, projectGoneMessage, canModifyComment, isOwnComment, sameSongs, sameComments,
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
-import { roleLabel } from '../lib/roleLabels';
 import {
-  ArrowLeft, Check, ChevronLeft, ChevronRight, Clock, HistoryIcon, LoaderCircle, MapPin, Pause, Play,
-  RotateCcw, Square, X,
+  ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Clock, Film, HistoryIcon, LoaderCircle, MapPin, Pause, Play,
+  Square, X,
 } from 'lucide-react';
 import './Preview.css';
 
@@ -87,6 +94,12 @@ function PreviewInner({ projectId }: { projectId: string }) {
   // Show 整場串播：依歌單順序自動推進（每首跑完所有 cue 後切下首歌）
   const [showMode, setShowMode] = useState(false);
   const [showCueIntervalSec, setShowCueIntervalSec] = useState(3);  // 每 cue 停留秒數
+  const [helpOpen, setHelpOpen] = useState(false);
+  // 按「需修改」→ 先寫原因（看的是哪一版）
+  const [decision, setDecision] = useState<{ songId: string; videoId: string | null; label: string } | null>(null);
+  // 通知點進來（?song=&video=&comment=）：先選到那首歌，再交給 SongDetail 選版本、捲到那則留言
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [target, setTarget] = useState<(DeepLink & { nonce: number }) | null>(null);
 
   const projectRole: ProjectRole | null = myRole === undefined ? (user?.role ?? null) : myRole;
 
@@ -160,6 +173,27 @@ function PreviewInner({ projectId }: { projectId: string }) {
   }, [projectId, loadMeta, applySongs]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  useEffect(() => {
+    const link = parseDeepLink(searchParams);
+    if (!link) return;
+    setTarget({ ...link, nonce: Date.now() });
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      for (const k of ['song', 'video', 'comment']) next.delete(k);
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
+  useEffect(() => {
+    if (!target || songsLoading) return;
+    if (songs.some(s => s.id === target.songId)) {
+      setShowMode(false);
+      setSelectedSongId(target.songId);
+    } else {
+      toast.warn('通知裡的那首歌已經不在了（可能剛被刪掉）');
+      setTarget(null);
+    }
+  }, [target, songs, songsLoading]);
 
   // 自動更新歌曲狀態：每 25 秒 + 切回分頁時（動畫師提交了，這邊 30 秒內看得到）
   const reloadSongs = useCallback(async (): Promise<Song[] | null> => {
@@ -299,10 +333,27 @@ function PreviewInner({ projectId }: { projectId: string }) {
     }));
   }, [selectedCueId, cueStates, stageObjects]);
 
-  /** 改狀態。帶上畫面上以為的目前狀態 → 別人剛改過的話後台回 409，不會蓋掉 */
-  async function changeStatus(songId: string, to: Status) {
+  /**
+   * 按狀態按鈕：需修改 → 先寫原因；通過 → 記下看的是哪一版（review = 正在看的版本；總覽上 = 最新一版）
+   */
+  function requestStatus(songId: string, to: Status, review?: { videoId: string | null; label: string }) {
     const song = songsRef.current.find(s => s.id === songId);
     if (!song) return;
+    const r = review ?? { videoId: song.latestVideoId ?? null, label: song.latestVideoVersion ? `V${song.latestVideoVersion}` : '' };
+    if (to === 'needs_changes') { setDecision({ songId, ...r }); return; }
+    if (to === 'approved') {
+      void changeStatus(songId, to, { reason: '', reviewVideoId: r.videoId }).then(ok => {
+        if (ok) toast.success(`「${song.name}」${r.label ? ` ${r.label}` : ''} 已通過，${decisionNotifyHint(song)}`);
+      });
+      return;
+    }
+    void changeStatus(songId, to);
+  }
+
+  /** 改狀態；成功回 true。帶上畫面上以為的目前狀態 → 別人剛改過的話後台回 409，不會蓋掉 */
+  async function changeStatus(songId: string, to: Status, review?: { reason: string; reviewVideoId: string | null }): Promise<boolean> {
+    const song = songsRef.current.find(s => s.id === songId);
+    if (!song) return false;
     const expected = song.status;
     const setStatus = (status: Status) => {
       const next = songsRef.current.map(s => s.id === songId ? { ...s, status } : s);
@@ -311,7 +362,10 @@ function PreviewInner({ projectId }: { projectId: string }) {
     };
     setStatus(to);
     try {
-      await api.updateSong(projectId, songId, { status: to, expectedStatus: expected });
+      await api.updateSong(projectId, songId, { status: to, expectedStatus: expected, ...(review || {}) });
+      // 審片紀錄、「有新版」要用新的
+      void reloadSongs();
+      return true;
     } catch (e) {
       const status = api.errorStatus(e);
       if (status === 409) {
@@ -330,6 +384,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
         setStatus(expected);
         toast.error('狀態沒有改成：' + friendlyError(e));
       }
+      return false;
     }
   }
 
@@ -389,6 +444,10 @@ function PreviewInner({ projectId }: { projectId: string }) {
             <option value={10}>每 cue 10 秒</option>
           </select>
         )}
+        <button className="preview-top__icon-btn" onClick={() => setHelpOpen(true)} title="使用說明（比較版本、留言、通知）" aria-label="使用說明">
+          <Icon icon={CircleHelp} size="md" />
+        </button>
+        <NotificationBell />
         {user && (
           <span className="preview-top__user">
             <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
@@ -429,17 +488,19 @@ function PreviewInner({ projectId }: { projectId: string }) {
           cueName={selectedCue?.name}
           user={user}
           projectRole={projectRole}
-          onChangeStatus={changeStatus}
+          onChangeStatus={requestStatus}
           onClose={() => setSelectedSongId(null)}
           onPickSong={setSelectedSongId}
           songs={songs}
           members={projectMembers}
+          target={target && target.songId === selectedSongId ? target : null}
+          onTargetDone={() => setTarget(null)}
         />
       ) : (
         <StatusBoard
           songsByStatus={songsByStatus}
           onPickSong={setSelectedSongId}
-          onChangeStatus={changeStatus}
+          onChangeStatus={(id, to) => requestStatus(id, to)}
           projectRole={projectRole}
           userId={user?.id ?? null}
         />
@@ -450,6 +511,23 @@ function PreviewInner({ projectId }: { projectId: string }) {
         projectId={projectId}
         onClose={() => setActivityOpen(false)}
       />
+      <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {decision && (
+        <DecisionDialog
+          songName={songs.find(s => s.id === decision.songId)?.name ?? ''}
+          versionLabel={decision.label}
+          onCancel={() => setDecision(null)}
+          onSubmit={async (reason) => {
+            const ok = await changeStatus(decision.songId, 'needs_changes', { reason, reviewVideoId: decision.videoId });
+            if (ok) {
+              setDecision(null);
+              const ds = songs.find(s => s.id === decision.songId);
+              toast.success(`已送出「需修改」${decision.label ? `（${decision.label}）` : ''}${ds ? `，${decisionNotifyHint(ds)}` : ''}`);
+            }
+            return ok;
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -483,6 +561,7 @@ function StatusBoard({
                 const actions = col.key === 'in_review'
                   ? songStatusActions({ role: projectRole, userId, song: s, flow: 'director' })
                   : [];
+                const newer = newVersionLabel(s);
                 return (
                   <div key={s.id} className="status-card">
                     <button
@@ -494,8 +573,21 @@ function StatusBoard({
                         {s.name}
                       </div>
                       <div className="status-card__meta">
-                        {s.cueCount} 個 cue{s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
+                        {s.cueCount} 個 cue
+                        {s.latestVideoVersion != null && ` · 最新 V${s.latestVideoVersion}`}
+                        {/* 提案（proposal）只有製作在編輯頁看得到：還沒有「接受」的流程 */}
+                        {projectRole === 'admin' && s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
                       </div>
+                      {newer && (
+                        <div className="status-card__newer" title={`導演上次看的是 V${s.reviewedVersion ?? s.lastReview?.version ?? ''}`}>
+                          <Icon icon={Film} size="xs" /> 有新版 {newer}
+                        </div>
+                      )}
+                      {!newer && s.lastReview && (
+                        <div className="status-card__last">
+                          上次：{s.lastReview.versionLabel ? `${s.lastReview.versionLabel} ` : ''}{STATUS_LABEL[s.lastReview.status]}
+                        </div>
+                      )}
                     </button>
                     {actions.length > 0 && (
                       <div className="status-card__actions">
@@ -524,6 +616,7 @@ function StatusBoard({
 function SongDetail({
   projectId, song, cues, cuesReady, selectedCueId, onSelectCue, autoStep, onToggleAutoStep,
   stageObjects, viewportStates, modelUrl, cueName, user, projectRole, onChangeStatus, onClose, onPickSong, songs, members,
+  target, onTargetDone,
 }: {
   projectId: string;
   song: Song;
@@ -540,11 +633,15 @@ function SongDetail({
   cueName?: string;
   user: ReturnType<typeof useAuth>['user'];
   projectRole: ProjectRole | null;
-  onChangeStatus: (songId: string, status: Status) => void | Promise<void>;
+  /** review = 正在看的那一版（通過 / 需修改記這一版） */
+  onChangeStatus: (songId: string, status: Status, review?: { videoId: string | null; label: string }) => void;
   onClose: () => void;
   onPickSong: (id: string) => void;
   songs: Song[];
   members: { id: string; name: string }[];
+  /** 通知點進來：要選的版本、要捲到的留言 */
+  target: (DeepLink & { nonce: number }) | null;
+  onTargetDone: () => void;
 }) {
   const actions = songStatusActions({ role: projectRole, userId: user?.id, song, flow: 'director' });
   const actionsHint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user?.id, song, flow: 'director' }) : null;
@@ -642,6 +739,66 @@ function SongDetail({
     if (it?.url) player.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
   }, [versions, selected, player]);
   const videoMode = !!selected && player.srcKey === selected.key;
+
+  // ── 比較（A/B）：選第二個版本，一個按鈕（或按 C）在兩版之間切，停在同一秒、播放 / 暫停照舊 ──
+  //    只有一個 <video>：換網址再跳到同一秒（localVideo.replaceUrl），不會同時放兩支
+  const [pair, setPair] = useState<AbPair | null>(null);
+  const currentKey = selected?.key ?? null;
+  const itemKeys = useMemo(() => versions.items.filter(it => it.url).map(it => it.key), [versions.items]);
+  useEffect(() => { setPair(null); }, [song.id]);
+  useEffect(() => {
+    setPair(p => { const next = syncPair(p, currentKey, itemKeys); return next === p ? p : next; });
+  }, [currentKey, itemKeys]);
+  const switchToVersion = useCallback((key: string) => {
+    const it = versions.items.find(x => x.key === key);
+    if (!it?.url) return;
+    // 先換網址（停在同一秒、播放 / 暫停照舊），再記住選了哪一版（上面載入影片的 effect 看到同一個 key 就不會從頭載）
+    player.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
+    versions.select(it.key);
+  }, [versions, player]);
+  // 切到另一版；還沒選比較的版本 → 先跟上一版比、直接切過去（按 C、收起來時的「比較」按鈕）
+  const flipCompare = useCallback(() => {
+    if (pair) { switchToVersion(flipTarget(pair, currentKey)); return; }
+    const other = defaultCompareKey(versions.items, currentKey);
+    if (!other || !currentKey) return;
+    setPair(startCompare(currentKey, other));
+    switchToVersion(other);
+  }, [pair, currentKey, versions.items, switchToVersion]);
+  const pickCompare = useCallback((key: string | null) => {
+    setPair(key ? startCompare(currentKey, key) : null);
+  }, [currentKey]);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (!isCompareShortcut(e)) return;
+      if (compareOptions(versions.items, currentKey).length === 0) return;
+      e.preventDefault();
+      flipCompare();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [currentKey, versions.items, flipCompare]);
+  const viewedReview = selected?.kind === 'version' ? { videoId: selected.id, label: selected.label } : { videoId: null, label: '' };
+  const latestVersionItem = versions.items.find(it => it.kind === 'version' && it.version != null) ?? null;
+
+  // ── 通知點進來：選那一版、捲到那則留言 ──
+  const [focusComment, setFocusComment] = useState<{ id: string; nonce: number } | null>(null);
+  const targetDoneRef = useRef(onTargetDone);
+  targetDoneRef.current = onTargetDone;
+  useEffect(() => {
+    if (!target) return;
+    // 等「這首歌」的版本清單抓到（剛換歌時清單還是空的）
+    if (versions.loadedSongId !== song.id) return;
+    if (target.videoId) {
+      const key = versionKey(target.videoId);
+      if (versions.items.some(it => it.key === key)) {
+        if (selected?.key !== key) versions.select(key);
+      } else {
+        toast.warn('通知裡的那一版已經不在了（可能被刪掉），先放最新的一版');
+      }
+    }
+    if (target.commentId) setFocusComment({ id: target.commentId, nonce: target.nonce });
+    targetDoneRef.current();
+  }, [target, versions, selected?.key, song.id]);
 
   // 影片時間軸要每個 cue 的位置（放影片時才抓；抓過的留著）
   const statesCacheRef = useRef(new Map<string, Promise<CueState[]>>());
@@ -764,8 +921,9 @@ function SongDetail({
               <button
                 key={a.kind}
                 className={'btn btn--sm ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
-                onClick={() => onChangeStatus(song.id, a.to)}
-              >{a.label}</button>
+                onClick={() => onChangeStatus(song.id, a.to, viewedReview)}
+                title={(a.to === 'approved' || a.to === 'needs_changes') && viewedReview.label ? `${a.label}（記在 ${viewedReview.label}）` : undefined}
+              >{a.label}{(a.to === 'approved' || a.to === 'needs_changes') && viewedReview.label ? ` ${viewedReview.label}` : ''}</button>
             ))}
           </div>
         )}
@@ -851,6 +1009,12 @@ function SongDetail({
                   onCommentPinClick={handlePinClick}
                   onAddCommentAtTime={(t) => setPendingCommentTime(t)}
                   onRetry={retryVersion}
+                  compare={{
+                    options: compareOptions(versions.items, currentKey),
+                    value: pair ? otherKey(pair, currentKey) : null,
+                    onPick: pickCompare,
+                    onFlip: flipCompare,
+                  }}
                 />
               )}
             </div>
@@ -889,9 +1053,23 @@ function SongDetail({
         </main>
 
         <aside className="song-detail__side">
+          <div className="song-detail__history">
+            <ReviewHistory
+              projectId={projectId}
+              songId={song.id}
+              reloadKey={song.lastReview?.at ?? null}
+              defaultOpen={false}
+              onOpenComment={(id) => setFocusComment({ id, nonce: Date.now() })}
+            />
+          </div>
           <SongComments
             projectId={projectId}
             song={song}
+            viewed={selected?.kind === 'version' && selected.version != null ? { id: selected.id, version: selected.version, label: selected.label } : null}
+            latest={latestVersionItem ? { id: latestVersionItem.id, label: latestVersionItem.label } : null}
+            hasVersions={versions.hasVersions}
+            focusComment={focusComment}
+            onSeek={(t) => player.seek(t)}
             user={user}
             projectRole={projectRole}
             comments={comments}
@@ -926,6 +1104,7 @@ function SongDetail({
 function SongComments({
   projectId, song, user, projectRole, comments, loading, onChange, onRefresh,
   pendingTime, onConsumedPendingTime, pendingAnchor, onConsumedPendingAnchor, members,
+  viewed, latest, hasVersions, focusComment, onSeek,
 }: {
   projectId: string;
   song: Song;
@@ -940,6 +1119,14 @@ function SongComments({
   pendingAnchor: import('../lib/api').CommentAnchor | null;
   onConsumedPendingAnchor: () => void;
   members: { id: string; name: string }[];
+  /** 正在看的那一版（留言綁這一版；「這一版」篩選看它） */
+  viewed: { id: string; version: number; label: string } | null;
+  /** 最新一版（「已改好（V3）」） */
+  latest: { id: string; label: string } | null;
+  hasVersions: boolean;
+  /** 通知 / 審片紀錄點進來：捲到這則留言 */
+  focusComment: { id: string; nonce: number } | null;
+  onSeek: (t: number) => void;
 }) {
   const [text, setText] = useState('');
   const [posting, setPosting] = useState(false);
@@ -947,17 +1134,20 @@ function SongComments({
   const [attachTime, setAttachTime] = useState<number | null>(null);
   const [attachAnchor, setAttachAnchor] = useState<import('../lib/api').CommentAnchor | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // 修改留言（自己的，或 admin）
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState('');
   // @-mention 自動完成
   const [mentionState, setMentionState] = useState<{
     open: boolean; query: string; startIdx: number; activeIdx: number;
   }>({ open: false, query: '', startIdx: 0, activeIdx: 0 });
 
-  // 切歌：清掉打到一半的修改 / 多選
+  // 「這一版 / 全部」：有版本的歌預設「這一版」；切歌回到預設
+  const [scope, setScope] = useState<CommentScope>(() => defaultScope(hasVersions));
+  const scopeTouchedRef = useRef(false);
+  useEffect(() => { scopeTouchedRef.current = false; setScope(defaultScope(hasVersions)); }, [song.id]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (!scopeTouchedRef.current) setScope(defaultScope(hasVersions)); }, [hasVersions]);
+  const chooseScope = (s: CommentScope) => { scopeTouchedRef.current = true; setScope(s); };
+
+  // 切歌：清掉多選
   useEffect(() => {
-    setEditingId(null);
     setSelectedIds(new Set());
   }, [song.id]);
 
@@ -992,7 +1182,7 @@ function SongComments({
     m.name.toLowerCase().includes(mentionState.query.toLowerCase())
   ).slice(0, 6);
 
-  // Bulk-select 模式
+  // Bulk-select 模式（每串最上面那則）
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   function toggleSelect(id: string) {
     setSelectedIds(prev => {
@@ -1003,18 +1193,20 @@ function SongComments({
     });
   }
   function clearSelection() { setSelectedIds(new Set()); }
+  const who = { role: projectRole, userId: user?.id ?? null, song };
   const canModify = (c: SongComment) => canModifyComment(c, user, projectRole);
-  // 多選裡面可以刪的（自己的，或 admin）
+  // 多選裡面可以刪的（自己的，或 admin）/ 可以標已改好的
   const deletableSelected = comments.filter(c => selectedIds.has(c.id) && canModify(c));
-  // Filter / sort
+  const resolvableSelected = comments.filter(c => selectedIds.has(c.id) && c.status !== 'resolved' && canResolveComment(c, who));
+  // Filter / sort（舊的「未解決」預設會把灰掉的「已改好」藏起來 → 換一個存的名字，預設全部）
   const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'resolved'>(() => {
-    try { return (localStorage.getItem('sp_comment_filter') as 'all' | 'open' | 'resolved') || 'open'; } catch { return 'open'; }
+    try { return (localStorage.getItem('sp_comment_filter_v2') as 'all' | 'open' | 'resolved') || 'all'; } catch { return 'all'; }
   });
   const [filterRole, setFilterRole] = useState<'all' | 'animator' | 'director' | 'designer'>('all');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'time-asc'>(() => {
     try { return (localStorage.getItem('sp_comment_sort') as 'newest' | 'oldest' | 'time-asc') || 'newest'; } catch { return 'newest'; }
   });
-  useEffect(() => { try { localStorage.setItem('sp_comment_filter', filterStatus); } catch {} }, [filterStatus]);
+  useEffect(() => { try { localStorage.setItem('sp_comment_filter_v2', filterStatus); } catch {} }, [filterStatus]);
   useEffect(() => { try { localStorage.setItem('sp_comment_sort', sortBy); } catch {} }, [sortBy]);
 
   // 收到 timeline 來的 pendingTime → 預填 + focus
@@ -1038,12 +1230,13 @@ function SongComments({
     if (!t) return;
     setPosting(true);
     try {
-      // 作者 / 身分由後台依登入的人填
+      // 作者 / 身分由後台依登入的人填；綁正在看的那一版
       const updated = await api.postSongComment(projectId, song.id, {
         text: t,
         time: attachTime ?? 0,
         anchor: attachAnchor ?? undefined,
         mentions: extractMentions(t, members),
+        videoId: viewed?.id ?? null,
       });
       onChange(updated);
       setText('');
@@ -1056,40 +1249,22 @@ function SongComments({
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('刪除這則留言？')) return;
-    try {
-      const updated = await api.deleteSongComment(projectId, song.id, id);
-      onChange(updated);
-    } catch (e) { toast.error('刪除失敗：' + friendlyError(e)); }
-  }
-
-  async function handleSaveEdit(id: string) {
-    const t = editText.trim();
-    if (!t) return;
-    try {
-      onChange(await api.patchSongComment(projectId, song.id, id, { text: t }));
-      setEditingId(null);
-    } catch (e) { toast.error('修改失敗：' + friendlyError(e)); }
-  }
-
   async function bulkMarkResolved() {
-    const ids = Array.from(selectedIds);
+    const ids = resolvableSelected.map(c => c.id);
     if (ids.length === 0) return;
-    if (!confirm(`把 ${ids.length} 則留言標為已解決？`)) return;
+    const label = latest ? `已改好（${latest.label}）` : '已改好';
+    if (!confirm(`把 ${ids.length} 則留言標成「${label}」？`)) return;
     let okCount = 0;
     let lastList: SongComment[] | null = null;
     for (const id of ids) {
       try {
-        // 誰解決、什麼時候由後台記
-        const updated = await api.patchSongComment(projectId, song.id, id, { status: 'resolved' });
-        lastList = updated;
+        lastList = await api.patchSongComment(projectId, song.id, id, { status: 'resolved', resolvedVideoId: latest?.id ?? null });
         okCount++;
       } catch { /* swallow per-item, continue */ }
     }
     if (lastList) onChange(lastList);
     clearSelection();
-    toast.success(`已標 ${okCount}/${ids.length} 則為已解決`);
+    toast.success(`已標 ${okCount}/${ids.length} 則為${label}`);
   }
 
   async function bulkDelete() {
@@ -1097,13 +1272,12 @@ function SongComments({
     if (ids.length === 0) return;
     const skipped = selectedIds.size - ids.length;
     const note = skipped > 0 ? `\n\n（另外 ${skipped} 則是別人的留言，只有留言的人或製作能刪，會跳過）` : '';
-    if (!confirm(`刪除 ${ids.length} 則留言？無法復原。${note}`)) return;
+    if (!confirm(`刪除 ${ids.length} 則留言（底下的回覆一起刪）？無法復原。${note}`)) return;
     let okCount = 0;
     let lastList: SongComment[] | null = null;
     for (const id of ids) {
       try {
-        const updated = await api.deleteSongComment(projectId, song.id, id);
-        lastList = updated;
+        lastList = await api.deleteSongComment(projectId, song.id, id);
         okCount++;
       } catch { /* swallow */ }
     }
@@ -1112,39 +1286,72 @@ function SongComments({
     toast.success(`已刪除 ${okCount}/${ids.length} 則`);
   }
 
-  async function handleToggleResolved(c: SongComment) {
-    const next = c.status === 'resolved' ? 'open' : 'resolved';
-    try {
-      const updated = await api.patchSongComment(projectId, song.id, c.id, { status: next });
-      onChange(updated);
-    } catch (e) { toast.error('狀態切換失敗：' + friendlyError(e)); }
-  }
+  // 串 → 「這一版 / 全部」→ 狀態 / 角色篩選 → 排序
+  const threads = useMemo(() => buildThreads(comments), [comments]);
+  const viewedVersion = viewed ? { id: viewed.id, version: viewed.version } : null;
+  const effectiveScope: CommentScope = viewedVersion ? scope : 'all';
+  const scoped = useMemo(() => scopeThreads(threads, effectiveScope, viewedVersion), [threads, effectiveScope, viewedVersion?.id, viewedVersion?.version]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const visible = filterAndSortThreads(scoped, { status: filterStatus, role: filterRole, sort: sortBy });
+  const versionCount = viewedVersion ? scopeThreads(threads, 'version', viewedVersion).length : 0;
 
-  // Filter + sort
-  const filteredComments = (() => {
-    let list = comments.slice();
-    if (filterStatus !== 'all') list = list.filter(c => (c.status ?? 'open') === filterStatus);
-    if (filterRole !== 'all') list = list.filter(c => c.role === filterRole);
-    list.sort((a, b) => {
-      if (sortBy === 'newest') return b.createdAt.localeCompare(a.createdAt);
-      if (sortBy === 'oldest') return a.createdAt.localeCompare(b.createdAt);
-      // time-asc：依綁定的影片時間
-      return (a.time || 0) - (b.time || 0);
-    });
-    return list;
-  })();
+  // 通知 / 審片紀錄點進來 → 這一版看不到就切到「全部」，捲過去閃一下
+  const [flashId, setFlashId] = useState<{ id: string; nonce: number } | null>(null);
+  useEffect(() => {
+    if (!focusComment || loading) return;
+    if (!comments.some(c => c.id === focusComment.id)) {
+      toast.warn('那則留言已經不在了（可能被刪掉）');
+      return;
+    }
+    if (!visibleInScope(comments, focusComment.id, effectiveScope, viewedVersion)) chooseScope('all');
+    setFilterStatus('all');
+    setFilterRole('all');
+    setFlashId(focusComment);
+  }, [focusComment?.nonce, loading]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!flashId) return;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`comment-${flashId.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('song-comment--flash');
+        window.setTimeout(() => el.classList.remove('song-comment--flash'), 1600);
+      }
+      setFlashId(null);
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [flashId, visible.length, scope]);
+
+  const canPost = canPostComment(who);
 
   return (
     <div className="song-comments">
       <div className="song-comments__head">
-        <span>留言（{filteredComments.length}/{comments.length}）</span>
+        <span>留言（{visible.length}/{threads.length}）</span>
         <button className="link-btn" onClick={onRefresh}>重新整理</button>
+      </div>
+
+      <div className="comment-scope" role="tablist" aria-label="看哪些留言">
+        <button
+          type="button" role="tab" aria-selected={effectiveScope === 'version'}
+          className={'comment-scope__btn' + (effectiveScope === 'version' ? ' is-active' : '')}
+          onClick={() => chooseScope('version')}
+          disabled={!viewedVersion}
+          title={viewedVersion ? `${viewed!.label} 的留言 + 之前版本還沒改好的` : '這首歌還沒有版本'}
+        >這一版{viewed ? `（${viewed.label}）` : ''}{viewedVersion ? ` ${versionCount}` : ''}</button>
+        <button
+          type="button" role="tab" aria-selected={effectiveScope === 'all'}
+          className={'comment-scope__btn' + (effectiveScope === 'all' ? ' is-active' : '')}
+          onClick={() => chooseScope('all')}
+          title="所有版本的留言（含還沒有版本時的舊留言）"
+        >全部 {threads.length}</button>
       </div>
 
       {selectedIds.size > 0 && (
         <div className="song-comments__bulk">
           <span>已選 <strong>{selectedIds.size}</strong> 則</span>
-          <button className="btn btn--sm btn--primary" onClick={bulkMarkResolved}>標已解決</button>
+          {resolvableSelected.length > 0 && (
+            <button className="btn btn--sm btn--primary" onClick={bulkMarkResolved}>已改好{latest ? `（${latest.label}）` : ''}</button>
+          )}
           {deletableSelected.length > 0 && (
             <button className="btn btn--sm btn--ghost" onClick={bulkDelete}>
               刪除{deletableSelected.length < selectedIds.size ? `（${deletableSelected.length} 則可刪）` : ''}
@@ -1155,25 +1362,25 @@ function SongComments({
       )}
 
       <div className="song-comments__filters">
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as 'all' | 'open' | 'resolved')}>
-          <option value="open">未解決</option>
-          <option value="resolved">已解決</option>
-          <option value="all">全部</option>
+        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as 'all' | 'open' | 'resolved')} aria-label="狀態">
+          <option value="all">全部狀態</option>
+          <option value="open">還沒改好</option>
+          <option value="resolved">已改好</option>
         </select>
-        <select value={filterRole} onChange={e => setFilterRole(e.target.value as 'all' | 'animator' | 'director' | 'designer')}>
+        <select value={filterRole} onChange={e => setFilterRole(e.target.value as 'all' | 'animator' | 'director' | 'designer')} aria-label="角色">
           <option value="all">所有角色</option>
           <option value="director">導演</option>
           <option value="animator">動畫師</option>
           <option value="designer">製作</option>
         </select>
-        <select value={sortBy} onChange={e => setSortBy(e.target.value as 'newest' | 'oldest' | 'time-asc')}>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value as 'newest' | 'oldest' | 'time-asc')} aria-label="排序">
           <option value="newest">最新優先</option>
           <option value="oldest">最舊優先</option>
           <option value="time-asc">依影片時間</option>
         </select>
       </div>
 
-      {user && (
+      {user && canPost && (
         <div className="song-comments__compose">
           {attachTime !== null && (
             <div className="song-comments__attach">
@@ -1197,8 +1404,8 @@ function SongComments({
             <textarea
               ref={textareaRef}
               placeholder={attachTime !== null
-                ? `在 ${formatTimeMS(attachTime)} 留言（打 @ 可以提及成員）`
-                : '留言給動畫師（例：第 3 個 cue 機關升起來太慢；打 @ 可以提及成員）'}
+                ? `在 ${formatTimeMS(attachTime)} 留言${viewed ? `（${viewed.label}）` : ''}（打 @ 可以提及成員）`
+                : `留言給動畫師${viewed ? `（會記在 ${viewed.label}）` : ''}，例：第 3 個 cue 機關升起來太慢；打 @ 可以提及成員`}
               value={text}
               onChange={handleTextChange}
               onKeyDown={(e) => {
@@ -1237,82 +1444,34 @@ function SongComments({
           </button>
         </div>
       )}
+      {user && !canPost && (
+        <div className="song-comments__empty">這首歌指派給其他動畫師，只有他、導演和製作可以留言</div>
+      )}
 
       {loading ? (
         <div className="song-comments__list">
           {Array.from({ length: 3 }).map((_, i) => <CommentSkeleton key={i} />)}
         </div>
-      ) : filteredComments.length === 0 ? (
-        <div className="song-comments__empty">
-          {comments.length === 0 ? '還沒有留言' : `沒有符合篩選的留言（共 ${comments.length} 則）`}
-        </div>
       ) : (
-        <ul className="song-comments__list">
-          {filteredComments.map(c => {
-            const isResolved = c.status === 'resolved';
-            const isSelected = selectedIds.has(c.id);
-            const editing = editingId === c.id;
-            return (
-              <li
-                key={c.id}
-                id={`comment-${c.id}`}
-                className={'song-comment song-comment--' + c.role + (isResolved ? ' is-resolved' : '') + (isSelected ? ' is-selected' : '')}
-              >
-                <div className="song-comment__head">
-                  <input
-                    type="checkbox"
-                    className="song-comment__check"
-                    checked={isSelected}
-                    onChange={() => toggleSelect(c.id)}
-                    title="多選"
-                  />
-                  <span className="song-comment__author">{c.author}</span>
-                  <span className="song-comment__role">{roleLabel(c.role)}</span>
-                  {c.time > 0 && (
-                    <span className="song-comment__attach" title="綁定影片時間"><Icon icon={Clock} size="xs" /> {formatTimeMS(c.time)}</span>
-                  )}
-                  {c.anchor && c.anchor.type !== 'screen' && (
-                    <span className="song-comment__attach" title="3D 位置"><Icon icon={MapPin} size="xs" label="3D 位置" /></span>
-                  )}
-                  {isResolved && (
-                    <span className="song-comment__resolved-pill" title={c.resolvedBy ? `${c.resolvedBy} 解決於 ${formatRelativeTime(c.resolvedAt || '')}` : '已解決'}><Icon icon={Check} size="xs" /> 已解決</span>
-                  )}
-                  <span className="song-comment__time">{formatRelativeTime(c.createdAt)}</span>
-                  {user && (
-                    <button
-                      className="song-comment__del"
-                      onClick={() => handleToggleResolved(c)}
-                      title={isResolved ? '標為未解決' : '標為已解決'}
-                      aria-label={isResolved ? '標為未解決' : '標為已解決'}
-                    ><Icon icon={isResolved ? RotateCcw : Check} /></button>
-                  )}
-                  {canModify(c) && !editing && (
-                    <>
-                      <button
-                        className="song-comment__del"
-                        style={{ fontSize: 11.5 }}
-                        onClick={() => { setEditingId(c.id); setEditText(c.text); }}
-                        title="修改"
-                      >修改</button>
-                      <button className="song-comment__del" onClick={() => handleDelete(c.id)} title="刪除" aria-label="刪除"><Icon icon={X} /></button>
-                    </>
-                  )}
-                </div>
-                {editing ? (
-                  <div className="song-comments__compose">
-                    <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3} autoFocus />
-                    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
-                      <button className="btn btn--ghost btn--sm" onClick={() => setEditingId(null)}>取消</button>
-                      <button className="btn btn--primary btn--sm" onClick={() => handleSaveEdit(c.id)} disabled={!editText.trim()}>儲存</button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="song-comment__text">{c.text}</div>
-                )}
-              </li>
-            );
-          })}
-        </ul>
+        <CommentThreadList
+          projectId={projectId}
+          song={song}
+          user={user}
+          projectRole={projectRole}
+          members={members}
+          threads={visible}
+          scope={effectiveScope}
+          viewedVideoId={viewed?.id ?? null}
+          latest={latest}
+          onChange={onChange}
+          onSeek={onSeek}
+          selection={{ ids: selectedIds, toggle: toggleSelect }}
+          emptyText={threads.length === 0
+            ? '還沒有留言'
+            : effectiveScope === 'version'
+              ? `${viewed?.label ?? '這一版'} 還沒有留言（按「全部」看所有版本的 ${threads.length} 則）`
+              : `沒有符合篩選的留言（共 ${threads.length} 則）`}
+        />
       )}
     </div>
   );

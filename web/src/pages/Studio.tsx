@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import type { ProjectMember, ProjectRole } from '../lib/mockData';
@@ -10,6 +10,12 @@ import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import AddVideoDialog from '../components/AddVideoDialog';
 import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
 import ShareSetlist from './ShareSetlist';
+import NotificationBell from '../components/NotificationBell';
+import ReviewHistory from '../components/ReviewHistory';
+import CommentThreadList from '../components/CommentThreadList';
+import { buildThreads, canPostComment, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, type CommentScope } from '../lib/commentThreads';
+import { lastReviewSentence, newVersionLabel } from '../lib/reviewHistory';
+import { parseDeepLink, type DeepLink } from '../lib/notifications';
 import { toast } from '../lib/toast';
 import { getLastSeen, markSeen, newFromOthersSince, songsToFetch, unreadFromSummary } from '../lib/unreadComments';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
@@ -29,12 +35,11 @@ import { extractMentions } from '../lib/mentions';
 import { formatRelativeTime } from '../lib/serverTime';
 import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
-  friendlyError, projectGoneMessage, canModifyComment, sameSongs, sameComments,
+  friendlyError, projectGoneMessage, sameSongs, sameComments,
 } from '../lib/songReview';
-import Icon from '../components/Icon';
-import { roleLabel } from '../lib/roleLabels';
+import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, HistoryIcon, Image, LoaderCircle, Music, Pause, Play, RefreshCw, Repeat,
+  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Film, HistoryIcon, Image, LoaderCircle, Music, Pause, Play, RefreshCw, Repeat,
   TriangleAlert, Volume2, VolumeX, X,
 } from 'lucide-react';
 import './Studio.css';
@@ -107,6 +112,10 @@ function StudioInner({ projectId }: { projectId: string }) {
   const [stageObjects, setStageObjects] = useState<StageObject[]>([]);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('cues');
+  // 通知點進來（?song=&video=&comment=）：選到那首歌、那一版、打開留言捲到那則
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [target, setTarget] = useState<(DeepLink & { nonce: number }) | null>(null);
+  const [focusComment, setFocusComment] = useState<{ id: string; nonce: number } | null>(null);
   // 全專案留言（歌單的未讀數字 + 審查分頁的留言清單共用同一份；自動更新）
   const [commentsBySong, setCommentsBySong] = useState<Map<string, SongComment[]>>(new Map());
 
@@ -252,6 +261,17 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   useEffect(() => { refreshAll(); }, [refreshAll]);
 
+  useEffect(() => {
+    const link = parseDeepLink(searchParams);
+    if (!link) return;
+    setTarget({ ...link, nonce: Date.now() });
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      for (const k of ['song', 'video', 'comment']) next.delete(k);
+      return next;
+    }, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   // 自動更新：每 25 秒 + 切回分頁時，重抓歌曲狀態 + 留言（導演改了狀態 / 留了言，這邊 30 秒內看得到）
   const reloadSongs = useCallback(async (): Promise<Song[] | null> => {
     try {
@@ -351,6 +371,21 @@ function StudioInner({ projectId }: { projectId: string }) {
     setSelectedSongId(visibleSongs[0].id);
   }, [visibleSongs, selectedSongId]);
 
+  // 通知點進來：那首歌不在「我的」→ 換到「全部」；選到那首歌；有留言 → 打開留言分頁
+  useEffect(() => {
+    if (!target || songsLoading) return;
+    const song = songs.find(s => s.id === target.songId);
+    if (!song) {
+      toast.warn('通知裡的那首歌已經不在了（可能剛被刪掉）');
+      setTarget(null);
+      return;
+    }
+    if (songFilter === 'mine' && song.animatorUserId !== user?.id) setSongFilter('all');
+    setSongSearch('');
+    setSelectedSongId(song.id);
+    if (target.commentId || target.videoId) setTab('review');
+  }, [target, songs, songsLoading]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   // 沒選 cue 時 viewport 顯示 stage objects 的 default position
   const viewportStates: CueState[] = useMemo(() => {
     if (selectedCueId && cueStates.length > 0) return cueStates;
@@ -429,6 +464,22 @@ function StudioInner({ projectId }: { projectId: string }) {
     const it = r?.items.find(x => x.key === selectedVersion?.key) ?? selectedVersion;
     if (it?.url) player.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
   }, [versions, selectedVersion, player]);
+
+  // 通知點進來：等這首歌的版本清單抓到 → 選那一版、放到 LED 上；捲到那則留言
+  useEffect(() => {
+    if (!target || selectedSongId !== target.songId || versions.loadedSongId !== target.songId) return;
+    if (target.videoId) {
+      const key = versionKey(target.videoId);
+      if (versions.items.some(it => it.key === key)) {
+        versions.select(key);
+        chooseSource('version');
+      } else {
+        toast.warn('通知裡的那一版已經不在了（可能被刪掉）');
+      }
+    }
+    if (target.commentId) setFocusComment({ id: target.commentId, nonce: target.nonce });
+    setTarget(null);
+  }, [target, selectedSongId, versions, chooseSource]);
 
   // 正在 LED 上放影片（歌曲影片 / 本地影片；不是圖片 / AE）→ 舞台、cue 列跟著影片時間走
   const fileVideoMode = source === 'file' && media.active?.kind === 'video' && player.srcKey === localMediaKey(media.active.id);
@@ -599,8 +650,8 @@ function StudioInner({ projectId }: { projectId: string }) {
         return true;
       }
     }
-    // 目前沒有站內通知 → 不要說「導演會收到通知」
-    toast.success('已提交審查。導演的畫面 30 秒內會自動更新（目前不會另外通知導演，急的話請直接跟導演說）', 7000);
+    // 導演會收到站內通知（小鈴鐺），導演頁 30 秒內也會自動更新
+    toast.success('已提交審查，導演會收到通知（右上角的小鈴鐺）', 6000);
     return true;
   }
 
@@ -658,6 +709,7 @@ function StudioInner({ projectId }: { projectId: string }) {
       <a className="studio-top__help" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
       {/* 設定頁有 NDI / AE 連線檢查 */}
       <Link className="studio-top__help" to="/settings">設定</Link>
+      <NotificationBell />
       {user && (
         <span className="studio-top__user">
           <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>
@@ -731,6 +783,7 @@ function StudioInner({ projectId }: { projectId: string }) {
           <ul className="studio-songs__list">
             {visibleSongs.map(s => {
               const unread = unreadOf(s.id);
+              const newer = newVersionLabel(s);
               return (
                 <li key={s.id}>
                   <button
@@ -742,6 +795,11 @@ function StudioInner({ projectId }: { projectId: string }) {
                       {s.code && <span className="song-code" title="歌曲代號">{s.code}</span>}
                       {s.name}
                     </span>
+                    {newer && (
+                      <span className="studio-songs__item-newer" title={`導演上次看的是 V${s.reviewedVersion ?? s.lastReview?.version ?? ''}，${newer} 還沒審`}>
+                        <Icon icon={Film} size="xs" /> 有新版 {newer}
+                      </span>
+                    )}
                     {unread > 0 && (
                       <span className="studio-songs__item-unread" title={`${unread} 則新留言`}>
                         <CommentIcon />{unread}
@@ -1033,6 +1091,19 @@ function StudioInner({ projectId }: { projectId: string }) {
                 onRefreshComments={() => refreshSongComments(selectedSong.id)}
                 onChangeStatus={(to) => changeStatus(selectedSong, to)}
                 onSubmitForReview={(note) => handleSubmitForReview(selectedSong, note)}
+                viewed={(() => {
+                  // 正在 LED 上放的那一版；沒在放影片（AE 即時 / 本地檔案）→ 最新一版
+                  const it = (source === 'version' && versions.selected?.kind === 'version' ? versions.selected : null)
+                    ?? versions.items.find(x => x.kind === 'version' && x.version != null) ?? null;
+                  return it && it.version != null ? { id: it.id, version: it.version, label: it.label } : null;
+                })()}
+                latest={(() => {
+                  const it = versions.items.find(x => x.kind === 'version' && x.version != null);
+                  return it ? { id: it.id, label: it.label } : null;
+                })()}
+                hasVersions={versions.hasVersions}
+                focusComment={focusComment}
+                onSeek={source === 'version' ? (t) => player.seek(t) : undefined}
               />
             )}
             {tab === 'review' && !selectedSong && (
@@ -1104,7 +1175,7 @@ function CuesTab({
 
 function ReviewTab({
   projectId, song, user, projectRole, members, comments, onCommentsChange, onRefreshComments,
-  onChangeStatus, onSubmitForReview,
+  onChangeStatus, onSubmitForReview, viewed, latest, hasVersions, focusComment, onSeek,
 }: {
   projectId: string;
   song: Song;
@@ -1117,33 +1188,49 @@ function ReviewTab({
   onRefreshComments: () => Promise<void>;
   onChangeStatus: (status: Song['status']) => Promise<boolean>;
   onSubmitForReview: (note: string) => Promise<boolean>;
+  /** 正在看的那一版（沒在放影片 = 最新一版）：留言綁這一版、「這一版」篩選 */
+  viewed: { id: string; version: number; label: string } | null;
+  /** 最新一版（「已改好（V3）」） */
+  latest: { id: string; label: string } | null;
+  hasVersions: boolean;
+  /** 通知點進來：捲到這則留言 */
+  focusComment: { id: string; nonce: number } | null;
+  /** 點留言上的影片時間（正在放歌曲影片時才有） */
+  onSeek?: (t: number) => void;
 }) {
   const [note, setNote] = useState('');
   const [posting, setPosting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editText, setEditText] = useState('');
+  const [scope, setScope] = useState<CommentScope>(() => defaultScope(hasVersions));
+  const scopeTouchedRef = useRef(false);
 
   const actions = songStatusActions({ role: projectRole, userId: user.id, song, flow: 'animator' });
   const hint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user.id, song, flow: 'animator' }) : null;
   const canSubmit = actions.some(a => a.to === 'in_review');
+  const canPost = canPostComment({ role: projectRole, userId: user.id, song });
+  const reviewSentence = lastReviewSentence(song.lastReview);
 
-  // 切歌時清空 note / 編輯中的留言
+  // 切歌時清空 note、回到預設的「這一版 / 全部」
   const lastSongIdRef = useRef(song.id);
   useEffect(() => {
     if (lastSongIdRef.current !== song.id) {
       setNote('');
-      setEditingId(null);
       lastSongIdRef.current = song.id;
+      scopeTouchedRef.current = false;
+      setScope(defaultScope(hasVersions));
     }
-  }, [song.id]);
+  }, [song.id, hasVersions]);
+  useEffect(() => { if (!scopeTouchedRef.current) setScope(defaultScope(hasVersions)); }, [hasVersions]);
+  const chooseScope = (s: CommentScope) => { scopeTouchedRef.current = true; setScope(s); };
 
   async function handlePost() {
     const text = note.trim();
     if (!text) return;
     setPosting(true);
     try {
-      const updated = await api.postSongComment(projectId, song.id, { text, mentions: extractMentions(text, members) });
+      const updated = await api.postSongComment(projectId, song.id, {
+        text, mentions: extractMentions(text, members), videoId: viewed?.id ?? null,
+      });
       onCommentsChange(updated);
       setNote('');
     } catch (e) {
@@ -1153,27 +1240,11 @@ function ReviewTab({
     }
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm('刪除這則留言？')) return;
-    try {
-      onCommentsChange(await api.deleteSongComment(projectId, song.id, id));
-    } catch (e) { toast.error('刪除失敗：' + friendlyError(e)); }
-  }
-
-  async function handleSaveEdit(id: string) {
-    const text = editText.trim();
-    if (!text) return;
-    try {
-      onCommentsChange(await api.patchSongComment(projectId, song.id, id, { text }));
-      setEditingId(null);
-    } catch (e) { toast.error('修改失敗：' + friendlyError(e)); }
-  }
-
   async function handleAction(to: Song['status']) {
     setPosting(true);
     try {
       if (to === 'in_review') {
-        if (!confirm(`把「${song.name}」狀態改為「審查中」？\n\n留言框裡的話會一起送出。`)) return;
+        if (!confirm(`把「${song.name}」狀態改為「審查中」？\n\n留言框裡的話會一起送出，導演會收到通知。`)) return;
         const ok = await onSubmitForReview(note);
         if (ok) setNote('');
       } else {
@@ -1189,11 +1260,45 @@ function ReviewTab({
     try { await onRefreshComments(); } finally { setRefreshing(false); }
   }
 
+  const list = comments ?? [];
+  const threads = useMemo(() => buildThreads(list), [list]);
+  const viewedVersion = viewed ? { id: viewed.id, version: viewed.version } : null;
+  const effectiveScope: CommentScope = viewedVersion ? scope : 'all';
+  const visible = filterAndSortThreads(scopeThreads(threads, effectiveScope, viewedVersion), { sort: 'newest' });
+  const versionCount = viewedVersion ? scopeThreads(threads, 'version', viewedVersion).length : 0;
+
+  // 通知點進來 → 這一版看不到就切到「全部」，捲過去閃一下
+  const [flash, setFlash] = useState<{ id: string; nonce: number } | null>(null);
+  useEffect(() => {
+    if (!focusComment || comments === undefined) return;
+    if (!list.some(c => c.id === focusComment.id)) { toast.warn('那則留言已經不在了（可能被刪掉）'); return; }
+    if (!visibleInScope(list, focusComment.id, effectiveScope, viewedVersion)) chooseScope('all');
+    setFlash(focusComment);
+  }, [focusComment?.nonce, comments === undefined]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!flash) return;
+    const t = window.setTimeout(() => {
+      const el = document.getElementById(`comment-${flash.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('song-comment--flash');
+        window.setTimeout(() => el.classList.remove('song-comment--flash'), 1600);
+      }
+      setFlash(null);
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [flash, visible.length, scope]);
+
   return (
     <div className="studio-review">
       <section className="studio-review__status">
         <div className="studio-review__status-label">目前狀態</div>
         <div className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</div>
+        {reviewSentence && (
+          <div className={`studio-review__last studio-review__last--${song.lastReview!.status}`}>
+            <StatusDot status={song.lastReview!.status} /> {reviewSentence}
+          </div>
+        )}
 
         <div className="studio-review__actions">
           {actions.map(a => (
@@ -1208,7 +1313,18 @@ function ReviewTab({
           ))}
           {hint && <span className="studio-review__hint">{hint}</span>}
         </div>
+        {song.status === 'needs_changes' && canSubmit && (
+          <div className="studio-review__hint">交新版（加影片）後會自動回到「審查中」，導演會收到通知</div>
+        )}
       </section>
+
+      <ReviewHistory
+        projectId={projectId}
+        songId={song.id}
+        reloadKey={song.lastReview?.at ?? null}
+        defaultOpen={false}
+        onOpenComment={(id) => setFlash({ id, nonce: Date.now() })}
+      />
 
       <section className="studio-review__notes">
         <div className="studio-review__notes-head">
@@ -1216,63 +1332,60 @@ function ReviewTab({
           <button className="link-btn" onClick={handleRefresh} disabled={refreshing}>{refreshing ? '更新中…' : '重新整理'}</button>
         </div>
 
-        <div className="studio-review__compose">
-          <textarea
-            placeholder={canSubmit
-              ? '寫一段給導演 / 製作的話，按「提交審查」會一起送出'
-              : '在這裡留言（給協作者看）'}
-            value={note}
-            onChange={e => setNote(e.target.value)}
-            rows={3}
-          />
-          <div className="studio-review__compose-actions">
-            <button className="btn btn--ghost" onClick={handlePost} disabled={posting || !note.trim()}>
-              送出留言
-            </button>
-          </div>
+        <div className="comment-scope" role="tablist" aria-label="看哪些留言">
+          <button
+            type="button" role="tab" aria-selected={effectiveScope === 'version'}
+            className={'comment-scope__btn' + (effectiveScope === 'version' ? ' is-active' : '')}
+            onClick={() => chooseScope('version')}
+            disabled={!viewedVersion}
+            title={viewedVersion ? `${viewed!.label} 的留言 + 之前版本還沒改好的` : '這首歌還沒有版本'}
+          >這一版{viewed ? `（${viewed.label}）` : ''}{viewedVersion ? ` ${versionCount}` : ''}</button>
+          <button
+            type="button" role="tab" aria-selected={effectiveScope === 'all'}
+            className={'comment-scope__btn' + (effectiveScope === 'all' ? ' is-active' : '')}
+            onClick={() => chooseScope('all')}
+          >全部 {threads.length}</button>
         </div>
+
+        {canPost ? (
+          <div className="studio-review__compose">
+            <textarea
+              placeholder={canSubmit
+                ? '寫一段給導演 / 製作的話，按「提交審查」會一起送出'
+                : `在這裡留言${viewed ? `（會記在 ${viewed.label}）` : ''}；打 @ 加名字可以提及成員`}
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              rows={3}
+            />
+            <div className="studio-review__compose-actions">
+              <button className="btn btn--ghost" onClick={handlePost} disabled={posting || !note.trim()}>
+                送出留言
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="studio-review__hint">這首歌指派給其他動畫師，只有他、導演和製作可以留言</div>
+        )}
 
         {comments === undefined ? (
           <div className="studio-review__loading">載入中…</div>
-        ) : comments.length === 0 ? (
-          <div className="studio-review__empty">還沒有留言</div>
         ) : (
-          <ul className="studio-review__list">
-            {[...comments].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(c => {
-              const canModify = canModifyComment(c, user, projectRole);
-              const editing = editingId === c.id;
-              return (
-                <li key={c.id} className={'studio-comment studio-comment--' + c.role}>
-                  <div className="studio-comment__head">
-                    <span className="studio-comment__author">{c.author}</span>
-                    <span className="studio-comment__role">{roleLabel(c.role)}</span>
-                    <span className="studio-comment__time">{formatRelativeTime(c.createdAt)}</span>
-                    {canModify && !editing && (
-                      <>
-                        <button
-                          className="studio-comment__del studio-comment__edit"
-                          onClick={() => { setEditingId(c.id); setEditText(c.text); }}
-                          title="修改"
-                        >修改</button>
-                        <button className="studio-comment__del" onClick={() => handleDelete(c.id)} title="刪除" aria-label="刪除"><Icon icon={X} /></button>
-                      </>
-                    )}
-                  </div>
-                  {editing ? (
-                    <div className="studio-comment__editbox">
-                      <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3} autoFocus />
-                      <div className="studio-review__compose-actions">
-                        <button className="btn btn--ghost" onClick={() => setEditingId(null)}>取消</button>
-                        <button className="btn btn--primary" onClick={() => handleSaveEdit(c.id)} disabled={!editText.trim()}>儲存</button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="studio-comment__text">{c.text}</div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
+          <CommentThreadList
+            projectId={projectId}
+            song={song}
+            user={user}
+            projectRole={projectRole}
+            members={members}
+            threads={visible}
+            scope={effectiveScope}
+            viewedVideoId={viewed?.id ?? null}
+            latest={latest}
+            onChange={onCommentsChange}
+            onSeek={onSeek}
+            emptyText={threads.length === 0
+              ? '還沒有留言'
+              : `${viewed?.label ?? '這一版'} 沒有要改的留言（按「全部」看所有版本的 ${threads.length} 則）`}
+          />
         )}
       </section>
     </div>

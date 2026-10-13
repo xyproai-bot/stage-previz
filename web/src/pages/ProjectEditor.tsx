@@ -17,6 +17,9 @@ import ImportCuesDialog from '../components/ImportCuesDialog';
 import ShareLinksDialog from '../components/ShareLinksDialog';
 import InviteDialog from '../components/InviteDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
+import NotificationBell from '../components/NotificationBell';
+import DecisionDialog from '../components/DecisionDialog';
+import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { pushRecentProject } from '../components/CommandPalette';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
@@ -150,6 +153,8 @@ export default function ProjectEditor() {
   const [commentSearchOpen, setCommentSearchOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [importCuesOpen, setImportCuesOpen] = useState(false);
+  // 狀態選單選「需修改」→ 先寫原因
+  const [decisionSongId, setDecisionSongId] = useState<string | null>(null);
   const [projectMeta, setProjectMeta] = useState<api.ProjectFull | null>(null);
   const [projectMetaFailed, setProjectMetaFailed] = useState(false);
   const refreshProjectMeta = useCallback(async () => {
@@ -454,14 +459,26 @@ export default function ProjectEditor() {
    * 管理頁的狀態選單：帶上畫面上以為的目前狀態（expectedStatus）→ 導演 / 動畫師剛改過的話後台回 409，
    * 不會蓋掉別人的決定；這時重新讀歌單、用白話說現在是什麼狀態（跟動畫師頁、導演頁一樣）
    */
-  async function handleUpdateSongStatus(songId: string, status: SongStatus) {
-    if (!projectId) return;
-    const expected = songs.find(s => s.id === songId)?.status;
-    if (!expected || expected === status) return;
+  async function handleUpdateSongStatus(songId: string, status: SongStatus, reason?: string): Promise<boolean> {
+    if (!projectId) return false;
+    const song = songs.find(s => s.id === songId);
+    const expected = song?.status;
+    if (!song || !expected || expected === status) return false;
+    // 需修改一定要寫原因（動畫師才知道改什麼）→ 先開對話框；通過 / 需修改都記在最新一版
+    if (status === 'needs_changes' && reason === undefined) {
+      setDecisionSongId(songId);
+      return false;
+    }
+    const review = (status === 'needs_changes' || status === 'approved')
+      ? { reason: reason ?? '', reviewVideoId: song.latestVideoId ?? null }
+      : {};
     const setStatus = (to: SongStatus) => setSongs(list => list.map(s => s.id === songId ? { ...s, status: to } : s));
     setStatus(status);  // 先改畫面
     try {
-      await api.updateSong(projectId, songId, { status, expectedStatus: expected });
+      await api.updateSong(projectId, songId, { status, expectedStatus: expected, ...review });
+      // 審片紀錄、「有新版」要用新的
+      api.listSongs(projectId).then(setSongs).catch(() => { /* 下次重新整理再拿 */ });
+      return true;
     } catch (e) {
       if (api.errorStatus(e) === 409) {
         const stale = staleStatusMessage((e as api.ApiError).data?.currentStatus, expected);
@@ -475,6 +492,7 @@ export default function ProjectEditor() {
         setStatus(expected);
         toast.error('狀態沒有改成：' + friendlyError(e));
       }
+      return false;
     }
   }
   // 指派負責的動畫師（動畫師工作站「我的」清單就是看這個）
@@ -911,6 +929,7 @@ export default function ProjectEditor() {
           >
             <Icon icon={HistoryIcon} /><span className="editor-topbar__label"> 最近活動</span>
           </button>
+          <NotificationBell />
         </div>
       </header>
 
@@ -986,6 +1005,7 @@ export default function ProjectEditor() {
                       <div className="song-item__meta">
                         <span>{s.cueCount} 個 cue</span>
                         {s.proposalCount > 0 && <span className="proposal-badge">{s.proposalCount} 提案</span>}
+                        {newVersionLabel(s) && <span className="song-item__newer" title={`導演上次看的是 V${s.reviewedVersion ?? s.lastReview?.version ?? ''}`}>有新版 {newVersionLabel(s)}</span>}
                         <SongVideoMeta song={s} jobs={videoJobsBySong.get(s.id)} onAdd={() => setAddVideoSongId(s.id)} />
                       </div>
                       <label
@@ -1112,7 +1132,8 @@ export default function ProjectEditor() {
             {([
               ['cues',      `Cue (${masterCues.length})`],
               ['state',     '物件狀態'],
-              ['proposals', `提案${proposalCues.length > 0 ? ` (${proposalCues.length})` : ''}`],
+              // 提案：現在沒有「建立 / 接受提案」的流程，只有舊資料才會有 → 有提案才出現這個分頁（只能看、刪）
+              ...(proposalCues.length > 0 || rightTab === 'proposals' ? [['proposals', `提案 (${proposalCues.length})`] as const] : []),
               ['objects',   stageObjectsStatus === 'ready' ? `物件 (${stageObjects.length})` : '物件'],
             ] as const).map(([key, label]) => (
               <button
@@ -1167,14 +1188,20 @@ export default function ProjectEditor() {
                 onJumpToObjects={() => setRightTab('objects')}
               />
             ) : rightTab === 'proposals' ? (
-              <CueList
-                cues={proposalCues}
-                loading={cuesLoading}
-                selectedId={selectedCueId}
-                onSelect={(id) => { setSelectedCueId(id); setRightTab('state'); }}
-                onDelete={handleDeleteCue}
-                emptyText="尚無提案"
-              />
+              <>
+                <div className="editor-proposals-note">
+                  這些是以前留下的「提案」cue。現在還沒有「接受提案」的功能（提案沒有記下要取代哪一個 cue，套上去可能蓋錯），
+                  只能點進去看擺位、或刪掉。要用的話，請在 Cue 分頁「沿用目前的 cue」複製一份再改。
+                </div>
+                <CueList
+                  cues={proposalCues}
+                  loading={cuesLoading}
+                  selectedId={selectedCueId}
+                  onSelect={(id) => { setSelectedCueId(id); setRightTab('state'); }}
+                  onDelete={handleDeleteCue}
+                  emptyText="這首歌沒有提案"
+                />
+              </>
             ) : (
               <ObjectsManager
                 objects={stageObjects}
@@ -1276,6 +1303,22 @@ export default function ProjectEditor() {
         onClose={() => setCommentSearchOpen(false)}
         onJump={(songId) => { setSelectedSongId(songId); setCommentSearchOpen(false); }}
       />
+
+      {decisionSongId && (() => {
+        const ds = songs.find(x => x.id === decisionSongId);
+        return (
+          <DecisionDialog
+            songName={ds?.name ?? ''}
+            versionLabel={ds?.latestVideoVersion ? `V${ds.latestVideoVersion}` : ''}
+            onCancel={() => setDecisionSongId(null)}
+            onSubmit={async (reason) => {
+              const ok = await handleUpdateSongStatus(decisionSongId, 'needs_changes', reason);
+              if (ok) { setDecisionSongId(null); toast.success(`已送出「需修改」${ds ? `，${decisionNotifyHint(ds)}` : ''}`); }
+              return ok;
+            }}
+          />
+        );
+      })()}
 
       <CueDiffDialog
         open={diffOpen}

@@ -5,6 +5,7 @@ import { helpUrl } from '../lib/helpLinks';
 import { ROLE_LABEL } from '../lib/roleLabels';
 import { Archive, Boxes, Cloud, Folder, LogOut, Settings, Ticket, Users } from 'lucide-react';
 import HelpModal from './HelpModal';
+import NotificationBell from './NotificationBell';
 import Icon from './Icon';
 import './AdminLayout.css';
 
@@ -89,6 +90,8 @@ function AdminShell({ children }: AdminLayoutProps) {
               <div className="admin-sidebar__user-name">{user?.name || '載入中…'}</div>
               <div className="admin-sidebar__user-role">{user ? ROLE_LABEL[user.role] : ''}</div>
             </div>
+            {/* 站內通知（@你、新版、被指派…）：側欄在左下角 → 面板往上開 */}
+            <NotificationBell placement="up-left" className="admin-sidebar__bell" />
             <button
               className="admin-sidebar__logout"
               onClick={handleLogout}
@@ -134,6 +137,7 @@ function MemberLayout({ children }: AdminLayoutProps) {
         </span>
         <span className="member-layout__grow" />
         <a className="member-layout__link" href={helpUrl()} target="_blank" rel="noopener">使用說明</a>
+        <NotificationBell />
         <span className="member-layout__user">
           <span className="avatar avatar--sm" style={{ background: user?.avatarColor || '#10c78a' }}>
             {user?.name?.[0] || '?'}

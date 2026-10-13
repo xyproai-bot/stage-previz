@@ -1,0 +1,217 @@
+/* 留言串（導演頁、動畫師工作站共用） */
+.rvc-empty {
+  padding: 20px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+.rvc-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rvc-thread {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.rvc-thread.is-greyed > .rvc-comment,
+.rvc-thread.is-greyed .rvc-replies { opacity: 0.55; }
+.rvc-thread.is-greyed > .rvc-comment .rvc-text { text-decoration: line-through; text-decoration-color: var(--text-muted); }
+.rvc-thread.is-selected { border-color: var(--accent); background: rgba(16, 199, 138, 0.08); }
+
+.rvc-comment {
+  padding: 8px 10px;
+  border-left: 3px solid var(--text-dim);
+}
+.rvc-comment--animator { border-left-color: var(--accent); }
+.rvc-comment--director { border-left-color: var(--warn); }
+.rvc-comment--designer { border-left-color: var(--text-dim); }
+.rvc-replies {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 14px;
+  border-top: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.12);
+}
+.rvc-replies > li + li { border-top: 1px dashed var(--border); }
+.rvc-comment--reply { border-left-width: 2px; padding: 6px 10px; }
+
+.rvc-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  row-gap: 4px;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+}
+.rvc-head > * { white-space: nowrap; flex-shrink: 0; }
+.rvc-check { margin: 0; accent-color: var(--accent); cursor: pointer; }
+.rvc-reply-mark { color: var(--text-muted); }
+.rvc-author { font-weight: 600; color: var(--text); }
+.rvc-role {
+  color: var(--text-dim);
+  font-size: 10.5px;
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.rvc-chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--warn);
+  background: var(--warn-dim);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.rvc-chip--carried { color: var(--text-dim); background: var(--bg); font-weight: 600; }
+.rvc-chip--legacy { font-family: inherit; font-weight: 500; color: var(--text-muted); background: var(--bg); }
+.rvc-kind {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--danger);
+  background: rgba(255, 84, 112, 0.14);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.rvc-attach {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: none;
+}
+button.rvc-attach { cursor: pointer; }
+button.rvc-attach:hover { filter: brightness(1.15); }
+.rvc-attach--3d { color: #7aa8ff; background: rgba(82, 148, 255, 0.15); }
+.rvc-resolved {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.rvc-time { margin-left: auto; color: var(--text-muted); font-size: 11px; }
+.rvc-text {
+  font-size: 13px;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+
+.rvc-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-top: 4px;
+}
+.rvc-act {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.rvc-act:hover:not(:disabled) { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.rvc-act--fix { color: var(--accent); }
+.rvc-act--fix:hover:not(:disabled) { color: var(--accent); background: var(--accent-dim); }
+.rvc-act--danger:hover:not(:disabled) { color: var(--danger); background: rgba(255, 84, 112, 0.15); }
+.rvc-act:disabled { opacity: 0.5; cursor: default; }
+
+.rvc-replybox,
+.rvc-editbox {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+}
+.rvc-replybox { border-top: 1px solid var(--border); background: rgba(0, 0, 0, 0.12); }
+.rvc-replybox textarea,
+.rvc-editbox textarea {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 48px;
+}
+.rvc-replybox textarea:focus,
+.rvc-editbox textarea:focus { outline: none; border-color: var(--accent); }
+.rvc-row-end { display: flex; justify-content: flex-end; gap: 6px; }
+.rvc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  border-radius: 5px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 28px;
+}
+.rvc-btn:hover:not(:disabled) { background: var(--surface-1); }
+.rvc-btn--primary { background: var(--accent); border-color: var(--accent); color: #000; }
+.rvc-btn--primary:hover:not(:disabled) { background: var(--accent-hover); }
+.rvc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.song-comment--flash,
+.rvc-comment.song-comment--flash { animation: rvc-flash 1.6s ease-out; }
+@keyframes rvc-flash {
+  0%, 35% { background: var(--accent-dim); box-shadow: inset 0 0 0 2px var(--accent); }
+  100% { background: transparent; box-shadow: none; }
+}
+
+/* 「這一版 / 全部」 */
+.comment-scope {
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+  align-self: flex-start;
+}
+.comment-scope__btn {
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.comment-scope__btn + .comment-scope__btn { border-left: 1px solid var(--border-strong); }
+.comment-scope__btn.is-active { background: var(--accent-dim); color: var(--accent); }
+.comment-scope__btn:disabled { color: var(--text-muted); cursor: not-allowed; }
+
+/* 觸控：按鈕大一點 */
+@media (hover: none) and (pointer: coarse) {
+  .rvc-act { padding: 6px 10px; font-size: 12.5px; }
+  .rvc-btn { min-height: 36px; padding: 6px 14px; }
+  .comment-scope__btn { padding: 8px 14px; font-size: 13px; }
+}

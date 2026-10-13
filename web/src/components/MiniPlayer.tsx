@@ -1,9 +1,21 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ChevronDown, ChevronUp, GripHorizontal, MessageSquarePlus, Pause, Play, RefreshCw, Repeat, Volume2, VolumeX } from 'lucide-react';
+import { ArrowLeftRight, ChevronDown, ChevronUp, GripHorizontal, MessageSquarePlus, Pause, Play, RefreshCw, Repeat, Volume2, VolumeX } from 'lucide-react';
 import Icon from './Icon';
 import { formatClock, parkVideo, type LocalVideoState } from '../lib/localVideo';
 import type { SongComment } from '../lib/api';
+import type { CompareOption } from '../lib/abCompare';
 import './MiniPlayer.css';
+
+/** 「比較」（A/B）：選第二個版本，一個按鈕（或按 C）在兩版之間切，停在同一秒（lib/abCompare.ts） */
+export interface MiniPlayerCompare {
+  /** 可以拿來比的版本（不含正在看的） */
+  options: CompareOption[];
+  /** 比較中「另一版」的 key（沒在比 = null） */
+  value: string | null;
+  onPick: (key: string | null) => void;
+  /** 切到另一版（同一秒、播放 / 暫停照舊）；還沒選比較的版本 → 跟上一版比 */
+  onFlip: () => void;
+}
 
 interface Props {
   player: LocalVideoState;
@@ -22,6 +34,8 @@ interface Props {
   onRetry?: () => void;
   /** 標題列右邊多放的東西 */
   extra?: ReactNode;
+  /** 有給（而且有兩版以上）才顯示「比較」 */
+  compare?: MiniPlayerCompare;
 }
 
 interface Placement { right: number; bottom: number; collapsed: boolean | null }
@@ -55,7 +69,7 @@ function clamp(n: number, lo: number, hi: number) {
  * 可以拖標題列移位置、按 ︿ 收成一條；放在 3D 畫面裡面（不會蓋到下面的 cue 列）。
  */
 export default function MiniPlayer({
-  player, label, detail, storageKey, comments, onCommentPinClick, onAddCommentAtTime, onRetry, extra,
+  player, label, detail, storageKey, comments, onCommentPinClick, onAddCommentAtTime, onRetry, extra, compare,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -135,6 +149,31 @@ export default function MiniPlayer({
   };
 
   const { playing, time, duration, loop, muted, ready, error } = player;
+  const canCompare = !!compare && compare.options.length > 0;
+  const compareLabel = compare?.value ? compare.options.find(o => o.key === compare.value)?.label ?? null : null;
+  const flipBtn = canCompare && compareLabel && (
+    <button
+      type="button"
+      className="mini-player__btn mini-player__btn--flip"
+      onClick={compare!.onFlip}
+      title={`切到 ${compareLabel}（同一個時間點；快捷鍵 C）`}
+      aria-label={`切到 ${compareLabel}`}
+    >
+      <Icon icon={ArrowLeftRight} size="sm" /> {compareLabel}
+    </button>
+  );
+  // 收起來時（iPad / 手機）：還沒選比較的版本 → 按一下就跟上一版比（跟按 C 一樣）
+  const collapsedCompareBtn = canCompare && (flipBtn || (
+    <button
+      type="button"
+      className="mini-player__btn mini-player__btn--flip"
+      onClick={compare!.onFlip}
+      title="跟上一版比較（同一個時間點；快捷鍵 C）"
+      aria-label="比較版本"
+    >
+      <Icon icon={ArrowLeftRight} size="sm" /> 比較
+    </button>
+  ));
   const pins = (comments || []).filter(c => typeof c.time === 'number' && c.time > 0 && duration > 0 && c.time <= duration + 1);
 
   const scrub = (
@@ -198,6 +237,7 @@ export default function MiniPlayer({
         {!collapsed && detail && <span className="mini-player__detail">{detail}</span>}
         {collapsed && <span className="mini-player__time">{formatClock(time)} / {formatClock(duration)}</span>}
         <span className="mini-player__grow" />
+        {collapsed && collapsedCompareBtn}
         {!collapsed && extra}
         <button
           type="button"
@@ -241,6 +281,23 @@ export default function MiniPlayer({
             </button>
           </div>
           {scrub}
+          {canCompare && (
+            <div className="mini-player__compare">
+              <label className="mini-player__compare-pick">
+                <span>比較</span>
+                <select
+                  value={compare!.value ?? ''}
+                  onChange={(e) => compare!.onPick(e.target.value || null)}
+                  aria-label="選另一個版本來比較"
+                  title="選另一個版本，按右邊的按鈕（或 C）在兩版之間切換，停在同一個時間點"
+                >
+                  <option value="">不比較</option>
+                  {compare!.options.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                </select>
+              </label>
+              {flipBtn || <span className="mini-player__compare-hint">選一版，按 C 切換</span>}
+            </div>
+          )}
           {onAddCommentAtTime && (
             <button type="button" className="mini-player__comment" onClick={() => onAddCommentAtTime(player.video.currentTime)} disabled={!ready}>
               <Icon icon={MessageSquarePlus} size="sm" /> 在 {formatClock(time)} 加留言

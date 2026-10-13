@@ -761,3 +761,43 @@
 .song-comment__head { flex-wrap: wrap; row-gap: 4px; }
 .song-comment__head > * { white-space: nowrap; flex-shrink: 0; }
 .song-comment__attach { display: inline-flex; align-items: center; gap: 3px; }
+
+/* ─── 審片 v2：說明按鈕、有新版、這一版 / 全部、審片紀錄 ─── */
+.preview-top__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.preview-top__icon-btn:hover { color: var(--text); border-color: var(--border-strong); }
+.status-card__newer {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: 11px;
+  font-weight: 700;
+}
+.status-card__last {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.song-detail__history { padding: 12px 14px 0; }
+@media (max-width: 640px) {
+  .preview-top__user > span:not(.avatar) { display: none; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .preview-top__icon-btn { width: 40px; height: 40px; }
+}

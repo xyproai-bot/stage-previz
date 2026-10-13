@@ -33,7 +33,7 @@ import {
   projectRoleOf, canEditProjectContent, songStatusDecision,
   describeProjectRoute, roleMeetsNeed, needDeniedMessage, PROJECT_GLOBAL_ADMIN_FIELDS, SONG_CONTENT_FIELDS,
   parseCommentSession, commentSessionFor, commentAuthorRole, canModifyComment,
-  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow, canBrowseSharedAssets,
+  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow, canBrowseSharedAssets, describeNotificationRoute,
 } from './access.mjs';
 // 每個 cue 時物件在哪裡（管理頁和分享連結共用同一份計算）
 import { buildCueStates } from './cueStates.mjs';
@@ -43,10 +43,10 @@ import {
   signShareAccess, verifyShareAccess, SHARE_PASSWORD_MAX, timingSafeEqualStr,
 } from './sharePassword.mjs';
 // 留言（D1 一則一列）
-import {
-  sanitizeComment, commentToRow, rowToComment, commentPatch,
-  MAX_COMMENTS_PER_SONG, COMMENT_ID_RE,
-} from './comments.mjs';
+// （發 / 改 / 刪在 reviews.mjs；這裡只剩讀清單和舊版 KV 留言串）
+import { sanitizeComment, rowToComment, COMMENT_ID_RE } from './comments.mjs';
+// 審片 v2：留言綁版本 / 回覆 / 已改好、通過・需修改的審片紀錄、站內通知（直接用 D1，回傳 { status, body }）
+import * as reviews from './reviews.mjs';
 // 歌曲影片版本（純判斷：代號對歌、版本號、連結、權限、播放通行證）
 import {
   normalizeSongCodeInput, nextSongCode, fillMissingSongCodes, songCodeTakenBy, matchSongByFilename,
@@ -109,6 +109,7 @@ export default {
       const step = { ...VIDEO_CRON_STEP, maxFetches: Math.max(5, VIDEO_CRON_STEP.maxFetches - syncs.length * 4) };
       await runVideoCopyJobs(env, step).catch(e => console.error('[cron video copy]', e?.message || e));
       await cleanupStaleVideoUploads(env).catch(e => console.error('[cron video cleanup]', e?.message || e));
+      await reviews.pruneNotifications(env.DB).catch(e => console.error('[cron notifications prune]', e?.message || e));
     })());
   }
 };
@@ -158,6 +159,10 @@ async function routeRequest(request, env) {
 
   if (url.pathname === '/api/comments') {
     return handleComments(request, env, url);
+  }
+  // 站內通知（只看自己的；要登入）
+  if (url.pathname === '/api/notifications' || url.pathname.startsWith('/api/notifications/')) {
+    return handleNotifications(request, env, url);
   }
 
   if (url.pathname === '/api/auth/login'  && request.method === 'POST')  return authLogin(request, env);
@@ -415,6 +420,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'songs.patch':           return updateSong(request, env, ctx, songId);
     case 'songs.delete':          return deleteSong(request, env, projectId, songId);
     case 'songs.importCues':      return importCuesFromSong(request, env, projectId, songId);
+    case 'reviews.list':          return reviewsResp(reviews.listSongReviews(env.DB, songId));
 
     case 'videos.list':           return listSongVideos(request, env, ctx);
     case 'videos.get':            return getSongVideo(request, env, ctx);
@@ -1428,6 +1434,8 @@ async function listSongs(env, projectId) {
     r = await query();
   }
   const latest = await latestReadyVideos(env, projectId);
+  // 最近一次通過 / 需修改、看過的最新版本號（有更新的版本 → 「有新版 V3」）
+  const reviewed = await reviews.reviewSummaryBySong(env.DB, projectId);
 
   return jsonResp({ songs: (r.results || []).map(s => ({
     id: s.id, name: s.name, order: s.order,
@@ -1438,6 +1446,8 @@ async function listSongs(env, projectId) {
     // 最新可以播的影片版本（沒有 = null）；版本清單：GET /songs/:id/videos
     latestVideoId: latest.get(s.id)?.id || null,
     latestVideoVersion: latest.get(s.id)?.version ?? null,
+    lastReview: reviewed.get(s.id)?.lastReview ?? null,
+    reviewedVersion: reviewed.get(s.id)?.reviewedVersion ?? null,
   })) });
 }
 
@@ -1557,6 +1567,7 @@ async function updateSong(request, env, ctx, songId) {
   }
 
   let statusChange = null;
+  let prepared = null;
   if ('status' in body) {
     const d = songStatusDecision({
       role, userId: me.id, song: before, to: body.status,
@@ -1566,6 +1577,9 @@ async function updateSong(request, env, ctx, songId) {
       return jsonResp({ error: d.error, ...(d.currentStatus ? { currentStatus: d.currentStatus } : {}) }, d.status);
     }
     if (!d.noop) {
+      // 通過 / 需修改：需修改要寫原因（reason）、看的是哪一版（reviewVideoId，沒帶 = 最新一版）→ reviews.mjs
+      prepared = await reviews.prepareStatusChange(env.DB, { song: before, body, to: body.status });
+      if (!prepared.ok) return jsonResp({ error: prepared.error }, prepared.status);
       sets.push('status = ?'); values.push(body.status);
       statusChange = { from: before.status, to: body.status };
     }
@@ -1595,15 +1609,30 @@ async function updateSong(request, env, ctx, songId) {
     return jsonResp({ error: 'Not found' }, 404);
   }
 
+  // 審片紀錄、需修改的原因留言、通知（導演 / 動畫師 / 被指派的人）→ reviews.mjs
+  const songRow = { ...before, project_id: projectId };
+  let review = null;
+  if (statusChange) {
+    review = await reviews.afterSongStatusChange(env.DB, { me, role, song: songRow, ...statusChange, prepared });
+  }
+  if ('animator_user_id' in body && body.animator_user_id) {
+    await reviews.afterAnimatorAssigned(env.DB, { me, song: songRow, toUserId: body.animator_user_id });
+  }
+
   const changes = {};
   for (const k of [...SONG_CONTENT_FIELDS, 'status']) if (k in body) changes[k] = body[k];
+  if (review?.reviewId && prepared?.decision?.reason) changes.reason = prepared.decision.reason;
   await logActivity(request, env, projectId, 'update', 'song', songId, {
     name: before?.name,
     changes,
     statusFrom: statusChange ? statusChange.from : undefined,
     statusTo: statusChange ? statusChange.to : undefined,
   });
-  return jsonResp({ ok: true, ...(statusChange ? { status: statusChange.to } : {}) });
+  return jsonResp({
+    ok: true,
+    ...(statusChange ? { status: statusChange.to } : {}),
+    ...(review?.reviewId ? { reviewId: review.reviewId, reviewCommentId: review.commentId } : {}),
+  });
 }
 
 async function deleteSong(request, env, projectId, songId) {
@@ -2570,9 +2599,10 @@ async function deleteCueState(request, env, projectId, cueId, objId) {
 // ─────────────────────────────────────────────
 // Comments API — /api/comments?session=<projectId>-<songId>（一首歌一串，session 規則見 access.mjs commentSessionFor）
 //   GET                                → { comments: [...] }
-//   POST   body: { comment: {...} }    → 新增一則；作者 = 登入的人（不信前端送的名字 / 身分）
-//   PATCH  body: { id, text?, status? } → 改文字：留言的人或 admin；標已解決 / 重新打開：成員都可以
-//   DELETE ?id=<留言 id>                → 留言的人或 admin
+//   POST   body: { comment: {..., videoId?, parentId?} } → 新增一則 / 回覆；作者 = 登入的人（不信前端送的名字 / 身分）
+//   PATCH  body: { id, text?, status?, resolvedVideoId? } → 改文字：留言的人或 admin；已改好 / 重新打開：見 access.mjs
+//   DELETE ?id=<留言 id>                → 留言的人或 admin（底下的回覆一起刪）
+// 審片 v2（綁版本、回覆、已改好（V3）、通知）的寫入在 reviews.mjs；舊版前端不帶新欄位照樣能用。
 // 都要登入，而且要是這個專案的成員（或 admin）；分享連結的訪客碰不到。回傳都是整串最新的留言。
 // 存在 D1 comments 表（一則一列，同時留言不會互相蓋掉）；格式見 comments.mjs。
 // ─────────────────────────────────────────────
@@ -2602,9 +2632,17 @@ async function handleComments(request, env, url) {
     if (request.method === 'GET') {
       return jsonResp({ comments: await listThreadComments(env, thread.songId) });
     }
-    if (request.method === 'POST') return await postThreadComment(request, env, me, thread);
-    if (request.method === 'PATCH') return await patchThreadComment(request, env, me, thread);
-    if (request.method === 'DELETE') return await deleteThreadComment(env, url, me, thread);
+    // 發 / 回覆 / 改 / 刪：規則和寫入在 reviews.mjs（權限在 access.mjs）
+    if (request.method === 'POST' || request.method === 'PATCH') {
+      let body;
+      try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+      return await reviewsResp(request.method === 'POST'
+        ? reviews.postComment(env.DB, { me, thread, body })
+        : reviews.patchComment(env.DB, { me, thread, body }));
+    }
+    if (request.method === 'DELETE') {
+      return await reviewsResp(reviews.deleteComment(env.DB, { me, thread, id: url.searchParams.get('id') }));
+    }
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
@@ -2665,83 +2703,35 @@ async function listThreadComments(env, songId) {
   return (r.results || []).map(rowToComment);
 }
 
-async function postThreadComment(request, env, me, thread) {
-  let body;
-  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
-  const raw = body?.comment;
-  if (!raw || typeof raw !== 'object') return jsonResp({ error: 'Invalid comment' }, 400);
-  // 作者、身分由後台依登入的人填；新留言一律「未解決」
-  const c = sanitizeComment({
-    ...raw,
-    author: me.name,
-    role: commentAuthorRole(me.role),
-    authorUserId: me.id,
-    status: 'open',
-    resolvedBy: undefined,
-    resolvedAt: undefined,
-  });
-  if (!c) return jsonResp({ error: 'Invalid comment' }, 400);
-
-  const [countR, dupR] = await env.DB.batch([
-    env.DB.prepare(`SELECT COUNT(*) AS n FROM comments WHERE song_id = ?`).bind(thread.songId),
-    env.DB.prepare(`SELECT song_id FROM comments WHERE id = ? LIMIT 1`).bind(c.id),
-  ]);
-  const dup = (dupR.results || [])[0];
-  if (dup && dup.song_id === thread.songId) {
-    // 同一則重送（網路重試）→ 不重複新增
-    return jsonResp({ ok: true, duplicate: true, comments: await listThreadComments(env, thread.songId) });
-  }
-  if (dup) c.id = 'c_' + randHex(8) + Date.now().toString(36);  // id 撞到別首歌的留言 → 換一個
-  if (((countR.results || [])[0]?.n || 0) >= MAX_COMMENTS_PER_SONG) {
-    return jsonResp({ error: '這首歌的留言已經太多了（上限 500 則）' }, 429);
-  }
-
-  const row = commentToRow(c);
-  await env.DB.prepare(`
-    INSERT INTO comments (id, project_id, song_id, time_in_video, anchor_type, anchor_screen_xy, anchor_world_xyz,
-      anchor_mesh_name, anchor_offset_xyz, text, mentions, status, resolved_by, resolved_at,
-      author_user_id, author_name, author_role, author_email, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    row.id, thread.projectId, thread.songId, row.time_in_video, row.anchor_type, row.anchor_screen_xy, row.anchor_world_xyz,
-    row.anchor_mesh_name, row.anchor_offset_xyz, row.text, row.mentions, row.status, row.resolved_by, row.resolved_at,
-    row.author_user_id, row.author_name, row.author_role, row.author_email, row.created_at,
-  ).run();
-  return jsonResp({ ok: true, comments: await listThreadComments(env, thread.songId) });
+// reviews.mjs 的結果（{ status, body }）→ Response
+async function reviewsResp(promise) {
+  const r = await promise;
+  return jsonResp(r.body, r.status);
 }
 
-async function patchThreadComment(request, env, me, thread) {
-  let body;
-  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
-  const id = (body && typeof body.id === 'string') ? body.id : null;
-  if (!id || !COMMENT_ID_RE.test(id)) return jsonResp({ error: 'Missing or invalid id' }, 400);
+// ─────────────────────────────────────────────
+// 站內通知 /api/notifications（只看自己的；寫入在事情發生的當下，見 reviews.mjs）
+//   GET                → { items: [...最新的在前], unreadCount, generatedAt }
+//   POST /read         body: { ids: [...] } 或 { all: true } → { ok, unreadCount }
+// ─────────────────────────────────────────────
 
-  const row = await env.DB.prepare(`SELECT * FROM comments WHERE id = ? AND song_id = ? LIMIT 1`).bind(id, thread.songId).first();
-  if (!row) return jsonResp({ error: 'Not found' }, 404);
-
-  const p = commentPatch(body, me);
-  if (!p.ok) return jsonResp({ error: p.error }, 400);
-  if (p.touchesText && !canModifyComment(rowToComment(row), me.id, thread.role)) {
-    return jsonResp({ error: '只有留言的人或製作可以修改這則留言' }, 403);
-  }
-  const keys = Object.keys(p.changes);
-  await env.DB.prepare(
-    `UPDATE comments SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ? AND song_id = ?`
-  ).bind(...keys.map(k => p.changes[k]), id, thread.songId).run();
-  return jsonResp({ ok: true, comments: await listThreadComments(env, thread.songId) });
-}
-
-async function deleteThreadComment(env, url, me, thread) {
-  const id = url.searchParams.get('id');
-  if (!id || !COMMENT_ID_RE.test(id)) return jsonResp({ error: 'Missing or invalid id' }, 400);
-  const row = await env.DB.prepare(`SELECT * FROM comments WHERE id = ? AND song_id = ? LIMIT 1`).bind(id, thread.songId).first();
-  if (row) {
-    if (!canModifyComment(rowToComment(row), me.id, thread.role)) {
-      return jsonResp({ error: '只有留言的人或製作可以刪除這則留言' }, 403);
+async function handleNotifications(request, env, url) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '請先登入' }, 401);
+  const route = describeNotificationRoute(request.method, url.pathname.split('/').filter(Boolean));
+  if (!route) return jsonResp({ error: 'Not found' }, 404);
+  if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
+  try {
+    if (route.kind === 'notifications.list') {
+      return await reviewsResp(reviews.listNotifications(env.DB, me, { limit: url.searchParams.get('limit') || 30 }));
     }
-    await env.DB.prepare(`DELETE FROM comments WHERE id = ? AND song_id = ?`).bind(id, thread.songId).run();
+    let body;
+    try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+    return await reviewsResp(reviews.markNotificationsRead(env.DB, me, body));
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
   }
-  return jsonResp({ ok: true, comments: await listThreadComments(env, thread.songId) });
 }
 
 // 舊版單頁工具的留言（存在 KV，key = s:<session>）— 只有 admin 走到這裡
@@ -4731,6 +4721,13 @@ async function finalizeVideoReady(env, v, request = null, meta = {}) {
       songId: v.song_id, version: row.version, label: versionLabel(row.version), source: v.source, title: v.title,
       createdBy: v.created_by || null,
     });
+    // 新的一版好了：歌在「需修改」→ 自動回到「審查中」；通知導演「新版等你審」（reviews.mjs）
+    const after = await reviews.afterVideoReady(env.DB, { videoId: v.id });
+    if (after.autoSubmitted) {
+      await logActivity(request, env, v.project_id, 'update', 'song', v.song_id, {
+        statusFrom: 'needs_changes', statusTo: 'in_review', auto: true, label: versionLabel(row.version),
+      });
+    }
   }
   return row;
 }

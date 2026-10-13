@@ -7,6 +7,7 @@ import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/
 import { normalizeHomeView, type HomeView } from './homeView';
 import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
+import type { SongReviewFields } from './reviewApi';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -377,7 +378,7 @@ export async function importProject(payload: object & { newName?: string }): Pro
 // ─── Songs ────────────────────────────────
 
 /** 歌單上的一首歌；code（歌曲代號 S01…）、latestVideoId / latestVideoVersion（最新可播的影片版本）見 videoApi.ts */
-export interface Song extends SongVideoFields {
+export interface Song extends SongVideoFields, Partial<SongReviewFields> {
   id: string;
   name: string;
   order: number;
@@ -404,7 +405,11 @@ export async function updateSong(
   projectId: string,
   songId: string,
   // expectedStatus：畫面上以為的目前狀態。改狀態時帶上 → 別人剛改過的話後台回 409（error.data.currentStatus = 現在的狀態），不會蓋掉
-  patch: Partial<{ name: string; order: number; status: Song['status']; expectedStatus: Song['status']; animator_user_id: string | null }>
+  // reason：需修改的原因（一定要寫；也會發成一則留言）；reviewVideoId：看的是哪一版（沒帶 = 最新一版）
+  patch: Partial<{
+    name: string; order: number; status: Song['status']; expectedStatus: Song['status']; animator_user_id: string | null;
+    reason: string; reviewVideoId: string | null;
+  }>
 ): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}`, {
     method: 'PATCH',
@@ -921,6 +926,14 @@ export interface SongComment {
   resolvedBy?: string;
   resolvedAt?: string;
   mentions?: { userId: string; name: string }[];  // @ 提及
+  // 審片 v2（舊留言沒有這些）
+  videoId?: string;         // 留言時看的那一版
+  videoVersion?: number;    // 那一版的號碼（V2 → 2）
+  parentId?: string;        // 回覆哪一則（只有一層）
+  resolvedVideoId?: string; // 「已改好（V3）」是哪一版
+  resolvedVersion?: number;
+  resolvedByUserId?: string;
+  kind?: 'needs_changes';   // 導演按「需修改」時寫的原因
 }
 
 export function songCommentSession(projectId: string, songId: string): string {
@@ -969,7 +982,13 @@ export async function listSongComments(projectId: string, songId: string): Promi
 // 作者 / 身分 / 誰解決的：後台依登入的人填（前端送的名字不算數），所以這裡不用帶
 export async function postSongComment(
   projectId: string, songId: string,
-  comment: { text: string; time?: number; x?: number; y?: number; email?: string | null; anchor?: CommentAnchor; mentions?: { userId: string; name: string }[] }
+  comment: {
+    text: string; time?: number; x?: number; y?: number; email?: string | null; anchor?: CommentAnchor; mentions?: { userId: string; name: string }[];
+    /** 正在看的那一版（V2）→ 留言綁這一版 */
+    videoId?: string | null;
+    /** 回覆哪一則 */
+    parentId?: string | null;
+  }
 ): Promise<SongComment[]> {
   const c: Record<string, unknown> = {
     id: 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
@@ -982,6 +1001,8 @@ export async function postSongComment(
   };
   if (comment.anchor) c.anchor = comment.anchor;
   if (comment.mentions && comment.mentions.length > 0) c.mentions = comment.mentions;
+  if (comment.videoId) c.videoId = comment.videoId;
+  if (comment.parentId) c.parentId = comment.parentId;
   const data = await commentsFetch<{ comments: SongComment[] }>(
     songCommentSession(projectId, songId),
     { method: 'POST', body: JSON.stringify({ comment: c }) }
@@ -998,10 +1019,11 @@ export async function deleteSongComment(projectId: string, songId: string, comme
   return Array.isArray(data.comments) ? data.comments : [];
 }
 
-// 改文字：留言的人自己或 admin；標已解決 / 重新打開：成員都可以（誰、什麼時候由後台記）
+// 改文字：留言的人自己或 admin；「已改好（V3）」/ 重新打開：規則見 commentThreads.ts canResolveComment（誰、什麼時候由後台記）
+// resolvedVideoId：哪一版改好的（沒帶 = 最新一版）
 export async function patchSongComment(
   projectId: string, songId: string, commentId: string,
-  patch: Partial<{ status: 'open' | 'resolved'; text: string }>
+  patch: Partial<{ status: 'open' | 'resolved'; text: string; resolvedVideoId: string | null }>
 ): Promise<SongComment[]> {
   const data = await commentsFetch<{ comments: SongComment[] }>(
     songCommentSession(projectId, songId),

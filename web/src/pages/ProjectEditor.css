@@ -218,6 +218,27 @@
   border-radius: 3px;
   font-size: 10px;
 }
+/* 審片 v2：導演看過的之後又交了新版 */
+.song-item__newer {
+  background: var(--warn-dim);
+  color: var(--warn);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+/* 提案分頁的說明（還沒有「接受提案」） */
+.editor-proposals-note {
+  margin: 10px 12px 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+}
 
 /* ─── 每首歌的影片：最新版本 / 交影片進度 / ＋加影片 ─── */
 .song-item__meta { flex-wrap: wrap; align-items: center; row-gap: 3px; }

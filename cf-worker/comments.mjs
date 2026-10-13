@@ -124,6 +124,14 @@ export function rowToComment(r) {
   if (r.resolved_by != null) out.resolvedBy = r.resolved_by;
   if (r.resolved_at != null) out.resolvedAt = r.resolved_at;
   if (r.author_user_id) out.authorUserId = r.author_user_id;
+  // 審片 v2（migration 0024）：沒有的欄位不放，舊留言的格式跟以前一模一樣
+  if (r.video_id) out.videoId = r.video_id;                         // 留言時看的那一版
+  if (r.video_version != null) out.videoVersion = r.video_version;  // 那一版的號碼（V2 → 2）
+  if (r.reply_to_comment_id) out.parentId = r.reply_to_comment_id;  // 回覆哪一則（只有一層）
+  if (r.resolved_video_id) out.resolvedVideoId = r.resolved_video_id;          // 「已改好（V3）」是哪一版
+  if (r.resolved_version != null) out.resolvedVersion = r.resolved_version;
+  if (r.resolved_by_user_id) out.resolvedByUserId = r.resolved_by_user_id;
+  if (r.kind) out.kind = r.kind;                                    // 'needs_changes' = 按需修改時寫的原因
   return out;
 }
 
