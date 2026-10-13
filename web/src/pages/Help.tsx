@@ -956,7 +956,7 @@ function ProducerChapter() {
         </FigRow>
         <p>專案卡片右上角的「<Ui>⋯</Ui>」：</p>
         <ul className="help-list">
-          <li><strong>複製專案</strong>：帶著全部物件、歌、cue、機關一起複製，開新場次最快（模型共用同一份，不用重新上傳）。</li>
+          <li><strong>複製專案</strong>：開新場次最快。會帶過去：模型（共用同一份，不用重新上傳）、物件、歌曲（代號、狀態、負責動畫師）、cue 和每個 cue 的位置、機關。<strong>不會</strong>帶過去：影片版本、留言、審片紀錄、成員和分享連結，新專案要再邀請導演和動畫師。</li>
           <li><strong>匯出 JSON</strong>：把整個專案存成一個檔案備份。要放回來：專案總覽右上角「<Ui>匯入</Ui>」，或直接把檔案拖進頁面。</li>
           <li><strong>編輯標籤</strong>、<strong>封存</strong>（看 <Go to={A.prodArchive}>封存和還原</Go>）。</li>
         </ul>
@@ -966,7 +966,7 @@ function ProducerChapter() {
 
       <Section id={A.prodModel} title="匯入 3D 模型">
         <ol className="help-steps">
-          <li>編輯頁右邊點「<Ui>物件</Ui>」分頁，按「<Ui>上傳模型</Ui>」。</li>
+          <li>編輯頁右邊點「<Ui>物件</Ui>」分頁，按「<Ui>上傳模型</Ui>」（新專案的 3D 畫面中間也有「<Ui>上傳模型</Ui>」按鈕）。</li>
           <li>把 <code>.glb</code>（或 <code>.gltf</code>）拖進框裡，或點一下選檔案。</li>
           <li>系統讀出模型裡的物件，照名稱自動分類（LED 面板、機關、表演者…）。沒對到命名規則的會標出來，在「<Ui>分類</Ui>」選單自己選。</li>
           <li>「<Ui>顯示名稱</Ui>」可以先改成大家好認的名字。</li>
