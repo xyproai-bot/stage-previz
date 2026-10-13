@@ -716,7 +716,16 @@
     gap: 10px;
   }
 
-  /* Song detail：side panel 改成下方折疊 */
+  /* Song detail（iPad 橫拿）：留言欄窄一點，舞台還是在左邊（以前一律搬到下面，3D 只剩 200 多 px 高） */
+  .song-detail__body { grid-template-columns: minmax(0, 1fr) 300px; }
+
+  /* Cuebar：cue 卡寬一點，touch 友善 */
+  .cuebar-cue { min-width: 90px; padding: 7px 12px; }
+  .cuebar-btn { width: 44px; height: 44px; }
+}
+
+/* iPad 直拿、比較窄的畫面：留言改到舞台下面 */
+@media (max-width: 900px), (max-width: 1024px) and (orientation: portrait) {
   .song-detail__body {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) 320px;
@@ -725,10 +734,6 @@
     border-left: none;
     border-top: 1px solid var(--border);
   }
-
-  /* Cuebar：cue 卡寬一點，touch 友善 */
-  .cuebar-cue { min-width: 90px; padding: 7px 12px; }
-  .cuebar-btn { width: 44px; height: 44px; }
 }
 
 @media (max-width: 640px) {

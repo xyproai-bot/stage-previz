@@ -588,9 +588,16 @@ function StatusBoard({
           <div className="status-col__body">
             {songsByStatus[col.key].length === 0 ? (
               col.key === 'in_review' ? (
-                <EmptyState icon={Inbox} title="目前沒有等你審的歌" size="compact">
-                  動畫師按「提交審查」後會出現在這裡，你也會收到通知（右上角的小鈴鐺）。
-                </EmptyState>
+                projectRole === 'director' ? (
+                  <EmptyState icon={Inbox} title="目前沒有等你審的歌" size="compact">
+                    動畫師按「提交審查」後會出現在這裡，你也會收到通知（右上角的小鈴鐺）。
+                  </EmptyState>
+                ) : (
+                  // 「新版等你審」的通知只發給導演（製作不會收到）→ 不能說「你也會收到通知」
+                  <EmptyState icon={Inbox} title="目前沒有在審查中的歌" size="compact">
+                    動畫師按「提交審查」後會出現在這裡，導演會收到通知。
+                  </EmptyState>
+                )
               ) : (
                 <div className="status-col__empty">{col.key === 'approved' ? '還沒有通過的歌' : `沒有「${col.label}」的歌`}</div>
               )
