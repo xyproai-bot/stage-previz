@@ -27,6 +27,7 @@ import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { useAbCompare } from '../lib/useAbCompare';
+import { useNewVersionHint } from '../lib/newVersionHint';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
@@ -504,6 +505,11 @@ function StudioInner({ projectId }: { projectId: string }) {
     player,
     enabled: !!selectedVersion,
   });
+  // 看到一半有新版進來（別人交的 / 25 秒自動更新）：播放照舊，版本旁邊「有新版 V3 · 切換」（LED 在放影片時才顯示）
+  const newVersion = useNewVersionHint({
+    scope: selectedSongId, loaded: !!selectedSongId && versions.loadedSongId === selectedSongId, items: versions.items,
+    currentKey: versions.selected?.key ?? null, select: selectVersionForCompare, player,
+  });
 
   // 通知點進來：等這首歌的版本清單抓到 → 選那一版、放到 LED 上；捲到那則留言
   useEffect(() => {
@@ -958,6 +964,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 onRetryPending={handleRetryPending}
                 onRemovePending={handleRemovePending}
                 emptyText={canAdd ? '還沒有影片，按右邊「加影片」交第一版給導演看' : '這首歌還沒有影片'}
+                newVersion={source === 'version' ? newVersion : null}
               />
               <div className="studio-stage__scene">
                 <StageScene

@@ -11,6 +11,24 @@ import type { MiniPlayerCompare } from '../components/MiniPlayer';
 
 interface CompareItem { key: string; label: string; url: string | null; crossOrigin?: LoadUrlOptions['crossOrigin'] }
 
+/**
+ * 換到某一版、停在同一秒、播放 / 暫停照舊（比較 A/B、「有新版 · 切換」共用）。
+ * 先換網址，再記住選了哪一版（頁面載入影片的 effect 看到同一個 key 就不會從頭載）
+ */
+export function useVersionSwitch(
+  items: readonly CompareItem[],
+  player: { replaceUrl: (url: string, opts: LoadUrlOptions) => void },
+  select: (key: string) => void,
+): (key: string) => void {
+  const { replaceUrl } = player;
+  return useCallback((key: string) => {
+    const it = items.find(x => x.key === key);
+    if (!it?.url) return;
+    replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
+    select(it.key);
+  }, [items, replaceUrl, select]);
+}
+
 export interface UseAbCompareOptions {
   /** 換歌（或換專案）→ 不比了 */
   resetKey: string | null;
@@ -35,14 +53,7 @@ export function useAbCompare({ resetKey, items, currentKey, select, player, enab
     setPair(p => { const next = syncPair(p, currentKey, itemKeys); return next === p ? p : next; });
   }, [currentKey, itemKeys]);
 
-  const { replaceUrl } = player;
-  const switchToVersion = useCallback((key: string) => {
-    const it = items.find(x => x.key === key);
-    if (!it?.url) return;
-    // 先換網址（停在同一秒、播放 / 暫停照舊），再記住選了哪一版（頁面載入影片的 effect 看到同一個 key 就不會從頭載）
-    replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
-    select(it.key);
-  }, [items, replaceUrl, select]);
+  const switchToVersion = useVersionSwitch(items, player, select);
 
   // 切到另一版；還沒選比較的版本 → 先跟上一版比、直接切過去（按 C、收起來時的「比較」按鈕）
   const onFlip = useCallback(() => {

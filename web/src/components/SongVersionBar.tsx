@@ -30,6 +30,8 @@ interface Props {
   emptyText?: string;
   /** 右邊多放的東西 */
   extra?: React.ReactNode;
+  /** 看的時候有人交了新版（lib/newVersionHint.ts）→ 版本旁邊「有新版 V3 · 切換」 */
+  newVersion?: { label: string; onSwitch: () => void } | null;
 }
 
 /** 誰交的 · 什麼時候（伺服器時間 → 本地時間） */
@@ -53,7 +55,7 @@ function versionTooltip(it: VersionItem): string {
  */
 export default function SongVersionBar({
   status, error, items, selectedKey, onSelect, pending, jobs, onRetryLoad, onAdd,
-  canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra,
+  canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
 }: Props) {
   const selected = items.find(it => it.key === selectedKey) ?? null;
   // 這個分頁正在交的那幾版不要重複列（後台清單也看得到）
@@ -84,6 +86,17 @@ export default function SongVersionBar({
                 </button>
               ))}
             </div>
+            {newVersion && (
+              <span className="vbar__new" role="status">
+                <Icon icon={Film} size="xs" /> 有新版 {newVersion.label}
+                <button
+                  type="button"
+                  className="vbar__new-btn"
+                  onClick={newVersion.onSwitch}
+                  title={`換到 ${newVersion.label}，停在同一秒`}
+                >切換</button>
+              </span>
+            )}
             {selected && (
               <div className="vbar__info" title={versionTooltip(selected)}>
                 {selected.note

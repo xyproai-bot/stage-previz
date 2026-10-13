@@ -18,6 +18,7 @@ import HelpModal from '../components/HelpModal';
 import CommentThreadList from '../components/CommentThreadList';
 import { buildThreads, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, canPostComment, canResolveComment, type CommentScope } from '../lib/commentThreads';
 import { useAbCompare } from '../lib/useAbCompare';
+import { useNewVersionHint } from '../lib/newVersionHint';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
 import { CommentSkeleton } from '../components/Skeleton';
@@ -804,6 +805,11 @@ function SongDetail({
 
   // ── 比較（A/B）：選第二個版本，一個按鈕（或按 C）在兩版之間切，停在同一秒、播放 / 暫停照舊（lib/useAbCompare.ts，工作站共用）──
   const compare = useAbCompare({ resetKey: song.id, items: versions.items, currentKey: selected?.key ?? null, select: versions.select, player });
+  // 看到一半有新版進來（25 秒自動更新）：播放照舊，版本旁邊「有新版 V3 · 切換」，按了停在同一秒換過去（跟比較一樣）
+  const newVersion = useNewVersionHint({
+    scope: song.id, loaded: versions.loadedSongId === song.id, items: versions.items,
+    currentKey: selected?.key ?? null, select: versions.select, player,
+  });
   const viewedReview = selected?.kind === 'version' ? { videoId: selected.id, label: selected.label } : { videoId: null, label: '' };
   const latestVersionItem = versions.items.find(it => it.kind === 'version' && it.version != null) ?? null;
 
@@ -981,6 +987,7 @@ function SongDetail({
             onRetryPending={handleRetryPending}
             onRemovePending={handleRemovePending}
             emptyText={canAdd ? '這首歌還沒有影片，按右邊「加影片」交第一版' : '這首歌還沒有影片（動畫師交了之後會自動出現）'}
+            newVersion={newVersion}
           />
 
           <div className="song-detail__stage">

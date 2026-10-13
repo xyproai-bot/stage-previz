@@ -54,6 +54,33 @@
 .vbar__chip-by { font-size: 10.5px; opacity: 0.8; white-space: nowrap; }
 .vbar__chip.is-drive .vbar__chip-label { font-family: inherit; font-weight: 600; }
 
+/* 看的時候有人交了新版：「有新版 V3 · 切換」（不會自己換掉正在看的那一版） */
+.vbar__new {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 2px 3px 2px 9px;
+  border-radius: 999px;
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.vbar__new-btn {
+  height: 22px;
+  padding: 0 9px;
+  margin-left: 2px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--warn);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.vbar__new-btn:hover { background: var(--warn); color: #000; }
+
 .vbar__info {
   min-width: 0;
   flex: 1 1 120px;
@@ -99,4 +126,5 @@
 @media (hover: none) and (pointer: coarse) {
   .vbar__chip { padding: 5px 11px; }
   .vbar__btn { height: 34px; padding: 0 10px; }
+  .vbar__new-btn { height: 30px; padding: 0 12px; }
 }
