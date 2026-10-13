@@ -9,7 +9,6 @@ import { normalizeHomeView } from '../lib/homeView';
 import { formatClock } from '../lib/localVideo';
 import { skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { toast } from '../lib/toast';
-import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueTransitionSeconds, videoCueSelection } from '../lib/cueTiming';
 import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
 import type { NdiClientStatus } from '../lib/ndiClient';
@@ -253,9 +252,8 @@ export default function Share() {
 
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId), [cues, selectedCueId]);
 
-  // 現場設定：專案預設 + 自己調過的（存在這台電腦，重新整理也會留著）
+  // 現場燈光：一律照專案預設（動畫師只看，不能調）
   const projectLook = useMemo(() => normalizeLookSettings(data?.lookSettings), [data]);
-  const personalLook = usePersonalLook(data?.project.id, projectLook);
   const materialOverrides = useMemo(() => normalizeMaterialOverrides(data?.materialOverrides), [data]);
   const homeView = useMemo(() => normalizeHomeView(data?.homeView ?? null), [data]);
 
@@ -428,17 +426,12 @@ export default function Share() {
               onTransform={() => {}}
               cueName={selectedCue?.name}
               modelUrl={data.modelUrl ? api.apiBase() + data.modelUrl : null}
-              readOnly
-              defaultRenderMode="live"
+              toolbarMode="viewer"
               cueKey={selectedCueId}
               crossfadeSeconds={cueTransitionSeconds(selectedCue)}
-              showScaleButton={false}
               scaleCorrection={data.scaleCorrection ?? 1}
               mechanismOffsets={data.mechanismOffsets}
-              lookSettings={personalLook.effective}
-              onLookSettingsChange={personalLook.set}
-              lookCustomized={personalLook.customized}
-              onLookReset={personalLook.reset}
+              lookSettings={projectLook}
               materialOverrides={materialOverrides}
               homeView={homeView}
               enableNdi={source === 'ndi'}
