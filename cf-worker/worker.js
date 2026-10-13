@@ -20,6 +20,11 @@
  *   2. npx wrangler deploy
  */
 
+import {
+  loginThrottleDecision, loginLockedMessage, loginClientKey,
+  LOGIN_ATTEMPT_KEEP_MS, LOGIN_LOOKBACK_MS,
+} from './loginThrottle.mjs';
+
 const MAX_COMMENTS_PER_SESSION = 500;
 const MAX_TEXT_LEN = 2000;
 const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -2670,14 +2675,38 @@ async function authLogin(request, env) {
   const code = (body?.accessCode || '').toString().trim().toUpperCase().replace(/\s+/g, '');
   if (!code) return jsonResp({ error: '請輸入號碼' }, 400);
 
+  // 防猜號碼：同一個 IP 15 分鐘內錯 10 次 → 鎖 15 分鐘（鎖定中就算號碼對也擋）
+  // 順手清掉一天以前的紀錄
+  const ipKey = loginClientKey(request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for'));
+  const now = Date.now();
+  const [, recentFailures] = await env.DB.batch([
+    env.DB.prepare(`DELETE FROM login_attempts WHERE attempted_at < ?`).bind(now - LOGIN_ATTEMPT_KEEP_MS),
+    env.DB.prepare(`SELECT attempted_at FROM login_attempts WHERE ip = ? AND attempted_at > ?`)
+      .bind(ipKey, now - LOGIN_LOOKBACK_MS),
+  ]);
+  const gate = loginThrottleDecision((recentFailures.results || []).map(r => r.attempted_at), now);
+  if (!gate.allowed) {
+    const retryAfterSec = Math.ceil(gate.retryAfterMs / 1000);
+    return new Response(JSON.stringify({ error: loginLockedMessage(gate.retryAfterMs), retryAfterSec }), {
+      status: 429,
+      headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Retry-After': String(retryAfterSec) }
+    });
+  }
+
   const u = await env.DB.prepare(
     `SELECT id, name, role, avatar_color, deactivated
        FROM users WHERE access_code = ? LIMIT 1`
   ).bind(code).first();
-  if (!u) return jsonResp({ error: '號碼無效' }, 401);
+  if (!u) {
+    await env.DB.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(ipKey, now).run();
+    return jsonResp({ error: '號碼無效' }, 401);
+  }
   if (u.deactivated) return jsonResp({ error: '此號碼已停用，請聯絡 admin' }, 403);
 
-  await env.DB.prepare(`UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`).bind(u.id).run();
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`).bind(u.id),
+    env.DB.prepare(`DELETE FROM login_attempts WHERE ip = ?`).bind(ipKey),  // 登入成功 → 這個 IP 的錯誤歸零
+  ]);
 
   const token = await newSessionToken(getAuthSecret(env), u.id);
   return jsonRespWithCookie({
