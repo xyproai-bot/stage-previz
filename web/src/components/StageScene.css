@@ -474,11 +474,22 @@
   position: absolute;
   bottom: 12px;
   left: 12px;
+  /* 右下角留給 VR 按鈕（three.js 固定 150px 寬，靠右 12px）+ 12px 間距；
+     放不下就一行收成「…」，不會跑到按鈕底下 */
+  right: 174px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 20px;   /* 讓 kbd 的框不會被 overflow 切到上下緣 */
   font-size: 11px;
   color: var(--text-muted);
   font-family: var(--font-mono);
   pointer-events: none;
   z-index: 5;
+}
+/* 很窄（手機）：快捷鍵提示用不到也放不下，直接收掉 */
+@container stage-scene (max-width: 480px) {
+  .stage-scene__help { display: none; }
 }
 .stage-scene__help kbd {
   background: var(--surface-2);

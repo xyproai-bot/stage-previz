@@ -647,67 +647,67 @@ export default function ProjectEditor() {
         </div>
         <div className="editor-topbar__right">
           <SaveIndicator />
-          <span className="muted small">{stageObjects.length} 物件</span>
+          <span className="muted small editor-topbar__count">{stageObjects.length} 物件</span>
           <button
             className="editor-topbar__activity"
             onClick={undo}
             disabled={undoCount === 0}
             title={undoCount > 0 ? `Undo (${undoCount} 步可回退) — Cmd/Ctrl+Z` : '沒有可 undo 的動作'}
           >
-            ↶ Undo {undoCount > 0 && <span className="muted small">({undoCount})</span>}
+            ↶<span className="editor-topbar__label"> Undo</span>{undoCount > 0 && <span className="muted small"> ({undoCount})</span>}
           </button>
           <button
-            className="editor-topbar__activity"
+            className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setStoryboardOpen(true)}
             title="Cue Storyboard（縮圖一覽）"
             disabled={!selectedSong || masterCues.length === 0}
           >
-            🎬 Storyboard
+            🎬<span className="editor-topbar__label"> Storyboard</span>
           </button>
           <button
-            className="editor-topbar__activity"
+            className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setDiffOpen(true)}
             title="兩個 cue 並排對比"
             disabled={!selectedSong || masterCues.length < 2}
           >
-            🔀 對比
+            🔀<span className="editor-topbar__label"> 對比</span>
           </button>
           <button
-            className="editor-topbar__activity"
+            className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setImportCuesOpen(true)}
             title="從別首歌匯入 cue（巡迴複製、跨專案沿用）"
             disabled={!selectedSong}
           >
-            📥 匯入 Cue
+            📥<span className="editor-topbar__label"> 匯入 Cue</span>
           </button>
           <button
-            className="editor-topbar__activity"
+            className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setCommentSearchOpen(true)}
             title="搜尋專案內所有歌的留言"
           >
-            🔍 搜留言
+            🔍<span className="editor-topbar__label"> 搜留言</span>
           </button>
           <button
             className="editor-topbar__activity"
             onClick={() => setShareOpen(true)}
             title="建立公開分享連結（外部人看 read-only 預覽）"
           >
-            🔗 分享
+            🔗<span className="editor-topbar__label"> 分享</span>
           </button>
           <button
-            className="editor-topbar__activity"
+            className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setDriveOpen(true)}
             title="Drive 來源設定"
           >
-            ☁ Drive
+            ☁<span className="editor-topbar__label"> Drive</span>
             {projectMeta?.drive_folder_id && <span className="muted small"> ●</span>}
           </button>
           <button
-            className="editor-topbar__activity"
+            className="editor-topbar__activity editor-topbar__activity--secondary"
             onClick={() => setActivityOpen(true)}
             title="最近活動"
           >
-            🕒 最近活動
+            🕒<span className="editor-topbar__label"> 最近活動</span>
           </button>
         </div>
       </header>
@@ -795,6 +795,16 @@ export default function ProjectEditor() {
           )}
 
           <button className="btn btn--ghost editor-songs__add" onClick={handleAddSong}>＋ 新增歌曲</button>
+
+          {/* 機關滑桿：放在歌曲清單下面（以前浮在畫面左邊，會蓋住歌曲清單） */}
+          {view.canEdit && (
+            <MechanismPanel
+              stageObjects={stageObjects}
+              offsets={view.mechanismOffsets}
+              onChange={view.updateMechanismOffset}
+              onResetAll={view.resetAllMechanismOffsets}
+            />
+          )}
         </aside>
 
         {/* Center — 3D viewport（永遠顯示；沒 cue 時編輯 = 改 default） */}
@@ -838,14 +848,6 @@ export default function ProjectEditor() {
               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
               homeView={view.homeView}
               onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
-            />
-          )}
-          {view.canEdit && (
-            <MechanismPanel
-              stageObjects={stageObjects}
-              offsets={view.mechanismOffsets}
-              onChange={view.updateMechanismOffset}
-              onResetAll={view.resetAllMechanismOffsets}
             />
           )}
         </section>

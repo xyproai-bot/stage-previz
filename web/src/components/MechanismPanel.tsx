@@ -13,6 +13,8 @@ interface Props {
 /**
  * 機關面板：給每片 LED panel 兩個滑桿（X / Y，公尺），即時加總到位置上。
  * 不寫回 cue 資料，純運行階段視覺 offset。
+ * 放在管理頁左欄歌曲清單的下面（跟著欄位排，不再浮在畫面上蓋住歌曲清單）；
+ * 最高 40% 視窗高，滑桿多就在面板裡捲動，也可以按標題收起來。
  */
 export default function MechanismPanel({ stageObjects, offsets, onChange, onResetAll, range = 10 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
@@ -29,22 +31,16 @@ export default function MechanismPanel({ stageObjects, offsets, onChange, onRese
     <div
       data-ui-element
       style={{
-        position: 'absolute',
-        left: 12,
-        top: '50%',
-        transform: 'translateY(-50%)',
-        zIndex: 40,
+        flexShrink: 0,
+        margin: '0 12px 12px',
         background: 'rgba(20, 20, 24, 0.85)',
-        backdropFilter: 'blur(8px)',
         border: '1px solid rgba(255,255,255,0.1)',
         borderRadius: 12,
         padding: collapsed ? '8px 10px' : '10px 12px',
         color: '#eee',
         fontSize: 12,
-        maxWidth: 260,
-        maxHeight: '80vh',
+        maxHeight: '40vh',
         overflowY: 'auto',
-        boxShadow: '0 10px 30px rgba(0,0,0,0.4)',
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: collapsed ? 0 : 8 }}>

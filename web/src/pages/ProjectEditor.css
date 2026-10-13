@@ -20,6 +20,7 @@
   flex-shrink: 0;
 }
 .editor-back {
+  flex-shrink: 0;
   background: none;
   border: 1px solid var(--border-strong);
   color: var(--text);
@@ -37,9 +38,17 @@
   align-items: center;
   gap: 8px;
   font-size: 13px;
+  min-width: 0;      /* 名字太長時讓麵包屑縮成「…」，不去擠右邊的按鈕 */
+  overflow: hidden;
+}
+.editor-breadcrumb > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .editor-breadcrumb .sep {
   color: var(--text-muted);
+  flex-shrink: 0;
 }
 .editor-breadcrumb .strong {
   font-weight: 600;
@@ -50,6 +59,11 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-shrink: 0;
+}
+.editor-topbar__right > * {
+  white-space: nowrap;   /* 按鈕裡的字不換行 */
+  flex-shrink: 0;
 }
 .editor-topbar__activity {
   background: var(--surface-1);
@@ -59,12 +73,26 @@
   border-radius: 999px;
   font-size: 12px;
   cursor: pointer;
+  white-space: nowrap;
   transition: background 0.12s, color 0.12s, border-color 0.12s;
 }
 .editor-topbar__activity:hover {
   background: var(--surface-2);
   color: var(--text);
   border-color: var(--border-strong);
+}
+/* 視窗不夠寬（全部帶字約要 1050–1100px）：次要按鈕只留圖示，滑鼠移上去仍有說明；
+   Undo / 分享 保留文字。再窄（手機、直拿平板）全部只留圖示、拿掉物件數 */
+@media (max-width: 1200px) {
+  .editor-topbar__right { gap: 8px; }
+  .editor-topbar__activity--secondary { padding-left: 9px; padding-right: 9px; }
+  .editor-topbar__activity--secondary .editor-topbar__label { display: none; }
+}
+@media (max-width: 860px) {
+  .editor-topbar { gap: 10px; padding-left: 12px; padding-right: 12px; }
+  .editor-topbar__count { display: none; }
+  .editor-topbar__activity { padding-left: 9px; padding-right: 9px; }
+  .editor-topbar__activity .editor-topbar__label { display: none; }
 }
 .save-indicator {
   font-size: 12px;
