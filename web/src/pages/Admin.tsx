@@ -17,7 +17,6 @@ export default function Admin() {
   if (tab === 'drive-sources') return <AdminLayout><PlaceholderTab name="Drive 來源" /></AdminLayout>;
   if (tab === 'users') return <AdminLayout><PlaceholderTab name="用戶" /></AdminLayout>;
   if (tab === 'templates') return <AdminLayout><PlaceholderTab name="模板庫" /></AdminLayout>;
-  if (tab === 'settings') return <AdminLayout><PlaceholderTab name="設定" /></AdminLayout>;
 
   return (
     <AdminLayout>

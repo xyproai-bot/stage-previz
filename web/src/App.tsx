@@ -10,6 +10,7 @@ import Users from './pages/Users';
 import Templates from './pages/Templates';
 import DriveSources from './pages/DriveSources';
 import ArchivedProjects from './pages/ArchivedProjects';
+import Settings from './pages/Settings';
 import CommandPalette from './components/CommandPalette';
 import ToastContainer from './components/ToastContainer';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -40,6 +41,7 @@ export default function App() {
             <Route path="/admin/templates" element={<RequireAuth><Templates /></RequireAuth>} />
             <Route path="/admin/drive-sources" element={<RequireAuth role="admin"><DriveSources /></RequireAuth>} />
         <Route path="/admin/archived" element={<RequireAuth role="admin"><ArchivedProjects /></RequireAuth>} />
+            <Route path="/admin/settings" element={<RequireAuth><Settings /></RequireAuth>} />
             <Route path="/admin/:tab" element={<RequireAuth><Admin /></RequireAuth>} />
             <Route path="/studio" element={<RequireAuth><ErrorBoundary><Studio /></ErrorBoundary></RequireAuth>} />
             <Route path="/studio/:projectId" element={<RequireAuth><ErrorBoundary><Studio /></ErrorBoundary></RequireAuth>} />
