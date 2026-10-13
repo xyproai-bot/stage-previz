@@ -324,11 +324,11 @@ export function videoUploadDecision({ role, userId, song }) {
   if (role === 'admin') return { ok: true };
   if (role === 'animator') {
     if (song?.animator_user_id && song.animator_user_id !== userId) {
-      return { ok: false, status: 403, error: '這首歌指派給其他動畫師，只有他或 admin 可以交影片' };
+      return { ok: false, status: 403, error: '這首歌指派給其他動畫師，只有他或製作可以交影片' };
     }
     return { ok: true };
   }
-  if (role === 'director') return { ok: false, status: 403, error: '導演可以看影片；交影片請找負責的動畫師或 admin' };
+  if (role === 'director') return { ok: false, status: 403, error: '導演可以看影片；交影片請找負責的動畫師或製作' };
   return { ok: false, status: 403, error: '沒有權限交影片' };
 }
 
@@ -340,7 +340,7 @@ export function videoModifyDecision({ role, userId, song, video }) {
   if (!base.ok) return base;
   if (role === 'admin') return { ok: true };
   if (!video?.created_by || video.created_by !== userId) {
-    return { ok: false, status: 403, error: '只有交這一版的人或 admin 可以改它' };
+    return { ok: false, status: 403, error: '只有交這一版的人或製作可以改它' };
   }
   return { ok: true };
 }

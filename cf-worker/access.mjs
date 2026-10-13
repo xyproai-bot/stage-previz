@@ -104,7 +104,7 @@ export function songStatusDecision({ role, userId, song, to, expected }) {
       return { ok: false, status: 403, error: '動畫師只能提交審查，或撤回還在審查中的歌；「已通過」「需修改」由導演決定' };
     }
     if (role === 'director') {
-      return { ok: false, status: 403, error: '導演可以把審查中的歌標成「已通過」或「需修改」；其他狀態請由動畫師或 admin 變更' };
+      return { ok: false, status: 403, error: '導演可以把審查中的歌標成「已通過」或「需修改」；其他狀態請由動畫師或製作變更' };
     }
     return { ok: false, status: 403, error: '沒有權限改這首歌的狀態' };
   }
@@ -337,13 +337,13 @@ export function needDeniedMessage(need) {
   switch (need) {
     case 'editor':
     case 'projectPatch':
-      return '只有 admin 可以修改專案內容';
+      return '只有製作可以修改專案內容';
     case 'shareManager':
-      return '只有 admin 或導演可以管理分享連結';
+      return '只有製作或導演可以管理分享連結';
     case 'videoUploader':
-      return '導演可以看影片；交影片請找負責的動畫師或 admin';
+      return '導演可以看影片；交影片請找負責的動畫師或製作';
     case 'globalAdmin':
-      return '只有 admin 可以做這件事';
+      return '只有製作可以做這件事';
     default:
       return '沒有權限存取此專案';
   }

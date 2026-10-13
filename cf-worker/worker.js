@@ -207,13 +207,13 @@ async function routeRequest(request, env) {
   if (url.pathname === '/api/projects/import' && request.method === 'POST') {
     const me = await getCurrentUser(request, env);
     if (!me) return jsonResp({ error: '未登入' }, 401);
-    if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可以匯入專案' }, 403);
+    if (me.role !== 'admin') return jsonResp({ error: '只有製作可以匯入專案' }, 403);
     return importProject(request, env);
   }
   if (url.pathname === '/api/projects-archived' && request.method === 'GET') {
     const me = await getCurrentUser(request, env);
     if (!me) return jsonResp({ error: '未登入' }, 401);
-    if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可看封存' }, 403);
+    if (me.role !== 'admin') return jsonResp({ error: '只有製作可以看封存的專案' }, 403);
     return listProjects(env, me, { archived: true });
   }
   if (url.pathname === '/api/search' && request.method === 'GET') {
@@ -275,7 +275,7 @@ async function handleProjectsRouter(request, env, url) {
     if (!projectId) {
       if (request.method === 'GET') return await listProjects(env, me);
       if (request.method === 'POST') {
-        if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可以建立專案' }, 403);
+        if (me.role !== 'admin') return jsonResp({ error: '只有製作可以建立專案' }, 403);
         return await createProject(request, env, me);
       }
       return jsonResp({ error: 'Method not allowed' }, 405);
@@ -604,18 +604,18 @@ async function updateProject(request, env, ctx) {
   if ('ledCanvas' in body && !('led_canvas' in body)) body.led_canvas = body.ledCanvas;
   const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body || 'material_overrides' in body || 'home_view' in body || 'led_canvas' in body;
   if (touchesViewSettings && me?.role !== 'admin') {
-    return jsonResp({ error: '只有 admin 能改 3D 檢視設定（校準 / 機關滑桿 / 現場設定 / 材質 / 重置視角 / AE 畫布尺寸）' }, 403);
+    return jsonResp({ error: '只有製作能改 3D 檢視設定（校準 / 機關滑桿 / 現場設定 / 材質 / 重置視角 / AE 畫布尺寸）' }, 403);
   }
   // Drive 綁定（用哪個 Google 帳號、哪個資料夾）和專案狀態 — 只有全站 admin
   // （不然專案成員可以把專案指到 admin 的 Google 帳號，讀到別的資料夾）
   if (['drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id'].some(k => k in body) && me?.role !== 'admin') {
-    return jsonResp({ error: '只有 admin 可以設定 Drive 來源' }, 403);
+    return jsonResp({ error: '只有製作可以設定 Drive 來源' }, 403);
   }
   if ('status' in body && me?.role !== 'admin') {
-    return jsonResp({ error: '只有 admin 可以改專案狀態' }, 403);
+    return jsonResp({ error: '只有製作可以改專案狀態' }, 403);
   }
   if (PROJECT_GLOBAL_ADMIN_FIELDS.some(k => k in body) && me?.role !== 'admin') {
-    return jsonResp({ error: '只有 admin 可以改這個設定' }, 403);
+    return jsonResp({ error: '只有製作可以改這個設定' }, 403);
   }
   if ('name' in body) {
     body.name = (body.name ?? '').toString().trim().slice(0, PROJECT_NAME_MAX);
@@ -990,7 +990,7 @@ async function createCueTemplate(request, env, ctx) {
   if (!name) return jsonResp({ error: 'name 必填' }, 400);
   if (!fromCueId) return jsonResp({ error: '需要來源 cue id' }, 400);
   // 全域模板（每個專案都看得到）只有全站 admin 能建
-  if (isGlobal && me.role !== 'admin') return jsonResp({ error: '只有 admin 可以建立全域模板' }, 403);
+  if (isGlobal && me.role !== 'admin') return jsonResp({ error: '只有製作可以建立全域模板' }, 403);
 
   // 來源 cue 一定要是這個專案的（不然可以把別人專案的 cue 抄出來）
   const cue = await env.DB.prepare(
@@ -1029,7 +1029,7 @@ async function createCueTemplate(request, env, ctx) {
 async function deleteCueTemplate(request, env, templateId) {
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
-  if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+  if (me.role !== 'admin') return jsonResp({ error: '只有製作可以刪除模板' }, 403);
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(templateId)) return jsonResp({ error: 'Invalid id' }, 400);
   const r = await env.DB.prepare(`DELETE FROM cue_templates WHERE id = ?`).bind(templateId).run();
   if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
@@ -1285,7 +1285,7 @@ async function handleShowsRouter(request, env, url) {
   const showId = segs[2] || null;
   const isRead = request.method === 'GET' || request.method === 'HEAD';
   // 建立 / 改 / 刪 Show 只有 admin；其他人只看得到「有自己專案在裡面」的 Show
-  if (!isRead && me.role !== 'admin') return jsonResp({ error: '只有 admin 可以管理 Show' }, 403);
+  if (!isRead && me.role !== 'admin') return jsonResp({ error: '只有製作可以管理 Show' }, 403);
 
   try {
     if (!showId) {
@@ -1509,7 +1509,7 @@ async function updateSong(request, env, ctx, songId) {
 
   const touchesContent = SONG_CONTENT_FIELDS.some(k => k in body);
   if (touchesContent && !canEditProjectContent(role)) {
-    return jsonResp({ error: '只有 admin 可以改歌名、代號、順序、指派或 Drive 資料夾' }, 403);
+    return jsonResp({ error: '只有製作可以改歌名、代號、順序、指派或 Drive 資料夾' }, 403);
   }
 
   const sets = [], values = [];
@@ -2722,7 +2722,7 @@ async function patchThreadComment(request, env, me, thread) {
   const p = commentPatch(body, me);
   if (!p.ok) return jsonResp({ error: p.error }, 400);
   if (p.touchesText && !canModifyComment(rowToComment(row), me.id, thread.role)) {
-    return jsonResp({ error: '只有留言的人或 admin 可以修改這則留言' }, 403);
+    return jsonResp({ error: '只有留言的人或製作可以修改這則留言' }, 403);
   }
   const keys = Object.keys(p.changes);
   await env.DB.prepare(
@@ -2737,7 +2737,7 @@ async function deleteThreadComment(env, url, me, thread) {
   const row = await env.DB.prepare(`SELECT * FROM comments WHERE id = ? AND song_id = ? LIMIT 1`).bind(id, thread.songId).first();
   if (row) {
     if (!canModifyComment(rowToComment(row), me.id, thread.role)) {
-      return jsonResp({ error: '只有留言的人或 admin 可以刪除這則留言' }, 403);
+      return jsonResp({ error: '只有留言的人或製作可以刪除這則留言' }, 403);
     }
     await env.DB.prepare(`DELETE FROM comments WHERE id = ? AND song_id = ?`).bind(id, thread.songId).run();
   }
@@ -3130,7 +3130,7 @@ async function handleUsersRouter(request, env, url) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
-  if (me.role !== 'admin') return jsonResp({ error: '權限不足，需要 admin' }, 403);
+  if (me.role !== 'admin') return jsonResp({ error: '只有製作可以管理用戶' }, 403);
 
   const segs = url.pathname.split('/').filter(Boolean);
   const userId = segs[2] || null;
@@ -3342,7 +3342,7 @@ async function addUserToProject(request, env, userId) {
   const projectId = (body?.projectId || '').toString();
   const role = ['admin', 'animator', 'director'].includes(body?.role) ? body.role : null;
   if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid projectId' }, 400);
-  if (!role) return jsonResp({ error: 'role 必填（admin/animator/director）' }, 400);
+  if (!role) return jsonResp({ error: '請選角色（製作 / 動畫師 / 導演）' }, 400);
 
   // 確認 project 跟 user 都存在
   const p = await env.DB.prepare(`SELECT id FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
@@ -3393,7 +3393,7 @@ async function handleInvitesRouter(request, env, url) {
       if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
       const me = await getCurrentUser(request, env);
       if (!me) return jsonResp({ error: '未登入' }, 401);
-      if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可以做這件事' }, 403);
+      if (me.role !== 'admin') return jsonResp({ error: '只有製作可以做這件事' }, 403);
       return await listOpenInvites(env, { projectId: null });
     }
     if (sub === 'peek' || sub === 'redeem') {
@@ -3603,7 +3603,7 @@ async function handleAssetsRouter(request, env, url) {
     if (!assetId) {
       if (request.method === 'GET') return listAssets(env);
       if (request.method === 'POST') {
-        if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+        if (me.role !== 'admin') return jsonResp({ error: '只有製作可以改模型庫' }, 403);
         return createAsset(request, env, me);
       }
       return jsonResp({ error: 'Method not allowed' }, 405);
@@ -3613,7 +3613,7 @@ async function handleAssetsRouter(request, env, url) {
 
     if (action === 'file') {
       if (request.method === 'PUT') {
-        if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+        if (me.role !== 'admin') return jsonResp({ error: '只有製作可以改模型庫' }, 403);
         return uploadAssetFile(request, env, assetId);
       }
       return jsonResp({ error: 'Method not allowed' }, 405);
@@ -3621,11 +3621,11 @@ async function handleAssetsRouter(request, env, url) {
 
     if (request.method === 'GET') return getAsset(env, assetId);
     if (request.method === 'PATCH') {
-      if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+      if (me.role !== 'admin') return jsonResp({ error: '只有製作可以改模型庫' }, 403);
       return updateAsset(request, env, assetId);
     }
     if (request.method === 'DELETE') {
-      if (me.role !== 'admin') return jsonResp({ error: '需要 admin' }, 403);
+      if (me.role !== 'admin') return jsonResp({ error: '只有製作可以改模型庫' }, 403);
       return deleteAsset(env, assetId);
     }
     return jsonResp({ error: 'Method not allowed' }, 405);
@@ -3889,7 +3889,7 @@ async function driveOAuthStart(request, env, url) {
   if (!googleConfigured(env)) return jsonResp({ error: 'Google OAuth 未設定。請聯絡平台管理員設定 GOOGLE_CLIENT_ID / SECRET / REDIRECT_URI' }, 503);
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
-  if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可連 Drive' }, 403);
+  if (me.role !== 'admin') return jsonResp({ error: '只有製作可以連接 Drive' }, 403);
 
   // 接受完整 URL 或相對路徑；只允許 stage-previz.vercel.app / haimiaan.com 子網域 / localhost
   const rawReturn = url.searchParams.get('return') || '/admin/drive-sources';
@@ -4019,7 +4019,7 @@ async function driveOAuthCallback(request, env, url) {
 async function driveListAccounts(request, env) {
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
-  if (me.role !== 'admin') return jsonResp({ error: '只有 admin' }, 403);
+  if (me.role !== 'admin') return jsonResp({ error: '只有製作可以管理 Drive' }, 403);
 
   const r = await env.DB.prepare(
     `SELECT id, account_email, account_name, scopes, created_at, last_used_at
@@ -4041,7 +4041,7 @@ async function driveListAccounts(request, env) {
 async function driveDeleteAccount(request, env, accId) {
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
-  if (me.role !== 'admin') return jsonResp({ error: '只有 admin' }, 403);
+  if (me.role !== 'admin') return jsonResp({ error: '只有製作可以管理 Drive' }, 403);
 
   // 把所有用此 token 的 project 的 drive_oauth_token_id 清空
   await env.DB.prepare(
@@ -4115,7 +4115,7 @@ async function driveApiGet(env, tokenId, path, query = {}) {
 async function driveListFolders(request, env, url) {
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
-  if (me.role !== 'admin') return jsonResp({ error: '只有 admin' }, 403);
+  if (me.role !== 'admin') return jsonResp({ error: '只有製作可以管理 Drive' }, 403);
 
   const tokenId = url.searchParams.get('account');
   if (!tokenId) return jsonResp({ error: 'Missing account id' }, 400);
@@ -4980,7 +4980,7 @@ async function fetchVideoSource(env, v, range = null) {
       at = await driveGetAccessToken(env, v.copy_token_id);
     } catch (e) {
       if (/OAuth token not found/i.test(String(e?.message))) {
-        throw new VideoCopyFatal('連接的 Google 帳號被移除了：請 admin 重新連接 Google 帳號後按「重試」');
+        throw new VideoCopyFatal('連接的 Google 帳號被移除了：請製作重新連接 Google 帳號後按「重試」');
       }
       throw e;
     }
