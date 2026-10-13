@@ -1,7 +1,7 @@
 // 歌曲影片版本（V1、V2…）的前端呼叫 — 對應 cf-worker/worker.js「歌曲影片版本」那一段
 // 完整說明（每個網址、回傳格式、錯誤碼）：docs/videos-api.md
 //
-// 影片一律放在我們自己的 R2：上傳是瀏覽器分段傳（每段 16 MiB，可以續傳）；
+// 影片一律放在我們自己的 R2：上傳是瀏覽器分段傳（每段 16 MiB，可以續傳；用 XMLHttpRequest 才有傳到一半的進度）；
 // 貼連結 / Drive 資料夾同步是後台複製一份到 R2。播放一律用回傳的 streamUrl（支援 Range、可以快取）。
 //
 // 權限（後台會檢查，畫面只是先擋）：
@@ -292,14 +292,105 @@ export async function createVideoUpload(
   })).video;
 }
 
-/** 傳第 n 段（大小要剛好是 partRange 切出來的） */
-export async function uploadVideoPart(
+export interface UploadPartResult { ok: true; partNumber: number; etag: string; bytesDone: number | null; totalBytes: number }
+
+/**
+ * 傳第 n 段（大小要剛好是 partRange 切出來的）。
+ * 用 XMLHttpRequest 不用 fetch：fetch 沒辦法知道「已經送出多少」，進度只能等整段傳完才跳一次；
+ * XMLHttpRequest 邊送邊回報（onUploadProgress = 這一段已經送出幾 bytes）。
+ * 錯誤跟以前一樣：後台回的錯 → VideoApiError（中文 message + status）；網路斷 → TypeError（跟 fetch 一樣）；
+ * signal 取消 → AbortError。
+ */
+export function uploadVideoPart(
   projectId: string, songId: string, videoId: string, partNumber: number, chunk: Blob, signal?: AbortSignal,
-): Promise<{ ok: true; partNumber: number; etag: string; bytesDone: number | null; totalBytes: number }> {
-  return call(`${songBase(projectId, songId)}/${enc(videoId)}/parts/${partNumber}`, {
-    method: 'PUT', body: chunk, signal,
-  }, { 'Content-Type': 'application/octet-stream' });
+  onUploadProgress?: (loaded: number) => void,
+): Promise<UploadPartResult> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return; }
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', apiBase() + `${songBase(projectId, songId)}/${enc(videoId)}/parts/${partNumber}`);
+    xhr.withCredentials = true;
+    const token = getSessionToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    if (onUploadProgress) xhr.upload.onprogress = (e) => onUploadProgress(Math.min(e.loaded, chunk.size));
+    let settled = false;
+    const onAbort = () => xhr.abort();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener('abort', onAbort);
+      fn();
+    };
+    xhr.onload = () => finish(() => {
+      let data: VideoApiError['data'] = {};
+      try { data = JSON.parse(xhr.responseText || '{}') ?? {}; } catch { /* 不是 JSON */ }
+      if (xhr.status >= 200 && xhr.status < 300) { resolve(data as unknown as UploadPartResult); return; }
+      const e = new Error(data?.error || `HTTP ${xhr.status}`) as VideoApiError;
+      e.status = xhr.status;
+      e.data = data || {};
+      reject(e);
+    });
+    // 跟 fetch 一樣：連不上 → TypeError（重試、錯誤說明都照舊）
+    xhr.onerror = () => finish(() => reject(new TypeError('Failed to fetch')));
+    xhr.ontimeout = () => finish(() => reject(new TypeError('Failed to fetch')));
+    xhr.onabort = () => finish(() => reject(new DOMException('Aborted', 'AbortError')));
+    xhr.send(chunk);
+  });
 }
+
+/**
+ * 上傳進度：同時傳好幾段時，把「傳好的段」和「正在送的段已經送出的部分」加起來。
+ *   - 只會往前（一段失敗重試時，畫面停在原地，不會倒退）
+ *   - 還有段沒收到後台確認時，最多到「總大小 - 1」（畫面停在 99%，不會提早說傳完了）
+ *   - 不會超過總大小
+ */
+export interface UploadProgress {
+  /** 第 n 段送出了 loaded bytes（還在傳）→ 回傳現在的總進度 */
+  sending(part: number, loaded: number): number;
+  /** 第 n 段傳好了（size = 這一段多大；serverBytesDone = 後台說總共收到多少，有的話）→ 回傳現在的總進度 */
+  done(part: number, size: number, serverBytesDone?: number | null): number;
+  /** 第 n 段失敗了（等一下重傳）→ 送出的部分不算 */
+  failed(part: number): number;
+  bytesDone(): number;
+}
+
+export function createUploadProgress(totalBytes: number, alreadyDone = 0): UploadProgress {
+  const total = Math.max(0, totalBytes);
+  let confirmed = Math.max(0, Math.min(total, alreadyDone));
+  let server = 0;
+  let shown = confirmed;
+  const inFlight = new Map<number, number>();
+  const compute = () => {
+    let sending = 0;
+    for (const v of inFlight.values()) sending += v;
+    let raw = Math.max(confirmed + sending, Math.min(server, total));
+    if (confirmed < total) raw = Math.min(raw, total - 1);
+    shown = Math.max(shown, Math.min(raw, total));
+    return shown;
+  };
+  return {
+    sending(part, loaded) {
+      inFlight.set(part, Math.max(0, loaded));
+      return compute();
+    },
+    done(part, size, serverBytesDone) {
+      inFlight.delete(part);
+      confirmed = Math.min(total, confirmed + Math.max(0, size));
+      if (typeof serverBytesDone === 'number' && Number.isFinite(serverBytesDone)) server = Math.max(server, serverBytesDone);
+      return compute();
+    },
+    failed(part) {
+      inFlight.delete(part);
+      return compute();
+    },
+    bytesDone: () => shown,
+  };
+}
+
+/** 傳到一半的進度最多多久回報一次（毫秒）；一段傳好一定回報 */
+const PROGRESS_INTERVAL_MS = 100;
 
 /** 所有段都傳好 → 合併、給版本號（可以順便帶影片長寬秒數） */
 export async function completeVideoUpload(
@@ -360,7 +451,7 @@ export interface UploadSongVideoOptions {
   /** 續傳：上次沒傳完的那一版 id（uploadResumeKey 存的） */
   resumeVideoId?: string | null;
   signal?: AbortSignal;
-  /** 每傳好一段叫一次 */
+  /** 進度：傳到一半也會叫（同時傳好幾段時是加起來的，最多每 0.1 秒一次）；每傳好一段一定叫一次 */
   onProgress?: (p: { bytesDone: number; totalBytes: number; video: SongVideo }) => void;
   /** 建好上傳（拿到 videoId）時叫一次 → 存起來給續傳用 */
   onStarted?: (video: SongVideo) => void;
@@ -397,7 +488,17 @@ export async function uploadSongVideo(
   opts.onStarted?.(video);
   const info = video.upload!;
   const todo = partsToUpload(info);
-  let bytesDone = video.progress?.bytesDone ?? 0;
+  // 進度 = 傳好的段 + 正在傳的段已經送出的（同時好幾段一起算）
+  const progress = createUploadProgress(file.size, video.progress?.bytesDone ?? 0);
+  let lastReportAt = -Infinity;
+  let lastReported = -1;
+  const report = (bytesDone: number, force: boolean) => {
+    const now = Date.now();
+    if (bytesDone === lastReported || (!force && now - lastReportAt < PROGRESS_INTERVAL_MS)) return;
+    lastReportAt = now;
+    lastReported = bytesDone;
+    opts.onProgress?.({ bytesDone, totalBytes: file.size, video: video! });
+  };
   const retries = opts.retries ?? 3;
   const queue = [...todo];
   const worker = async () => {
@@ -408,11 +509,14 @@ export async function uploadSongVideo(
       for (let attempt = 0; ; attempt++) {
         if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
         try {
-          const r = await uploadVideoPart(projectId, songId, video!.id, n, file.slice(start, end), opts.signal);
-          bytesDone = r.bytesDone ?? bytesDone + (end - start);
-          opts.onProgress?.({ bytesDone, totalBytes: file.size, video: video! });
+          const r = await uploadVideoPart(
+            projectId, songId, video!.id, n, file.slice(start, end), opts.signal,
+            (loaded) => report(progress.sending(n, loaded), false),
+          );
+          report(progress.done(n, end - start, r.bytesDone), true);
           break;
         } catch (e) {
+          progress.failed(n);
           const status = (e as VideoApiError).status;
           // 權限 / 這一版已經不在上傳中 / 大小不對 → 重試也沒用
           if ((e as Error).name === 'AbortError' || status === 400 || status === 403 || status === 404 || status === 409 || attempt >= retries) throw e;
