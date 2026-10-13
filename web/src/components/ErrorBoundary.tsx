@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from 'react';
 import { RotateCw, TriangleAlert } from 'lucide-react';
 import Icon from './Icon';
+import { reportRenderError } from '../lib/errorReporting';
 import './ErrorBoundary.css';
 
 interface Props {
@@ -27,8 +28,10 @@ export default class ErrorBoundary extends Component<Props, State> {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: { componentStack?: string }) {
+  componentDidCatch(error: Error, info: { componentStack?: string | null }) {
     console.error('[ErrorBoundary]', error, info.componentStack);
+    // 畫面崩潰 window 收不到 → 這裡也回報到「設定 → 系統狀態」（只有正式版會送）
+    reportRenderError(error, info.componentStack);
   }
 
   reset = () => this.setState({ error: null });

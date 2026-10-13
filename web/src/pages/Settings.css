@@ -52,8 +52,10 @@
   font-size: 13.5px;
 }
 .settings-account__rows dt {
-  width: 72px;
+  /* 「AE 即時預覽」放得下一行，不會斷成兩行 */
+  width: 6.4em;
   flex-shrink: 0;
+  white-space: nowrap;
   color: var(--text-muted);
 }
 .settings-account__rows dd {
@@ -137,7 +139,7 @@
 }
 
 @media (max-width: 768px) {
-  .settings-account__rows dt { width: 60px; }
+  .settings-account__rows > div { gap: 8px; }
 }
 
 /* 步驟後面的「看圖」：開新分頁到 /help 那一段 */

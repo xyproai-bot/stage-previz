@@ -126,10 +126,45 @@ export function sendClientError(report: ClientErrorReport): void {
 }
 
 type EventTargetLike = Pick<Window, 'addEventListener' | 'removeEventListener'> & { location: { href: string } };
+type Reporter = ReturnType<typeof createErrorReporter>;
+
+// 這一頁共用的一個（window 的錯誤和 ErrorBoundary 接到的錯誤一起算「一頁最多 10 則」、一起去重）
+let pageReporter: Reporter | null = null;
+function getPageReporter(): Reporter {
+  if (!pageReporter) pageReporter = createErrorReporter({ send: sendClientError, getHref: () => window.location.href });
+  return pageReporter;
+}
+
+/** 畫面元件崩潰（ErrorBoundary 接到的）→ 要送的內容：元件的位置接在 stack 後面，看得出是哪個畫面 */
+export function renderErrorValue(error: unknown, componentStack?: string | null): unknown {
+  const comp = (componentStack || '').trim();
+  if (!comp || !(error instanceof Error)) return error;
+  const e = new Error(error.message);
+  e.name = error.name;
+  e.stack = `${error.stack || `${error.name}: ${error.message}`}\nComponent stack:\n${comp}`;
+  return e;
+}
+
+/**
+ * ErrorBoundary 接到的錯誤（畫面崩潰時 window 收不到）也回報；只在正式版送。
+ * @returns 有沒有送出去（測試用）
+ */
+export function reportRenderError(
+  error: unknown,
+  componentStack?: string | null,
+  opts: { enabled?: boolean; report?: (value: unknown) => boolean } = {},
+): boolean {
+  const enabled = opts.enabled ?? import.meta.env.PROD;
+  if (!enabled) return false;
+  const report = opts.report ?? ((v: unknown) => getPageReporter().report(v));
+  try { return report(renderErrorValue(error, componentStack)); } catch { return false; }
+}
 
 /** 接上 window；回傳拆掉的函式 */
 export function installErrorReporting(target: EventTargetLike = window, send: (r: ClientErrorReport) => void = sendClientError) {
-  const reporter = createErrorReporter({ send, getHref: () => target.location.href });
+  const reporter = (typeof window !== 'undefined' && target === window && send === sendClientError)
+    ? getPageReporter()
+    : createErrorReporter({ send, getHref: () => target.location.href });
   const onError = (e: Event) => reporter.onError(e as ErrorEvent);
   const onRejection = (e: Event) => reporter.onRejection(e as PromiseRejectionEvent);
   target.addEventListener('error', onError);

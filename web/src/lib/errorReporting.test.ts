@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  createErrorReporter, describeError, errorKey, installErrorReporting, MAX_REPORTS_PER_PAGE, reportPath, shouldIgnore,
-  type ClientErrorReport,
+  createErrorReporter, describeError, errorKey, installErrorReporting, MAX_REPORTS_PER_PAGE, renderErrorValue, reportPath,
+  reportRenderError, shouldIgnore, type ClientErrorReport,
 } from './errorReporting';
 
 describe('reportPath', () => {
@@ -86,5 +86,36 @@ describe('installErrorReporting', () => {
     expect(sent.map(s => [s.message, s.path])).toEqual([['Error: a', '/preview/p_1'], ['Error: b', '/preview/p_1']]);
     off();
     expect(listeners.size).toBe(0);
+  });
+});
+
+describe('reportRenderError（ErrorBoundary 接到的畫面崩潰）', () => {
+  it('正式版才送；開發中不送', () => {
+    const sent: unknown[] = [];
+    const report = (v: unknown) => { sent.push(v); return true; };
+    expect(reportRenderError(new Error('x'), null, { enabled: false, report })).toBe(false);
+    expect(sent).toHaveLength(0);
+    expect(reportRenderError(new Error('x'), null, { enabled: true, report })).toBe(true);
+    expect(sent).toHaveLength(1);
+  });
+  it('元件的位置接在 stack 後面，訊息不變', () => {
+    const e = new TypeError('cannot read x');
+    const v = renderErrorValue(e, '\n    at StageScene\n    at Preview') as Error;
+    expect(v).toBeInstanceOf(Error);
+    expect(describeError(v)?.message).toBe('TypeError: cannot read x');
+    expect(v.stack).toContain('Component stack:');
+    expect(v.stack).toContain('at StageScene');
+    // 沒有元件位置 → 原封不動
+    expect(renderErrorValue(e, '')).toBe(e);
+  });
+  it('跟 window 的錯誤一樣去重、一頁最多 10 則（共用同一個 reporter）', () => {
+    const sent: ClientErrorReport[] = [];
+    const r = createErrorReporter({ send: (x) => sent.push(x), getHref: () => 'https://x/preview/p_1' });
+    const err = new Error('boom');
+    reportRenderError(err, 'at A', { enabled: true, report: (v) => r.report(v) });
+    reportRenderError(err, 'at A', { enabled: true, report: (v) => r.report(v) });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].message).toBe('Error: boom');
+    expect(sent[0].path).toBe('/preview/p_1');
   });
 });

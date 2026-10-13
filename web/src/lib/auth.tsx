@@ -19,6 +19,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
+    // 這台電腦沒登入過（沒有登入狀態）→ 不用問後台：以前登入頁、邀請頁、分享連結每次打開都會多一個 401 失敗的請求
+    if (!api.getSessionToken()) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
     try {
       const u = await api.authMe();
       setUser(u);
