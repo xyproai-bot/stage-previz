@@ -451,16 +451,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       };
     }
 
-    // VR Button — 只在瀏覽器支援時顯示（Quest browser、Edge with WebXR enabled、PCVR + Steam）
-    let vrBtn: HTMLElement | null = null;
-    try {
-      vrBtn = VRButton.createButton(renderer);
-      vrBtn.classList.add('stage-scene__vr-btn');
-      container.appendChild(vrBtn);
-    } catch (e) {
-      console.warn('[StageScene] VRButton failed (no WebXR support?):', e);
-    }
-
     // ── 現場模式：LED 燈組 + 只拍 LED 的環境光 + 取色器 ──
     ledRigRef.current = new LedLightRig(scene);
     ledRigRef.current.setMaxLights(qualityRef.current.maxLights);
@@ -1029,7 +1019,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       try { fadeWarmupRef.current?.dispose(); } catch {}
       fadeWarmupRef.current = null;
       try { renderer.setAnimationLoop(null); } catch {}
-      if (vrBtn) try { container.removeChild(vrBtn); } catch {}
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
       try { scene.remove(transformHelper); } catch {}
       try { transform.detach(); } catch {}
@@ -1079,6 +1068,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       sceneRef.current = null;
     };
   }, []);
+
+  // ── VR Button — 只在瀏覽器支援時顯示（Quest browser、Edge with WebXR enabled、PCVR + Steam）；只看模式不放 ──
+  useEffect(() => {
+    const renderer = rendererRef.current;
+    const container = containerRef.current;
+    if (viewer || !renderer || !container) return;
+    let vrBtn: HTMLElement | null = null;
+    try {
+      vrBtn = VRButton.createButton(renderer);
+      vrBtn.classList.add('stage-scene__vr-btn');
+      container.appendChild(vrBtn);
+    } catch (e) {
+      console.warn('[StageScene] VRButton failed (no WebXR support?):', e);
+    }
+    return () => { vrBtn?.remove(); };
+  }, [viewer]);
 
   // ── Load .glb model (if any) → build mesh_name map ──
   useEffect(() => {
