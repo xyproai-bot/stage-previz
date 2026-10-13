@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractMentions } from './mentions';
+import { extractMentions, mentionCandidates } from './mentions';
 
 const members = [
   { id: 'u_ming', name: '小明' },
@@ -48,5 +48,22 @@ describe('extractMentions', () => {
     expect(extractMentions('@小明', [])).toEqual([]);
     expect(extractMentions('@小明', null)).toEqual([]);
     expect(extractMentions('@小明', [{ id: 'x', name: '' }, { id: 'u_ming', name: '小明' }])).toEqual([{ userId: 'u_ming', name: '小明' }]);
+  });
+});
+
+describe('mentionCandidates（打 @ 之後列出的人）', () => {
+  const people = [
+    { id: 'u_admin', name: '製作小林' },
+    { id: 'u_mei', name: '小美' },
+    { id: 'u_kai', name: '阿凱' },
+  ];
+  it('名字開頭對上的排前面', () => {
+    expect(mentionCandidates(people, '小').map(m => m.name)).toEqual(['小美', '製作小林']);
+  });
+  it('沒打字 → 照原本的順序；找不到 → 空的；最多幾個', () => {
+    expect(mentionCandidates(people, '').map(m => m.name)).toEqual(['製作小林', '小美', '阿凱']);
+    expect(mentionCandidates(people, '王')).toEqual([]);
+    expect(mentionCandidates(people, '', 2)).toHaveLength(2);
+    expect(mentionCandidates(null, '小')).toEqual([]);
   });
 });

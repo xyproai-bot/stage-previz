@@ -38,3 +38,15 @@ export function extractMentions(text: string, members: readonly MentionMember[] 
   }
   return Array.from(found.values());
 }
+
+/**
+ * 打 @ 之後要列出的人：名字裡有打的字才列，「開頭就對上」的排前面（打「@小」先出小美，不是製作小林）。
+ * 同一級照原本的順序；最多 limit 個。
+ */
+export function mentionCandidates<T extends MentionMember>(members: readonly T[] | null | undefined, query: string, limit = 6): T[] {
+  const q = query.trim().toLowerCase();
+  const list = (members || []).filter(m => m.name.toLowerCase().includes(q));
+  const starts = list.filter(m => m.name.toLowerCase().startsWith(q));
+  const rest = list.filter(m => !m.name.toLowerCase().startsWith(q));
+  return [...starts, ...rest].slice(0, limit);
+}

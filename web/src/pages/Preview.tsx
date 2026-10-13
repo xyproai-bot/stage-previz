@@ -34,7 +34,7 @@ import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { useLiveRefresh } from '../lib/liveRefresh';
-import { extractMentions } from '../lib/mentions';
+import { extractMentions, mentionCandidates } from '../lib/mentions';
 import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
   friendlyError, projectGoneMessage, canModifyComment, isOwnComment, sameSongs, sameComments,
@@ -1194,9 +1194,8 @@ function SongComments({
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
-  const filteredMembers = (members || []).filter(m =>
-    m.name.toLowerCase().includes(mentionState.query.toLowerCase())
-  ).slice(0, 6);
+  // 打「@小」先出名字開頭是「小」的人（lib/mentions.ts）
+  const filteredMembers = mentionCandidates(members, mentionState.query);
 
   // Bulk-select 模式（每串最上面那則）
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
