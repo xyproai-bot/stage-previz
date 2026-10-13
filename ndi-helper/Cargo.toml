@@ -1,6 +1,6 @@
 [package]
 name = "stage-previz-ndi-helper"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 authors = ["phang <phang9111@gmail.com>"]
 description = "NDI receiver bridge — pulls frames from NDI sources and serves to web browser via local WebSocket"
@@ -10,15 +10,20 @@ name = "stage-previz-ndi-helper"
 path = "src/main.rs"
 
 [dependencies]
-# NDI SDK 載入用 — 動態載入 Processing.NDI.Lib.x64.dll，避免硬綁版本
+# NDI SDK 載入用 — 動態載入 Processing.NDI.Lib.x64.dll / libndi.dylib，避免硬綁版本
 libloading = "0.8"
+
+# 本機 hostname（NDI 來源名稱「機器名 (程式名)」→ 判斷哪個是這台電腦的 AE）
+gethostname = "0.5"
 
 # WebSocket server（給瀏覽器接收 NDI frames）
 tokio = { version = "1", features = ["full"] }
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
 
-# JPEG 編碼（NDI BGRA → JPEG 給瀏覽器，控制 payload 大小）
+# JPEG 編碼（NDI RGBA → JPEG 給瀏覽器，控制 payload 大小）
+# 預設 features 會用 cmake 從原始碼編 libjpeg-turbo 並「靜態連結」→ 使用者電腦不用另外裝任何東西
+# （x86_64 需要 nasm；Apple Silicon 不用）
 turbojpeg = "1.1"
 
 # Per-pixel 處理平行化（rows 切多執行緒處理）
@@ -48,20 +53,17 @@ open = "5"
 [target.'cfg(windows)'.dependencies]
 # Windows-specific: registry 操作（開機自啟）
 winreg = "0.52"
-windows = { version = "0.58", features = [
-  "Win32_Foundation",
-  "Win32_System_Console",
-  "Win32_UI_WindowsAndMessaging",
-] }
 
 [profile.release]
 lto = true
 codegen-units = 1
-opt-level = "z"
+# 3 = 速度優先（每幀的縮小 / 色彩轉換迴圈是熱點；檔案大一點沒關係）
+opt-level = 3
 strip = true
 
 # cargo-wix（Windows MSI installer）
-# 跑：cargo install cargo-wix; cargo wix init; cargo wix
+# 安裝檔範本在 wix/main.wxs（已客製：開始選單捷徑、裝完自動啟動、升級時自動關掉舊版）
+# 跑：cargo install cargo-wix; cargo wix --no-build -C -ext -C WixUtilExtension -L -ext -L WixUtilExtension
 [package.metadata.wix]
 upgrade-guid = "B9C5A3E8-7F4D-4E2B-9A1C-2D5F8B1E3C7A"
 path-guid = "F2A4D1B8-3E7C-4F9A-8B2D-1C6E5F4A7B3D"

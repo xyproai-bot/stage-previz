@@ -1,6 +1,6 @@
 name: NDI Helper — Release
 
-# 觸發：手動 + tag push (v0.x)
+# 觸發：手動（只編不發佈，可以在任何分支測）+ tag push ndi-helper-v*（編 + 發佈）
 on:
   workflow_dispatch:
   push:
@@ -24,24 +24,42 @@ jobs:
         with:
           workspaces: ndi-helper
 
-      # turbojpeg 系統套件 — 用 vcpkg
-      - name: Setup vcpkg
-        uses: johnwason/vcpkg-action@v8
-        with:
-          pkgs: libjpeg-turbo
-          triplet: x64-windows
-          token: ${{ github.token }}
+      # turbojpeg 會從原始碼編 libjpeg-turbo 並靜態連結（x86_64 SIMD 需要 nasm）
+      - name: Ensure nasm
+        shell: pwsh
+        run: |
+          if (-not (Get-Command nasm -ErrorAction SilentlyContinue)) {
+            choco install nasm -y --no-progress
+            Add-Content $env:GITHUB_PATH "C:\Program Files\NASM"
+          }
+
+      - name: Unit tests
+        run: cargo test --release
 
       - name: Build release
         run: cargo build --release
 
-      - name: Install cargo-wix
-        run: cargo install cargo-wix
-
-      - name: Build MSI
+      # 冒煙測試：exe 跑得起來、WebSocket 有 hello/status、沒裝 NDI 會回報 missing、Origin 檢查有效
+      - name: Smoke test
+        shell: bash
+        env:
+          STAGE_PREVIZ_NDI_HEADLESS: '1'
+          STAGE_PREVIZ_NDI_NO_AUTOSTART: '1'
+          STAGE_PREVIZ_NDI_PORT: '7799'
         run: |
-          cargo wix init --force
-          cargo wix --no-build
+          export STAGE_PREVIZ_NDI_CONFIG_DIR="$RUNNER_TEMP/ndi-helper-cfg"
+          ./target/release/stage-previz-ndi-helper.exe > "$RUNNER_TEMP/helper.log" 2>&1 &
+          PID=$!
+          python ci/smoke.py 7799 || { cat "$RUNNER_TEMP/helper.log"; kill $PID; exit 1; }
+          kill $PID || true
+          cat "$RUNNER_TEMP/helper.log"
+
+      - name: Install cargo-wix
+        run: cargo install cargo-wix --version 0.3.9 --locked
+
+      # 安裝檔範本已客製在 wix/main.wxs（不要再 cargo wix init，會蓋掉）
+      - name: Build MSI
+        run: cargo wix --no-build --nocapture
 
       - name: Upload MSI artifact
         uses: actions/upload-artifact@v7
@@ -56,30 +74,89 @@ jobs:
           path: ndi-helper/target/release/stage-previz-ndi-helper.exe
 
   build-macos:
-    # 暫時關閉 — 等修好 tray Send/Sync 再開
-    if: false
+    # Apple Silicon runner 編 arm64 + 交叉編 x86_64 → lipo 成 universal → 包 .app → zip
     runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '11.0'
     defaults:
       run:
         working-directory: ndi-helper
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: ndi-helper
 
-      - name: Install jpeg-turbo
-        run: brew install jpeg-turbo
+      # libjpeg-turbo 從原始碼靜態編進去（使用者不用裝 Homebrew）；x86_64 SIMD 需要 nasm
+      - name: Install build tools
+        run: |
+          brew install nasm
+          command -v cmake || brew install cmake
 
-      - name: Build release
-        run: cargo build --release
+      - name: Unit tests
+        run: cargo test --release --target aarch64-apple-darwin
 
-      - name: Upload macOS binary
+      - name: Build arm64
+        run: cargo build --release --target aarch64-apple-darwin
+
+      - name: Build x86_64
+        run: cargo build --release --target x86_64-apple-darwin
+
+      - name: Universal binary
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/stage-previz-ndi-helper \
+            target/aarch64-apple-darwin/release/stage-previz-ndi-helper \
+            target/x86_64-apple-darwin/release/stage-previz-ndi-helper
+          lipo -info dist/stage-previz-ndi-helper
+          otool -L dist/stage-previz-ndi-helper
+          # 不能連到 Homebrew 的動態函式庫（使用者電腦上沒有）
+          if otool -L dist/stage-previz-ndi-helper | grep -E '/opt/homebrew|/usr/local'; then
+            echo "Binary links to Homebrew libraries"; exit 1
+          fi
+
+      - name: Smoke test (headless)
+        env:
+          STAGE_PREVIZ_NDI_HEADLESS: '1'
+          STAGE_PREVIZ_NDI_NO_AUTOSTART: '1'
+          STAGE_PREVIZ_NDI_PORT: '7799'
+        run: |
+          export STAGE_PREVIZ_NDI_CONFIG_DIR="$RUNNER_TEMP/ndi-helper-cfg"
+          ./dist/stage-previz-ndi-helper > "$RUNNER_TEMP/helper.log" 2>&1 &
+          PID=$!
+          python3 ci/smoke.py 7799 || { cat "$RUNNER_TEMP/helper.log"; kill $PID; exit 1; }
+          kill $PID || true
+          cat "$RUNNER_TEMP/helper.log"
+
+      - name: Make .app + zip
+        run: |
+          VERSION=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          bash macos/make-app.sh dist/stage-previz-ndi-helper "$VERSION" dist
+
+      # 有選單列圖示的完整啟動（CI 機器的 GUI 環境不一定穩，失敗只當參考）
+      - name: Smoke test (menu bar app)
+        continue-on-error: true
+        env:
+          STAGE_PREVIZ_NDI_NO_AUTOSTART: '1'
+          STAGE_PREVIZ_NDI_PORT: '7798'
+        run: |
+          export STAGE_PREVIZ_NDI_CONFIG_DIR="$RUNNER_TEMP/ndi-helper-cfg2"
+          "dist/Stage Previz NDI Helper.app/Contents/MacOS/stage-previz-ndi-helper" > "$RUNNER_TEMP/helper-tray.log" 2>&1 &
+          PID=$!
+          sleep 5
+          cat "$RUNNER_TEMP/helper-tray.log"
+          kill -0 $PID && echo "still running after 5s: OK"
+          python3 ci/smoke.py 7798
+          kill $PID || true
+
+      - name: Upload macOS zip
         uses: actions/upload-artifact@v7
         with:
-          name: ndi-helper-macos
-          path: ndi-helper/target/release/stage-previz-ndi-helper
+          name: ndi-helper-mac-zip
+          path: ndi-helper/dist/stage-previz-ndi-helper-mac.zip
 
   build-linux:
     # 暫時關閉 — 等補 nasm 依賴 + 驗證再開
@@ -98,7 +175,7 @@ jobs:
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libturbojpeg0-dev libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
+          sudo apt-get install -y nasm libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
 
       - name: Build release
         run: cargo build --release
@@ -110,10 +187,11 @@ jobs:
           path: ndi-helper/target/release/stage-previz-ndi-helper
 
   release:
-    needs: [build-windows]
-    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-windows, build-macos]
+    # Windows 成功就發佈；Mac 有編出來就一起放（Mac 失敗不擋 Windows）
+    if: startsWith(github.ref, 'refs/tags/') && !cancelled() && needs.build-windows.result == 'success'
     runs-on: ubuntu-latest
-    # 建立 Release + 上傳檔案需要寫入權限（之前每次都卡在這：Resource not accessible by integration）
+    # 建立 Release + 上傳檔案需要寫入權限
     permissions:
       contents: write
     steps:
@@ -121,8 +199,9 @@ jobs:
         with:
           path: artifacts
 
-      # 網站固定連到 releases/latest/download/stage-previz-ndi-helper-windows.msi
-      # → 每版都多放一份固定檔名的 MSI，換版本網站不用改
+      # 網站固定連到 releases/latest/download/<固定檔名>，換版本網站不用改：
+      #   stage-previz-ndi-helper-windows.msi
+      #   stage-previz-ndi-helper-mac.zip
       - name: Prepare release files
         run: |
           set -euo pipefail
@@ -137,6 +216,11 @@ jobs:
           cp "${msis[0]}" dist/
           cp "${msis[0]}" dist/stage-previz-ndi-helper-windows.msi
           cp artifacts/ndi-helper-windows-exe/stage-previz-ndi-helper.exe dist/
+          if [ -f artifacts/ndi-helper-mac-zip/stage-previz-ndi-helper-mac.zip ]; then
+            cp artifacts/ndi-helper-mac-zip/stage-previz-ndi-helper-mac.zip dist/
+          else
+            echo "::warning::macOS zip missing — releasing Windows only"
+          fi
           ls -la dist
 
       - name: Make release
@@ -146,5 +230,6 @@ jobs:
           fail_on_unmatched_files: true
           make_latest: true
           body: |
-            Windows 安裝檔（固定檔名，網站連這個）：`stage-previz-ndi-helper-windows.msi`
+            - Windows 安裝檔（固定檔名，網站連這個）：`stage-previz-ndi-helper-windows.msi`
+            - Mac（Apple Silicon + Intel 通用版，固定檔名）：`stage-previz-ndi-helper-mac.zip` — 解壓後把 App 拖進「應用程式」，第一次打開見 ndi-helper/README.md
           generate_release_notes: true

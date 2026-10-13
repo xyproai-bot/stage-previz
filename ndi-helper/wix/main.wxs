@@ -1,0 +1,138 @@
+<?xml version='1.0' encoding='windows-1252'?>
+<!--
+  Stage Previz NDI Helper - Windows installer (cargo-wix template, customized)
+
+  Changes vs the default `cargo wix init` template:
+    - Start Menu shortcut "Stage Previz NDI Helper"
+    - Fewer clicks: Welcome -> Install -> Finish (no feature tree page)
+    - "Launch Stage Previz NDI Helper" checkbox on the last page, checked by default
+      (on first launch the helper registers itself to start at login)
+    - Closes a running helper before installing / upgrading / uninstalling
+      (no "files in use" prompt when updating)
+    - Uninstall also removes the start-at-login entry
+    - No PATH entry (it is a tray app, not a command line tool)
+
+  Build: cargo wix (with the no-build flag after cargo build). cargo-wix adds
+  WixUtilExtension automatically because of the util namespace below.
+
+  Note: keep this file ASCII / codepage 1252 (MSI tables are 1252 here).
+-->
+
+<?if $(sys.BUILDARCH) = x64 or $(sys.BUILDARCH) = arm64 ?>
+    <?define PlatformProgramFilesFolder = "ProgramFiles64Folder" ?>
+<?else ?>
+    <?define PlatformProgramFilesFolder = "ProgramFilesFolder" ?>
+<?endif ?>
+
+<Wix xmlns='http://schemas.microsoft.com/wix/2006/wi'
+     xmlns:util='http://schemas.microsoft.com/wix/UtilExtension'>
+
+    <Product
+        Id='*'
+        Name='Stage Previz NDI Helper'
+        UpgradeCode='B9C5A3E8-7F4D-4E2B-9A1C-2D5F8B1E3C7A'
+        Manufacturer='phang'
+        Language='1033'
+        Codepage='1252'
+        Version='$(var.Version)'>
+
+        <Package Id='*'
+            Keywords='Installer'
+            Description='Stage Previz NDI Helper - receives After Effects NDI output for the Stage Previz web app'
+            Manufacturer='phang'
+            InstallerVersion='450'
+            Languages='1033'
+            Compressed='yes'
+            InstallScope='perMachine'
+            SummaryCodepage='1252'
+            />
+
+        <MajorUpgrade
+            Schedule='afterInstallInitialize'
+            DowngradeErrorMessage='A newer version of [ProductName] is already installed. Setup will now exit.'/>
+
+        <Media Id='1' Cabinet='media1.cab' EmbedCab='yes' DiskPrompt='CD-ROM #1'/>
+        <Property Id='DiskPrompt' Value='Stage Previz NDI Helper Installation'/>
+
+        <Directory Id='TARGETDIR' Name='SourceDir'>
+            <Directory Id='$(var.PlatformProgramFilesFolder)' Name='PFiles'>
+                <Directory Id='APPLICATIONFOLDER' Name='stage-previz-ndi-helper'>
+                    <Directory Id='Bin' Name='bin'>
+                        <Component Id='binary0' Guid='*'>
+                            <File
+                                Id='exe0'
+                                Name='stage-previz-ndi-helper.exe'
+                                DiskId='1'
+                                Source='$(var.CargoTargetBinDir)\stage-previz-ndi-helper.exe'
+                                KeyPath='yes'/>
+                        </Component>
+                    </Directory>
+                </Directory>
+            </Directory>
+
+            <Directory Id='ProgramMenuFolder'>
+                <Component Id='StartMenuShortcut' Guid='390F8819-3EE3-48E4-BD2F-07E9DB4CF649'>
+                    <Shortcut
+                        Id='StartMenuShortcutLink'
+                        Name='Stage Previz NDI Helper'
+                        Description='Receive After Effects NDI output in Stage Previz'
+                        Target='[Bin]stage-previz-ndi-helper.exe'
+                        WorkingDirectory='Bin'/>
+                    <RegistryValue
+                        Root='HKCU'
+                        Key='Software\xyproai\stage-previz-ndi-helper'
+                        Name='StartMenuShortcut'
+                        Type='integer'
+                        Value='1'
+                        KeyPath='yes'/>
+                </Component>
+            </Directory>
+        </Directory>
+
+        <Feature
+            Id='Binaries'
+            Title='Application'
+            Description='Installs Stage Previz NDI Helper.'
+            Level='1'
+            ConfigurableDirectory='APPLICATIONFOLDER'
+            AllowAdvertise='no'
+            Display='expand'
+            Absent='disallow'>
+            <ComponentRef Id='binary0'/>
+            <ComponentRef Id='StartMenuShortcut'/>
+        </Feature>
+
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+        <Property Id='ARPHELPLINK' Value='https://stage-previz.vercel.app/'/>
+
+        <!-- Close a running helper first (it is a tray app: no window to close, so just end it) -->
+        <SetProperty Id='WixQuietExec64CmdLine' Before='CloseRunningHelper' Sequence='execute'
+            Value='"[System64Folder]taskkill.exe" /F /IM stage-previz-ndi-helper.exe'/>
+        <CustomAction Id='CloseRunningHelper' BinaryKey='WixCA' DllEntry='WixQuietExec64' Execute='immediate' Return='ignore'/>
+
+        <!-- Uninstall (not upgrade): remove the start-at-login entry the helper wrote for this user -->
+        <CustomAction Id='SetRemoveAutostartCmd' Property='RemoveAutostart'
+            Value='"[System64Folder]reg.exe" delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v StagePrevizNdiHelper /f'/>
+        <CustomAction Id='RemoveAutostart' BinaryKey='WixCA' DllEntry='WixQuietExec64' Execute='deferred' Impersonate='yes' Return='ignore'/>
+
+        <InstallExecuteSequence>
+            <Custom Action='CloseRunningHelper' Before='InstallValidate'>1</Custom>
+            <Custom Action='SetRemoveAutostartCmd' Before='RemoveAutostart'>REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+            <Custom Action='RemoveAutostart' Before='InstallFinalize'>REMOVE~="ALL" AND NOT UPGRADINGPRODUCTCODE</Custom>
+        </InstallExecuteSequence>
+
+        <!-- Launch after install (checkbox on the last page, checked by default) -->
+        <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT' Value='Launch Stage Previz NDI Helper now'/>
+        <Property Id='WIXUI_EXITDIALOGOPTIONALCHECKBOX' Value='1'/>
+        <Property Id='WixShellExecTarget' Value='[#exe0]'/>
+        <CustomAction Id='LaunchApplication' BinaryKey='WixCA' DllEntry='WixShellExec' Impersonate='yes'/>
+
+        <UI>
+            <UIRef Id='WixUI_FeatureTree'/>
+            <!-- Skip license + feature tree: Welcome -> Ready to install -->
+            <Publish Dialog='WelcomeDlg' Control='Next' Event='NewDialog' Value='VerifyReadyDlg' Order='99'>1</Publish>
+            <Publish Dialog='VerifyReadyDlg' Control='Back' Event='NewDialog' Value='WelcomeDlg' Order='99'>NOT Installed</Publish>
+            <Publish Dialog='ExitDialog' Control='Finish' Event='DoAction' Value='LaunchApplication'>WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 and NOT Installed</Publish>
+        </UI>
+    </Product>
+</Wix>

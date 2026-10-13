@@ -7,9 +7,9 @@
 #
 # 需求：
 #   1. Rust toolchain（https://rustup.rs/）
-#   2. NDI Tools 安裝（不然 helper 跑起來找不到 SDK）
-#   3. turbojpeg：vcpkg install libjpeg-turbo:x64-windows
-#   4. （MSI only）WiX Toolset v3.x（cargo wix 自動下）
+#   2. Visual Studio C++ Build Tools（含 CMake）+ NASM（turbojpeg 從原始碼靜態編進 exe）
+#   3. NDI Tools 安裝（不然 helper 跑起來會回報「沒裝 NDI」）
+#   4. （MSI only）WiX Toolset v3.x；範本在 wix\main.wxs（已客製，不要 init --force）
 
 param(
     [switch]$Msi,

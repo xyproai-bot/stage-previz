@@ -1,106 +1,110 @@
 // stage-previz-ndi-helper
 //
-// 這個 binary 跑在動畫師本機，背景接收 AE 的 NDI 輸出，透過 WebSocket
-// 把每幀（JPEG）推給瀏覽器中的 Stage Previz 平台。
+// 跑在動畫師電腦背景（系統列小圖示），接收 AE 的 NDI 輸出，
+// 透過本機 WebSocket（ws://127.0.0.1:7777）把畫面（JPEG）跟狀態推給瀏覽器裡的 Stage Previz。
 //
 // 架構：
-//   AE NDI Output → Processing.NDI.Lib.x64.dll (FFI via libloading)
-//        → ndi_recv 收到 BGRA buffer
-//        → 2x downsample + limited→full range
-//        → turbojpeg encode (q ≈ 70, ~ 200KB / frame@1080p)
-//        → broadcast 到所有 ws clients (ws://127.0.0.1:7777)
+//   AE NDI Output → NDI 函式庫（runtime 動態載入）
+//        → ndi.rs：挑來源（本機 AE 優先）、限速 30fps、2x 縮小、turbojpeg 編碼
+//        → state.rs：broadcast 給每個網頁連線
+//        → ws_server.rs：hello / status / JPEG frames；收 select_source / pause / resume
+//   tray.rs：系統列圖示（主執行緒；macOS 規定）
+//   autostart.rs：開機自動啟動（預設開，tray 可關）
 //
-// 瀏覽器端：lib/ndi-client.ts 連 ws → 拿 JPEG bytes → drawImage 到 canvas
-// → uploadTexture 給 Three.js LED panel material（取代 procedural mock）
-//
-// 平台：Windows（NDI SDK 主要用），macOS / Linux 用 NDI for macOS / Linux
-// 動態載入：使用者要先裝 NDI Tools (https://www.ndi.tv/tools/)
+// 開發 / 測試用環境變數：
+//   STAGE_PREVIZ_NDI_PORT=7790          換 port（不寫回 config）
+//   STAGE_PREVIZ_NDI_CONFIG_DIR=…       換設定檔資料夾
+//   STAGE_PREVIZ_NDI_NO_AUTOSTART=1     不碰開機自啟動設定
+//   STAGE_PREVIZ_NDI_HEADLESS=1         不開系統列圖示（CI / 測試）
 
+// Release 版不開黑色命令列視窗
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
-mod ndi;
-mod ws_server;
-mod tray;
-mod config;
 mod autostart;
+mod config;
+mod ndi;
+mod state;
+mod tray;
+mod ws_server;
 
 use log::{error, info};
 use std::sync::Arc;
-use tokio::sync::{broadcast, RwLock};
 
-// 全域狀態（給 tray 顯示）
-#[derive(Default, Clone)]
-pub struct HelperState {
-    pub source_name: Option<String>,
-    pub frame_count: u64,
-    pub fps: f32,
-    pub clients: usize,
-    pub last_error: Option<String>,
-    /// 目前掃描到的所有 NDI sources（顯示給瀏覽器讓用戶挑）
-    pub available_sources: Vec<String>,
-    /// 瀏覽器透過 WebSocket 指定要連的 source（NDI receiver 讀這個重連）
-    pub requested_source: Option<String>,
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).map(|v| !v.is_empty() && v != "0").unwrap_or(false)
 }
 
-#[tokio::main]
-async fn main() {
+fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     info!("Stage Previz NDI Helper v{}", env!("CARGO_PKG_VERSION"));
 
-    // 確保只有一個 instance 在跑（同 path 上的 mutex）
-    let _instance = single_instance::SingleInstance::new("stage-previz-ndi-helper").unwrap();
-    if !_instance.is_single() {
-        eprintln!("Another instance is already running.");
-        std::process::exit(1);
-    }
-
     let cfg = config::load_or_default();
-    info!("Config loaded: {:?}", cfg);
+    let port = config::effective_port(&cfg);
+    info!("Config {}: {:?} (port {port})", config::config_path().display(), cfg);
 
-    let state = Arc::new(RwLock::new(HelperState::default()));
-
-    // broadcast channel: NDI receiver → ws clients
-    // 用 broadcast 讓多個瀏覽器 tab 都能接到同一份 frame
-    let (tx, _rx) = broadcast::channel::<Arc<Vec<u8>>>(8);
-
-    // Spawn WebSocket server
-    {
-        let tx = tx.clone();
-        let state = state.clone();
-        let port = cfg.port;
-        tokio::spawn(async move {
-            if let Err(e) = ws_server::run(port, tx, state).await {
-                error!("WS server failed: {e}");
+    // 同一個 port 只能有一個 helper（重複打開就直接結束，不吵用戶）
+    #[cfg(target_os = "macos")]
+    let instance_name = config::config_dir()
+        .join(format!("instance-{port}.lock"))
+        .to_string_lossy()
+        .into_owned();
+    #[cfg(not(target_os = "macos"))]
+    let instance_name = if port == 7777 {
+        "stage-previz-ndi-helper".to_string()
+    } else {
+        format!("stage-previz-ndi-helper-{port}")
+    };
+    let _instance = match single_instance::SingleInstance::new(&instance_name) {
+        Ok(i) => {
+            if !i.is_single() {
+                info!("Another instance is already running on port {port}; exiting.");
+                return;
             }
-        });
+            Some(i)
+        }
+        Err(e) => {
+            error!("single-instance check failed ({e}); continuing");
+            None
+        }
+    };
+
+    // 開機自動啟動：預設開，指到目前這個執行檔
+    autostart::sync(cfg.autostart);
+
+    let shared = Arc::new(state::Shared::new(cfg, port));
+
+    // WebSocket server（tokio，兩條 worker 就夠）
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .thread_name("ws")
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    runtime.spawn(ws_server::run(shared.clone()));
+
+    // NDI 接收（專用 thread；NDI C API 用 raw pointer）
+    {
+        let shared = shared.clone();
+        std::thread::Builder::new()
+            .name("ndi".into())
+            .spawn(move || ndi::run_forever(shared))
+            .expect("spawn ndi thread");
     }
 
-    // Spawn NDI receiver — 用 spawn_blocking 因為 NDI C API 帶 raw pointer
-    // 跨 await 不滿足 Send，整個 receiver 改成同步函式跑在 blocking pool。
-    {
-        let tx = tx.clone();
-        let state = state.clone();
-        let cfg = cfg.clone();
-        tokio::task::spawn_blocking(move || {
-            // 重試迴圈（NDI source 不在線時退出但每 5s 重試）
-            loop {
-                match ndi::run_receiver(&cfg, &tx, &state) {
-                    Ok(_) => info!("NDI receiver exited cleanly"),
-                    Err(e) => {
-                        error!("NDI receiver error: {e}");
-                        let mut s = state.blocking_write();
-                        s.last_error = Some(e.to_string());
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_secs(5));
-            }
-        });
+    if env_flag("STAGE_PREVIZ_NDI_HEADLESS") {
+        info!("Headless mode (no tray icon)");
+        loop {
+            std::thread::park();
+        }
     }
 
-    // Tray icon — blocks the main thread (event loop)
-    if let Err(e) = tray::run(state, cfg) {
+    // 系統列圖示：佔用主執行緒直到「離開」
+    if let Err(e) = tray::run(shared) {
         error!("Tray failed: {e}");
-        // 沒 tray 就退出（背景跑沒 UI 沒意義）
-        std::process::exit(1);
+        // 沒有系統列圖示也繼續在背景服務（網頁照樣能連）
+        loop {
+            std::thread::park();
+        }
     }
+    drop(runtime);
 }

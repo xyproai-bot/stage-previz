@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_TW</string>
+	<key>CFBundleName</key>
+	<string>Stage Previz NDI Helper</string>
+	<key>CFBundleDisplayName</key>
+	<string>Stage Previz NDI Helper</string>
+	<key>CFBundleExecutable</key>
+	<string>stage-previz-ndi-helper</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.xyproai.stage-previz-ndi-helper</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>11.0</string>
+	<!-- 只在選單列出現，不佔 Dock -->
+	<key>LSUIElement</key>
+	<true/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- NDI 用 Bonjour / multicast 找來源 → macOS「本地網路」權限。有這兩個 key 才會跳「允許」，不然會默默找不到 -->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Stage Previz 需要找到同一台電腦或網路上的 After Effects NDI 畫面 / Needed to find After Effects NDI sources on this Mac or your network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_ndi._tcp</string>
+		<string>_ndi._udp</string>
+	</array>
+</dict>
+</plist>
