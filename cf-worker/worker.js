@@ -432,7 +432,7 @@ async function updateProject(request, env, projectId, me) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets', 'look_settings'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
   // tags 是 array → 存成 JSON string
@@ -440,12 +440,13 @@ async function updateProject(request, env, projectId, me) {
     body.tags = JSON.stringify(body.tags.filter(t => typeof t === 'string').slice(0, 20));
   }
 
-  // 3D 檢視設定（校準倍率 / 機關滑桿）— 全專案共用，只有 admin 能改
+  // 3D 檢視設定（校準倍率 / 機關滑桿 / 現場設定）— 全專案共用，只有 admin 能改
   if ('scaleCorrection' in body && !('scale_correction' in body)) body.scale_correction = body.scaleCorrection;
   if ('mechanismOffsets' in body && !('mechanism_offsets' in body)) body.mechanism_offsets = body.mechanismOffsets;
-  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body;
+  if ('lookSettings' in body && !('look_settings' in body)) body.look_settings = body.lookSettings;
+  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body;
   if (touchesViewSettings && me?.role !== 'admin') {
-    return jsonResp({ error: '只有 admin 能改校準 / 機關滑桿' }, 403);
+    return jsonResp({ error: '只有 admin 能改校準 / 機關滑桿 / 現場設定' }, 403);
   }
   if ('scale_correction' in body) {
     const n = Number(body.scale_correction);
@@ -456,6 +457,11 @@ async function updateProject(request, env, projectId, me) {
     const clean = sanitizeMechanismOffsets(body.mechanism_offsets);
     if (!clean) return jsonResp({ error: 'mechanism_offsets 不合法' }, 400);
     body.mechanism_offsets = JSON.stringify(clean);
+  }
+  if ('look_settings' in body) {
+    const clean = sanitizeLookSettings(body.look_settings);
+    if (!clean) return jsonResp({ error: 'look_settings 不合法' }, 400);
+    body.look_settings = JSON.stringify(clean);
   }
   const sets = [], values = [];
   for (const k of allowed) {
@@ -471,9 +477,10 @@ async function updateProject(request, env, projectId, me) {
   ).bind(...values).run();
 
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
-  // 滑桿拖動會一直存，不寫 activity（不然 audit log 會被洗版）
-  const onlyMechanism = sets.length === 1 && 'mechanism_offsets' in body;
-  if (!onlyMechanism) {
+  // 滑桿 / 現場設定拖動會一直存，不寫 activity（不然 audit log 會被洗版）
+  const onlyLiveTweaks = sets.length > 0 && Object.keys(body).every(k =>
+    ['mechanism_offsets', 'mechanismOffsets', 'look_settings', 'lookSettings'].includes(k));
+  if (!onlyLiveTweaks) {
     await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
   }
   return jsonResp({ ok: true });
@@ -494,6 +501,30 @@ function sanitizeMechanismOffsets(raw) {
     if (!isFinite(x) || !isFinite(y)) return null;
     if (x === 0 && y === 0) continue; // 0 不用存
     out[id] = { x: clamp(x), y: clamp(y) };
+  }
+  return out;
+}
+
+// 現場模式設定：範圍要跟 web/src/lib/stageLook/lookSettings.ts 的 LOOK_SETTING_RANGES 一致
+const LOOK_SETTING_RANGES = {
+  houseLight: [0, 1],
+  exposure: [0.2, 3],
+  ledLightStrength: [0, 5],
+  bloomStrength: [0, 3],
+  reflectionSharpness: [0, 1],
+  ledViewFalloff: [0, 1],
+};
+
+function sanitizeLookSettings(raw) {
+  let obj = raw;
+  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { return null; } }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const out = {};
+  for (const [key, [min, max]] of Object.entries(LOOK_SETTING_RANGES)) {
+    if (!(key in obj)) continue;
+    const n = Number(obj[key]);
+    if (!isFinite(n)) return null;
+    out[key] = Math.max(min, Math.min(max, n));
   }
   return out;
 }
@@ -3753,7 +3784,7 @@ async function handleShareRouter(request, env, url, token) {
   if (sub === 'data' && request.method === 'GET') {
     // bundle 給 share viewer：project meta + songs + stage_objects + model
     const proj = await env.DB.prepare(
-      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
     ).bind(link.project_id).first();
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
@@ -3790,6 +3821,7 @@ async function handleShareRouter(request, env, url, token) {
       restrictedToSongId: link.song_id,
       scaleCorrection: proj.scale_correction ?? 1,
       mechanismOffsets: safeJsonObj(proj.mechanism_offsets, {}),
+      lookSettings: safeJsonObj(proj.look_settings, {}),
     });
   }
 
