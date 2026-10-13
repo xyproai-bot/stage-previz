@@ -1,9 +1,36 @@
 import { describe, it, expect } from 'vitest';
 import {
   requiredSeconds, fixSeconds, checkSongMechanisms, buildMechanismTimeline, MechanismTweener, timedOrderMismatch,
-  cueGoTimes, formatSeconds, formatMechValue, type MotionCue,
+  cueGoTimes, formatSeconds, formatMechValue, moveSeconds, type MotionCue,
 } from './motion';
 import { resolveSongMechanisms } from './track';
+
+describe('換 cue 時機關走幾秒（三種動法）', () => {
+  it('real：max(轉場, 距離 ÷ 最高速度)；transition：就是轉場秒數；instant：0', () => {
+    expect(moveSeconds(3.5, 0.25, 5)).toBe(14);
+    expect(moveSeconds(3.5, 0.25, 20, 'real')).toBe(20);
+    expect(moveSeconds(3.5, 0.25, 5, 'transition')).toBe(5);
+    expect(moveSeconds(3.5, null, 5, 'transition')).toBe(5);
+    expect(moveSeconds(3.5, 0.25, 0, 'transition')).toBe(0);  // 轉場 0 = 直接切換
+    expect(moveSeconds(3.5, 0.25, 5, 'instant')).toBe(0);
+    expect(moveSeconds(1, 0.25, -3, 'transition')).toBe(0);
+  });
+
+  it('管理頁（transition）：機關跟物件一起到，不等機器；轉場 0 直接到位', () => {
+    const m = [{ id: 'lift', maxSpeed: 0.25 }];
+    const tw = new MechanismTweener();
+    tw.retarget(m, { lift: 0 }, 0, { animate: false, minSeconds: 0 });
+    tw.retarget(m, { lift: 3.5 }, 0, { animate: true, minSeconds: 2, motion: 'transition' });
+    expect(tw.valueAt('lift', 1000)).toBeCloseTo(1.75, 9);
+    expect(tw.valueAt('lift', 2000)).toBe(3.5);   // 照機器速度要 14 秒
+    tw.retarget(m, { lift: 0 }, 2000, { animate: true, minSeconds: 0, motion: 'transition' });
+    expect(tw.valueAt('lift', 2000)).toBe(0);     // 直接切換
+    tw.retarget(m, { lift: 3.5 }, 3000, { animate: true, minSeconds: 0, motion: 'real' });
+    expect(tw.valueAt('lift', 10000)).toBeCloseTo(1.75, 9);  // 照機器速度：轉場 0 也要 14 秒
+    tw.retarget(m, { lift: 1 }, 20000, { animate: true, minSeconds: 5, motion: 'instant' });
+    expect(tw.valueAt('lift', 20000)).toBe(1);
+  });
+});
 
 const cue = (id: string, order: number, videoTimeSec: number | null, crossfadeSeconds: number, status = 'master'): MotionCue =>
   ({ id, order, videoTimeSec, crossfadeSeconds, status });

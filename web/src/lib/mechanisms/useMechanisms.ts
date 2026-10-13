@@ -13,7 +13,7 @@ import { useLiveRefresh } from '../liveRefresh';
 import { toast } from '../toast';
 import { clampValue, type CueMechanismPosition, type Mechanism, type MechanismValues } from './model';
 import { defaultRow, ownValuesByCue, resolveSongMechanisms, valuesOf, type ResolvedRow } from './track';
-import { buildMechanismTimeline, checkSongMechanisms, sortMasters, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
+import { buildMechanismTimeline, checkSongMechanisms, sortMasters, type MechanismMotion, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
 import * as mapi from './mechanismApi';
 import type { StageSceneQuery } from '../../components/StageScene';
 
@@ -21,6 +21,8 @@ export interface MechanismSceneProps {
   mechanisms: Mechanism[] | null;
   mechanismTargets: MechanismValues;
   mechanismAtFrame?: () => MechanismValues | null;
+  /** 管理頁：預設 'transition'（照轉場秒數）；其他頁不給 = 照機器速度 */
+  mechanismMotion?: MechanismMotion;
   focusedMechanismId?: string | null;
   sceneQueryRef?: React.MutableRefObject<StageSceneQuery | null>;
 }
@@ -157,6 +159,16 @@ export function useShareMechanisms(o: {
 // 管理頁（製作）
 // ─────────────────────────────────────────────
 
+/** 管理頁「照機器速度播放」記在這台電腦（每個人自己的） */
+export const REAL_SPEED_PREF_KEY = 'sp_mech_real_speed';
+export function readRealSpeedPref(storage: Pick<Storage, 'getItem'> | null | undefined): boolean {
+  try { return storage?.getItem(REAL_SPEED_PREF_KEY) === '1'; } catch { return false; }
+}
+export function writeRealSpeedPref(storage: Pick<Storage, 'setItem' | 'removeItem'> | null | undefined, on: boolean): void {
+  try { if (on) storage?.setItem(REAL_SPEED_PREF_KEY, '1'); else storage?.removeItem(REAL_SPEED_PREF_KEY); } catch { /* 無痕模式 / 不能存 → 這次有效就好 */ }
+}
+const localStore = (): Storage | null => { try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; } };
+
 export interface EditorHistory {
   push(scope: string, step: HistoryStep): void;
   bump(): void;
@@ -178,6 +190,9 @@ export function useEditorMechanisms(o: {
   // 拖滑桿時的預覽（還沒存）：mechId → value
   const [preview, setPreview] = useState<MechanismValues>({});
   const [focusedId, setFocusedId] = useState<string | null>(null);
+  // 換 cue 時：預設照轉場秒數（跟物件一起到，編輯不用等機器）；開了「照機器速度播放」才照機器速度
+  const [realSpeed, setRealSpeedState] = useState(() => readRealSpeedPref(localStore()));
+  const setRealSpeed = useCallback((on: boolean) => { setRealSpeedState(on); writeRealSpeedPref(localStore(), on); }, []);
   const sceneQueryRef = useRef<StageSceneQuery | null>(null);
   const mechsRef = useRef<Mechanism[] | null>(null);
   mechsRef.current = mechanisms;
@@ -353,12 +368,15 @@ export function useEditorMechanisms(o: {
 
   const sceneProps: MechanismSceneProps = useMemo(() => ({
     mechanisms, mechanismTargets: targets, focusedMechanismId: focusedId, sceneQueryRef,
-  }), [mechanisms, targets, focusedId]);
+    mechanismMotion: (realSpeed ? 'real' : 'transition') as MechanismMotion,
+  }), [mechanisms, targets, focusedId, realSpeed]);
 
   return {
     status, mechanisms: mechanisms || EMPTY_MECHS, positions: list, resolved: pb.resolved, selectedRow: pb.selectedRow,
     targets, check, preview, focusedId, setFocusedId, sceneQueryRef,
     commitValue, clearValue, previewValue, create, update, remove, reorder,
+    /** 「照機器速度播放」：換 cue 時照機器速度（預設關 = 照轉場秒數） */
+    realSpeed, setRealSpeed,
     refreshDefs, refreshPositions, sceneProps,
     /** 目前 cue 的機關值（從目前 3D 畫面建立 cue 時一起存） */
     currentValues: pb.targets,

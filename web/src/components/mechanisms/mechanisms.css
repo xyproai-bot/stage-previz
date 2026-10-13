@@ -24,6 +24,9 @@
 .mech-section__head .btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 
 .mech-cue-pick { display: flex; align-items: center; gap: 8px; }
+.mech-speed-toggle { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; cursor: pointer; }
+.mech-speed-toggle input { accent-color: var(--warn); margin: 0; }
+.mech-speed-toggle small { flex-basis: 100%; padding-left: 20px; font-size: 11px; line-height: 1.4; }
 .mech-cue-pick select,
 .mech-form select,
 .mech-form input[type="text"],

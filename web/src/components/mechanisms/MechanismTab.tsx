@@ -220,6 +220,11 @@ export default function MechanismTab({
             title="用 Excel 打開；整個專案每首歌、每個 cue、每個機關一行"
           ><Icon icon={exporting ? LoaderCircle : FileSpreadsheet} spin={exporting} /> 匯出機關總表</button>
         </header>
+        <label className="mech-speed-toggle" title="開了：換 cue 時機關照最高速度走（跟導演頁、分享連結一樣，太快就晚到）。關了：照轉場秒數，跟物件一起到">
+          <input type="checkbox" checked={mech.realSpeed} onChange={e => mech.setRealSpeed(e.target.checked)} />
+          <span>照機器速度播放</span>
+          <small className="muted">{mech.realSpeed ? '換 cue 時機關照最高速度走，跟導演、客戶看到的一樣' : '換 cue 時機關照轉場秒數走（編輯比較快）；提醒照樣會出現'}</small>
+        </label>
         {cues.length > 0 && (
           <label className="mech-cue-pick">
             <span className="muted small">換 cue</span>

@@ -292,11 +292,28 @@ export function buildMechanismTimeline(
 
 interface TweenState { from: number; to: number; t0: number; dur: number }
 
+/**
+ * 換 cue 時機關怎麼走：
+ *   'real'       照機器速度（花 max(轉場, 距離 ÷ 最高速度) 秒；導演頁、分享頁、工作站、管理頁開「照機器速度播放」時）
+ *   'transition' 照轉場秒數（跟物件一起到；管理頁預設，編輯時不用等機器）；轉場 0 = 直接切換
+ *   'instant'    直接到位（分鏡縮圖）
+ */
+export type MechanismMotion = 'real' | 'transition' | 'instant';
+
 export interface RetargetOptions {
-  /** 換了 cue = true（照速度走過去）；同一個 cue 裡改值 = false（直接跳） */
+  /** 換了 cue = true（照下面的動法走過去）；同一個 cue 裡改值 = false（直接跳） */
   animate: boolean;
   /** 新 cue 的轉場秒數（沒填最高速度的機關照這個秒數走；有填的至少這麼久） */
   minSeconds: number;
+  /** 預設 'real'；'transition' = 不管最高速度，照轉場秒數；'instant' = 跟 animate: false 一樣 */
+  motion?: MechanismMotion;
+}
+
+/** 換 cue 時這個機關要走幾秒 */
+export function moveSeconds(distance: number, maxSpeed: number | null | undefined, minSeconds: number, motion: MechanismMotion = 'real'): number {
+  if (motion === 'instant') return 0;
+  const t = Math.max(0, minSeconds);
+  return motion === 'transition' ? t : Math.max(t, requiredSeconds(distance, maxSpeed));
 }
 
 export class MechanismTweener {
@@ -345,7 +362,7 @@ export class MechanismTweener {
       if (cur.to === to) continue;
       const from = valueOf(cur, nowMs);
       if (!opts.animate || from === to) { this.states.set(m.id, { from: to, to, t0: nowMs, dur: 0 }); continue; }
-      const dur = Math.max(Math.max(0, opts.minSeconds), requiredSeconds(to - from, m.maxSpeed)) * 1000;
+      const dur = moveSeconds(to - from, m.maxSpeed, opts.minSeconds, opts.motion) * 1000;
       this.states.set(m.id, dur > 0 ? { from, to, t0: nowMs, dur } : { from: to, to, t0: nowMs, dur: 0 });
     }
     for (const id of [...this.states.keys()]) if (!live.has(id)) this.states.delete(id);

@@ -16,7 +16,7 @@ import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
 import { legacyOffsetsToMechanisms, legacyRowToMechanism, type Mechanism, type MechanismValues, type MechVec3 } from '../lib/mechanisms/model';
 import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type RigMechanism } from '../lib/mechanisms/pose';
-import { MechanismTweener } from '../lib/mechanisms/motion';
+import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
 import { stageFrontDirection } from '../lib/stageCamera';
 import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
@@ -144,8 +144,8 @@ interface Props {
   mechanismTargets?: MechanismValues;
   /** 跟著影片時間：只在 poseAtFrame 有回傳位置的那幾幀才問；回傳 null = 用 mechanismTargets */
   mechanismAtFrame?: () => MechanismValues | null;
-  /** 'real'（預設）= 照機器速度；'instant' = 直接到位（分鏡縮圖） */
-  mechanismMotion?: 'real' | 'instant';
+  /** 換 cue 時機關怎麼走：'real'（預設）= 照機器速度；'transition' = 照轉場秒數（管理頁編輯時）；'instant' = 直接到位（分鏡縮圖） */
+  mechanismMotion?: MechanismMotion;
   /** 查舞台：舞台正面方向、一組物件的中心（設定機關用） */
   sceneQueryRef?: React.MutableRefObject<StageSceneQuery | null>;
   /** 管理頁正在看的機關：3D 畫面上畫出它的行程（直線 / 圓弧，常用位置有刻度） */
@@ -918,7 +918,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           mechTimelineActiveRef.current = false;
           tweener.setCurrent(shown, nowTs);
           tweener.retarget(rigNow.mechanisms, mechTargetsRef.current || EMPTY_VALUES, nowTs, {
-            animate: mechMotionRef.current !== 'instant', minSeconds: crossfadeRef.current,
+            animate: mechMotionRef.current !== 'instant', minSeconds: crossfadeRef.current, motion: mechMotionRef.current,
           });
         }
         v = tweener.valuesAt(nowTs);
@@ -1545,7 +1545,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const animate = mechanismMotion !== 'instant' && prev !== UNSET_CUE && cueKey !== prev;
     const now = performance.now();
     mechTweenerRef.current.retarget(rig.mechanisms, mechanismTargets || EMPTY_VALUES, now, {
-      animate, minSeconds: crossfadeSeconds,
+      animate, minSeconds: crossfadeSeconds, motion: mechanismMotion,
     });
     lastMechCueKeyRef.current = cueKey;
     commitPosesRef.current(now, timelineActiveRef.current);
