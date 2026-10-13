@@ -239,6 +239,41 @@ export async function updateProject(id: string, patch: Partial<{ name: string; d
   });
 }
 
+// ─── 專案共用 3D 檢視設定（測距校準倍率 + 機關滑桿）──────
+// 之前存各自瀏覽器 localStorage；現在存在 project 上，所有人共用，只有 admin 能改
+
+export type MechanismOffsets = Record<string, { x: number; y: number }>;
+
+export interface ProjectViewSettings {
+  scaleCorrection: number;
+  mechanismOffsets: MechanismOffsets;
+}
+
+export async function getProjectViewSettings(projectId: string): Promise<ProjectViewSettings> {
+  const data = await http<{ project: { scale_correction?: number; mechanism_offsets?: string } }>(
+    `/api/projects/${encodeURIComponent(projectId)}`
+  );
+  const n = Number(data.project?.scale_correction);
+  let offsets: MechanismOffsets = {};
+  try {
+    const parsed = JSON.parse(data.project?.mechanism_offsets || '{}');
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) offsets = parsed;
+  } catch { /* 壞資料當沒有 */ }
+  return { scaleCorrection: isFinite(n) && n > 0 ? n : 1, mechanismOffsets: offsets };
+}
+
+export async function updateProjectViewSettings(
+  projectId: string,
+  patch: Partial<ProjectViewSettings>,
+  opts?: { keepalive?: boolean },  // 關分頁時最後一次存檔用，瀏覽器才不會中途砍掉
+): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+    keepalive: opts?.keepalive,
+  });
+}
+
 export async function archiveProject(id: string): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' });
 }
@@ -1105,6 +1140,9 @@ export interface SharePublicData {
   songs: { id: string; name: string; order: number; status: string }[];
   stageObjects: StageObject[];
   restrictedToSongId: string | null;
+  /** 舊版 worker 沒有這兩個欄位 → undefined */
+  scaleCorrection?: number;
+  mechanismOffsets?: MechanismOffsets;
 }
 
 /** 公開存取 — 無需 auth，可選 password */

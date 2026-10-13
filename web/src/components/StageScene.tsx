@@ -72,13 +72,17 @@ interface Props {
   bookmarkScope?: string;
   /** 機關 offset：per-objectId 的 X/Y 偏移量，單位「真實公尺」。純視覺加總，不寫回 cue。 */
   mechanismOffsets?: Record<string, { x: number; y: number }>;
+  /** 測距校準倍率（模型 scene units → 真實公尺），存在專案上全員共用；預設 1 = 未校準 */
+  scaleCorrection?: number;
+  /** 有傳才顯示「設為已知距離 / 重設」— 只有 admin 能改校準 */
+  onScaleCorrectionChange?: (n: number) => void;
 }
 
 type RenderMode = 'quick' | 'realistic' | 'cinematic';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -188,19 +192,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const measureLineRef = useRef<THREE.Line | null>(null);
   const [measureDistance, setMeasureDistance] = useState<number | null>(null);
 
-  // 模型 → 真實單位的換算倍率（per project，存 localStorage）
-  // 自動偵測的縮放可能猜錯（例：GLB 是公分 / 毫米 / 英吋）→ 提供校準工具
-  const scaleKey = `scale-correction:${bookmarkScope || 'global'}`;
-  const [scaleCorrection, setScaleCorrection] = useState<number>(() => {
-    try {
-      const v = parseFloat(localStorage.getItem(scaleKey) || '1');
-      return isFinite(v) && v > 0 ? v : 1;
-    } catch { return 1; }
-  });
-  const saveScaleCorrection = (n: number) => {
-    setScaleCorrection(n);
-    try { localStorage.setItem(scaleKey, String(n)); } catch {}
-  };
+  // 模型 → 真實單位的換算倍率：由上層從專案設定傳進來（scaleCorrection prop）
+  // 自動偵測的縮放可能猜錯（例：GLB 是公分 / 毫米 / 英吋）→ 提供校準工具，admin 才能存
+  const canCalibrate = !!onScaleCorrectionChange;
+  const saveScaleCorrection = (n: number) => { onScaleCorrectionChange?.(n); };
   // 校準對話框：開著時 = 等使用者輸入「這兩點實際多少公尺」
   const [calibratePromptOpen, setCalibratePromptOpen] = useState(false);
   const [calibrateInput, setCalibrateInput] = useState('');
@@ -1780,23 +1775,30 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             : (
               <>
                 <span> · <strong className="measure-dist">{(measureDistance * scaleCorrection).toFixed(2)} m</strong>（再點下一點重開）</span>
-                <button
-                  className="btn btn--ghost btn--sm"
-                  style={{ marginLeft: 12 }}
-                  onClick={() => { setCalibrateInput(''); setCalibratePromptOpen(true); }}
-                  title="把剛剛量到的距離設為已知值 → 之後測距都會用這個倍率校準"
-                >🎯 設為已知距離</button>
+                {canCalibrate && (
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    style={{ marginLeft: 12 }}
+                    onClick={() => { setCalibrateInput(''); setCalibratePromptOpen(true); }}
+                    title="把剛剛量到的距離設為已知值 → 全專案的測距 / 比例尺 / 機關滑桿都會用這個倍率（所有人一起）"
+                  >🎯 設為已知距離</button>
+                )}
               </>
             )
           }
           {scaleCorrection !== 1 && (
             <span style={{ marginLeft: 12, opacity: 0.7, fontSize: 12 }}>
-              （目前校準倍率 ×{scaleCorrection.toFixed(2)}{' '}
-              <button
-                className="btn btn--ghost btn--sm"
-                onClick={() => saveScaleCorrection(1)}
-                title="清除校準、回到模型原始尺寸"
-              >重設</button>
+              （目前校準倍率 ×{scaleCorrection.toFixed(2)}
+              {canCalibrate && (
+                <>
+                  {' '}
+                  <button
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => saveScaleCorrection(1)}
+                    title="清除校準、回到模型原始尺寸（所有人一起）"
+                  >重設</button>
+                </>
+              )}
               ）
             </span>
           )}
@@ -1821,7 +1823,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             <h3 style={{ marginTop: 0 }}>校準尺寸</h3>
             <p style={{ fontSize: 14, opacity: 0.8, marginTop: 0 }}>
               剛剛量到的距離是 <strong>{(measureDistance * scaleCorrection).toFixed(3)} m</strong>。
-              它實際應該是幾公尺？輸入後之後所有測距都會用這個倍率換算。
+              它實際應該是幾公尺？輸入後，這個專案所有人的測距、比例尺、機關滑桿都會用這個倍率換算。
             </p>
             <input
               type="number"

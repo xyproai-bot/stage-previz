@@ -17,6 +17,7 @@ import ImportCuesDialog from '../components/ImportCuesDialog';
 import ShareLinksDialog from '../components/ShareLinksDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import { pushRecentProject } from '../components/CommandPalette';
+import { useProjectViewSettings } from '../lib/projectViewSettings';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -80,28 +81,8 @@ export default function ProjectEditor() {
     setSelectedObjectIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   }, []);
 
-  // 機關 offset（per LED panel，公尺）— localStorage 存，per project
-  const mechanismKey = `mechanism-offsets:${projectId || 'global'}`;
-  const [mechanismOffsets, setMechanismOffsets] = useState<Record<string, { x: number; y: number }>>(() => {
-    try {
-      const raw = localStorage.getItem(mechanismKey);
-      if (!raw) return {};
-      const parsed = JSON.parse(raw);
-      return typeof parsed === 'object' && parsed !== null ? parsed : {};
-    } catch { return {}; }
-  });
-  const updateMechanismOffset = useCallback((objId: string, axis: 'x' | 'y', value: number) => {
-    setMechanismOffsets(prev => {
-      const cur = prev[objId] || { x: 0, y: 0 };
-      const next = { ...prev, [objId]: { ...cur, [axis]: value } };
-      try { localStorage.setItem(mechanismKey, JSON.stringify(next)); } catch {}
-      return next;
-    });
-  }, [mechanismKey]);
-  const resetAllMechanismOffsets = useCallback(() => {
-    setMechanismOffsets({});
-    try { localStorage.removeItem(mechanismKey); } catch {}
-  }, [mechanismKey]);
+  // 機關 offset（per LED panel，公尺）+ 測距校準倍率 — 存在專案上，所有人共用，admin 才能改
+  const view = useProjectViewSettings(projectId, user?.role === 'admin');
 
   const [rightTab, setRightTab] = useState<RightTab>('cues');
   const [uploadOpen, setUploadOpen] = useState(false);
@@ -833,15 +814,19 @@ export default function ProjectEditor() {
               modelUrl={modelUrl}
               enableNdi
               bookmarkScope={projectId}
-              mechanismOffsets={mechanismOffsets}
+              mechanismOffsets={view.mechanismOffsets}
+              scaleCorrection={view.scaleCorrection}
+              onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
             />
           )}
-          <MechanismPanel
-            stageObjects={stageObjects}
-            offsets={mechanismOffsets}
-            onChange={updateMechanismOffset}
-            onResetAll={resetAllMechanismOffsets}
-          />
+          {view.canEdit && (
+            <MechanismPanel
+              stageObjects={stageObjects}
+              offsets={view.mechanismOffsets}
+              onChange={view.updateMechanismOffset}
+              onResetAll={view.resetAllMechanismOffsets}
+            />
+          )}
         </section>
 
         {/* Right — Cue panel */}
@@ -1025,6 +1010,8 @@ export default function ProjectEditor() {
                 onReordered={refreshCues}
                 projectName={projectMeta?.name}
                 songName={selectedSong.name}
+                scaleCorrection={view.scaleCorrection}
+                mechanismOffsets={view.mechanismOffsets}
               />
             </div>
           </div>

@@ -185,6 +185,8 @@ export default function Share() {
               readOnly
               defaultRenderMode="cinematic"
               crossfadeSeconds={selectedCue?.crossfadeSeconds ?? 0}
+              scaleCorrection={data.scaleCorrection ?? 1}
+              mechanismOffsets={data.mechanismOffsets}
             />
           ) : (
             <div className="share-empty">這個專案沒有可預覽的內容</div>

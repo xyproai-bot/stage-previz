@@ -314,7 +314,7 @@ async function handleProjects(request, env, projectId, _unused) {
     }
 
     if (request.method === 'GET') return getProject(env, projectId);
-    if (request.method === 'PATCH') return updateProject(request, env, projectId);
+    if (request.method === 'PATCH') return updateProject(request, env, projectId, me);
     if (request.method === 'DELETE') return archiveProject(request, env, projectId);
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
@@ -428,16 +428,34 @@ async function getProject(env, projectId) {
   return jsonResp({ project: row });
 }
 
-async function updateProject(request, env, projectId) {
+async function updateProject(request, env, projectId, me) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
   // tags 是 array → 存成 JSON string
   if ('tags' in body && Array.isArray(body.tags)) {
     body.tags = JSON.stringify(body.tags.filter(t => typeof t === 'string').slice(0, 20));
+  }
+
+  // 3D 檢視設定（校準倍率 / 機關滑桿）— 全專案共用，只有 admin 能改
+  if ('scaleCorrection' in body && !('scale_correction' in body)) body.scale_correction = body.scaleCorrection;
+  if ('mechanismOffsets' in body && !('mechanism_offsets' in body)) body.mechanism_offsets = body.mechanismOffsets;
+  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body;
+  if (touchesViewSettings && me?.role !== 'admin') {
+    return jsonResp({ error: '只有 admin 能改校準 / 機關滑桿' }, 403);
+  }
+  if ('scale_correction' in body) {
+    const n = Number(body.scale_correction);
+    if (!isFinite(n) || n <= 0.0001 || n >= 10000) return jsonResp({ error: 'scale_correction 不合法' }, 400);
+    body.scale_correction = n;
+  }
+  if ('mechanism_offsets' in body) {
+    const clean = sanitizeMechanismOffsets(body.mechanism_offsets);
+    if (!clean) return jsonResp({ error: 'mechanism_offsets 不合法' }, 400);
+    body.mechanism_offsets = JSON.stringify(clean);
   }
   const sets = [], values = [];
   for (const k of allowed) {
@@ -453,8 +471,31 @@ async function updateProject(request, env, projectId) {
   ).bind(...values).run();
 
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
-  await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
+  // 滑桿拖動會一直存，不寫 activity（不然 audit log 會被洗版）
+  const onlyMechanism = sets.length === 1 && 'mechanism_offsets' in body;
+  if (!onlyMechanism) {
+    await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
+  }
   return jsonResp({ ok: true });
+}
+
+// 機關滑桿 offsets：{ [stageObjectId]: { x, y } }（公尺），不合法回 null
+function sanitizeMechanismOffsets(raw) {
+  let obj = raw;
+  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { return null; } }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const entries = Object.entries(obj);
+  if (entries.length > 500) return null;
+  const clamp = (v) => Math.max(-100, Math.min(100, v));
+  const out = {};
+  for (const [id, v] of entries) {
+    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id) || !v || typeof v !== 'object') return null;
+    const x = Number(v.x ?? 0), y = Number(v.y ?? 0);
+    if (!isFinite(x) || !isFinite(y)) return null;
+    if (x === 0 && y === 0) continue; // 0 不用存
+    out[id] = { x: clamp(x), y: clamp(y) };
+  }
+  return out;
 }
 
 // 複製整棵 project（含 stage_objects / songs / cues / cue_states）
@@ -468,7 +509,7 @@ async function duplicateProject(request, env, projectId) {
 
   // 抓原 project
   const src = await env.DB.prepare(
-    `SELECT id, name, description, model_r2_key, show_id FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+    `SELECT id, name, description, model_r2_key, show_id, scale_correction FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
   ).bind(projectId).first();
   if (!src) return jsonResp({ error: 'Source project not found' }, 404);
 
@@ -478,9 +519,9 @@ async function duplicateProject(request, env, projectId) {
 
   // 1. 建新 project
   await env.DB.prepare(
-    `INSERT INTO projects (id, name, description, model_r2_key, show_id, created_by_user_id)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(newId, newName, src.description || '', src.model_r2_key, showId, me.id).run();
+    `INSERT INTO projects (id, name, description, model_r2_key, show_id, created_by_user_id, scale_correction)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  ).bind(newId, newName, src.description || '', src.model_r2_key, showId, me.id, src.scale_correction ?? 1).run();
 
   // 2. 加 admin 進 project_members
   await env.DB.prepare(
@@ -3712,7 +3753,7 @@ async function handleShareRouter(request, env, url, token) {
   if (sub === 'data' && request.method === 'GET') {
     // bundle 給 share viewer：project meta + songs + stage_objects + model
     const proj = await env.DB.prepare(
-      `SELECT id, name, description, model_r2_key FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
     ).bind(link.project_id).first();
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
@@ -3747,6 +3788,8 @@ async function handleShareRouter(request, env, url, token) {
       songs: (songsR.results || []).map(s => ({ id: s.id, name: s.name, order: s.order, status: s.status })),
       stageObjects,
       restrictedToSongId: link.song_id,
+      scaleCorrection: proj.scale_correction ?? 1,
+      mechanismOffsets: safeJsonObj(proj.mechanism_offsets, {}),
     });
   }
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api';
-import type { Cue, CueState, StageObject } from '../lib/api';
+import type { Cue, CueState, MechanismOffsets, StageObject } from '../lib/api';
 import StageScene from './StageScene';
 import { toast } from '../lib/toast';
 import { exportSongStoryboardAsPdf, loadCueThumbs } from '../lib/exportPdf';
@@ -19,6 +19,9 @@ interface Props {
   /** 用於 PDF 匯出檔名 */
   projectName?: string;
   songName?: string;
+  /** 專案共用的校準倍率 + 機關滑桿位移，縮圖跟大家看到的一致 */
+  scaleCorrection?: number;
+  mechanismOffsets?: MechanismOffsets;
 }
 
 const STORAGE_PREFIX = 'sp-cue-thumb:';   // localStorage key prefix（小張縮圖夠存）
@@ -32,7 +35,7 @@ const STORAGE_PREFIX = 'sp-cue-thumb:';   // localStorage key prefix（小張縮
  */
 export default function CueStoryboard({
   projectId, songId, cues, stageObjects, modelUrl, selectedCueId, onSelectCue, onReordered,
-  projectName, songName,
+  projectName, songName, scaleCorrection, mechanismOffsets,
 }: Props) {
   const [orderedCues, setOrderedCues] = useState<Cue[]>(cues);
   useEffect(() => { setOrderedCues(cues); }, [cues]);
@@ -257,6 +260,8 @@ export default function CueStoryboard({
             readOnly
             defaultRenderMode="cinematic"
             snapshotApiRef={snapshotApiRef}
+            scaleCorrection={scaleCorrection}
+            mechanismOffsets={mechanismOffsets}
           />
         </div>
       )}

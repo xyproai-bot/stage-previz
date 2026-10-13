@@ -9,6 +9,7 @@ import VideoTimeline from '../components/VideoTimeline';
 import ActivityDrawer from '../components/ActivityDrawer';
 import { ProjectCardSkeleton, CommentSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
+import { useProjectViewSettings } from '../lib/projectViewSettings';
 import './Preview.css';
 
 type Status = Song['status'];
@@ -482,6 +483,8 @@ function SongDetail({
   members: { id: string; name: string }[];
 }) {
   const canApprove = user?.role === 'director' || user?.role === 'admin';
+  // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，導演這邊只看）
+  const view = useProjectViewSettings(projectId, user?.role === 'admin');
 
   // 在 song list 中找上下首
   const idx = songs.findIndex(s => s.id === song.id);
@@ -610,6 +613,9 @@ function SongDetail({
                   }
                 }}
                 bookmarkScope={projectId}
+                scaleCorrection={view.scaleCorrection}
+                onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+                mechanismOffsets={view.mechanismOffsets}
                 onAddAnchoredComment={(anchor) => {
                   // 上層存暫存的 anchor，留言區會接著用
                   pendingAnchorRef.current = anchor;

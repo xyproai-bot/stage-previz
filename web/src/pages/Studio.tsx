@@ -8,6 +8,7 @@ import StageScene from '../components/StageScene';
 import { ProjectCardSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { markSeen, songUnread } from '../lib/unreadComments';
+import { useProjectViewSettings } from '../lib/projectViewSettings';
 import './Studio.css';
 
 type Tab = 'cues' | 'review' | 'activity';
@@ -109,6 +110,8 @@ function ProjectPicker() {
 function StudioInner({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，動畫師這邊只看）
+  const view = useProjectViewSettings(projectId, user?.role === 'admin');
 
   const [projectName, setProjectName] = useState<string>('');
   const [songs, setSongs] = useState<Song[]>([]);
@@ -470,6 +473,9 @@ function StudioInner({ projectId }: { projectId: string }) {
                   enableNdi
                   crossfadeSeconds={selectedCue?.crossfadeSeconds ?? 0}
                   bookmarkScope={projectId}
+                  scaleCorrection={view.scaleCorrection}
+                  onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+                  mechanismOffsets={view.mechanismOffsets}
                 />
               </div>
               {masterCues.length > 0 && (
