@@ -28,11 +28,29 @@ import {
 import { isTrustedOrigin } from './origins.mjs';
 // 好讀分享網址的規則跟前端共用同一個檔（純判斷，wrangler 打包時會一起編進來）
 import { normalizeSlugInput, slugProblem, slugProblemMessage } from '../web/src/lib/shareSlug.ts';
+// 權限規則（誰在這個專案能做什麼）— 純判斷，access.test.mjs 有測
+import {
+  projectRoleOf, canEditProjectContent, songStatusDecision,
+  describeProjectRoute, roleMeetsNeed, needDeniedMessage, PROJECT_GLOBAL_ADMIN_FIELDS, SONG_CONTENT_FIELDS,
+  parseCommentSession, commentSessionFor, commentAuthorRole, canModifyComment,
+  scrubActivityPayload,
+} from './access.mjs';
+// 每個 cue 時物件在哪裡（管理頁和分享連結共用同一份計算）
+import { buildCueStates } from './cueStates.mjs';
+// 分享連結密碼（加鹽雜湊）+ 通行證
+import {
+  hashSharePassword, verifySharePassword, shareLinkHasPassword, shareCredential,
+  signShareAccess, verifyShareAccess, SHARE_PASSWORD_MAX, timingSafeEqualStr,
+} from './sharePassword.mjs';
+// 留言（D1 一則一列）
+import {
+  sanitizeComment, commentToRow, rowToComment, commentPatch,
+  MAX_COMMENTS_PER_SONG, COMMENT_ID_RE,
+} from './comments.mjs';
 
 const MAX_COMMENTS_PER_SESSION = 500;
-const MAX_TEXT_LEN = 2000;
 const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
-const COMMENT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
+const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 export default {
   async fetch(request, env) {
@@ -115,13 +133,6 @@ async function routeRequest(request, env) {
     const slug = url.pathname.slice('/api/s/'.length).split('/')[0];
     return handleShareRouter(request, env, url, { kind: 'slug', key: slug });
   }
-  if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
-    // 短路：share-links 子路由屬於 admin 管理
-    if (url.pathname.match(/^\/api\/projects\/[^/]+\/share-links/)) {
-      return handleProjectShareLinks(request, env, url);
-    }
-  }
-
   // Drive OAuth & accounts
   if (url.pathname === '/api/drive/oauth/start'    && (request.method === 'GET' || request.method === 'POST')) return driveOAuthStart(request, env, url);
   if (url.pathname === '/api/drive/oauth/callback' && request.method === 'GET')    return driveOAuthCallback(request, env, url);
@@ -147,6 +158,9 @@ async function routeRequest(request, env) {
   }
 
   if (url.pathname === '/api/projects/import' && request.method === 'POST') {
+    const me = await getCurrentUser(request, env);
+    if (!me) return jsonResp({ error: '未登入' }, 401);
+    if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可以匯入專案' }, 403);
     return importProject(request, env);
   }
   if (url.pathname === '/api/projects-archived' && request.method === 'GET') {
@@ -182,180 +196,211 @@ async function routeRequest(request, env) {
 }
 
 // 統一 router：把 /api/projects/* 分派到對應 handler
+//   1. 一定要登入
+//   2. describeProjectRoute（access.mjs）：這個路徑要什麼權限、網址上有哪些 id 要檢查
+//   3. 一次查完：專案在不在、我在這個專案是什麼角色、網址上的歌 / cue / 物件是不是真的屬於這個專案
+//      （不然可以用自己專案的網址去改別人專案的歌）
+//   4. 封存的專案：非 admin 看不到；admin 只能看和還原，不能改
+//
+// 路徑形態：
+//   /api/projects                                             → 列表 / 建立
+//   /api/projects/:id                                         → 單筆（GET / PATCH / DELETE=封存）
+//   /api/projects/:id/stage-objects[/:objId|seed-defaults|bulk]
+//   /api/projects/:id/model[/use-asset|/versions[/activate|/:ts.glb]]
+//   /api/projects/:id/songs[/reorder|/:songId[/import-cues|/cues[/reorder|/:cueId[/reset|/states[/:objId]]]]]
+//   /api/projects/:id/activity | duplicate | restore | export | cue-templates | drive/... | share-links[/:token]
 async function handleProjectsRouter(request, env, url) {
-  // 必須登入
-  const userId = await getRequestUserId(request, env);
-  if (!userId) return jsonResp({ error: '未登入' }, 401);
-
-  const segs = url.pathname.split('/').filter(Boolean);
-  // 路徑形態：
-  //   /api/projects                                            → projects collection
-  //   /api/projects/:id                                        → project item
-  //   /api/projects/:id/stage-objects                          → stage_objects collection
-  //   /api/projects/:id/stage-objects/:objId                   → stage_object item
-  //   /api/projects/:id/stage-objects/seed-defaults            → 一鍵塞範例物件
-  //   /api/projects/:id/songs                                  → songs collection
-  //   /api/projects/:id/songs/:songId                          → song item
-  //   /api/projects/:id/songs/reorder                          → 批次排序
-  //   /api/projects/:id/songs/:songId/cues                     → cues collection
-  //   /api/projects/:id/songs/:songId/cues/:cueId              → cue item
-  //   /api/projects/:id/songs/:songId/cues/:cueId/states       → object states for this cue
-  //   /api/projects/:id/songs/:songId/cues/:cueId/states/:objId → set/clear single state
-
-  const projectId = segs[2] || null;
-  const sub = segs[3] || null;
-  const songId = segs[4] || null;
-  const sub2 = segs[5] || null;
-  const cueId = segs[6] || null;
-  const sub3 = segs[7] || null;
-  const objId = segs[8] || null;
-
-  if (!projectId) {
-    return handleProjects(request, env, null, null);
-  }
-
-  if (sub === 'stage-objects') {
-    // segs[4] is obj id (or 'seed-defaults' magic action)
-    return handleStageObjects(request, env, projectId, segs[4] || null);
-  }
-
-  if (sub === 'model') {
-    // /api/projects/:id/model              → upload (PUT) / get info (GET)
-    // /api/projects/:id/model/versions     → list all versions (GET)
-    // /api/projects/:id/model/versions/activate  → POST {key} 切換 active 版本
-    // /api/projects/:id/model/versions/:keySuffix → DELETE 刪某舊版本
-    return handleModel(request, env, projectId, segs[4] || null, segs[5] || null);
-  }
-
-  if (sub === 'activity') {
-    // /api/projects/:id/activity?limit=50  → 列最近活動
-    if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
-    const limit = url.searchParams.get('limit') || '50';
-    return listActivity(env, projectId, limit);
-  }
-
-  if (sub === 'duplicate') {
-    if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-    return duplicateProject(request, env, projectId);
-  }
-
-  if (sub === 'restore') {
-    if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-    if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可還原' }, 403);
-    await env.DB.prepare(
-      `UPDATE projects SET status = 'active', updated_at = datetime('now') WHERE id = ?`
-    ).bind(projectId).run();
-    await logActivity(request, env, projectId, 'update', 'project', projectId, { restored: true });
-    return jsonResp({ ok: true });
-  }
-
-  if (sub === 'export') {
-    if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
-    return exportProject(request, env, projectId);
-  }
-
-  if (sub === 'cue-templates') {
-    if (request.method === 'GET') return listCueTemplates(env, projectId);
-    if (request.method === 'POST') return createCueTemplate(request, env, projectId);
-    return jsonResp({ error: 'Method not allowed' }, 405);
-  }
-
-  if (sub === 'drive') {
-    // /api/projects/:id/drive/files            GET   → cached files list
-    // /api/projects/:id/drive/sync             POST  → trigger manual sync
-    // /api/projects/:id/drive/files/:fid/assign POST → 手動把檔案歸到某 song
-    // /api/projects/:id/drive/sync-log         GET   → 看同步歷史
-    const sub2v = segs[4] || null;
-    const fid   = segs[5] || null;
-    const sub3v = segs[6] || null;
-    if (sub2v === 'files' && !fid && request.method === 'GET') return driveListProjectFiles(env, projectId);
-    if (sub2v === 'files' && fid && sub3v === 'assign' && request.method === 'POST') return driveAssignFile(request, env, projectId, fid);
-    if (sub2v === 'sync' && request.method === 'POST') return driveSyncProject(request, env, projectId, 'manual');
-    if (sub2v === 'sync-log' && request.method === 'GET') return driveSyncLog(env, projectId);
-    return jsonResp({ error: 'Drive route not found' }, 404);
-  }
-
-  if (sub === 'songs' && sub2 === 'cues' && sub3 === 'states') {
-    return handleCueStates(request, env, projectId, songId, cueId, objId);
-  }
-
-  // /api/projects/:id/songs/:songId/import-cues  POST {fromSongId} → 從別的 song 把 cue 全複製進來
-  if (sub === 'songs' && songId && sub2 === 'import-cues' && request.method === 'POST') {
-    return importCuesFromSong(request, env, projectId, songId);
-  }
-
-  if (sub === 'songs' && sub2 === 'cues') {
-    return handleCues(request, env, projectId, songId, cueId);
-  }
-
-  if (sub === 'songs') {
-    return handleSongs(request, env, projectId, songId);
-  }
-
-  return handleProjects(request, env, projectId, null);
-}
-
-// ─────────────────────────────────────────────
-// Projects API（Phase 1 backend — D1）
-//   GET    /api/projects          → list（含 stats: songCount/cueCount/proposalCount/members）
-//   POST   /api/projects          body: { name, description } → 建專案
-//   GET    /api/projects/:id      → 單筆
-//   PATCH  /api/projects/:id      body: 任何 projects 欄位 → 更新
-//   DELETE /api/projects/:id      → 軟刪除（status=archived）
-// ─────────────────────────────────────────────
-
-const PROJECT_NAME_MAX = 80;
-const PROJECT_DESC_MAX = 300;
-
-async function handleProjects(request, env, projectId, _unused) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
 
+  const segs = url.pathname.split('/').filter(Boolean);
+  const projectId = segs[2] || null;
+
   try {
     if (!projectId) {
-      if (request.method === 'GET') {
-        // 用 URL search params 拿 archived flag — 但 handleProjects 沒拿到 url，找原 caller
-        // 簡化：在 router 層多傳一個 archived flag
-        return listProjects(env, me);
+      if (request.method === 'GET') return await listProjects(env, me);
+      if (request.method === 'POST') {
+        if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可以建立專案' }, 403);
+        return await createProject(request, env, me);
       }
-      if (request.method === 'POST') return createProject(request, env);
       return jsonResp({ error: 'Method not allowed' }, 405);
     }
+    if (!ID_RE.test(projectId)) return jsonResp({ error: 'Invalid project id' }, 400);
 
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) {
-      return jsonResp({ error: 'Invalid project id' }, 400);
+    const route = describeProjectRoute(request.method, segs);
+    if (!route) return jsonResp({ error: 'Not found' }, 404);
+    if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
+    for (const id of [route.songId, route.cueId, route.objId]) {
+      if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
-    // 非 admin 要檢查 project_members
-    if (me.role !== 'admin') {
-      const member = await env.DB.prepare(
-        `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
-      ).bind(projectId, me.id).first();
-      if (!member) return jsonResp({ error: '沒有權限存取此專案' }, 403);
+    const ctx = await loadProjectContext(env, me, projectId, route);
+    if (!ctx.project) return jsonResp({ error: '找不到這個專案' }, 404);
+    if (ctx.archived && me.role !== 'admin') return jsonResp({ error: '找不到這個專案（可能已封存）' }, 404);
+    if (!ctx.role) return jsonResp({ error: '沒有權限存取此專案' }, 403);
+    if (!roleMeetsNeed(route.need, { role: ctx.role, globalRole: me.role })) {
+      return jsonResp({ error: needDeniedMessage(route.need) }, 403);
     }
+    const isRead = request.method === 'GET' || request.method === 'HEAD';
+    if (ctx.archived && !isRead && !route.allowArchived) {
+      return jsonResp({ error: '這個專案已封存，請先還原再修改' }, 409);
+    }
+    if (route.songId && !ctx.song) return jsonResp({ error: '這個專案裡找不到這首歌' }, 404);
+    if (route.cueId && !ctx.cueFound) return jsonResp({ error: '這首歌裡找不到這個 cue' }, 404);
+    if (route.objId && !ctx.objFound) return jsonResp({ error: '這個專案裡找不到這個物件' }, 404);
 
-    if (request.method === 'GET') return getProject(env, projectId);
-    if (request.method === 'PATCH') return updateProject(request, env, projectId, me);
-    if (request.method === 'DELETE') return archiveProject(request, env, projectId);
-    return jsonResp({ error: 'Method not allowed' }, 405);
+    return await dispatchProjectRoute(request, env, url, ctx, route, segs);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
   }
 }
+
+// 專案 + 我的角色 + 網址上的歌 / cue / 物件屬不屬於這個專案（一次往返）
+async function loadProjectContext(env, me, projectId, route) {
+  const stmts = [
+    env.DB.prepare(
+      `SELECT p.id, p.name, p.status, pm.role AS member_role
+         FROM projects p
+         LEFT JOIN project_members pm ON pm.project_id = p.id AND pm.user_id = ?
+        WHERE p.id = ? LIMIT 1`
+    ).bind(me.id, projectId),
+  ];
+  const at = {};
+  if (route.songId) {
+    at.song = stmts.length;
+    stmts.push(env.DB.prepare(
+      `SELECT id, name, status, animator_user_id FROM songs WHERE id = ? AND project_id = ? LIMIT 1`
+    ).bind(route.songId, projectId));
+  }
+  if (route.cueId) {
+    at.cue = stmts.length;
+    stmts.push(env.DB.prepare(
+      `SELECT c.id FROM cues c JOIN songs s ON s.id = c.song_id
+        WHERE c.id = ? AND c.song_id = ? AND s.project_id = ? LIMIT 1`
+    ).bind(route.cueId, route.songId, projectId));
+  }
+  if (route.objId) {
+    at.obj = stmts.length;
+    stmts.push(env.DB.prepare(
+      `SELECT id FROM stage_objects WHERE id = ? AND project_id = ? LIMIT 1`
+    ).bind(route.objId, projectId));
+  }
+  const results = stmts.length === 1 ? [await stmts[0].all()] : await env.DB.batch(stmts);
+  const first = (i) => (i === undefined ? null : ((results[i]?.results || [])[0] || null));
+  const project = first(0);
+  return {
+    me,
+    projectId,
+    project,
+    role: project ? projectRoleOf(me.role, project.member_role) : null,
+    archived: project?.status === 'archived',
+    song: first(at.song),
+    cueFound: !!first(at.cue),
+    objFound: !!first(at.obj),
+  };
+}
+
+async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
+  const { projectId } = ctx;
+  const { songId, cueId, objId } = route;
+  switch (route.kind) {
+    case 'project.get':           return getProject(env, ctx);
+    case 'project.patch':         return updateProject(request, env, ctx);
+    case 'project.archive':       return archiveProject(request, env, projectId);
+    case 'shareLinks':
+    case 'shareLinks.item':       return handleProjectShareLinks(request, env, ctx, segs[4] || null);
+
+    case 'stageObjects.list':     return listStageObjects(env, projectId);
+    case 'stageObjects.create':   return createStageObject(request, env, projectId);
+    case 'stageObjects.seed-defaults': return seedDefaultStageObjects(request, env, projectId);
+    case 'stageObjects.bulk':     return bulkCreateStageObjects(request, env, projectId);
+    case 'stageObjects.item':
+      return request.method === 'PATCH'
+        ? updateStageObject(request, env, projectId, objId)
+        : deleteStageObject(request, env, projectId, objId);
+
+    case 'model.get':
+    case 'model.upload':          return handleModel(request, env, projectId);
+    case 'model.useAsset':        return useSharedAssetForProject(request, env, projectId);
+    case 'model.versions':        return listModelVersions(env, projectId);
+    case 'model.activate':        return activateModelVersion(request, env, projectId);
+    case 'model.deleteVersion':   return deleteModelVersion(request, env, projectId, segs[5]);
+
+    case 'activity':              return listActivity(env, projectId, url.searchParams.get('limit') || '50');
+    case 'duplicate':             return duplicateProject(request, env, projectId);
+    case 'restore':               return restoreProject(request, env, projectId);
+    case 'export':                return exportProject(request, env, projectId);
+    case 'cueTemplates.list':     return listCueTemplates(env, projectId);
+    case 'cueTemplates.create':   return createCueTemplate(request, env, ctx);
+
+    case 'drive.files':           return driveListProjectFiles(env, projectId);
+    case 'drive.assign':          return driveAssignFile(request, env, projectId, segs[5]);
+    case 'drive.sync':            return driveSyncProject(request, env, projectId, 'manual');
+    case 'drive.syncLog':         return driveSyncLog(env, projectId);
+
+    case 'songs.list':            return listSongs(env, projectId);
+    case 'songs.create':          return createSong(request, env, projectId);
+    case 'songs.reorder':         return reorderSongs(request, env, projectId);
+    case 'songs.get':             return getSong(env, projectId, songId);
+    case 'songs.patch':           return updateSong(request, env, ctx, songId);
+    case 'songs.delete':          return deleteSong(request, env, projectId, songId);
+    case 'songs.importCues':      return importCuesFromSong(request, env, projectId, songId);
+
+    case 'cues.list':             return listCues(env, songId);
+    case 'cues.create':           return createCue(request, env, projectId, songId);
+    case 'cues.reorder':          return reorderCues(request, env, projectId, songId);
+    case 'cues.get':              return getCue(env, songId, cueId);
+    case 'cues.patch':            return updateCue(request, env, projectId, songId, cueId);
+    case 'cues.delete':           return deleteCue(request, env, projectId, songId, cueId);
+    case 'cues.reset':            return resetCue(request, env, projectId, cueId);
+
+    case 'states.list':           return listCueStates(env, projectId, cueId);
+    case 'states.item':
+      return request.method === 'PUT'
+        ? upsertCueState(request, env, cueId, objId)
+        : deleteCueState(request, env, projectId, cueId, objId);
+    default:
+      return jsonResp({ error: 'Not found' }, 404);
+  }
+}
+
+// 還原封存的專案（只有全站 admin；router 已檢查）
+async function restoreProject(request, env, projectId) {
+  const r = await env.DB.prepare(
+    `UPDATE projects SET status = 'active', updated_at = datetime('now') WHERE id = ? AND status = 'archived'`
+  ).bind(projectId).run();
+  if (r.meta.changes) {
+    await logActivity(request, env, projectId, 'update', 'project', projectId, { restored: true });
+  }
+  return jsonResp({ ok: true, restored: !!r.meta.changes });
+}
+
+// ─────────────────────────────────────────────
+// Projects API（Phase 1 backend — D1）
+//   GET    /api/projects          → list（含 stats: songCount/cueCount/proposalCount/members、myRole）
+//   POST   /api/projects          body: { name, description } → 建專案（只有 admin）
+//   GET    /api/projects/:id      → 單筆（含 myRole：我在這個專案的角色）
+//   PATCH  /api/projects/:id      body: 專案欄位 → 更新（一般欄位要專案 admin；Drive / 狀態 / 3D 檢視設定要全站 admin）
+//   DELETE /api/projects/:id      → 封存（status=archived，只有 admin）
+// ─────────────────────────────────────────────
+
+const PROJECT_NAME_MAX = 80;
+const PROJECT_DESC_MAX = 300;
 
 async function listProjects(env, me, opts = {}) {
   // admin 看全部，其他 role 只看自己被加進 project_members 的 project
   const memberFilter = me?.role === 'admin'
     ? ''
     : ` AND p.id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = ?)`;
-  const binds = me?.role === 'admin' ? [] : [me.id];
+  const binds = me?.role === 'admin' ? [me.id] : [me.id, me.id];
   const archivedFilter = opts.archived ? `p.status = 'archived'` : `p.status != 'archived'`;
 
   const projects = await env.DB.prepare(`
     SELECT
       p.id, p.name, p.description, p.thumbnail_r2_key, p.status, p.show_id, p.tags,
       p.created_at, p.updated_at,
+      (SELECT pm.role FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?) AS my_member_role,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id) AS song_count,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'todo') AS songs_todo,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'in_review') AS songs_in_review,
@@ -374,7 +419,7 @@ async function listProjects(env, me, opts = {}) {
 
   // 撈所有成員一次（避免 N+1）
   const members = await env.DB.prepare(`
-    SELECT pm.project_id, u.id, u.name, u.avatar_color
+    SELECT pm.project_id, pm.role, u.id, u.name, u.avatar_color
     FROM project_members pm
     JOIN users u ON pm.user_id = u.id
   `).all();
@@ -382,7 +427,7 @@ async function listProjects(env, me, opts = {}) {
   const membersByProject = {};
   for (const m of members.results || []) {
     (membersByProject[m.project_id] = membersByProject[m.project_id] || []).push({
-      id: m.id, name: m.name, avatarColor: m.avatar_color
+      id: m.id, name: m.name, avatarColor: m.avatar_color, role: m.role,
     });
   }
 
@@ -407,15 +452,14 @@ async function listProjects(env, me, opts = {}) {
     updatedAt: p.updated_at,
     createdAt: p.created_at,
     members: membersByProject[p.id] || [],
+    // 我在這個專案的角色（審查按鈕要看這個，不是帳號的預設角色）
+    myRole: projectRoleOf(me?.role, p.my_member_role),
   }));
 
   return jsonResp({ projects: list });
 }
 
-async function createProject(request, env) {
-  const me = await getCurrentUser(request, env);
-  if (!me) return jsonResp({ error: '未登入' }, 401);
-
+async function createProject(request, env, me) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
@@ -423,7 +467,11 @@ async function createProject(request, env) {
   const description = (body?.description || '').toString().trim().slice(0, PROJECT_DESC_MAX);
   if (!name) return jsonResp({ error: 'name is required' }, 400);
 
-  const showId = body?.showId && /^[a-zA-Z0-9_-]{1,64}$/.test(body.showId) ? body.showId : null;
+  let showId = body?.showId && ID_RE.test(body.showId) ? body.showId : null;
+  if (showId) {
+    const sh = await env.DB.prepare(`SELECT id FROM shows WHERE id = ? LIMIT 1`).bind(showId).first();
+    if (!sh) return jsonResp({ error: '找不到這個 Show' }, 400);
+  }
 
   const id = 'p_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
@@ -442,17 +490,18 @@ async function createProject(request, env) {
   return jsonResp({ ok: true, id }, 201);
 }
 
-async function getProject(env, projectId) {
-  const row = await env.DB.prepare(`
-    SELECT * FROM projects WHERE id = ? AND status != 'archived' LIMIT 1
-  `).bind(projectId).first();
+// 單筆（封存的只有 admin 拿得到，router 已擋）
+async function getProject(env, ctx) {
+  const row = await env.DB.prepare(`SELECT * FROM projects WHERE id = ? LIMIT 1`).bind(ctx.projectId).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
-  return jsonResp({ project: row });
+  return jsonResp({ project: row, myRole: ctx.role });
 }
 
-async function updateProject(request, env, projectId, me) {
+async function updateProject(request, env, ctx) {
+  const { me, projectId } = ctx;
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
 
   const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets', 'look_settings', 'material_overrides', 'home_view', 'led_canvas'];
   // 前端 camelCase showId 轉 snake_case show_id
@@ -472,6 +521,53 @@ async function updateProject(request, env, projectId, me) {
   const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body || 'material_overrides' in body || 'home_view' in body || 'led_canvas' in body;
   if (touchesViewSettings && me?.role !== 'admin') {
     return jsonResp({ error: '只有 admin 能改 3D 檢視設定（校準 / 機關滑桿 / 現場設定 / 材質 / 重置視角 / AE 畫布尺寸）' }, 403);
+  }
+  // Drive 綁定（用哪個 Google 帳號、哪個資料夾）和專案狀態 — 只有全站 admin
+  // （不然專案成員可以把專案指到 admin 的 Google 帳號，讀到別的資料夾）
+  if (['drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id'].some(k => k in body) && me?.role !== 'admin') {
+    return jsonResp({ error: '只有 admin 可以設定 Drive 來源' }, 403);
+  }
+  if ('status' in body && me?.role !== 'admin') {
+    return jsonResp({ error: '只有 admin 可以改專案狀態' }, 403);
+  }
+  if (PROJECT_GLOBAL_ADMIN_FIELDS.some(k => k in body) && me?.role !== 'admin') {
+    return jsonResp({ error: '只有 admin 可以改這個設定' }, 403);
+  }
+  if ('name' in body) {
+    body.name = (body.name ?? '').toString().trim().slice(0, PROJECT_NAME_MAX);
+    if (!body.name) return jsonResp({ error: '專案名稱不能是空的' }, 400);
+  }
+  if ('description' in body) body.description = (body.description ?? '').toString().trim().slice(0, PROJECT_DESC_MAX);
+  if ('status' in body && !['active', 'in_review', 'archived'].includes(body.status)) {
+    return jsonResp({ error: '專案狀態不正確' }, 400);
+  }
+  if ('tags' in body && typeof body.tags !== 'string') return jsonResp({ error: 'tags 不合法' }, 400);
+  if ('show_id' in body) {
+    if (body.show_id === null || body.show_id === '') body.show_id = null;
+    else {
+      if (typeof body.show_id !== 'string' || !ID_RE.test(body.show_id)) return jsonResp({ error: 'show_id 不合法' }, 400);
+      const sh = await env.DB.prepare(`SELECT id FROM shows WHERE id = ? LIMIT 1`).bind(body.show_id).first();
+      if (!sh) return jsonResp({ error: '找不到這個 Show' }, 400);
+    }
+  }
+  if ('drive_oauth_token_id' in body) {
+    if (body.drive_oauth_token_id === null || body.drive_oauth_token_id === '') body.drive_oauth_token_id = null;
+    else {
+      if (typeof body.drive_oauth_token_id !== 'string' || !ID_RE.test(body.drive_oauth_token_id)) return jsonResp({ error: 'Google 帳號不合法' }, 400);
+      const tk = await env.DB.prepare(`SELECT id FROM oauth_tokens WHERE id = ? LIMIT 1`).bind(body.drive_oauth_token_id).first();
+      if (!tk) return jsonResp({ error: '找不到這個 Google 帳號' }, 400);
+    }
+  }
+  if ('drive_folder_id' in body) {
+    if (body.drive_folder_id === null || body.drive_folder_id === '') body.drive_folder_id = null;
+    else if (typeof body.drive_folder_id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(body.drive_folder_id)) {
+      return jsonResp({ error: 'Drive 資料夾 id 不合法' }, 400);
+    }
+  }
+  if ('drive_filename_pattern' in body) {
+    const pat = body.drive_filename_pattern;
+    if (typeof pat !== 'string' || !pat || pat.length > 200) return jsonResp({ error: '檔名規則不合法' }, 400);
+    try { new RegExp(pat); } catch { return jsonResp({ error: '檔名規則不是有效的正規表示式' }, 400); }
   }
   if ('scale_correction' in body) {
     const n = Number(body.scale_correction);
@@ -727,10 +823,10 @@ async function duplicateProject(request, env, projectId) {
     const newBaseCueId = c.base_cue_id ? cueIdMap.get(c.base_cue_id) || null : null;
     cueStmts.push(env.DB.prepare(`
       INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds,
-                        status, base_cue_id, thumbnail_r2_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        video_time_sec, status, base_cue_id, thumbnail_r2_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(newCueId, newSongId, c.name, c.order, c.position_xyz, c.rotation_xyz, c.fov, c.crossfade_seconds,
-            c.status, newBaseCueId, c.thumbnail_r2_key));
+            c.video_time_sec ?? null, c.status, newBaseCueId, c.thumbnail_r2_key));
   }
   if (cueStmts.length > 0) await env.DB.batch(cueStmts);
 
@@ -799,9 +895,8 @@ async function listCueTemplates(env, projectId) {
   });
 }
 
-async function createCueTemplate(request, env, projectId) {
-  const me = await getCurrentUser(request, env);
-  if (!me) return jsonResp({ error: '未登入' }, 401);
+async function createCueTemplate(request, env, ctx) {
+  const { me, projectId } = ctx;
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   const name = (body?.name || '').toString().trim().slice(0, 80);
@@ -810,11 +905,13 @@ async function createCueTemplate(request, env, projectId) {
   const isGlobal = !!body?.global;
   if (!name) return jsonResp({ error: 'name 必填' }, 400);
   if (!fromCueId) return jsonResp({ error: '需要來源 cue id' }, 400);
+  // 全域模板（每個專案都看得到）只有全站 admin 能建
+  if (isGlobal && me.role !== 'admin') return jsonResp({ error: '只有 admin 可以建立全域模板' }, 403);
 
-  // 抓 cue 跟所有 cue_object_states + 對應 stage_objects 的 mesh_name
+  // 來源 cue 一定要是這個專案的（不然可以把別人專案的 cue 抄出來）
   const cue = await env.DB.prepare(
-    `SELECT * FROM cues WHERE id = ? LIMIT 1`
-  ).bind(fromCueId).first();
+    `SELECT c.* FROM cues c JOIN songs s ON s.id = c.song_id WHERE c.id = ? AND s.project_id = ? LIMIT 1`
+  ).bind(fromCueId, projectId).first();
   if (!cue) return jsonResp({ error: 'Source cue not found' }, 404);
   const states = await env.DB.prepare(`
     SELECT cos.position, cos.rotation, cos.scale, o.mesh_name
@@ -974,7 +1071,8 @@ async function importProject(request, env) {
   const newId = 'p_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
   // model_r2_key 預設保留（指向同一個 R2，跨 D1 匯入時可能 broken link，user 自己重 upload）
-  const modelKey = body.project.modelR2Key || null;
+  const rawKey = typeof body.project.modelR2Key === 'string' ? body.project.modelR2Key : '';
+  const modelKey = /^(models|assets)\/[a-zA-Z0-9_\/.-]{1,200}$/.test(rawKey) && !rawKey.includes('..') ? rawKey : null;
 
   await env.DB.prepare(
     `INSERT INTO projects (id, name, description, model_r2_key, created_by_user_id)
@@ -1023,10 +1121,12 @@ async function importProject(request, env) {
     const newSongId = songIdMap.get(c.song_id);
     if (!newSongId) continue;
     cueStmts.push(env.DB.prepare(`
-      INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds, video_time_sec, status)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(newCueId, newSongId, c.name, c.order, c.position_xyz, c.rotation_xyz,
-            c.fov, c.crossfade_seconds, c.status || 'master'));
+            c.fov, typeof c.crossfade_seconds === 'number' ? c.crossfade_seconds : DEFAULT_CUE_CROSSFADE_SECONDS,
+            typeof c.video_time_sec === 'number' && isFinite(c.video_time_sec) && c.video_time_sec >= 0 ? c.video_time_sec : null,
+            ['master', 'proposal', 'alternate'].includes(c.status) ? c.status : 'master'));
   }
   if (cueStmts.length > 0) await env.DB.batch(cueStmts);
 
@@ -1087,39 +1187,52 @@ const SHOW_DESC_MAX = 300;
 
 async function handleShowsRouter(request, env, url) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
-  const userId = await getRequestUserId(request, env);
-  if (!userId) return jsonResp({ error: '未登入' }, 401);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
   const segs = url.pathname.split('/').filter(Boolean);
   const showId = segs[2] || null;
+  const isRead = request.method === 'GET' || request.method === 'HEAD';
+  // 建立 / 改 / 刪 Show 只有 admin；其他人只看得到「有自己專案在裡面」的 Show
+  if (!isRead && me.role !== 'admin') return jsonResp({ error: '只有 admin 可以管理 Show' }, 403);
 
   try {
     if (!showId) {
-      if (request.method === 'GET') return listShows(env);
-      if (request.method === 'POST') return createShow(request, env);
+      if (request.method === 'GET') return await listShows(env, me);
+      if (request.method === 'POST') return await createShow(request, env);
       return jsonResp({ error: 'Method not allowed' }, 405);
     }
     if (!/^[a-zA-Z0-9_-]{1,64}$/.test(showId)) return jsonResp({ error: 'Invalid show id' }, 400);
-    if (request.method === 'GET') return getShow(env, showId);
-    if (request.method === 'PATCH') return updateShow(request, env, showId);
-    if (request.method === 'DELETE') return deleteShow(env, showId);
+    if (request.method === 'GET') return await getShow(env, showId, me);
+    if (request.method === 'PATCH') return await updateShow(request, env, showId);
+    if (request.method === 'DELETE') return await deleteShow(env, showId);
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
     return jsonResp({ error: e.message }, 500);
   }
 }
 
-async function listShows(env) {
+// 非 admin：只算自己是成員的專案
+function showMemberFilter(me, alias = 'p') {
+  return me?.role === 'admin'
+    ? { sql: '', binds: [] }
+    : { sql: ` AND ${alias}.id IN (SELECT pm.project_id FROM project_members pm WHERE pm.user_id = ?)`, binds: [me.id] };
+}
+
+async function listShows(env, me) {
+  const f = showMemberFilter(me);
   const rows = await env.DB.prepare(`
     SELECT s.id, s.name, s.description, s.created_at, s.updated_at,
-           (SELECT COUNT(*) FROM projects p WHERE p.show_id = s.id AND p.status != 'archived') AS project_count
+           (SELECT COUNT(*) FROM projects p WHERE p.show_id = s.id AND p.status != 'archived'${f.sql}) AS project_count
     FROM shows s
     ORDER BY s.updated_at DESC
-  `).all();
-  const list = (rows.results || []).map(s => ({
-    id: s.id, name: s.name, description: s.description,
-    projectCount: s.project_count,
-    createdAt: s.created_at, updatedAt: s.updated_at,
-  }));
+  `).bind(...f.binds).all();
+  const list = (rows.results || [])
+    .filter(s => me?.role === 'admin' || s.project_count > 0)
+    .map(s => ({
+      id: s.id, name: s.name, description: s.description,
+      projectCount: s.project_count,
+      createdAt: s.created_at, updatedAt: s.updated_at,
+    }));
   return jsonResp({ shows: list });
 }
 
@@ -1137,17 +1250,20 @@ async function createShow(request, env) {
   return jsonResp({ ok: true, id }, 201);
 }
 
-async function getShow(env, showId) {
+async function getShow(env, showId, me) {
   const show = await env.DB.prepare(
     `SELECT id, name, description, created_at, updated_at FROM shows WHERE id = ? LIMIT 1`
   ).bind(showId).first();
   if (!show) return jsonResp({ error: 'Not found' }, 404);
 
+  const f = showMemberFilter(me, 'projects');
   const projects = await env.DB.prepare(`
     SELECT id, name FROM projects
-    WHERE show_id = ? AND status != 'archived'
+    WHERE show_id = ? AND status != 'archived'${f.sql}
     ORDER BY updated_at DESC
-  `).bind(showId).all();
+  `).bind(showId, ...f.binds).all();
+  // 非 admin 看不到「裡面沒有自己專案」的 Show
+  if (me?.role !== 'admin' && !(projects.results || []).length) return jsonResp({ error: 'Not found' }, 404);
 
   return jsonResp({
     show: {
@@ -1204,33 +1320,6 @@ async function deleteShow(env, showId) {
 
 const SONG_NAME_MAX = 80;
 
-async function handleSongs(request, env, projectId, songId) {
-  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid project id' }, 400);
-
-  try {
-    if (!songId) {
-      if (request.method === 'GET') return listSongs(env, projectId);
-      if (request.method === 'POST') return createSong(request, env, projectId);
-      return jsonResp({ error: 'Method not allowed' }, 405);
-    }
-
-    if (songId === 'reorder') {
-      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return reorderSongs(request, env, projectId);
-    }
-
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(songId)) return jsonResp({ error: 'Invalid song id' }, 400);
-
-    if (request.method === 'GET') return getSong(env, songId);
-    if (request.method === 'PATCH') return updateSong(request, env, projectId, songId);
-    if (request.method === 'DELETE') return deleteSong(request, env, projectId, songId);
-    return jsonResp({ error: 'Method not allowed' }, 405);
-  } catch (e) {
-    return jsonResp({ error: e.message }, 500);
-  }
-}
-
 async function listSongs(env, projectId) {
   const r = await env.DB.prepare(`
     SELECT s.id, s.name, s."order", s.animator_user_id, s.status, s.created_at,
@@ -1272,47 +1361,105 @@ async function createSong(request, env, projectId) {
   return jsonResp({ ok: true, id, order }, 201);
 }
 
-async function getSong(env, songId) {
-  const row = await env.DB.prepare(`SELECT * FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
+async function getSong(env, projectId, songId) {
+  const row = await env.DB.prepare(`SELECT * FROM songs WHERE id = ? AND project_id = ? LIMIT 1`).bind(songId, projectId).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp({ song: row });
 }
 
-async function updateSong(request, env, projectId, songId) {
+// 改歌：
+//   只改狀態 → 照 songStatusDecision 的規則（動畫師提交 / 撤回、導演通過 / 需修改、admin 都可以）
+//     前端可以帶 expectedStatus（它以為的目前狀態）；跟資料庫不一樣就回 409，不會蓋掉別人剛做的決定
+//   改歌名 / 順序 / 指派 / Drive 資料夾 → 專案 admin
+async function updateSong(request, env, ctx, songId) {
+  const { me, projectId, role } = ctx;
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
 
-  // 抓更動前狀態做 diff
-  const before = await env.DB.prepare(`SELECT name, status FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
+  const before = ctx.song;  // router 已經確認這首歌屬於這個專案
 
-  const allowed = ['name', 'order', 'status', 'animator_user_id', 'drive_folder_id'];
+  const touchesContent = SONG_CONTENT_FIELDS.some(k => k in body);
+  if (touchesContent && !canEditProjectContent(role)) {
+    return jsonResp({ error: '只有 admin 可以改歌名、順序、指派或 Drive 資料夾' }, 403);
+  }
+
   const sets = [], values = [];
-  for (const k of allowed) {
-    if (k in body) {
-      sets.push(k === 'order' ? `"order" = ?` : `${k} = ?`);
-      values.push(body[k]);
+  if ('name' in body) {
+    const name = (body.name ?? '').toString().trim().slice(0, SONG_NAME_MAX);
+    if (!name) return jsonResp({ error: '歌名不能是空的' }, 400);
+    sets.push('name = ?'); values.push(name);
+  }
+  if ('order' in body) {
+    const n = Number(body.order);
+    if (!Number.isInteger(n) || n < 0 || n > 100000) return jsonResp({ error: '順序不合法' }, 400);
+    sets.push('"order" = ?'); values.push(n);
+  }
+  if ('animator_user_id' in body) {
+    const uid = body.animator_user_id;
+    if (uid === null || uid === '') { sets.push('animator_user_id = ?'); values.push(null); }
+    else {
+      if (typeof uid !== 'string' || !ID_RE.test(uid)) return jsonResp({ error: '指派的動畫師不合法' }, 400);
+      const u = await env.DB.prepare(`SELECT id FROM users WHERE id = ? LIMIT 1`).bind(uid).first();
+      if (!u) return jsonResp({ error: '找不到這位動畫師' }, 400);
+      sets.push('animator_user_id = ?'); values.push(uid);
     }
   }
-  if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
-  values.push(songId);
+  if ('drive_folder_id' in body) {
+    const f = body.drive_folder_id;
+    if (f !== null && f !== '' && (typeof f !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(f))) {
+      return jsonResp({ error: 'Drive 資料夾 id 不合法' }, 400);
+    }
+    sets.push('drive_folder_id = ?'); values.push(f || null);
+  }
 
-  const result = await env.DB.prepare(
-    `UPDATE songs SET ${sets.join(', ')} WHERE id = ?`
-  ).bind(...values).run();
-  if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  let statusChange = null;
+  if ('status' in body) {
+    const d = songStatusDecision({
+      role, userId: me.id, song: before, to: body.status,
+      expected: 'expectedStatus' in body ? body.expectedStatus : undefined,
+    });
+    if (!d.ok) {
+      return jsonResp({ error: d.error, ...(d.currentStatus ? { currentStatus: d.currentStatus } : {}) }, d.status);
+    }
+    if (!d.noop) {
+      sets.push('status = ?'); values.push(body.status);
+      statusChange = { from: before.status, to: body.status };
+    }
+  }
 
+  if (!sets.length) {
+    if ('status' in body) return jsonResp({ ok: true, status: before.status, unchanged: true });
+    return jsonResp({ error: 'no updatable fields' }, 400);
+  }
+
+  // 改狀態時加上「狀態還是剛剛讀到的那個」→ 兩個人同時按，只有先到的算數
+  const where = statusChange ? 'id = ? AND project_id = ? AND status = ?' : 'id = ? AND project_id = ?';
+  values.push(songId, projectId);
+  if (statusChange) values.push(statusChange.from);
+  const result = await env.DB.prepare(`UPDATE songs SET ${sets.join(', ')} WHERE ${where}`).bind(...values).run();
+  if (!result.meta.changes) {
+    if (statusChange) {
+      const now = await env.DB.prepare(`SELECT status FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
+      return jsonResp({ error: '這首歌的狀態剛剛被別人改了，請重新整理後再操作', currentStatus: now?.status ?? null }, 409);
+    }
+    return jsonResp({ error: 'Not found' }, 404);
+  }
+
+  const changes = {};
+  for (const k of [...SONG_CONTENT_FIELDS, 'status']) if (k in body) changes[k] = body[k];
   await logActivity(request, env, projectId, 'update', 'song', songId, {
     name: before?.name,
-    changes: body,
-    statusFrom: before?.status,
-    statusTo: 'status' in body ? body.status : undefined,
+    changes,
+    statusFrom: statusChange ? statusChange.from : undefined,
+    statusTo: statusChange ? statusChange.to : undefined,
   });
-  return jsonResp({ ok: true });
+  return jsonResp({ ok: true, ...(statusChange ? { status: statusChange.to } : {}) });
 }
 
 async function deleteSong(request, env, projectId, songId) {
-  const before = await env.DB.prepare(`SELECT name FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
-  const result = await env.DB.prepare(`DELETE FROM songs WHERE id = ?`).bind(songId).run();
+  const before = await env.DB.prepare(`SELECT name FROM songs WHERE id = ? AND project_id = ? LIMIT 1`).bind(songId, projectId).first();
+  const result = await env.DB.prepare(`DELETE FROM songs WHERE id = ? AND project_id = ?`).bind(songId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   await logActivity(request, env, projectId, 'delete', 'song', songId, { name: before?.name });
   return jsonResp({ ok: true });
@@ -1342,41 +1489,8 @@ async function reorderSongs(request, env, projectId) {
 // ─────────────────────────────────────────────
 
 const CUE_NAME_MAX = 100;
-
-async function handleCues(request, env, projectId, songId, cueId) {
-  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(songId)) return jsonResp({ error: 'Invalid song id' }, 400);
-
-  try {
-    if (!cueId) {
-      if (request.method === 'GET') return listCues(env, songId);
-      if (request.method === 'POST') return createCue(request, env, projectId, songId);
-      return jsonResp({ error: 'Method not allowed' }, 405);
-    }
-
-    // 特殊 action：cues/reorder
-    if (cueId === 'reorder') {
-      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return reorderCues(request, env, projectId, songId);
-    }
-
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cueId)) return jsonResp({ error: 'Invalid cue id' }, 400);
-
-    // /cues/:id/reset
-    const segs = new URL(request.url).pathname.split('/').filter(Boolean);
-    if (segs[7] === 'reset') {
-      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return resetCue(request, env, projectId, cueId);
-    }
-
-    if (request.method === 'GET') return getCue(env, cueId);
-    if (request.method === 'PATCH') return updateCue(request, env, projectId, cueId);
-    if (request.method === 'DELETE') return deleteCue(request, env, projectId, cueId);
-    return jsonResp({ error: 'Method not allowed' }, 405);
-  } catch (e) {
-    return jsonResp({ error: e.message }, 500);
-  }
-}
+// 新 cue 沒指定淡入淡出時用 1 秒（0 = 硬切）。要跟前端 NEW_CUE_CROSSFADE_SECONDS 一致
+const DEFAULT_CUE_CROSSFADE_SECONDS = 1;
 
 // 從另一首歌（同 project 或跨 project）把所有 master cue + cue_object_states 複製進此 song
 // 物件 id 用 mesh_name 對應（兩邊 mesh_name 相同就 map）— 避免硬綁 stage_object id
@@ -1392,10 +1506,11 @@ async function importCuesFromSong(request, env, targetProjectId, targetSongId) {
 
   // 驗 source song 存在 + 用戶有權限存取它的 project
   const srcSong = await env.DB.prepare(
-    `SELECT id, project_id FROM songs WHERE id = ? LIMIT 1`
+    `SELECT s.id, s.project_id, p.status AS project_status FROM songs s JOIN projects p ON p.id = s.project_id WHERE s.id = ? LIMIT 1`
   ).bind(fromSongId).first();
   if (!srcSong) return jsonResp({ error: 'Source song not found' }, 404);
   if (me.role !== 'admin') {
+    if (srcSong.project_status === 'archived') return jsonResp({ error: 'Source song not found' }, 404);
     const m = await env.DB.prepare(
       `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
     ).bind(srcSong.project_id, me.id).first();
@@ -1516,10 +1631,35 @@ async function createCue(request, env, projectId, songId) {
   const name = (body?.name || '').toString().trim().slice(0, CUE_NAME_MAX);
   if (!name) return jsonResp({ error: 'name is required' }, 400);
 
+  // 複製來源 / 模板 / 物件都一定要是這個專案的（不然可以把別人專案的資料抄進來）
+  let cloneSrc = null;
+  if (body?.cloneFrom) {
+    if (typeof body.cloneFrom !== 'string' || !ID_RE.test(body.cloneFrom)) return jsonResp({ error: '來源 cue 不合法' }, 400);
+    cloneSrc = await env.DB.prepare(
+      `SELECT c.id, c.crossfade_seconds FROM cues c JOIN songs s ON s.id = c.song_id WHERE c.id = ? AND s.project_id = ? LIMIT 1`
+    ).bind(body.cloneFrom, projectId).first();
+    if (!cloneSrc) return jsonResp({ error: '這個專案裡找不到來源 cue' }, 404);
+  } else if (body?.fromTemplateId) {
+    if (typeof body.fromTemplateId !== 'string' || !ID_RE.test(body.fromTemplateId)) return jsonResp({ error: '模板不合法' }, 400);
+    const tplOk = await env.DB.prepare(
+      `SELECT id FROM cue_templates WHERE id = ? AND (project_id IS NULL OR project_id = ?) LIMIT 1`
+    ).bind(body.fromTemplateId, projectId).first();
+    if (!tplOk) return jsonResp({ error: '找不到這個模板' }, 404);
+  }
+  let projectObjIds = null;
+  if (!body?.cloneFrom && Array.isArray(body?.snapshotStates) && body.snapshotStates.length > 0) {
+    const objs = await env.DB.prepare(`SELECT id FROM stage_objects WHERE project_id = ?`).bind(projectId).all();
+    projectObjIds = new Set((objs.results || []).map(o => o.id));
+  }
+
   const position = JSON.stringify(body?.position || { x: 0, y: 0, z: 0 });
   const rotation = JSON.stringify(body?.rotation || { pitch: 0, yaw: 0, roll: 0 });
-  const fov = typeof body?.fov === 'number' ? body.fov : 60;
-  const crossfade = typeof body?.crossfadeSeconds === 'number' ? body.crossfadeSeconds : 0;
+  const fov = typeof body?.fov === 'number' && isFinite(body.fov) ? body.fov : 60;
+  // 淡入淡出秒數：有給就用；複製的 cue 沿用來源的；都沒有 → 1 秒（0 = 硬切，要明確給 0 才是）
+  // （影片時間不複製：兩個 cue 對到同一秒沒有意義，複製出來的 cue 由使用者自己設）
+  const crossfade = typeof body?.crossfadeSeconds === 'number' && isFinite(body.crossfadeSeconds) && body.crossfadeSeconds >= 0
+    ? body.crossfadeSeconds
+    : (cloneSrc && typeof cloneSrc.crossfade_seconds === 'number' ? cloneSrc.crossfade_seconds : DEFAULT_CUE_CROSSFADE_SECONDS);
 
   const maxRow = await env.DB.prepare(
     `SELECT COALESCE(MAX("order"), -1) AS max_order FROM cues WHERE song_id = ? AND status = 'master'`
@@ -1552,8 +1692,9 @@ async function createCue(request, env, projectId, songId) {
   } else if (Array.isArray(body?.snapshotStates) && body.snapshotStates.length > 0) {
     // 顯式 snapshot：每個 object 的 position/rotation
     const stmts = [];
-    for (const s of body.snapshotStates) {
+    for (const s of body.snapshotStates.slice(0, 1000)) {
       if (!s?.objectId || !/^[a-zA-Z0-9_-]{1,64}$/.test(s.objectId)) continue;
+      if (!projectObjIds?.has(s.objectId)) continue;  // 不是這個專案的物件 → 略過
       const cosId = 'cos_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + stmts.length;
       const sPos = s.position ? JSON.stringify(s.position) : null;
       const sRot = s.rotation ? JSON.stringify(s.rotation) : null;
@@ -1637,46 +1778,62 @@ async function reorderCues(request, env, projectId, songId) {
   return jsonResp({ ok: true, updated: ids.length });
 }
 
-async function getCue(env, cueId) {
-  const row = await env.DB.prepare(`SELECT * FROM cues WHERE id = ? LIMIT 1`).bind(cueId).first();
+async function getCue(env, songId, cueId) {
+  const row = await env.DB.prepare(`SELECT * FROM cues WHERE id = ? AND song_id = ? LIMIT 1`).bind(cueId, songId).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp({ cue: parseCueRow(row) });
 }
 
-async function updateCue(request, env, projectId, cueId) {
+const CUE_STATUSES = ['master', 'proposal', 'alternate'];
+
+async function updateCue(request, env, projectId, songId, cueId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
 
-  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? LIMIT 1`).bind(cueId).first();
+  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? AND song_id = ? LIMIT 1`).bind(cueId, songId).first();
 
+  const isNum = (v) => typeof v === 'number' && isFinite(v);
   const sets = [], values = [];
   if ('name' in body) { sets.push('name = ?'); values.push((body.name || '').toString().trim().slice(0, CUE_NAME_MAX)); }
-  if ('order' in body) { sets.push('"order" = ?'); values.push(body.order); }
+  if ('order' in body) {
+    if (!isNum(body.order)) return jsonResp({ error: '順序不合法' }, 400);
+    sets.push('"order" = ?'); values.push(body.order);
+  }
   if ('position' in body) { sets.push('position_xyz = ?'); values.push(JSON.stringify(body.position)); }
   if ('rotation' in body) { sets.push('rotation_xyz = ?'); values.push(JSON.stringify(body.rotation)); }
-  if ('fov' in body) { sets.push('fov = ?'); values.push(body.fov); }
-  if ('crossfadeSeconds' in body) { sets.push('crossfade_seconds = ?'); values.push(body.crossfadeSeconds); }
+  if ('fov' in body) {
+    if (!isNum(body.fov)) return jsonResp({ error: 'fov 不合法' }, 400);
+    sets.push('fov = ?'); values.push(body.fov);
+  }
+  if ('crossfadeSeconds' in body) {
+    if (!isNum(body.crossfadeSeconds) || body.crossfadeSeconds < 0) return jsonResp({ error: '淡入淡出秒數不合法' }, 400);
+    sets.push('crossfade_seconds = ?'); values.push(body.crossfadeSeconds);
+  }
   if ('videoTimeSec' in body) {
     const v = body.videoTimeSec;
     sets.push('video_time_sec = ?');
-    values.push(typeof v === 'number' && isFinite(v) && v >= 0 ? v : null);
+    values.push(isNum(v) && v >= 0 ? v : null);
   }
-  if ('status' in body) { sets.push('status = ?'); values.push(body.status); }
+  if ('status' in body) {
+    if (!CUE_STATUSES.includes(body.status)) return jsonResp({ error: 'cue 狀態不正確' }, 400);
+    sets.push('status = ?'); values.push(body.status);
+  }
 
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
-  values.push(cueId);
+  values.push(cueId, songId);
 
   const result = await env.DB.prepare(
-    `UPDATE cues SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ?`
+    `UPDATE cues SET ${sets.join(', ')}, updated_at = datetime('now') WHERE id = ? AND song_id = ?`
   ).bind(...values).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   await logActivity(request, env, projectId, 'update', 'cue', cueId, { name: before?.name, changes: body });
   return jsonResp({ ok: true });
 }
 
-async function deleteCue(request, env, projectId, cueId) {
-  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? LIMIT 1`).bind(cueId).first();
-  const result = await env.DB.prepare(`DELETE FROM cues WHERE id = ?`).bind(cueId).run();
+async function deleteCue(request, env, projectId, songId, cueId) {
+  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? AND song_id = ? LIMIT 1`).bind(cueId, songId).first();
+  const result = await env.DB.prepare(`DELETE FROM cues WHERE id = ? AND song_id = ?`).bind(cueId, songId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   await logActivity(request, env, projectId, 'delete', 'cue', cueId, { name: before?.name });
   return jsonResp({ ok: true });
@@ -1692,36 +1849,6 @@ async function deleteCue(request, env, projectId, cueId) {
 // ─────────────────────────────────────────────
 
 const STAGE_OBJ_CATEGORIES = ['led_panel', 'walk_point', 'mechanism', 'fixture', 'performer', 'other'];
-
-async function handleStageObjects(request, env, projectId, objIdOrAction) {
-  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
-  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(projectId)) return jsonResp({ error: 'Invalid project id' }, 400);
-
-  try {
-    if (!objIdOrAction) {
-      if (request.method === 'GET') return listStageObjects(env, projectId);
-      if (request.method === 'POST') return createStageObject(request, env, projectId);
-      return jsonResp({ error: 'Method not allowed' }, 405);
-    }
-
-    if (objIdOrAction === 'seed-defaults') {
-      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return seedDefaultStageObjects(request, env, projectId);
-    }
-    if (objIdOrAction === 'bulk') {
-      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
-      return bulkCreateStageObjects(request, env, projectId);
-    }
-
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(objIdOrAction)) return jsonResp({ error: 'Invalid obj id' }, 400);
-
-    if (request.method === 'PATCH') return updateStageObject(request, env, projectId, objIdOrAction);
-    if (request.method === 'DELETE') return deleteStageObject(request, env, projectId, objIdOrAction);
-    return jsonResp({ error: 'Method not allowed' }, 405);
-  } catch (e) {
-    return jsonResp({ error: e.message }, 500);
-  }
-}
 
 async function listStageObjects(env, projectId) {
   const r = await env.DB.prepare(`
@@ -2068,9 +2195,32 @@ async function bulkCreateStageObjects(request, env, projectId) {
   if (!items || !items.length) return jsonResp({ error: 'items required' }, 400);
   if (items.length > 200) return jsonResp({ error: 'too many items (max 200)' }, 400);
 
-  const replace = !!body?.replace; // 若 true，先清掉專案所有舊 stage_objects
+  // replace = true：先清掉專案所有舊物件 → 每首歌每個 cue 裡這些物件的位置也會一起刪掉（資料庫 cascade）
+  // 這很傷 → 前端一定要再帶 confirmReplace: true 才做；沒帶就回 409 + 會刪掉多少東西，給畫面問使用者
+  const replace = !!body?.replace;
+  let deleted = null;
   if (replace) {
+    const [objN, stateN, cueN] = await env.DB.batch([
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM stage_objects WHERE project_id = ?`).bind(projectId),
+      env.DB.prepare(`SELECT COUNT(*) AS n FROM cue_object_states cos JOIN stage_objects o ON o.id = cos.stage_object_id WHERE o.project_id = ?`).bind(projectId),
+      env.DB.prepare(`SELECT COUNT(DISTINCT cos.cue_id) AS n FROM cue_object_states cos JOIN stage_objects o ON o.id = cos.stage_object_id WHERE o.project_id = ?`).bind(projectId),
+    ]);
+    const willDelete = {
+      stageObjects: objN.results?.[0]?.n || 0,
+      cueStates: stateN.results?.[0]?.n || 0,
+      cuesAffected: cueN.results?.[0]?.n || 0,
+    };
+    if (body?.confirmReplace !== true) {
+      return jsonResp({
+        error: willDelete.cueStates > 0
+          ? `清除現有物件會一起刪掉 ${willDelete.cuesAffected} 個 cue 裡的 ${willDelete.cueStates} 筆物件位置，而且不能復原。確定要清除的話請再確認一次。`
+          : `清除現有物件會刪掉 ${willDelete.stageObjects} 個物件。確定要清除的話請再確認一次。`,
+        requiresConfirmation: true,
+        willDelete,
+      }, 409);
+    }
     await env.DB.prepare(`DELETE FROM stage_objects WHERE project_id = ?`).bind(projectId).run();
+    deleted = willDelete;
   }
 
   const maxRow = await env.DB.prepare(
@@ -2102,8 +2252,8 @@ async function bulkCreateStageObjects(request, env, projectId) {
   }
 
   await env.DB.batch(stmts);
-  await logActivity(request, env, projectId, 'bulk_create', 'stage_object', null, { inserted, skipped, replace });
-  return jsonResp({ ok: true, inserted, skipped });
+  await logActivity(request, env, projectId, 'bulk_create', 'stage_object', null, { inserted, skipped, replace, ...(deleted ? { deleted } : {}) });
+  return jsonResp({ ok: true, inserted, skipped, ...(deleted ? { deleted } : {}) });
 }
 
 const DEFAULT_STAGE_OBJECTS = [
@@ -2158,132 +2308,52 @@ async function seedDefaultStageObjects(request, env, projectId) {
 //        → 重置為 default（刪除 row）
 // ─────────────────────────────────────────────
 
-async function handleCueStates(request, env, projectId, songId, cueId, objId) {
-  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
-  if (![projectId, songId, cueId].every(s => /^[a-zA-Z0-9_-]{1,64}$/.test(s))) {
-    return jsonResp({ error: 'Invalid id' }, 400);
-  }
-
-  try {
-    if (!objId) {
-      if (request.method === 'GET') return listCueStates(env, projectId, cueId);
-      return jsonResp({ error: 'Method not allowed' }, 405);
-    }
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(objId)) return jsonResp({ error: 'Invalid obj id' }, 400);
-
-    if (request.method === 'PUT') return upsertCueState(request, env, cueId, objId);
-    if (request.method === 'DELETE') return deleteCueState(request, env, projectId, cueId, objId);
-    return jsonResp({ error: 'Method not allowed' }, 405);
-  } catch (e) {
-    return jsonResp({ error: e.message }, 500);
-  }
-}
-
-async function listCueStates(env, projectId, cueId) {
-  // 找當前 cue 的 song + order，用來算 tracking
-  const cueRow = await env.DB.prepare(
-    `SELECT song_id, "order" AS cue_order FROM cues WHERE id = ? LIMIT 1`
-  ).bind(cueId).first();
-
-  // 拿同 song 內 order < 當前 cue 的所有 cue 的 override（給 tracking 用）
-  // tracking 規則：對每個 stage_object，若當前 cue 沒 override，找前面 cue 中最近一個有 override 的
-  let trackingOverrides = new Map(); // stage_object_id -> { position, rotation, scale, visible, fromCueOrder }
-  if (cueRow) {
-    const earlier = await env.DB.prepare(`
+// 某個 cue 時每個物件在哪裡。管理頁 / 導演頁 / 動畫師工作站和分享連結都用這一個（計算在 cueStates.mjs）
+//   → 分享連結看到的位置跟導演看到的一模一樣（包含「沒改的物件沿用前面 cue 的位置」）
+// 呼叫的人要先確認 cueId 屬於 projectId
+async function loadCueStates(env, projectId, cueId) {
+  const [objR, earlierR] = await env.DB.batch([
+    // 每個物件 + 這個 cue 自己的設定
+    env.DB.prepare(`
+      SELECT
+        o.id            AS object_id,
+        o.mesh_name,
+        o.display_name,
+        o.category,
+        o."order"       AS object_order,
+        o.default_position,
+        o.default_rotation,
+        o.default_scale,
+        o.locked        AS object_locked,
+        cos.position    AS state_position,
+        cos.rotation    AS state_rotation,
+        cos.scale       AS state_scale,
+        cos.visible     AS state_visible,
+        cos.custom_props AS state_custom,
+        cos.updated_at  AS state_updated_at
+      FROM stage_objects o
+      LEFT JOIN cue_object_states cos
+        ON cos.stage_object_id = o.id AND cos.cue_id = ?
+      WHERE o.project_id = ?
+      ORDER BY o."order" ASC, o.created_at ASC
+    `).bind(cueId, projectId),
+    // 同一首歌、順序在這個 cue 前面的 cue 的設定（tracking：沒改的物件沿用前面最近一次的設定）
+    env.DB.prepare(`
       SELECT cos.stage_object_id, cos.position, cos.rotation, cos.scale, cos.visible, c."order" AS cue_order
         FROM cue_object_states cos
         JOIN cues c ON cos.cue_id = c.id
-       WHERE c.song_id = ? AND c."order" < ?
+        JOIN songs s ON s.id = c.song_id
+       WHERE s.project_id = ?
+         AND c.song_id = (SELECT song_id FROM cues WHERE id = ?)
+         AND c."order" < (SELECT "order" FROM cues WHERE id = ?)
        ORDER BY c."order" ASC
-    `).bind(cueRow.song_id, cueRow.cue_order).all();
-    for (const row of (earlier.results || [])) {
-      // 取最近的（cue_order 最大）— 因為 ORDER BY ASC 後面 overwrite 前面
-      trackingOverrides.set(row.stage_object_id, {
-        position: row.position, rotation: row.rotation, scale: row.scale, visible: row.visible,
-        fromCueOrder: row.cue_order,
-      });
-    }
-  }
+    `).bind(projectId, cueId, cueId),
+  ]);
+  return buildCueStates(objR.results || [], earlierR.results || []);
+}
 
-  // 主 query：每個 stage_object + 當前 cue 的 own override
-  const r = await env.DB.prepare(`
-    SELECT
-      o.id            AS object_id,
-      o.mesh_name,
-      o.display_name,
-      o.category,
-      o."order"       AS object_order,
-      o.default_position,
-      o.default_rotation,
-      o.default_scale,
-      o.metadata,
-      o.locked        AS object_locked,
-      cos.position    AS state_position,
-      cos.rotation    AS state_rotation,
-      cos.scale       AS state_scale,
-      cos.visible     AS state_visible,
-      cos.custom_props AS state_custom,
-      cos.updated_at  AS state_updated_at
-    FROM stage_objects o
-    LEFT JOIN cue_object_states cos
-      ON cos.stage_object_id = o.id AND cos.cue_id = ?
-    WHERE o.project_id = ?
-    ORDER BY o."order" ASC, o.created_at ASC
-  `).bind(cueId, projectId).all();
-
-  const safe = (s, fb) => s == null ? fb : (() => { try { return JSON.parse(s); } catch { return fb; } })();
-
-  const items = (r.results || []).map(row => {
-    const def = {
-      position: safe(row.default_position, { x: 0, y: 0, z: 0 }),
-      rotation: safe(row.default_rotation, { pitch: 0, yaw: 0, roll: 0 }),
-      scale: safe(row.default_scale, { x: 1, y: 1, z: 1 }),
-    };
-    const hasOverride = row.state_updated_at != null;
-    const tracking = trackingOverrides.get(row.object_id);
-
-    // effective 計算優先序：own override > tracking（前 cue 繼承）> default
-    const effPosition = hasOverride && row.state_position ? safe(row.state_position, def.position)
-                      : tracking?.position ? safe(tracking.position, def.position)
-                      : def.position;
-    const effRotation = hasOverride && row.state_rotation ? safe(row.state_rotation, def.rotation)
-                      : tracking?.rotation ? safe(tracking.rotation, def.rotation)
-                      : def.rotation;
-    const effScale    = hasOverride && row.state_scale    ? safe(row.state_scale, def.scale)
-                      : tracking?.scale ? safe(tracking.scale, def.scale)
-                      : def.scale;
-    const effVisible  = hasOverride && row.state_visible != null ? !!row.state_visible
-                      : tracking?.visible != null ? !!tracking.visible
-                      : true;
-
-    return {
-      objectId: row.object_id,
-      meshName: row.mesh_name,
-      displayName: row.display_name || row.mesh_name,
-      category: row.category,
-      order: row.object_order,
-      locked: !!row.object_locked,
-      default: def,
-      override: hasOverride ? {
-        position: safe(row.state_position, null),
-        rotation: safe(row.state_rotation, null),
-        scale: safe(row.state_scale, null),
-        visible: row.state_visible == null ? null : !!row.state_visible,
-        customProps: safe(row.state_custom, null),
-        updatedAt: row.state_updated_at,
-      } : null,
-      // 標記是否來自 tracking（前 cue 繼承）— 給 UI 區分用
-      tracked: !hasOverride && !!tracking,
-      effective: {
-        position: effPosition,
-        rotation: effRotation,
-        scale: effScale,
-        visible: effVisible,
-      },
-    };
-  });
-
-  return jsonResp({ states: items });
+async function listCueStates(env, projectId, cueId) {
+  return jsonResp({ states: await loadCueStates(env, projectId, cueId) });
 }
 
 async function upsertCueState(request, env, cueId, objId) {
@@ -2344,19 +2414,164 @@ async function deleteCueState(request, env, projectId, cueId, objId) {
 }
 
 // ─────────────────────────────────────────────
-// Comments API
+// Comments API — /api/comments?session=<projectId>-<songId>（一首歌一串，session 規則見 access.mjs commentSessionFor）
+//   GET                                → { comments: [...] }
+//   POST   body: { comment: {...} }    → 新增一則；作者 = 登入的人（不信前端送的名字 / 身分）
+//   PATCH  body: { id, text?, status? } → 改文字：留言的人或 admin；標已解決 / 重新打開：成員都可以
+//   DELETE ?id=<留言 id>                → 留言的人或 admin
+// 都要登入，而且要是這個專案的成員（或 admin）；分享連結的訪客碰不到。回傳都是整串最新的留言。
+// 存在 D1 comments 表（一則一列，同時留言不會互相蓋掉）；格式見 comments.mjs。
 // ─────────────────────────────────────────────
 
 async function handleComments(request, env, url) {
-  if (!env.COMMENTS) {
-    return jsonResp({ error: 'KV not configured' }, 500);
-  }
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '請先登入' }, 401);
 
   const session = url.searchParams.get('session');
   if (!session || !SESSION_ID_RE.test(session)) {
     return jsonResp({ error: 'Missing or invalid session' }, 400);
   }
 
+  try {
+    const thread = await resolveCommentThread(env, me, session);
+    if (!thread) {
+      // 對不到任何一首歌 = 舊版單頁工具的留言串（還存在 KV）→ 只有 admin 能看 / 管
+      if (me.role !== 'admin') return jsonResp({ error: '沒有權限看這個留言串' }, 403);
+      return await handleLegacyKvComments(request, env, url, session);
+    }
+    if (thread.archived && me.role !== 'admin') return jsonResp({ error: '找不到這個專案（可能已封存）' }, 404);
+    if (!thread.role) return jsonResp({ error: '沒有權限存取此專案' }, 403);
+    const isRead = request.method === 'GET' || request.method === 'HEAD';
+    if (thread.archived && !isRead) return jsonResp({ error: '這個專案已封存，請先還原再修改' }, 409);
+
+    if (request.method === 'GET') {
+      return jsonResp({ comments: await listThreadComments(env, thread.songId) });
+    }
+    if (request.method === 'POST') return await postThreadComment(request, env, me, thread);
+    if (request.method === 'PATCH') return await patchThreadComment(request, env, me, thread);
+    if (request.method === 'DELETE') return await deleteThreadComment(env, url, me, thread);
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+// session id → 哪個專案的哪首歌 + 我在那個專案的角色；對不到回 null
+async function resolveCommentThread(env, me, session) {
+  const base = `SELECT s.id AS song_id, s.project_id, p.status AS project_status, pm.role AS member_role
+                  FROM songs s
+                  JOIN projects p ON p.id = s.project_id
+                  LEFT JOIN project_members pm ON pm.project_id = s.project_id AND pm.user_id = ?`;
+  let list = [];
+  const guess = parseCommentSession(session);
+  if (guess) {
+    list = (await env.DB.prepare(`${base} WHERE s.id = ? AND s.project_id = ? LIMIT 1`)
+      .bind(me.id, guess.songId, guess.projectId).all()).results || [];
+  }
+  if (!list.length) {
+    // id 很長被截斷過 → 整張歌曲表比對（歌曲數不多）
+    list = (await env.DB.prepare(`${base} WHERE substr(s.project_id, 1, 28) || '-' || substr(s.id, 1, 28) = ? LIMIT 5`)
+      .bind(me.id, session).all()).results || [];
+    list = list.filter(r => commentSessionFor(r.project_id, r.song_id) === session);
+  }
+  if (!list.length) return null;
+  const pick = list.find(r => projectRoleOf(me.role, r.member_role)) || list[0];
+  return {
+    projectId: pick.project_id,
+    songId: pick.song_id,
+    archived: pick.project_status === 'archived',
+    role: projectRoleOf(me.role, pick.member_role),
+  };
+}
+
+async function listThreadComments(env, songId) {
+  const r = await env.DB.prepare(`SELECT * FROM comments WHERE song_id = ? ORDER BY rowid ASC`).bind(songId).all();
+  return (r.results || []).map(rowToComment);
+}
+
+async function postThreadComment(request, env, me, thread) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const raw = body?.comment;
+  if (!raw || typeof raw !== 'object') return jsonResp({ error: 'Invalid comment' }, 400);
+  // 作者、身分由後台依登入的人填；新留言一律「未解決」
+  const c = sanitizeComment({
+    ...raw,
+    author: me.name,
+    role: commentAuthorRole(me.role),
+    authorUserId: me.id,
+    status: 'open',
+    resolvedBy: undefined,
+    resolvedAt: undefined,
+  });
+  if (!c) return jsonResp({ error: 'Invalid comment' }, 400);
+
+  const [countR, dupR] = await env.DB.batch([
+    env.DB.prepare(`SELECT COUNT(*) AS n FROM comments WHERE song_id = ?`).bind(thread.songId),
+    env.DB.prepare(`SELECT song_id FROM comments WHERE id = ? LIMIT 1`).bind(c.id),
+  ]);
+  const dup = (dupR.results || [])[0];
+  if (dup && dup.song_id === thread.songId) {
+    // 同一則重送（網路重試）→ 不重複新增
+    return jsonResp({ ok: true, duplicate: true, comments: await listThreadComments(env, thread.songId) });
+  }
+  if (dup) c.id = 'c_' + randHex(8) + Date.now().toString(36);  // id 撞到別首歌的留言 → 換一個
+  if (((countR.results || [])[0]?.n || 0) >= MAX_COMMENTS_PER_SONG) {
+    return jsonResp({ error: '這首歌的留言已經太多了（上限 500 則）' }, 429);
+  }
+
+  const row = commentToRow(c);
+  await env.DB.prepare(`
+    INSERT INTO comments (id, project_id, song_id, time_in_video, anchor_type, anchor_screen_xy, anchor_world_xyz,
+      anchor_mesh_name, anchor_offset_xyz, text, mentions, status, resolved_by, resolved_at,
+      author_user_id, author_name, author_role, author_email, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    row.id, thread.projectId, thread.songId, row.time_in_video, row.anchor_type, row.anchor_screen_xy, row.anchor_world_xyz,
+    row.anchor_mesh_name, row.anchor_offset_xyz, row.text, row.mentions, row.status, row.resolved_by, row.resolved_at,
+    row.author_user_id, row.author_name, row.author_role, row.author_email, row.created_at,
+  ).run();
+  return jsonResp({ ok: true, comments: await listThreadComments(env, thread.songId) });
+}
+
+async function patchThreadComment(request, env, me, thread) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const id = (body && typeof body.id === 'string') ? body.id : null;
+  if (!id || !COMMENT_ID_RE.test(id)) return jsonResp({ error: 'Missing or invalid id' }, 400);
+
+  const row = await env.DB.prepare(`SELECT * FROM comments WHERE id = ? AND song_id = ? LIMIT 1`).bind(id, thread.songId).first();
+  if (!row) return jsonResp({ error: 'Not found' }, 404);
+
+  const p = commentPatch(body, me);
+  if (!p.ok) return jsonResp({ error: p.error }, 400);
+  if (p.touchesText && !canModifyComment(rowToComment(row), me.id, thread.role)) {
+    return jsonResp({ error: '只有留言的人或 admin 可以修改這則留言' }, 403);
+  }
+  const keys = Object.keys(p.changes);
+  await env.DB.prepare(
+    `UPDATE comments SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ? AND song_id = ?`
+  ).bind(...keys.map(k => p.changes[k]), id, thread.songId).run();
+  return jsonResp({ ok: true, comments: await listThreadComments(env, thread.songId) });
+}
+
+async function deleteThreadComment(env, url, me, thread) {
+  const id = url.searchParams.get('id');
+  if (!id || !COMMENT_ID_RE.test(id)) return jsonResp({ error: 'Missing or invalid id' }, 400);
+  const row = await env.DB.prepare(`SELECT * FROM comments WHERE id = ? AND song_id = ? LIMIT 1`).bind(id, thread.songId).first();
+  if (row) {
+    if (!canModifyComment(rowToComment(row), me.id, thread.role)) {
+      return jsonResp({ error: '只有留言的人或 admin 可以刪除這則留言' }, 403);
+    }
+    await env.DB.prepare(`DELETE FROM comments WHERE id = ? AND song_id = ?`).bind(id, thread.songId).run();
+  }
+  return jsonResp({ ok: true, comments: await listThreadComments(env, thread.songId) });
+}
+
+// 舊版單頁工具的留言（存在 KV，key = s:<session>）— 只有 admin 走到這裡
+async function handleLegacyKvComments(request, env, url, session) {
+  if (!env.COMMENTS) return jsonResp({ error: 'KV not configured' }, 500);
   const key = `s:${session}`;
 
   if (request.method === 'GET') {
@@ -2367,25 +2582,13 @@ async function handleComments(request, env, url) {
 
   if (request.method === 'POST') {
     let body;
-    try {
-      body = await request.json();
-    } catch (e) {
-      return jsonResp({ error: 'Invalid JSON' }, 400);
-    }
-
+    try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
     const c = sanitizeComment(body && body.comment);
     if (!c) return jsonResp({ error: 'Invalid comment' }, 400);
-
     const existing = await env.COMMENTS.get(key);
     const list = existing ? JSON.parse(existing) : [];
-
-    if (list.length >= MAX_COMMENTS_PER_SESSION) {
-      return jsonResp({ error: 'Session comment limit reached' }, 429);
-    }
-    if (list.some(x => x.id === c.id)) {
-      return jsonResp({ ok: true, duplicate: true, comments: list });
-    }
-
+    if (list.length >= MAX_COMMENTS_PER_SESSION) return jsonResp({ error: 'Session comment limit reached' }, 429);
+    if (list.some(x => x.id === c.id)) return jsonResp({ ok: true, duplicate: true, comments: list });
     list.push(c);
     await env.COMMENTS.put(key, JSON.stringify(list));
     return jsonResp({ ok: true, comments: list });
@@ -2401,13 +2604,8 @@ async function handleComments(request, env, url) {
     const list = JSON.parse(existing);
     const idx = list.findIndex(x => x.id === id);
     if (idx < 0) return jsonResp({ error: 'Not found' }, 404);
-    // 只允許特定欄位 patch
-    const allowed = ['status', 'text', 'resolvedBy', 'resolvedAt'];
     const patched = { ...list[idx] };
-    for (const k of allowed) {
-      if (k in body) patched[k] = body[k];
-    }
-    // 重跑 sanitize
+    for (const k of ['status', 'text', 'resolvedBy', 'resolvedAt']) if (k in body) patched[k] = body[k];
     const safe = sanitizeComment(patched);
     if (!safe) return jsonResp({ error: 'Invalid patched comment' }, 400);
     list[idx] = safe;
@@ -2417,92 +2615,15 @@ async function handleComments(request, env, url) {
 
   if (request.method === 'DELETE') {
     const id = url.searchParams.get('id');
-    if (!id || !COMMENT_ID_RE.test(id)) {
-      return jsonResp({ error: 'Missing or invalid id' }, 400);
-    }
+    if (!id || !COMMENT_ID_RE.test(id)) return jsonResp({ error: 'Missing or invalid id' }, 400);
     const existing = await env.COMMENTS.get(key);
     if (!existing) return jsonResp({ ok: true, comments: [] });
-
     const list = JSON.parse(existing).filter(x => x.id !== id);
     await env.COMMENTS.put(key, JSON.stringify(list));
     return jsonResp({ ok: true, comments: list });
   }
 
   return jsonResp({ error: 'Method not allowed' }, 405);
-}
-
-function sanitizeComment(c) {
-  if (!c || typeof c !== 'object') return null;
-  if (typeof c.id !== 'string' || !COMMENT_ID_RE.test(c.id)) return null;
-  if (typeof c.text !== 'string') return null;
-
-  const text = c.text.slice(0, MAX_TEXT_LEN).trim();
-  if (!text) return null;
-
-  const num = (v, def = 0) => (typeof v === 'number' && isFinite(v)) ? v : def;
-  const str = (v, max = 200) => (typeof v === 'string') ? v.slice(0, max) : '';
-
-  // 3D anchor（可選）— anchor.type = 'world' | 'mesh' | 'screen'
-  let anchor = null;
-  if (c.anchor && typeof c.anchor === 'object') {
-    const a = c.anchor;
-    if (a.type === 'world' && a.world && typeof a.world === 'object') {
-      anchor = {
-        type: 'world',
-        world: {
-          x: num(a.world.x, 0),
-          y: num(a.world.y, 0),
-          z: num(a.world.z, 0),
-        },
-      };
-    } else if (a.type === 'mesh' && typeof a.meshName === 'string') {
-      anchor = {
-        type: 'mesh',
-        meshName: str(a.meshName, 120),
-        offset: a.offset && typeof a.offset === 'object' ? {
-          x: num(a.offset.x, 0),
-          y: num(a.offset.y, 0),
-          z: num(a.offset.z, 0),
-        } : null,
-      };
-    } else if (a.type === 'screen') {
-      anchor = { type: 'screen' }; // 預設
-    }
-  }
-
-  // role 兼容：舊版只有 designer / director；新增 animator
-  const role = (c.role === 'designer' || c.role === 'director' || c.role === 'animator') ? c.role : 'director';
-
-  // resolved 狀態：'open' | 'resolved'（預設 open）
-  const status = (c.status === 'resolved' || c.status === 'open') ? c.status : 'open';
-
-  // @mentions：[{ userId, name }, ...]
-  let mentions = null;
-  if (Array.isArray(c.mentions)) {
-    mentions = c.mentions
-      .filter(m => m && typeof m === 'object' && typeof m.userId === 'string' && typeof m.name === 'string')
-      .slice(0, 20)
-      .map(m => ({ userId: str(m.userId, 64), name: str(m.name, 80) }));
-  }
-
-  const out = {
-    id: c.id,
-    time: num(c.time, 0),
-    x: Math.max(0, Math.min(1, num(c.x, 0.5))),
-    y: Math.max(0, Math.min(1, num(c.y, 0.5))),
-    text,
-    author: str(c.author, 80) || '匿名',
-    email: str(c.email, 200) || null,
-    role,
-    status,
-    createdAt: str(c.createdAt, 40) || new Date().toISOString()
-  };
-  if (anchor) out.anchor = anchor;
-  if (mentions && mentions.length > 0) out.mentions = mentions;
-  // 同樣 pass-through resolvedBy / resolvedAt 給 client 用
-  if (typeof c.resolvedBy === 'string') out.resolvedBy = str(c.resolvedBy, 80);
-  if (typeof c.resolvedAt === 'string') out.resolvedAt = str(c.resolvedAt, 40);
-  return out;
 }
 
 // ─────────────────────────────────────────────
@@ -2654,7 +2775,7 @@ async function verifySessionToken(secret, token) {
   const exp = parseInt(expStr, 10);
   if (!exp || exp < Math.floor(Date.now() / 1000)) return null;
   const expectedSig = await hmacSign(secret, `${userId}.${expStr}`);
-  if (sig !== expectedSig) return null;
+  if (!timingSafeEqualStr(sig, expectedSig)) return null;
   return userId;
 }
 
@@ -2668,7 +2789,26 @@ function parseCookies(request) {
   return map;
 }
 
+// 同一個請求只查一次登入身分（router、handler、活動紀錄都會問）
+const requestUserCache = new WeakMap();
+
 async function getRequestUserId(request, env) {
+  const u = await getCurrentUser(request, env);
+  return u ? u.id : null;
+}
+
+function getCurrentUser(request, env) {
+  if (!request || typeof request !== 'object') return Promise.resolve(null);
+  let p = requestUserCache.get(request);
+  if (!p) {
+    p = loadRequestUser(request, env);
+    requestUserCache.set(request, p);
+  }
+  return p;
+}
+
+async function loadRequestUser(request, env) {
+  if (!env.DB) return null;
   // 優先讀 Authorization: Bearer <token>（避開 third-party cookie 限制）
   let token = null;
   const auth = request.headers.get('authorization') || '';
@@ -2686,18 +2826,9 @@ async function getRequestUserId(request, env) {
   if (!token) return null;
   const userId = await verifySessionToken(getAuthSecret(env), token);
   if (!userId) return null;
-  // 確認該 user 仍然 active
+  // 確認該 user 仍然 active（停用的帳號 token 立刻失效）
   const u = await env.DB.prepare(
-    `SELECT id FROM users WHERE id = ? AND deactivated = 0 LIMIT 1`
-  ).bind(userId).first();
-  return u ? userId : null;
-}
-
-async function getCurrentUser(request, env) {
-  const userId = await getRequestUserId(request, env);
-  if (!userId) return null;
-  const u = await env.DB.prepare(
-    `SELECT id, name, role, avatar_color FROM users WHERE id = ? LIMIT 1`
+    `SELECT id, name, role, avatar_color FROM users WHERE id = ? AND deactivated = 0 LIMIT 1`
   ).bind(userId).first();
   if (!u) return null;
   return { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color };
@@ -3154,12 +3285,15 @@ async function deleteAsset(env, assetId) {
 async function logActivity(request, env, projectId, action, targetType, targetId, payload = {}) {
   if (!env.DB || !projectId) return;
   try {
-    const userId = (request && (await getRequestUserId(request, env))) || 'u_phang';
+    // 沒有登入身分（例如排程同步）→ 記成 NULL（「系統」），不要冒用某個人
+    const userId = (request && (await getRequestUserId(request, env))) || null;
     const id = 'a_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    // 號碼、密碼、通行證這類欄位一律遮掉再存（activity 會給專案成員看）
+    const safePayload = scrubActivityPayload(payload ?? {});
     await env.DB.prepare(
       `INSERT INTO activity_log (id, project_id, user_id, action, target_type, target_id, payload)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).bind(id, projectId, userId, action, targetType, targetId || null, JSON.stringify(payload)).run();
+    ).bind(id, projectId, userId, action, targetType, targetId || null, JSON.stringify(safePayload)).run();
   } catch (e) {
     console.warn('logActivity failed', e?.message || e);
   }
@@ -3568,11 +3702,18 @@ async function driveAssignFile(request, env, projectId, fid) {
   let body = {};
   try { body = await request.json(); } catch {}
   const songId = body?.songId || null;
-  if (songId !== null && typeof songId !== 'string') return jsonResp({ error: 'Invalid songId' }, 400);
-  await env.DB.prepare(
+  if (songId !== null && (typeof songId !== 'string' || !ID_RE.test(songId))) return jsonResp({ error: 'Invalid songId' }, 400);
+  if (!fid || !ID_RE.test(fid)) return jsonResp({ error: 'Invalid file id' }, 400);
+  // 只能歸到這個專案的歌
+  if (songId) {
+    const s = await env.DB.prepare(`SELECT id FROM songs WHERE id = ? AND project_id = ? LIMIT 1`).bind(songId, projectId).first();
+    if (!s) return jsonResp({ error: '這個專案裡找不到這首歌' }, 404);
+  }
+  const r = await env.DB.prepare(
     `UPDATE drive_files SET song_id = ?, classified_by = 'manual'
       WHERE id = ? AND project_id = ?`
   ).bind(songId, fid, projectId).run();
+  if (!r.meta.changes) return jsonResp({ error: '這個專案裡找不到這個檔案' }, 404);
   await logActivity(request, env, projectId, 'update', 'drive_file', fid, { songId });
   return jsonResp({ ok: true });
 }
@@ -3741,8 +3882,12 @@ async function driveStreamFile(request, env, fid) {
   if (!fid) return jsonResp({ error: 'Missing file id' }, 400);
 
   // 找這個 drive_file_id 屬於哪個 project（順便驗權）
+  if (!/^[a-zA-Z0-9_-]{1,200}$/.test(fid)) return jsonResp({ error: 'Invalid file id' }, 400);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+
   const f = await env.DB.prepare(
-    `SELECT df.project_id, df.filename, df.mime_type, p.drive_oauth_token_id
+    `SELECT df.project_id, df.filename, df.mime_type, p.drive_oauth_token_id, p.status AS project_status
        FROM drive_files df
        JOIN projects p ON df.project_id = p.id
       WHERE df.drive_file_id = ?
@@ -3750,10 +3895,9 @@ async function driveStreamFile(request, env, fid) {
   ).bind(fid).first();
   if (!f) return jsonResp({ error: 'File not found' }, 404);
 
-  const me = await getCurrentUser(request, env);
-  if (!me) return jsonResp({ error: '未登入' }, 401);
-  // 非 admin 要在 project_members
+  // 非 admin 要在 project_members，而且專案沒封存
   if (me.role !== 'admin') {
+    if (f.project_status === 'archived') return jsonResp({ error: 'File not found' }, 404);
     const m = await env.DB.prepare(
       `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
     ).bind(f.project_id, me.id).first();
@@ -3855,29 +3999,18 @@ function isSlugTakenError(e) {
 
 const SLUG_TAKEN_MESSAGE = '這個網址已經有人用了，請換一個名字（或勾「加上隨機碼」）';
 
-async function handleProjectShareLinks(request, env, url) {
+async function handleProjectShareLinks(request, env, ctx, token) {
   // /api/projects/:projectId/share-links               GET / POST
   // /api/projects/:projectId/share-links/:token        DELETE / PATCH（改網址名稱 { slug: '...' | null }）
-  const me = await getCurrentUser(request, env);
-  if (!me) return jsonResp({ error: '未登入' }, 401);
-
-  const segs = url.pathname.split('/').filter(Boolean);
-  // [api, projects, projectId, share-links, token?]
-  const projectId = segs[2];
-  const token = segs[4] || null;
-
-  // 權限：admin 或 project_members
-  if (me.role !== 'admin') {
-    const m = await env.DB.prepare(
-      `SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ? LIMIT 1`
-    ).bind(projectId, me.id).first();
-    if (!m) return jsonResp({ error: '沒有權限' }, 403);
-  }
+  // 權限（admin 或這個專案的導演）、專案在不在、封存與否都在 handleProjectsRouter 檢查過了
+  const { me, projectId } = ctx;
+  if (token !== null && !/^[a-zA-Z0-9_-]{1,64}$/.test(token)) return jsonResp({ error: 'Invalid token' }, 400);
 
   if (!token) {
     if (request.method === 'GET') {
       const r = await env.DB.prepare(
-        `SELECT token, slug, project_id, song_id, password IS NOT NULL AS has_password,
+        `SELECT token, slug, project_id, song_id,
+                (password_hash IS NOT NULL OR password IS NOT NULL) AS has_password,
                 expires_at, view_count, last_viewed_at, created_at
            FROM share_links WHERE project_id = ? ORDER BY created_at DESC`
       ).bind(projectId).all();
@@ -3898,18 +4031,27 @@ async function handleProjectShareLinks(request, env, url) {
     if (request.method === 'POST') {
       let body = {};
       try { body = await request.json(); } catch {}
-      const songId = body?.songId && /^[a-zA-Z0-9_-]{1,64}$/.test(body.songId) ? body.songId : null;
-      const password = typeof body?.password === 'string' && body.password ? body.password.slice(0, 60) : null;
+      let songId = null;
+      if (body?.songId) {
+        if (typeof body.songId !== 'string' || !/^[a-zA-Z0-9_-]{1,64}$/.test(body.songId)) return jsonResp({ error: 'Invalid songId' }, 400);
+        // 只能分享這個專案的歌
+        const s = await env.DB.prepare(`SELECT id FROM songs WHERE id = ? AND project_id = ? LIMIT 1`).bind(body.songId, projectId).first();
+        if (!s) return jsonResp({ error: '這個專案裡找不到這首歌' }, 404);
+        songId = body.songId;
+      }
+      const password = typeof body?.password === 'string' && body.password ? body.password.slice(0, SHARE_PASSWORD_MAX) : null;
       const expiresInDays = typeof body?.expiresInDays === 'number' && body.expiresInDays > 0 ? Math.min(body.expiresInDays, 365) : null;
       const parsed = parseSlugInput(body?.slug);
       if (parsed.error) return jsonResp({ error: parsed.error }, 400);
       const tk = randHex(16);
       const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400_000).toISOString() : null;
+      // 密碼只存加鹽雜湊，不存明文
+      const hashed = password ? await hashSharePassword(password) : null;
       try {
         await env.DB.prepare(`
-          INSERT INTO share_links (token, project_id, song_id, password, expires_at, created_by_user_id, slug)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).bind(tk, projectId, songId, password, expiresAt, me.id, parsed.slug).run();
+          INSERT INTO share_links (token, project_id, song_id, password, password_hash, password_salt, expires_at, created_by_user_id, slug)
+          VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
+        `).bind(tk, projectId, songId, hashed?.hash ?? null, hashed?.salt ?? null, expiresAt, me.id, parsed.slug).run();
       } catch (e) {
         if (isSlugTakenError(e)) return jsonResp({ error: SLUG_TAKEN_MESSAGE, slugTaken: true }, 409);
         throw e;
@@ -3959,6 +4101,12 @@ function shareLinkExpired(expiresAt, now = Date.now()) {
 
 // ── 公開存取（read-only，無需登入）──
 // ref ={ kind: 'token', key: 連結碼 }（/api/share/...）或 { kind: 'slug', key: 網址名稱 }（/api/s/...）
+//
+// 有密碼的連結：
+//   第一次：X-Share-Password header 帶密碼（不收網址上的密碼）→ 對了就發「通行證」（8 小時，/data 回傳 access.token）
+//   之後：X-Share-Access header 帶通行證就好；影片 <video src> 帶不了 header → 影片網址後面已經接好 ?access=<通行證>
+//   （只有影片串流收網址上的通行證）
+//   舊版前端每個請求都帶密碼 → 照樣可以（每個 isolate 記住算過的結果，不會每次都重算雜湊）
 async function handleShareRouter(request, env, url, ref) {
   const bySlug = ref?.kind === 'slug';
   let key = ref?.key || '';
@@ -3972,18 +4120,25 @@ async function handleShareRouter(request, env, url, ref) {
 
   const segs = url.pathname.split('/').filter(Boolean);
   // [api, share|s, token|slug, ...rest]
-  const sub = segs[3] || null;        // 'data' / 'cues' / 'states' / 'comments'
+  const sub = segs[3] || null;        // 'data' / 'songs' / 'videos'
   // 回給前端的影片網址用同一種開頭（用好讀網址開的人，看不到連結碼）
   const shareBase = bySlug ? `/api/s/${key}` : `/api/share/${key}`;
+  const isStream = sub === 'videos' && !!segs[4] && segs[5] === 'stream';
 
-  const provided = request.headers.get('x-share-password') || url.searchParams.get('p') || '';
+  // 密碼只收 header；通行證收 header，影片串流才收網址上的 ?access=
+  const provided = request.headers.get('x-share-password') || '';
+  const providedAccess = request.headers.get('x-share-access') || (isStream ? (url.searchParams.get('access') || '') : '');
   const now = Date.now();
   const ipKey = loginClientKey(request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for'));
   const failuresStmt = (k) => env.DB.prepare(
     `SELECT attempted_at FROM login_attempts WHERE ip = ? AND attempted_at > ?`
   ).bind(k, now - LOGIN_LOOKBACK_MS);
   const linkStmt = env.DB.prepare(
-    `SELECT token, project_id, song_id, password, expires_at FROM share_links WHERE ${bySlug ? 'slug' : 'token'} = ? LIMIT 1`
+    `SELECT l.token, l.project_id, l.song_id, l.password, l.password_hash, l.password_salt, l.expires_at,
+            p.status AS project_status
+       FROM share_links l
+       JOIN projects p ON p.id = l.project_id
+      WHERE l.${bySlug ? 'slug' : 'token'} = ? LIMIT 1`
   ).bind(key);
 
   // 防猜密碼：跟登入同一套（同一個 IP 對同一條連結 15 分鐘內錯 10 次 → 鎖 15 分鐘，鎖定中密碼對也擋）
@@ -4019,42 +4174,57 @@ async function handleShareRouter(request, env, url, ref) {
     link = await linkStmt.first();
   }
   if (!link) return jsonResp({ error: 'Share link not found' }, 404);
+  // 專案封存了 → 分享連結暫時不能看（還原後恢復）
+  if (link.project_status === 'archived') return jsonResp({ error: '這個分享連結的專案已封存' }, 404);
   const token = link.token;
-  const attemptKey = provided ? shareAttemptKey(token, ipKey) : null;
-  if (provided && link.password && recentFailures === null) {
-    // 好讀網址：查到連結才知道連結碼 → 這時才查密碼錯誤紀錄
-    const failR = await failuresStmt(attemptKey).all();
-    recentFailures = (failR.results || []).map(r => r.attempted_at);
-  }
-  recentFailures = recentFailures || [];
   if (shareLinkExpired(link.expires_at, now)) {
     return jsonResp({ error: 'Share link expired' }, 410);
   }
 
-  // 密碼檢查（password via header X-Share-Password）
-  if (link.password) {
-    if (!provided) return jsonResp({ error: 'Password required', requiresPassword: true }, 401);
-    const gate = loginThrottleDecision(recentFailures, now);
-    if (!gate.allowed) {
-      const retryAfterSec = Math.ceil(gate.retryAfterMs / 1000);
-      return new Response(JSON.stringify({ error: loginLockedMessage(gate.retryAfterMs), retryAfterSec }), {
-        status: 429,
-        headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Retry-After': String(retryAfterSec) }
-      });
-    }
-    if (provided !== link.password) {
-      // 記一次錯，順手清掉一天以前的紀錄
-      await env.DB.batch([
-        env.DB.prepare(`DELETE FROM login_attempts WHERE attempted_at < ?`).bind(now - LOGIN_ATTEMPT_KEEP_MS),
-        env.DB.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(attemptKey, now),
-      ]);
-      return jsonResp({ error: 'Password required', requiresPassword: true }, 401);
-    }
-    // 密碼對 → 這個 IP 對這條連結的錯誤歸零（有錯過才寫，不然每個請求都多一次寫入）
-    if (recentFailures.length > 0) {
-      await env.DB.prepare(`DELETE FROM login_attempts WHERE ip = ?`).bind(attemptKey).run();
+  // 密碼 / 通行證檢查
+  let access = null;  // { token, expiresAt }：這次請求用的通行證（有密碼的連結才有）
+  if (shareLinkHasPassword(link)) {
+    const secret = getAuthSecret(env);
+    const credential = await shareCredential(link);
+    if (providedAccess && await verifyShareAccess(secret, { linkToken: token, credential, token: providedAccess, now })) {
+      access = { token: providedAccess, expiresAt: Number(providedAccess.split('.')[0]) };
+    } else {
+      if (!provided) {
+        return jsonResp({ error: providedAccess ? '通行證過期了，請重新輸入密碼' : 'Password required', requiresPassword: true }, 401);
+      }
+      const attemptKey = shareAttemptKey(token, ipKey);
+      if (recentFailures === null) {
+        // 好讀網址：查到連結才知道連結碼 → 這時才查密碼錯誤紀錄
+        const failR = await failuresStmt(attemptKey).all();
+        recentFailures = (failR.results || []).map(r => r.attempted_at);
+      }
+      const gate = loginThrottleDecision(recentFailures, now);
+      if (!gate.allowed) {
+        const retryAfterSec = Math.ceil(gate.retryAfterMs / 1000);
+        return new Response(JSON.stringify({ error: loginLockedMessage(gate.retryAfterMs), retryAfterSec }), {
+          status: 429,
+          headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Retry-After': String(retryAfterSec) }
+        });
+      }
+      const check = await verifySharePasswordCached(provided, link);
+      if (!check.ok) {
+        // 記一次錯，順手清掉一天以前的紀錄
+        await env.DB.batch([
+          env.DB.prepare(`DELETE FROM login_attempts WHERE attempted_at < ?`).bind(now - LOGIN_ATTEMPT_KEEP_MS),
+          env.DB.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(attemptKey, now),
+        ]);
+        return jsonResp({ error: 'Password required', requiresPassword: true }, 401);
+      }
+      // 密碼對 → 這個 IP 對這條連結的錯誤歸零（有錯過才寫，不然每個請求都多一次寫入）
+      if (recentFailures.length > 0) {
+        await env.DB.prepare(`DELETE FROM login_attempts WHERE ip = ?`).bind(attemptKey).run();
+      }
+      let cred = credential;
+      if (check.legacy) cred = await upgradeLegacySharePassword(env, link, provided);
+      access = await signShareAccess(secret, { linkToken: token, credential: cred, now });
     }
   }
+  const withAccess = (path) => access ? `${path}?access=${encodeURIComponent(access.token)}` : path;
 
   // bump view counter（GET data 才算數，避免 stream 每幀 ++）
   if (sub === 'data' && request.method === 'GET') {
@@ -4107,6 +4277,8 @@ async function handleShareRouter(request, env, url, ref) {
       materialOverrides: safeJsonObj(proj.material_overrides, {}),
       homeView: proj.home_view ? safeJsonObj(proj.home_view, null) : null,
       ledCanvas: proj.led_canvas ? sanitizeLedCanvas(proj.led_canvas) : null,
+      // 有密碼的連結：之後的請求帶這張通行證（X-Share-Access header），不用再送密碼
+      access,
     });
   }
 
@@ -4114,9 +4286,9 @@ async function handleShareRouter(request, env, url, ref) {
     const songId = segs[4];
     const cuesOnly = segs[5] === 'cues' && !segs[6];
     const cueId = segs[5] === 'cues' && segs[6] ? segs[6] : null;
-    const wantStates = cueId && segs[7] === 'states';
-    const wantVideos = segs[5] === 'videos';
-    if (!songId) return jsonResp({ error: 'Missing songId' }, 400);
+    const wantStates = cueId && segs[7] === 'states' && !segs[8];
+    const wantVideos = segs[5] === 'videos' && !segs[6];
+    if (!songId || !/^[a-zA-Z0-9_-]{1,64}$/.test(songId)) return jsonResp({ error: 'Missing songId' }, 400);
     // 驗證 song 屬於 project / 限制 song
     if (link.song_id && link.song_id !== songId) return jsonResp({ error: 'Song not in scope' }, 403);
     const song = await env.DB.prepare(
@@ -4151,58 +4323,28 @@ async function handleShareRouter(request, env, url, ref) {
           mimeType: f.mime_type,
           modifiedTime: f.modified_time,
           sizeBytes: f.size_bytes,
-          // 公開存取的 stream URL：用同一條分享連結認證（跟這次用的網址同一種開頭）
-          streamUrl: `${shareBase}/videos/${f.drive_file_id}/stream`,
+          // 公開存取的 stream URL：用同一條分享連結認證（跟這次用的網址同一種開頭）；
+          // 有密碼的連結後面接著通行證（<video> 帶不了 header）
+          streamUrl: withAccess(`${shareBase}/videos/${f.drive_file_id}/stream`),
         })),
       });
     }
     if (wantStates) {
-      // 套既有 listCueStates 邏輯（簡版：直接抓 cue_object_states + stage_objects join）
-      // 這裡用 inline 簡化：把 stage_objects + cue_object_states 合成 effective state
-      const objsR = await env.DB.prepare(
-        `SELECT * FROM stage_objects WHERE project_id = ? ORDER BY "order"`
-      ).bind(link.project_id).all();
-      const statesR = await env.DB.prepare(
-        `SELECT * FROM cue_object_states WHERE cue_id = ?`
-      ).bind(cueId).all();
-      const overrides = new Map();
-      for (const s of (statesR.results || [])) overrides.set(s.stage_object_id, s);
-      const safeJsonObj = (s, def = {}) => { try { const v = JSON.parse(s || ''); return v || def; } catch { return def; } };
-      const out = (objsR.results || []).map(o => {
-        const ov = overrides.get(o.id);
-        const def = {
-          position: safeJsonObj(o.default_position, { x: 0, y: 0, z: 0 }),
-          rotation: safeJsonObj(o.default_rotation, { pitch: 0, yaw: 0, roll: 0 }),
-          scale: safeJsonObj(o.default_scale, { x: 1, y: 1, z: 1 }),
-        };
-        const ovObj = ov ? {
-          position: ov.position ? safeJsonObj(ov.position, null) : null,
-          rotation: ov.rotation ? safeJsonObj(ov.rotation, null) : null,
-          scale: ov.scale ? safeJsonObj(ov.scale, null) : null,
-          visible: ov.visible !== null && ov.visible !== undefined ? !!ov.visible : null,
-          customProps: ov.custom_props ? safeJsonObj(ov.custom_props, null) : null,
-          updatedAt: ov.updated_at,
-        } : null;
-        const eff = {
-          position: ovObj?.position || def.position,
-          rotation: ovObj?.rotation || def.rotation,
-          scale: ovObj?.scale || def.scale,
-          visible: ovObj?.visible ?? true,
-        };
-        return {
-          objectId: o.id, meshName: o.mesh_name, displayName: o.display_name,
-          category: o.category, order: o.order, locked: !!o.locked,
-          default: def, override: ovObj, effective: eff,
-        };
-      });
-      return jsonResp({ states: out });
+      // 跟管理頁 / 導演頁同一份計算（loadCueStates）→ 沒改的物件一樣沿用前面 cue 的位置
+      if (!/^[a-zA-Z0-9_-]{1,64}$/.test(cueId)) return jsonResp({ error: 'Invalid cue id' }, 400);
+      const cue = await env.DB.prepare(
+        `SELECT id FROM cues WHERE id = ? AND song_id = ? AND status = 'master' LIMIT 1`
+      ).bind(cueId, songId).first();
+      if (!cue) return jsonResp({ error: 'Cue not found' }, 404);
+      return jsonResp({ states: await loadCueStates(env, link.project_id, cueId) });
     }
     return jsonResp({ error: 'Bad share sub-path' }, 404);
   }
 
   // /api/share/:token/videos/:driveFileId/stream — 公開存取串流
-  if (sub === 'videos' && segs[4] && segs[5] === 'stream' && (request.method === 'GET' || request.method === 'HEAD')) {
+  if (isStream && (request.method === 'GET' || request.method === 'HEAD')) {
     const driveFileId = segs[4];
+    if (!/^[a-zA-Z0-9_-]{1,200}$/.test(driveFileId)) return jsonResp({ error: 'Video not found' }, 404);
     // 驗 driveFileId 屬於這個分享範圍（同 project，且如有限制 song 的話也對）
     const f = await env.DB.prepare(`
       SELECT df.project_id, df.song_id, df.mime_type, p.drive_oauth_token_id
@@ -4237,4 +4379,36 @@ async function handleShareRouter(request, env, url, ref) {
   }
 
   return jsonResp({ error: 'Bad share request' }, 404);
+}
+
+// 算過的「密碼對了」記在這個 isolate 一陣子（舊版前端每個請求都帶密碼，不要每次都算 PBKDF2）
+// key 含連結碼 + 目前的密碼雜湊 + 輸入密碼的 SHA-256 → 密碼換了自動失效；只記「對的」
+const sharePasswordOkCache = new Map();
+const SHARE_PASSWORD_CACHE_MS = 10 * 60 * 1000;
+
+async function verifySharePasswordCached(provided, link) {
+  if (!link.password_hash) return verifySharePassword(provided, link);  // 舊明文：比對很便宜，不用記
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(provided)));
+  const cacheKey = `${link.token}|${link.password_hash}|${bytesToBase64(digest)}`;
+  const hit = sharePasswordOkCache.get(cacheKey);
+  if (hit && hit > Date.now()) return { ok: true };
+  const r = await verifySharePassword(provided, link);
+  if (r.ok) {
+    if (sharePasswordOkCache.size > 500) sharePasswordOkCache.clear();
+    sharePasswordOkCache.set(cacheKey, Date.now() + SHARE_PASSWORD_CACHE_MS);
+  }
+  return r;
+}
+
+// 舊的明文密碼第一次被正確輸入 → 換成加鹽雜湊、明文清掉；回傳通行證要綁的雜湊
+async function upgradeLegacySharePassword(env, link, password) {
+  const hashed = await hashSharePassword(password);
+  const r = await env.DB.prepare(
+    `UPDATE share_links SET password_hash = ?, password_salt = ?, password = NULL
+      WHERE token = ? AND password = ? AND password_hash IS NULL`
+  ).bind(hashed.hash, hashed.salt, link.token, password).run();
+  if (r.meta?.changes) return hashed.hash;
+  // 同時有別的請求先換好了 → 用資料庫裡的那個
+  const now = await env.DB.prepare(`SELECT password, password_hash FROM share_links WHERE token = ? LIMIT 1`).bind(link.token).first();
+  return now ? await shareCredential(now) : hashed.hash;
 }
