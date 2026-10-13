@@ -208,16 +208,25 @@ describe('computeMirrorCamera', () => {
     expect(v.position.z).toBeCloseTo(10);
   });
 
-  it('地板上的點：倒影貼圖座標 = 主相機看到的螢幕位置', () => {
+  it('地板上看到 Q 倒影的那一點，取樣到的正是 Q 在倒影圖裡的位置', () => {
     const c = cam([2, 4, 8], [0, 0, 0]);
     const v = new THREE.PerspectiveCamera();
     const tm = new THREE.Matrix4();
     computeMirrorCamera(c, 0, v, tm);
-    const p = new THREE.Vector3(0.7, 0, -0.4);
-    const t = new THREE.Vector4(p.x, p.y, p.z, 1).applyMatrix4(tm);
-    const screen = p.clone().project(c); // NDC
-    expect(t.x / t.w).toBeCloseTo(screen.x * 0.5 + 0.5, 3);
-    expect(t.y / t.w).toBeCloseTo(1 - (screen.y * 0.5 + 0.5), 3);
+    // 地板上方的點 Q，鏡像點 Q'；主相機往 Q' 看的視線跟地板交點 P = 看到 Q 倒影的位置
+    const q = new THREE.Vector3(0.5, 1.5, -2);
+    const qMirror = new THREE.Vector3(q.x, -q.y, q.z);
+    const t = c.position.y / (c.position.y - qMirror.y);
+    const p = c.position.clone().lerp(qMirror, t);
+    expect(p.y).toBeCloseTo(0);
+    const uv = (w: THREE.Vector3) => {
+      const h = new THREE.Vector4(w.x, w.y, w.z, 1).applyMatrix4(tm);
+      return [h.x / h.w, h.y / h.w];
+    };
+    const [pu, pv] = uv(p);
+    const [qu, qv] = uv(q);
+    expect(pu).toBeCloseTo(qu, 4);
+    expect(pv).toBeCloseTo(qv, 4);
   });
 
   it('相機在地板下面 → 不畫', () => {
@@ -227,7 +236,7 @@ describe('computeMirrorCamera', () => {
 });
 ```
 
-（第二個 case 的 y 是否鏡像要以實測為準：鏡像相機的 up 被反射，畫出來的圖上下顛倒；若實測 y 等於 `screen.y*0.5+0.5`，改測試期望值並在程式註解記下。）
+（倒影圖本身左右是翻的，所以不測「跟主相機螢幕位置一樣」，而是測「看到 Q 倒影的地板點 P 取樣到 Q」。）
 
 - [ ] **Step 2: 跑測試確認失敗**
 
@@ -451,7 +460,7 @@ export class FloorReflection {
 }
 ```
 
-- [ ] **Step 4: 跑測試確認通過**（依 Step 1 註記，必要時修正 y 方向的期望值）
+- [ ] **Step 4: 跑測試確認通過**（5 tests）
 
 - [ ] **Step 5: Commit** `feat(stage-look): 地板倒影模組（鏡像相機 + 注入地板材質）`
 
