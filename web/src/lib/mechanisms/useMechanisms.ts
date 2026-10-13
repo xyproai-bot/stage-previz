@@ -154,15 +154,6 @@ export function useShareMechanisms(o: {
 }
 
 // ─────────────────────────────────────────────
-// 分鏡縮圖：每個 cue 的機關位置（直接到位）
-// ─────────────────────────────────────────────
-
-export function useSongMechanismTable(projectId: string | undefined, songId: string | null, cues: CueLike[]) {
-  const st = useStageMechanisms({ projectId, songId, cues, selectedCueId: null });
-  return st;
-}
-
-// ─────────────────────────────────────────────
 // 管理頁（製作）
 // ─────────────────────────────────────────────
 

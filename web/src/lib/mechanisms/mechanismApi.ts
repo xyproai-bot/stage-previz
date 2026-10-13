@@ -5,7 +5,7 @@
 
 import { apiBase, getSessionToken, type ShareRef } from '../api';
 import { saveStatus } from '../saveStatus';
-import type { CueMechanismPosition, Mechanism, MechanismInput, MechanismPreset, MechVec3 } from './model';
+import type { CueMechanismPosition, Mechanism, MechanismInput, MechanismPreset, MechanismValues, MechVec3 } from './model';
 
 /** 後台回的錯誤：message 是中文、可以直接顯示；data 是整個錯誤內容 */
 export interface MechanismApiError extends Error {
@@ -177,6 +177,14 @@ export async function setCuePosition(projectId: string, songId: string, cueId: s
 /** 回到沿用上一個 cue */
 export async function clearCuePosition(projectId: string, songId: string, cueId: string, mechId: string): Promise<void> {
   await call(`${base(projectId)}/songs/${enc(songId)}/cues/${enc(cueId)}/mechanisms/${enc(mechId)}`, { method: 'DELETE' });
+}
+
+/**
+ * 「從目前 3D 狀態建立 cue」時一起存機關現在的值（後台 POST …/cues 收 snapshotMechanisms）。
+ * api.ts 的 createCue 型別還沒有這個欄位（之後清理時再加），先在這裡包一層
+ */
+export function withMechanismSnapshot<T extends object>(input: T, values: MechanismValues | null | undefined): T {
+  return values && Object.keys(values).length > 0 ? ({ ...input, snapshotMechanisms: values } as T) : input;
 }
 
 // ─── 機關總表 / 轉換 ───

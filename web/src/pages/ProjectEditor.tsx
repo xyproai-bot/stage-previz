@@ -4,7 +4,11 @@ import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, MaterialProps, LedProps } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
-import MechanismPanel from '../components/MechanismPanel';
+import MechanismTab from '../components/mechanisms/MechanismTab';
+import MechanismObjectHint, { MechanismHintProvider } from '../components/mechanisms/MechanismObjectHint';
+import { useEditorMechanisms } from '../lib/mechanisms/useMechanisms';
+import { withMechanismSnapshot } from '../lib/mechanisms/mechanismApi';
+import { valuesOf } from '../lib/mechanisms/track';
 import UploadModelDialog from '../components/UploadModelDialog';
 import ModelVersionsDialog from '../components/ModelVersionsDialog';
 import AssetPickerDialog from '../components/AssetPickerDialog';
@@ -45,7 +49,7 @@ import {
 } from 'lucide-react';
 import './ProjectEditor.css';
 
-type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
+type RightTab = 'cues' | 'state' | 'mechanisms' | 'proposals' | 'objects';
 type LoadStatus = 'loading' | 'ready' | 'error';
 /**
  * 改物件狀態：直接給要改的欄位，或給「從現在的樣子算出要改什麼」
@@ -175,6 +179,11 @@ export default function ProjectEditor() {
   const historyRef = useRef(new EditHistory());
   const [, setHistoryVersion] = useState(0);
   const bumpHistory = useCallback(() => setHistoryVersion(v => v + 1), []);
+  // 機關（右邊「機關」分頁）：每個 cue 的機關位置、定義、速度檢查；改了也記在同一份復原
+  const mech = useEditorMechanisms({
+    projectId, songId: selectedSongId, cues, selectedCueId, canEdit: true,
+    history: { push: (scope, step) => historyRef.current.push(scope, step), bump: bumpHistory },
+  });
   const currentHistoryScope = historyScope(selectedCueId);
   const historyScopeRef = useRef(currentHistoryScope);
   historyScopeRef.current = currentHistoryScope;
@@ -252,7 +261,7 @@ export default function ProjectEditor() {
           ? (curIdx < 0 ? 0 : Math.min(curIdx + 1, cs.length - 1))
           : (curIdx <= 0 ? 0 : curIdx - 1);
         setSelectedCueId(cs[nextIdx].id);
-        setRightTab('state');
+        setRightTab(t => (t === 'mechanisms' ? t : 'state'));
       } else {
         if (ss.length === 0) return;
         const curIdx = ss.findIndex(s => s.id === sid);
@@ -603,7 +612,7 @@ export default function ProjectEditor() {
         position: s.effective.position,
         rotation: s.effective.rotation,
       }));
-      await api.createCue(projectId, selectedSongId, { name, snapshotStates, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS });
+      await api.createCue(projectId, selectedSongId, withMechanismSnapshot({ name, snapshotStates, crossfadeSeconds: NEW_CUE_CROSSFADE_SECONDS }, mech.currentValues));
       await refreshCues();
       setRightTab('cues');
     } catch (e) { toast.error('cue 沒有新增：' + msg(e)); }
@@ -619,10 +628,11 @@ export default function ProjectEditor() {
   }
   async function handleResetCue(cueId: string, name: string) {
     if (!projectId || !selectedSongId) return;
-    if (!(await confirmDialog({ title: `重置 cue「${name}」？`, message: '這個 cue 裡所有物件的調整都會清掉，回到預設位置。', confirmLabel: '重置', destructive: true }))) return;
+    if (!(await confirmDialog({ title: `重置 cue「${name}」？`, message: '這個 cue 自己設的物件位置和機關位置都會清掉，改回沿用上一個 cue。', confirmLabel: '重置', destructive: true }))) return;
     try {
       await api.resetCue(projectId, selectedSongId, cueId);
       await refreshCueStates();
+      await mech.refreshPositions();
     } catch (e) { toast.error('重置失敗：' + msg(e)); }
   }
   async function handleRenameCue(cueId: string, currentName: string) {
@@ -1072,16 +1082,6 @@ export default function ProjectEditor() {
           )}
 
           <button className="btn btn--ghost editor-songs__add" onClick={handleAddSong}>＋ 新增歌曲</button>
-
-          {/* 機關滑桿：放在歌曲清單下面（以前浮在畫面左邊，會蓋住歌曲清單） */}
-          {view.canEdit && (
-            <MechanismPanel
-              stageObjects={stageObjects}
-              offsets={view.mechanismOffsets}
-              onChange={view.updateMechanismOffset}
-              onResetAll={view.resetAllMechanismOffsets}
-            />
-          )}
         </aside>
 
         {/* Center — 3D viewport（永遠顯示；沒 cue 時編輯 = 改 default） */}
@@ -1117,7 +1117,7 @@ export default function ProjectEditor() {
               onSelect={(id, mode) => {
                 if (mode === 'toggle' && id) toggleSelected(id);
                 else selectSingle(id);
-                if (id) setRightTab('state');
+                if (id) setRightTab(t => (t === 'mechanisms' ? t : 'state'));
               }}
               onTransform={(objId, position, rotation) =>
                 handleSetState(objId, { position, rotation }).catch(e => { toast.error('位置沒有存到：' + msg(e)); })
@@ -1129,6 +1129,7 @@ export default function ProjectEditor() {
               enableNdi
               bookmarkScope={projectId}
               mechanismOffsets={view.mechanismOffsets}
+              {...mech.sceneProps}
               scaleCorrection={view.scaleCorrection}
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
               lookSettings={personalLook.effective}
@@ -1150,6 +1151,7 @@ export default function ProjectEditor() {
             {([
               ['cues',      `Cue (${masterCues.length})`],
               ['state',     '物件狀態'],
+              ['mechanisms', mech.mechanisms.length > 0 ? `機關 (${mech.mechanisms.length})` : '機關'],
               // 提案：現在沒有「建立 / 接受提案」的流程，只有舊資料才會有 → 有提案才出現這個分頁（只能看、刪）
               ...(proposalCues.length > 0 || rightTab === 'proposals' ? [['proposals', `提案 (${proposalCues.length})`] as const] : []),
               ['objects',   stageObjectsStatus === 'ready' ? `物件 (${stageObjects.length})` : '物件'],
@@ -1158,11 +1160,14 @@ export default function ProjectEditor() {
                 key={key}
                 className={'tab' + (rightTab === key ? ' is-active' : '')}
                 onClick={() => setRightTab(key)}
-              >{label}</button>
+              >{label}{key === 'mechanisms' && mech.problemCount > 0 && (
+                <span className="mech-tab-dot" title={`有 ${mech.problemCount} 個 cue 的機關來不及到位`} aria-label={`有 ${mech.problemCount} 個 cue 的機關來不及到位`} />
+              )}</button>
             ))}
           </div>
 
           <div className="editor-cues__body">
+            <MechanismHintProvider value={mech}>
             {songsLoading && !selectedSongId ? (
               <div className="editor-empty muted">載入中…</div>
             ) : !selectedSongId ? (
@@ -1205,6 +1210,20 @@ export default function ProjectEditor() {
                 onUpdateLed={handleUpdateLed}
                 onJumpToObjects={() => setRightTab('objects')}
               />
+            ) : rightTab === 'mechanisms' ? (
+              <MechanismTab
+                mech={mech}
+                projectId={projectId || ''}
+                projectName={projectMeta?.name}
+                cues={cues}
+                selectedCue={selectedCue}
+                onSelectCue={setSelectedCueId}
+                stageObjects={stageObjects}
+                selectedObjectIds={selectedObjectIds}
+                scaleCorrection={view.scaleCorrection}
+                onSetCrossfade={(s) => handleUpdateCueMeta({ crossfadeSeconds: s })}
+                onStatesChanged={() => { void refreshCueStates(); }}
+              />
             ) : rightTab === 'proposals' ? (
               <>
                 <div className="editor-proposals-note">
@@ -1236,6 +1255,7 @@ export default function ProjectEditor() {
                 onDelete={handleDeleteObject}
               />
             )}
+            </MechanismHintProvider>
           </div>
         </aside>
       </div>
@@ -1376,6 +1396,8 @@ export default function ProjectEditor() {
                 songName={selectedSong.name}
                 scaleCorrection={view.scaleCorrection}
                 mechanismOffsets={view.mechanismOffsets}
+                mechanisms={mech.sceneProps.mechanisms}
+                mechanismTargetsFor={(cueId) => valuesOf(mech.resolved.get(cueId))}
                 lookSettings={personalLook.effective}
                 materialOverrides={view.materialOverrides}
                 homeView={view.homeView}
@@ -2156,6 +2178,7 @@ function ObjectAttributePanel({
           </div>
           <div className="muted small">改完按 Enter 或點別的地方就會存；Esc 取消；↑↓ 微調（按住 Shift 一次 10 倍）</div>
           {fieldError && <div className="field-error small" role="alert">{fieldError}</div>}
+          <MechanismObjectHint objectId={state.objectId} />
           {hasOverride && (
             <div className="object-row__actions">
               <button className="btn btn--ghost" onClick={reset} disabled={busy} title="重置成預設位置">

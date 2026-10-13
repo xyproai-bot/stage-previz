@@ -321,7 +321,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   mechMotionRef.current = mechanismMotion;
   /** 套上機關、寫到 mesh（render loop 每幀最後一次；states 換了也馬上一次） */
   const commitPosesRef = useRef<(nowTs: number, timelineActive: boolean) => void>(() => {});
-  // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；機關滑桿 / 選取 / 校準變了照舊直接套
+  // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；選取 / 校準變了照舊直接套
   const lastSyncedStatesRef = useRef<CueState[] | null>(null);
   // 換 cue 了 → 下一次 states 換掉時要滑過去（cue 的位置是另外抓的，會晚一點到）
   const lastCueKeyRef = useRef(cueKey);
@@ -2625,7 +2625,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                     className="btn btn--ghost btn--sm"
                     style={{ marginLeft: 12 }}
                     onClick={() => { setCalibrateInput(''); setCalibratePromptOpen(true); }}
-                    title="把剛剛量到的距離設為已知值，全專案的測距 / 比例尺 / 機關滑桿都會用這個倍率（所有人一起）"
+                    title="把剛剛量到的距離設為已知值，全專案的測距 / 比例尺 / 機關都會用這個倍率（所有人一起）"
                   ><Icon icon={Target} /> 設為已知距離</button>
                 )}
               </>
@@ -2668,7 +2668,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             <h3 style={{ marginTop: 0 }}>校準尺寸</h3>
             <p style={{ fontSize: 14, opacity: 0.8, marginTop: 0 }}>
               剛剛量到的距離是 <strong>{(measureDistance * scaleCorrection).toFixed(3)} m</strong>。
-              它實際應該是幾公尺？輸入後，這個專案所有人的測距、比例尺、機關滑桿都會用這個倍率換算。
+              它實際應該是幾公尺？輸入後，這個專案所有人的測距、比例尺、機關都會用這個倍率換算。
             </p>
             <input
               type="number"

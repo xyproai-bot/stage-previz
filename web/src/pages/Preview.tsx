@@ -25,6 +25,7 @@ import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { cueTransitionSeconds } from '../lib/cueTiming';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
+import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
@@ -827,6 +828,10 @@ function SongDetail({
     onSelectCue,
     seek: player.seek,
   });
+  // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
+  const mech = useStageMechanisms({
+    projectId, songId: song.id, cues: cuesReady ? cues : EMPTY_CUES, selectedCueId, video: player.video,
+  });
 
   // 鍵盤：Shift+J/K 切 cue（有在放影片的話影片跟著跳到那個 cue 的時間）
   useEffect(() => {
@@ -981,6 +986,7 @@ function SongDetail({
                 scaleCorrection={view.scaleCorrection}
                 onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                 mechanismOffsets={view.mechanismOffsets}
+                {...mech.sceneProps}
                 lookSettings={personalLook.effective}
                 onLookSettingsChange={personalLook.set}
                 lookCustomized={personalLook.customized}

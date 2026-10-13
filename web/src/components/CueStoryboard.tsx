@@ -4,6 +4,7 @@ import type { Cue, CueState, MechanismOffsets, StageObject } from '../lib/api';
 import type { LookSettings } from '../lib/stageLook/lookSettings';
 import type { MaterialOverrides } from '../lib/stageLook/materialOverrides';
 import type { HomeView } from '../lib/homeView';
+import type { Mechanism, MechanismValues } from '../lib/mechanisms/model';
 import StageScene from './StageScene';
 import { toast } from '../lib/toast';
 import { exportSongStoryboardAsPdf, loadCueThumbs } from '../lib/exportPdf';
@@ -27,6 +28,9 @@ interface Props {
   /** 專案共用的校準倍率 + 機關滑桿位移 + 現場設定，縮圖跟大家看到的一致 */
   scaleCorrection?: number;
   mechanismOffsets?: MechanismOffsets;
+  /** 機關（有給就不用 mechanismOffsets）＋每個 cue 的機關位置：縮圖直接到位 */
+  mechanisms?: Mechanism[] | null;
+  mechanismTargetsFor?: (cueId: string) => MechanismValues;
   lookSettings?: LookSettings;
   materialOverrides?: MaterialOverrides;
   homeView?: HomeView | null;
@@ -43,7 +47,7 @@ const STORAGE_PREFIX = 'sp-cue-thumb:';   // localStorage key prefix（小張縮
  */
 export default function CueStoryboard({
   projectId, songId, cues, stageObjects, modelUrl, selectedCueId, onSelectCue, onReordered,
-  projectName, songName, scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView,
+  projectName, songName, scaleCorrection, mechanismOffsets, mechanisms, mechanismTargetsFor, lookSettings, materialOverrides, homeView,
 }: Props) {
   const [orderedCues, setOrderedCues] = useState<Cue[]>(cues);
   useEffect(() => { setOrderedCues(cues); }, [cues]);
@@ -273,6 +277,9 @@ export default function CueStoryboard({
             snapshotApiRef={snapshotApiRef}
             scaleCorrection={scaleCorrection}
             mechanismOffsets={mechanismOffsets}
+            mechanisms={mechanisms}
+            mechanismTargets={mechanismTargetsFor?.(hidden.cueId)}
+            mechanismMotion="instant"
             lookSettings={lookSettings}
             materialOverrides={materialOverrides}
             homeView={homeView}

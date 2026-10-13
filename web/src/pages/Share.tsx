@@ -14,6 +14,7 @@ import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localM
 import { toast } from '../lib/toast';
 import { cueTransitionSeconds } from '../lib/cueTiming';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
+import { useShareMechanisms } from '../lib/mechanisms/useMechanisms';
 import { shareVersionFetcher, useSongVersions, type VersionFetcher } from '../lib/useSongVersions';
 import { versionChoiceStorageKey } from '../lib/songVersions';
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
@@ -329,6 +330,11 @@ export default function Share() {
     onSelectCue: setSelectedCueId,
     seek: local.seek,
   });
+  // 機關：定義跟著 /data 來，每首歌的位置抓一次；播影片時跟著影片時間（只看，沒有提醒）
+  const mech = useShareMechanisms({
+    shareRef, mechanisms: (data as { mechanisms?: unknown } | null)?.mechanisms, songId: selectedSongId, accessToken,
+    cues, selectedCueId, refreshKey: cueRefresh, video: local.video,
+  });
 
   if (loading) return <div className="share-loading"><Icon icon={LoaderCircle} size="lg" spin /> 載入中…</div>;
 
@@ -471,6 +477,7 @@ export default function Share() {
                 crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                 scaleCorrection={data.scaleCorrection ?? 1}
                 mechanismOffsets={data.mechanismOffsets}
+                {...mech.sceneProps}
                 lookSettings={projectLook}
                 materialOverrides={materialOverrides}
                 homeView={homeView}

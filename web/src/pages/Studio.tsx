@@ -22,6 +22,7 @@ import { getLastSeen, markSeen, newFromOthersSince, songsToFetch, unreadFromSumm
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
+import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
@@ -522,6 +523,10 @@ function StudioInner({ projectId }: { projectId: string }) {
     onSelectCue: setSelectedCueId,
     seek: player.seek,
   });
+  // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
+  const mech = useStageMechanisms({
+    projectId, songId: selectedSongId, cues: cuesFor === selectedSongId ? masterCues : EMPTY_CUES, selectedCueId, video: player.video,
+  });
   /** 點 cue（cue 列、右邊清單、Shift+J/K）：有在放影片的話影片跳到那個 cue 的時間 */
   const selectCueById = useCallback((id: string) => {
     const c = masterCues.find(x => x.id === id);
@@ -908,6 +913,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   scaleCorrection={view.scaleCorrection}
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                   mechanismOffsets={view.mechanismOffsets}
+                  {...mech.sceneProps}
                   toolbarMode={isAnimatorViewer ? 'viewer' : 'full'}
                   lookSettings={isAnimatorViewer ? view.lookSettings : personalLook.effective}
                   onLookSettingsChange={isAnimatorViewer ? undefined : personalLook.set}
