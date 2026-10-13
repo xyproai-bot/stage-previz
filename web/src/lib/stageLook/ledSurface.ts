@@ -1,4 +1,5 @@
 // LED 面板表面質感（現場模式）：在 MeshStandardMaterial 的 emissive 計算後面插 GLSL
+//   0. 影片貼圖補做 sRGB 轉換（見 needsVideoSrgbDecode）
 //   1. 像素格：依貼圖解析度畫出一顆顆 LED（螢幕上太小就淡出，避免摩爾紋；平均亮度維持）
 //   2. 側看變暗：法線跟視線夾角越大越暗（ledViewFalloff 可調）
 // 黑亮底色 / 反射在 StageScene 設（roughness、envMapIntensity），這裡只管發光那一層。
@@ -53,6 +54,28 @@ uniform float uLedGridFill;
 uniform float uLedViewFalloff;
 `;
 
+/**
+ * three r169 的影片貼圖（VideoTexture）存成一般 RGBA8、顯卡不做 sRGB 轉換，
+ * 只有放在 map 時 three 會在 shader 裡補轉（DECODE_VIDEO_TEXTURE），放在 emissiveMap 不會。
+ * 現場模式的 LED 畫面放在 emissiveMap → 影片沒轉 → 比同一格畫面的圖片 / NDI 亮、黑色發灰。
+ * 這種貼圖由 LED shader 自己轉（快速模式用 map，three 本來就轉好了）。
+ */
+export function needsVideoSrgbDecode(tex: THREE.Texture | null | undefined): boolean {
+  return !!tex && (tex as THREE.VideoTexture).isVideoTexture === true
+    && THREE.ColorManagement.getTransfer(tex.colorSpace) === THREE.SRGBTransfer;
+}
+
+// 取代 three 的 <emissivemap_fragment>：一樣讀 emissiveMap，影片貼圖多做一次 sRGB → linear（公式同 three 的 map_fragment）
+const LED_EMISSIVE_MAP = /* glsl */`
+#ifdef USE_EMISSIVEMAP
+  vec4 emissiveColor = texture2D( emissiveMap, vEmissiveMapUv );
+  #ifdef LED_DECODE_VIDEO
+  emissiveColor.rgb = mix( pow( emissiveColor.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), emissiveColor.rgb * 0.0773993808, vec3( lessThanEqual( emissiveColor.rgb, vec3( 0.04045 ) ) ) );
+  #endif
+  totalEmissiveRadiance *= emissiveColor.rgb;
+#endif
+`;
+
 const LED_FRAGMENT = /* glsl */`
 #ifdef USE_EMISSIVEMAP
 if ( uLedOn > 0.5 ) {
@@ -81,11 +104,12 @@ if ( uLedOn > 0.5 ) {
 export function patchLedShader(
   shader: { uniforms: Record<string, { value: unknown }>; fragmentShader: string },
   uniforms: LedSurfaceUniforms,
+  decodeVideo = false,
 ) {
   Object.assign(shader.uniforms, uniforms);
-  shader.fragmentShader = LED_UNIFORM_DECL + shader.fragmentShader.replace(
+  shader.fragmentShader = (decodeVideo ? '#define LED_DECODE_VIDEO\n' : '') + LED_UNIFORM_DECL + shader.fragmentShader.replace(
     '#include <emissivemap_fragment>',
-    '#include <emissivemap_fragment>\n' + LED_FRAGMENT,
+    LED_EMISSIVE_MAP + LED_FRAGMENT,
   );
 }
 
@@ -93,8 +117,14 @@ export function applyLedSurface(material: THREE.MeshStandardMaterial) {
   if (material.userData.ledSurface) return;
   const uniforms = createLedSurfaceUniforms();
   material.userData.ledSurface = uniforms;
-  material.onBeforeCompile = (shader) => patchLedShader(shader, uniforms);
-  material.customProgramCacheKey = () => 'led-surface-v1';
+  // 用 this（不是 material）：淡入淡出的材質複本會沿用這兩個函式，要看的是複本自己的貼圖
+  // 換成 / 換掉影片貼圖時 StageScene 會設 needsUpdate → cache key 不同 → 換一份有 / 沒有轉換的 shader
+  material.onBeforeCompile = function (this: THREE.MeshStandardMaterial, shader) {
+    patchLedShader(shader, uniforms, needsVideoSrgbDecode(this.emissiveMap));
+  };
+  material.customProgramCacheKey = function (this: THREE.MeshStandardMaterial) {
+    return needsVideoSrgbDecode(this.emissiveMap) ? 'led-surface-v1-video' : 'led-surface-v1';
+  };
   material.needsUpdate = true;
 }
 
