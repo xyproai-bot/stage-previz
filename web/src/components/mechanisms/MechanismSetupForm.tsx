@@ -4,6 +4,7 @@ import {
   Bookmark, Crosshair, Gauge, Layers, MoveVertical, Plus, RotateCw, Ruler, Search, Trash2, Wand2,
 } from 'lucide-react';
 import Icon from '../Icon';
+import { confirmDialog } from '../dialogs';
 import type { StageObject } from '../../lib/api';
 import { STAGE_CATEGORY } from '../stageCategories';
 import {
@@ -113,11 +114,16 @@ export default function MechanismSetupForm({
   }, [mechanisms, editing]);
 
   const name = d.name.trim() || '這個機關';
-  const toggleObject = (id: string, on: boolean) => {
+  const toggleObject = async (id: string, on: boolean) => {
     if (on && ownerOf.has(id) && !moveConfirmed.has(id)) {
       const owner = ownerOf.get(id)!;
       const obj = stageObjects.find(o => o.id === id);
-      if (!confirm(`「${obj?.displayName || id}」已經在「${owner.name}」裡，一個物件只能直接放在一個機關。\n\n要把它移到「${name}」嗎？`)) return;
+      const ok = await confirmDialog({
+        title: `要把它移到「${name}」嗎？`,
+        message: `「${obj?.displayName || id}」已經在「${owner.name}」裡，一個物件只能直接放在一個機關。`,
+        confirmLabel: '移過來',
+      });
+      if (!ok) return;
       setMoveConfirmed(s => new Set(s).add(id));
     }
     setD(prev => {
@@ -130,12 +136,17 @@ export default function MechanismSetupForm({
     if (!c) return {};
     return { pivotM: [fmt(sceneToMeters(c.x, scaleCorrection)), fmt(sceneToMeters(c.y, scaleCorrection)), fmt(sceneToMeters(c.z, scaleCorrection))] };
   };
-  const useSelection = () => {
+  const useSelection = async () => {
     const ids = selectedObjectIds.filter(id => stageObjects.some(o => o.id === id));
     const moving = ids.filter(id => ownerOf.has(id) && !moveConfirmed.has(id) && !d.objectIds.includes(id));
     if (moving.length) {
       const names = moving.map(id => `「${stageObjects.find(o => o.id === id)?.displayName || id}」（在「${ownerOf.get(id)!.name}」）`).join('、');
-      if (!confirm(`${names} 已經在別的機關裡，一個物件只能直接放在一個機關。\n\n要把它們移到「${name}」嗎？`)) return;
+      const ok = await confirmDialog({
+        title: `要把它們移到「${name}」嗎？`,
+        message: `${names} 已經在別的機關裡，一個物件只能直接放在一個機關。`,
+        confirmLabel: '移過來',
+      });
+      if (!ok) return;
       setMoveConfirmed(s => { const n = new Set(s); moving.forEach(id => n.add(id)); return n; });
     }
     setD(prev => {
@@ -266,7 +277,7 @@ export default function MechanismSetupForm({
             <Icon icon={Search} size="xs" />
             <input type="search" value={search} placeholder="找物件" aria-label="找物件" onChange={e => setSearch(e.target.value)} />
           </label>
-          <button type="button" className="btn btn--ghost btn--sm" disabled={selectedObjectIds.length === 0} onClick={useSelection}
+          <button type="button" className="btn btn--ghost btn--sm" disabled={selectedObjectIds.length === 0} onClick={() => void useSelection()}
             title="在 3D 畫面按住 Shift 點物件可以選好幾個"><Icon icon={Layers} /> 用 3D 畫面選取的物件（{selectedObjectIds.length} 個）</button>
         </div>
         <div className="mech-objects">
@@ -281,7 +292,7 @@ export default function MechanismSetupForm({
                   const checked = d.objectIds.includes(o.id);
                   return (
                     <label key={o.id} className="mech-objects__item">
-                      <input type="checkbox" checked={checked} onChange={e => toggleObject(o.id, e.target.checked)} />
+                      <input type="checkbox" checked={checked} onChange={e => void toggleObject(o.id, e.target.checked)} />
                       <span>{o.displayName}</span>
                       {owner && !checked && <span className="muted small">已在「{owner.name}」</span>}
                     </label>

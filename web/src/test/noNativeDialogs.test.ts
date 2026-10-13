@@ -19,16 +19,10 @@ const NATIVE = new Set(['alert', 'confirm', 'prompt']);
 const GLOBAL_OBJECTS = new Set(['window', 'globalThis', 'self', 'top', 'parent']);
 
 /**
- * 暫時允許的檔案：key = 檔案，value = 最多幾個 + 原因。數量只能變少。
- * StageScene.tsx 的「存視角」名稱還在用 window.prompt：這個檔案同時有另一件工作（機關）在改，
- * 避免兩邊打架先不動；那邊改完要換成 promptDialog，然後把這一條拿掉。
+ * 暫時允許的檔案：key = 檔案，value = 最多幾個 + 原因。數量只能變少。目前沒有
+ * （StageScene.tsx「存視角」的名稱輸入已經換成 promptDialog）。
  */
-const ALLOW_FILES: Record<string, { max: number; reason: string }> = {
-  '../components/StageScene.tsx': {
-    max: 1,
-    reason: '3D 工具列「存視角」的名稱輸入；StageScene 同時有機關的工作在改，之後換成 promptDialog 再拿掉這一條',
-  },
-};
+const ALLOW_FILES: Record<string, { max: number; reason: string }> = {};
 
 interface Hit { file: string; line: number; text: string }
 

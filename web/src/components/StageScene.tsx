@@ -44,6 +44,7 @@ import {
   PersonStanding, RefreshCw, Rotate3d, Ruler, SlidersHorizontal, Sparkles, Tag, Target, Video, X, Zap,
 } from 'lucide-react';
 import Icon from './Icon';
+import { promptDialog } from './dialogs';
 import './StageScene.css';
 
 // 3D 畫面上用 DOM 直接畫的小圖示（物件名稱旁的鎖、留言圖釘）：跟 lucide 的 Lock / MessageSquare 同一個圖形
@@ -452,11 +453,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     try { localStorage.setItem('sp_camera_bookmarks:' + bookmarkScope, JSON.stringify(bookmarks)); } catch {}
   }, [bookmarks, bookmarkScope]);
 
-  function saveCurrentCamera() {
+  async function saveCurrentCamera() {
     const cam = cameraRef.current;
     const orb = orbitRef.current;
     if (!cam || !orb) return;
-    const name = (window.prompt('視角名稱：', `視角 ${bookmarks.length + 1}`) || '').trim();
+    const name = ((await promptDialog({
+      title: '存目前的視角', label: '視角名稱', defaultValue: `視角 ${bookmarks.length + 1}`, confirmLabel: '儲存', maxLength: 40,
+    })) || '').trim();
     if (!name) return;
     const bm: Bookmark = {
       id: 'bm_' + Math.random().toString(36).slice(2, 10),

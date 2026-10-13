@@ -12,6 +12,7 @@ import { speedUnitOf, type Mechanism, type MechanismInput, type MechVec3 } from 
 import * as mapi from '../../lib/mechanisms/mechanismApi';
 import { buildMechanismSheetCsv, downloadMechanismSheet, sheetFileName } from '../../lib/mechanisms/cueSheet';
 import { toast } from '../../lib/toast';
+import { confirmDialog } from '../dialogs';
 import MechanismCueRow from './MechanismCueRow';
 import MechanismSetupForm from './MechanismSetupForm';
 import './mechanisms.css';
@@ -94,7 +95,7 @@ export default function MechanismTab({
       } catch (e) {
         const err = e as mapi.MechanismApiError;
         if (err.status !== 409 || !err.data?.conflicts?.length) throw e;
-        if (!confirm(`${err.message}\n\n要把它移到「${input.name}」嗎？`)) return;
+        if (!(await confirmDialog({ title: `要把它移到「${input.name}」嗎？`, message: err.message, confirmLabel: '移過來' }))) return;
         await send(true);
       }
       toast.success(editing ? `已儲存「${input.name}」` : `已新增「${input.name}」`);
@@ -107,7 +108,13 @@ export default function MechanismTab({
   }
 
   async function remove(m: Mechanism) {
-    if (!confirm(`刪除「${m.name}」？會一起清掉 ${m.cueCount} 個 cue 裡設定的機關位置，不能復原。`)) return;
+    const ok = await confirmDialog({
+      title: `刪除「${m.name}」？`,
+      message: `會一起清掉 ${m.cueCount} 個 cue 裡設定的機關位置，不能復原。`,
+      confirmLabel: '刪除',
+      destructive: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await mech.remove(m.id);
@@ -130,8 +137,13 @@ export default function MechanismTab({
           : `「${m.name}」帶的物件在每個 cue 都沒有離開預設位置，不用轉`);
         return;
       }
-      const skippedNote = dry.skipped.length ? `\n\n另外 ${dry.skipped.length} 個 cue 沒辦法轉，會照原本的樣子留著。` : '';
-      if (!confirm(`把 ${dry.converted} 個 cue 裡「${m.name}」帶的物件的位置，轉成「${m.name}」的機關位置？\n\n畫面看起來不會變，之後就能檢查速度、匯出總表。想先試試看的話，可以先複製專案、在副本上試。${skippedNote}`)) return;
+      const skippedNote = dry.skipped.length ? `另外 ${dry.skipped.length} 個 cue 沒辦法轉，會照原本的樣子留著。` : '';
+      const ok = await confirmDialog({
+        title: `把 ${dry.converted} 個 cue 的位置轉成「${m.name}」的機關位置？`,
+        message: `這些 cue 裡「${m.name}」帶的物件的高度 / 角度會變成機關的位置，畫面看起來不會變，之後就能檢查速度、匯出總表。想先試試看的話，可以先複製專案、在副本上試。${skippedNote}`,
+        confirmLabel: '轉換',
+      });
+      if (!ok) return;
       const r = await mapi.convertCuePositions(projectId, m.id, false);
       toast.success(`已轉好 ${r.converted} 個 cue`);
       const bad = r.skipped.filter(s => s.reason === 'inconsistent');
