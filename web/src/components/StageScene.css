@@ -5,6 +5,8 @@
   overflow: hidden;
   background: #16181c;
   user-select: none;
+  /* 讓工具列能依「3D 區塊有多寬」（不是整個視窗）切換精簡模式 */
+  container: stage-scene / inline-size;
 }
 
 .stage-scene canvas {
@@ -13,23 +15,31 @@
   height: 100% !important;
 }
 
-/* Toolbar overlay */
+/* Toolbar overlay
+   以前用 left:50% + translateX(-50%) 置中，工具列最多只能用到 3D 區塊一半寬，
+   字就被擠成直的。現在左右各留 10px、寬度貼著內容、置中；
+   放不下時：先變成只剩圖示（見下面 @container），再不夠才換第二排，字永遠不斷行。 */
 .stage-scene__toolbar {
   position: absolute;
   top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 10px;
+  right: 10px;
+  width: fit-content;
+  margin: 0 auto;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
   gap: 4px;
   padding: 6px;
   background: rgba(20, 22, 27, 0.85);
   border: 1px solid var(--border);
   backdrop-filter: blur(10px);
-  border-radius: 999px;
+  border-radius: 21px; /* 一排時是膠囊；萬一換成兩排就是圓角方塊 */
   z-index: 5;
   font-size: 12.5px;
 }
+.stage-scene__toolbar > * { flex-shrink: 0; }
 
 .stage-scene__toolbar .tool {
   background: transparent;
@@ -40,6 +50,7 @@
   cursor: pointer;
   font-family: inherit;
   font-size: 12.5px;
+  white-space: nowrap;
   transition: background 0.1s, color 0.1s;
 }
 .stage-scene__toolbar .tool:hover {
@@ -57,11 +68,19 @@
   background: var(--border-strong);
   margin: 0 2px;
 }
-.stage-scene__toolbar .grow { flex: 1; }
+/* 工具列寬度貼著內容，不需要撐開的空白（留著反而會在換排時把東西推到邊邊） */
+.stage-scene__toolbar .grow { display: none; }
+/* 當前 cue：名字太長時縮成「…」（至少留 90px），不要為了它多換一排 */
 .stage-scene__toolbar .cue-tag {
   color: var(--text-dim);
   padding: 0 10px;
   font-size: 12px;
+  white-space: nowrap;
+  flex: 1 1 0;
+  min-width: 90px;
+  max-width: max-content;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .stage-scene__toolbar .cue-tag strong {
   color: var(--accent);
@@ -76,6 +95,7 @@
   border-radius: 999px;
   letter-spacing: 0.05em;
   margin-right: 8px;
+  white-space: nowrap;
 }
 .ndi-pill--live {
   background: var(--accent-dim);
@@ -99,6 +119,63 @@
   border: none;
   font: inherit;
   margin-right: 0;
+}
+
+/* ── 3D 區塊不夠寬時的精簡模式（看的是 3D 區塊的寬，不是整個視窗） ──
+   第 1 段「只留圖示」：按鈕寬度上限只夠放一個圖示，圖示後面的空白撐很寬，
+     後面的字就被推到按鈕外面藏起來（滑鼠移上去仍有說明文字）。
+   第 2 段「再擠一點」：間距縮小、當前 cue 只留名字。
+   還是放不下才換第二排；換排時右上角的「現場設定 / 材質」面板往下讓。
+   管理頁按鈕最多（有 移動 / 旋轉 / 縮放）：全部帶字約 1300px、只留圖示約 805px、再擠約 635px。
+   其他頁（動畫師 / 導演 / 分享）：全部帶字最多約 1000px、只留圖示約 640px、再擠約 510px。
+   :where(:has(.tool-sep)) = 管理頁的工具列（只有它有分隔線），:where 讓它不會蓋過後面的規則。 */
+@container stage-scene (max-width: 1340px) {
+  .stage-scene__toolbar:where(:has(.tool-sep)) .tool {
+    max-width: 33px;
+    padding-left: 8px;
+    padding-right: 8px;
+    overflow: hidden;
+    word-spacing: 100px;
+  }
+  .stage-scene__toolbar:where(:has(.tool-sep)) .tool span { display: none; }
+}
+@container stage-scene (max-width: 1040px) {
+  .stage-scene__toolbar .tool {
+    max-width: 33px;
+    padding-left: 8px;
+    padding-right: 8px;
+    overflow: hidden;
+    word-spacing: 100px;
+  }
+  .stage-scene__toolbar .tool span { display: none; }
+}
+@container stage-scene (max-width: 830px) {
+  .stage-scene__toolbar:where(:has(.tool-sep)) { top: 8px; gap: 2px; padding: 4px; border-radius: 19px; }
+  .stage-scene__toolbar:where(:has(.tool-sep)) .tool { max-width: 30px; padding-left: 6px; padding-right: 6px; }
+  .stage-scene__toolbar:where(:has(.tool-sep)) .tool-sep { margin: 0 1px; }
+  .stage-scene__toolbar:where(:has(.tool-sep)) .cue-tag { font-size: 0; padding: 0 8px 0 4px; min-width: 60px; }
+  .stage-scene__toolbar:where(:has(.tool-sep)) .cue-tag strong { font-size: 12px; margin-left: 0; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+  .stage-scene__toolbar:where(:has(.tool-sep)) .ndi-pill { padding: 3px 8px; }
+  .stage-scene__toolbar:where(:has(.tool-sep)) .ndi-wrap { margin-right: 2px; }
+  /* 可能換排：NDI / 視角 的彈出框改對齊整條工具列的右下角，不會跑出 3D 區塊被切掉 */
+  .stage-scene__toolbar:where(:has(.tool-sep)) :is(.ndi-wrap, .bm-wrap) { position: static; }
+}
+@container stage-scene (max-width: 680px) {
+  .stage-scene__toolbar { top: 8px; gap: 2px; padding: 4px; border-radius: 19px; }
+  .stage-scene__toolbar .tool { max-width: 30px; padding-left: 6px; padding-right: 6px; }
+  .stage-scene__toolbar .tool-sep { margin: 0 1px; }
+  .stage-scene__toolbar .cue-tag { font-size: 0; padding: 0 8px 0 4px; min-width: 60px; }
+  .stage-scene__toolbar .cue-tag strong { font-size: 12px; margin-left: 0; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: top; }
+  .stage-scene__toolbar .ndi-pill { padding: 3px 8px; }
+  .stage-scene__toolbar .ndi-wrap { margin-right: 2px; }
+  .stage-scene__toolbar :is(.ndi-wrap, .bm-wrap) { position: static; }
+}
+/* 工具列換成兩排時，右上角的「現場設定 / 材質」面板（用 inline style 定位）往下讓 */
+@container stage-scene (max-width: 660px) {
+  .stage-scene__toolbar:where(:has(.tool-sep)) ~ [data-ui-element] { top: 92px !important; }
+}
+@container stage-scene (max-width: 540px) {
+  .stage-scene__toolbar ~ [data-ui-element] { top: 92px !important; }
 }
 .ndi-popover {
   position: absolute;
