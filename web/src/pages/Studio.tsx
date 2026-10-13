@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
@@ -123,6 +123,9 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
+  // 載入中 / 失敗時不能顯示「這首歌還沒有 cue」，會讓動畫師以為真的沒 cue
+  const [cuesStatus, setCuesStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [cuesReloadKey, setCuesReloadKey] = useState(0);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [cueStates, setCueStates] = useState<CueState[]>([]);
   const [stageObjects, setStageObjects] = useState<StageObject[]>([]);
@@ -220,14 +223,23 @@ function StudioInner({ projectId }: { projectId: string }) {
   useEffect(() => {
     if (!selectedSongId) { setCues([]); setSelectedCueId(null); return; }
     let cancelled = false;
+    // 切歌時先清掉上一首的 cue，不然載入期間會顯示舊歌的 cue
+    setCues([]);
+    setSelectedCueId(null);
+    setCuesStatus('loading');
     api.listCues(projectId, selectedSongId).then(list => {
       if (cancelled) return;
       const masters = list.filter(c => c.status === 'master');
       setCues(list);
       setSelectedCueId(masters[0]?.id ?? null);
-    }).catch(() => { if (!cancelled) setCues([]); });
+      setCuesStatus('ready');
+    }).catch(() => {
+      if (cancelled) return;
+      setCues([]);
+      setCuesStatus('error');
+    });
     return () => { cancelled = true; };
-  }, [projectId, selectedSongId]);
+  }, [projectId, selectedSongId, cuesReloadKey]);
 
   // 切 cue → 拉 states
   useEffect(() => {
@@ -529,7 +541,17 @@ function StudioInner({ projectId }: { projectId: string }) {
                 cues={masterCues}
                 selectedCueId={selectedCueId}
                 onSelectCue={setSelectedCueId}
-                emptyHint={selectedSong ? '這首歌還沒有 cue，請聯絡製作主管' : '先挑一首歌'}
+                emptyHint={
+                  !selectedSong ? '先挑一首歌'
+                  : cuesStatus === 'loading' ? '⏳ 載入 cue 中…'
+                  : cuesStatus === 'error' ? (
+                    <>
+                      <div>⚠️ cue 載入失敗</div>
+                      <button className="btn btn--ghost" onClick={() => setCuesReloadKey(k => k + 1)} style={{ marginTop: 8 }}>重試</button>
+                    </>
+                  )
+                  : '這首歌還沒有 cue，請聯絡製作主管'
+                }
               />
             )}
             {tab === 'review' && selectedSong && user && (
@@ -562,7 +584,7 @@ function CuesTab({
   cues: Cue[];
   selectedCueId: string | null;
   onSelectCue: (id: string) => void;
-  emptyHint: string;
+  emptyHint: ReactNode;
 }) {
   if (cues.length === 0) return <div className="studio-right__empty">{emptyHint}</div>;
   return (

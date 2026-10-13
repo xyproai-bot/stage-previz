@@ -84,6 +84,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitRef = useRef<OrbitControls | null>(null);
+  // 模型載入後自動對準舞台的視角（🎥 重置會回到這裡）
+  const homeViewRef = useRef<{ position: THREE.Vector3; target: THREE.Vector3 } | null>(null);
   const transformRef = useRef<TransformControls | null>(null);
   const meshesRef = useRef<Map<string, THREE.Object3D>>(new Map());
   const modelMeshMapRef = useRef<Map<string, THREE.Object3D>>(new Map()); // mesh_name → top-level node from .glb
@@ -102,6 +104,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const [showLabels, setShowLabels] = useState(true);
   const [renderMode, setRenderMode] = useState<RenderMode>(defaultRenderMode || 'quick');
   const [, setModelLoading] = useState(false);
+  // 每次 GLB 載入完 +1，讓依賴 meshesRef 的 effect 重建 / 重套材質
+  const [modelVersion, setModelVersion] = useState(0);
   // bump 用：dragging-changed end 後讓 attach pivot 的 effect 重跑
   const [pivotVersion, setPivotVersion] = useState(0);
 
@@ -821,8 +825,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         modelMeshMapRef.current = map;
 
         // 重新算 bbox after scale baking
+        // 注意：children 已經從 gltf.scene detach，要從 map 算，不然 bbox 是空的、鏡頭不會對準舞台
         const finalBox = new THREE.Box3();
-        gltf.scene.children.forEach(c => finalBox.expandByObject(c));
+        map.forEach(c => finalBox.expandByObject(c));
         const finalSize = finalBox.getSize(new THREE.Vector3());
         const finalCenter = finalBox.getCenter(new THREE.Vector3());
         const finalDiag = finalSize.length();
@@ -842,15 +847,20 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           cam.near = Math.max(0.01, finalDiag / 1000);
           cam.far  = Math.max(200, finalDiag * 10);
           cam.updateProjectionMatrix();
+          homeViewRef.current = { position: cam.position.clone(), target: finalCenter.clone() };
         }
 
-        // 觸發 mesh 重建
+        // 觸發 mesh 重建：清掉舊 mesh + label，bump modelVersion 讓 sync / 材質 / wireframe effect 重跑
+        // （之前只 clear 沒 bump，模型比 cue 資料晚到時舞台整個不見，只剩 label）
         meshesRef.current.forEach((m) => {
           scene.remove(m);
           disposeObject3D(m);
         });
         meshesRef.current.clear();
+        labelsRef.current.forEach((lbl) => lbl.remove());
+        labelsRef.current.clear();
         setModelLoading(false);
+        setModelVersion((v) => v + 1);
       },
       undefined,
       (err) => {
@@ -1022,7 +1032,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         lbl.classList.toggle('has-override', !!s.override);
       }
     }
-  }, [states, selectedObjectIds, mechanismOffsets, scaleCorrection]);
+  }, [states, selectedObjectIds, mechanismOffsets, scaleCorrection, modelVersion]);
 
   // ── Attach gizmo：單選 attach mesh、多選建 pivot 把 mesh reparent 進去 ──
   useEffect(() => {
@@ -1077,7 +1087,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     multiPivotRef.current = pivot;
     meshes.forEach(m => pivot.attach(m));
     transform.attach(pivot);
-  }, [selectedObjectIds, states.length, pivotVersion, readOnly]);
+  }, [selectedObjectIds, states.length, pivotVersion, readOnly, modelVersion]);
 
   // ── Mode / space ──
   useEffect(() => { transformRef.current?.setMode(mode); }, [mode]);
@@ -1358,7 +1368,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         ledLights.delete(id);
       }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion]);
 
   void RectAreaLightHelper; // keep import in case we want helper toggle later
 
@@ -1372,7 +1382,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         if (m && 'wireframe' in m) m.wireframe = wireframe;
       });
     });
-  }, [wireframe, states, stageObjects]);
+  }, [wireframe, states, stageObjects, modelVersion]);
 
   // ── 比例尺輔助：人形剪影 + 每格 1 公尺的網格 ──
   // 用 scaleCorrection 把真實公尺換算成 scene units，所以校準後尺寸就會對得起來。
@@ -1550,8 +1560,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const cam = cameraRef.current;
     const orb = orbitRef.current;
     if (!cam || !orb) return;
-    cam.position.set(8, 6, 10);
-    orb.target.set(0, 1, 0);
+    // 有載入模型 → 回到對準舞台的視角；沒模型才用預設位置
+    const home = homeViewRef.current;
+    if (home) {
+      cam.position.copy(home.position);
+      orb.target.copy(home.target);
+    } else {
+      cam.position.set(8, 6, 10);
+      orb.target.set(0, 1, 0);
+    }
     cam.updateProjectionMatrix();
   }, []);
 
