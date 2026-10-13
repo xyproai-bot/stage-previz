@@ -5,7 +5,6 @@ import type { Song, Cue, CueState, StageObject, StageObjectCategory, Vec3, Euler
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
 import MechanismPanel from '../components/MechanismPanel';
-import LedCanvasField from '../components/LedCanvasField';
 import UploadModelDialog from '../components/UploadModelDialog';
 import ModelVersionsDialog from '../components/ModelVersionsDialog';
 import AssetPickerDialog from '../components/AssetPickerDialog';
@@ -805,11 +804,6 @@ export default function ProjectEditor() {
               onChange={view.updateMechanismOffset}
               onResetAll={view.resetAllMechanismOffsets}
             />
-          )}
-
-          {/* AE 畫布尺寸：admin 每個專案填一次，動畫師用 NDI Webcam 預覽時要用 */}
-          {view.canEdit && (
-            <LedCanvasField value={view.ledCanvas} onChange={view.setLedCanvas} />
           )}
         </aside>
 

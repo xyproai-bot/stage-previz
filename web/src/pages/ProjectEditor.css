@@ -1083,69 +1083,6 @@
 .editor-songs__mine-toggle input { accent-color: var(--accent); }
 .editor-songs__mine-toggle label:has(input:checked) { color: var(--accent); }
 
-/* ── AE 畫布尺寸（左欄最下面，admin 才有） ── */
-.led-canvas-field {
-  flex-shrink: 0;
-  margin: 0 12px 12px;
-  padding: 8px 10px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  font-size: 12px;
-}
-.led-canvas-field__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-.led-canvas-field__title {
-  font-weight: 600;
-  color: var(--text-dim);
-}
-.led-canvas-field__clear {
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  padding: 0 2px;
-  font-size: 11px;
-  line-height: 1;
-}
-.led-canvas-field__clear:hover:not(:disabled) { color: var(--danger); }
-.led-canvas-field__clear:disabled { opacity: 0.3; cursor: default; }
-.led-canvas-field__inputs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.led-canvas-field__input {
-  width: 64px;
-  min-width: 0;
-  padding: 3px 6px;
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  text-align: right;
-}
-.led-canvas-field__input:focus { outline: none; border-color: var(--accent); }
-.led-canvas-field__input.is-error { border-color: var(--danger); }
-.led-canvas-field__x,
-.led-canvas-field__unit { color: var(--text-muted); }
-.led-canvas-field__pending {
-  margin-left: auto;
-  font-size: 11px;
-  color: var(--warn);
-}
-.led-canvas-field__hint {
-  margin-top: 6px;
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--text-muted);
-}
-.led-canvas-field__hint.is-error { color: var(--danger); }
-
 /* ── Objects manager tab ── */
 .objects-manager {
   padding: 12px;
