@@ -206,19 +206,35 @@
 }
 
 .studio-songs__hint {
-  padding: 10px 14px;
+  /* 兩段各自不斷行；真的放不下（窄的 iPad）才在兩段中間換行 */
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  padding: 10px 12px;
   border-top: 1px solid var(--border);
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-muted);
   font-family: var(--font-mono);
 }
+.studio-songs__hint-item { white-space: nowrap; }
 .studio-songs__hint kbd {
   background: var(--surface-2);
-  padding: 1px 5px;
+  padding: 1px 4px;
   border-radius: 3px;
   font-size: 10px;
   margin: 0 1px;
 }
+
+/* 歌單本體（手機上收進「打開歌單」）；桌機、iPad 照舊整條在左邊 */
+.studio-songs__sheet {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* 手機才有的「現在這首歌 ▾」 */
+.studio-songs__toggle { display: none; }
 
 .status-dot {
   width: 8px;
@@ -768,29 +784,82 @@
 }
 
 @media (max-width: 768px) {
-  /* 小一點：直接 collapse 左右成 drawer 模式（暫時 hide 右 panel，讓 3D 全寬） */
-  .studio-body { grid-template-columns: 180px 1fr; }
-  .studio-right { display: none; }
+  /* iPad 直拿：歌單在左邊；cue / 審查 / 留言放到 3D 下面（以前整個藏起來，看不到導演的意見、不能提交審查） */
+  .studio-body {
+    grid-template-columns: 180px 1fr;
+    grid-template-rows: minmax(0, 1fr) minmax(240px, 38vh);
+  }
+  .studio-songs { grid-row: 1 / span 2; }
+  .studio-right {
+    grid-column: 2;
+    grid-row: 2;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
   .studio-top__role { font-size: 10px; padding: 3px 8px; }
 }
 
 @media (max-width: 640px) {
-  .studio-body { grid-template-columns: 1fr; grid-template-rows: 160px minmax(0, 1fr); }
+  /* 手機：整頁往下捲 —— 一行「現在這首歌 ▾」、3D 舞台、cue / 審查 / 留言 */
+  .studio-body {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+  }
   .studio-songs {
+    flex: none;
+    position: sticky;
+    top: 0;
+    z-index: 40;
     border-right: none;
     border-bottom: 1px solid var(--border);
-    flex-direction: row;
-    overflow-x: auto;
   }
-  .studio-songs__list {
+  .studio-songs__toggle {
     display: flex;
-    flex-direction: row;
-    gap: 6px;
-    overflow-x: auto;
-    overflow-y: hidden;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 14px;
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 13.5px;
+    text-align: left;
   }
-  .studio-songs__item { white-space: nowrap; }
+  .studio-songs__toggle-name {
+    flex: 1;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-weight: 600;
+  }
+  .studio-songs__toggle-count { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+  /* 打開的歌單：蓋在舞台上面、直的清單，太長就在裡面捲 */
+  .studio-songs__sheet { display: none; }
+  .studio-songs.is-sheet-open .studio-songs__sheet {
+    display: flex;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    max-height: 70vh;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  }
   .studio-songs__hint { display: none; }
+  .studio-stage { flex: none; height: 68vh; min-height: 420px; }
+  .studio-right {
+    flex: none;
+    min-height: 60vh;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+  .studio-right__body { overflow: visible; }
 }
 
 @media (hover: none) and (pointer: coarse) {
@@ -869,11 +938,11 @@
 .studio-songs__item.is-active .song-code { background: rgba(0, 0, 0, 0.18); color: inherit; }
 
 /* ── 本地檔案清單（選了「本地檔案」時接在歌曲清單下面）── */
-.studio-songs > .share-setlist {
+.studio-songs__sheet > .share-setlist {
   flex: 1 1 55%;
   border-top: 1px solid var(--border);
 }
-.studio-songs:has(> .share-setlist) > .studio-songs__list { flex: 1 1 45%; }
+.studio-songs__sheet:has(> .share-setlist) > .studio-songs__list { flex: 1 1 45%; }
 
 /* ── 審片 v2：有新版、導演看過哪一版 ── */
 .studio-songs__item-newer {

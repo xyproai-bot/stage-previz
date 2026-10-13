@@ -38,13 +38,14 @@ import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions } from '../lib/mentions';
 import { formatRelativeTime } from '../lib/serverTime';
+import { describeActivity } from '../lib/activityText';
 import {
   SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
   friendlyError, projectGoneMessage, sameSongs, sameComments,
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, BookOpen, ChevronLeft, ChevronRight, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Play, RefreshCw, Repeat,
+  ArrowLeft, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Play, RefreshCw, Repeat,
   SearchX, Settings, TriangleAlert, UserRoundSearch, Volume2, VolumeX, X,
 } from 'lucide-react';
 import './Studio.css';
@@ -104,6 +105,19 @@ function StudioInner({ projectId }: { projectId: string }) {
   });
   useEffect(() => { try { localStorage.setItem('sp_studio_filter', songFilter); } catch {} }, [songFilter]);
   const [songSearch, setSongSearch] = useState('');
+  // 手機上的歌單：平常收成一行，點開才是整個清單（點外面或選了歌就收起來）
+  const [songsSheetOpen, setSongsSheetOpen] = useState(false);
+  const songsAsideRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (!songsSheetOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (songsAsideRef.current && !songsAsideRef.current.contains(e.target as Node)) setSongsSheetOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSongsSheetOpen(false); };
+    document.addEventListener('pointerdown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('pointerdown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [songsSheetOpen]);
 
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
@@ -665,7 +679,8 @@ function StudioInner({ projectId }: { projectId: string }) {
     if (note.trim()) {
       const text = `[提交審查] ${note.trim()}`;
       try {
-        const updated = await api.postSongComment(projectId, song.id, { text, mentions: extractMentions(text, members) });
+        // 記在交上去的那一版（最新一版）：導演在「這一版」就看得到，不會變成「舊留言」
+        const updated = await api.postSongComment(projectId, song.id, { text, mentions: extractMentions(text, members), videoId: song.latestVideoId ?? null });
         setSongComments(song.id, updated);
       } catch (e) {
         toast.warn('已提交審查，但附的那段話沒送出去：' + friendlyError(e));
@@ -770,7 +785,23 @@ function StudioInner({ projectId }: { projectId: string }) {
       {topBar}
 
       <div className="studio-body">
-        <aside className="studio-songs">
+        <aside className={'studio-songs' + (songsSheetOpen ? ' is-sheet-open' : '')} ref={songsAsideRef}>
+          {/* 手機：上面一行寫現在這首歌，點了才打開整個歌單（直的清單，不會左右捲、卡片不會被切掉） */}
+          <button
+            type="button"
+            className="studio-songs__toggle"
+            onClick={() => setSongsSheetOpen(o => !o)}
+            aria-expanded={songsSheetOpen}
+            aria-label={songsSheetOpen ? '收起歌單' : '打開歌單（換歌）'}
+          >
+            <Icon icon={ListMusic} size="sm" />
+            <span className="studio-songs__toggle-name">
+              {selectedSong ? <>{selectedSong.code && <span className="song-code">{selectedSong.code}</span>}{selectedSong.name}</> : '選一首歌'}
+            </span>
+            <span className="studio-songs__toggle-count">{source === 'file' ? `本地檔案 ${media.items.length}` : `${visibleSongs.length} 首`}</span>
+            <Icon icon={songsSheetOpen ? ChevronUp : ChevronDown} size="sm" />
+          </button>
+          <div className="studio-songs__sheet">
           <div className="studio-songs__head">
             <div className="studio-songs__title">歌曲</div>
             {!isAdmin && (
@@ -820,7 +851,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 <li key={s.id}>
                   <button
                     className={'studio-songs__item' + (s.id === selectedSongId ? ' is-active' : '')}
-                    onClick={() => setSelectedSongId(s.id)}
+                    onClick={() => { setSelectedSongId(s.id); setSongsSheetOpen(false); }}
                   >
                     <span className={'status-dot status-dot--' + s.status} title={STATUS_LABEL[s.status]} />
                     <span className="studio-songs__item-name">
@@ -845,7 +876,9 @@ function StudioInner({ projectId }: { projectId: string }) {
           </ul>
 
           <div className="studio-songs__hint">
-            <kbd>J</kbd>/<kbd>K</kbd> 切歌 · <kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd> 切 cue
+            <span className="studio-songs__hint-item"><kbd>J</kbd>/<kbd>K</kbd> 切歌</span>
+            <span className="studio-songs__hint-sep" aria-hidden="true">·</span>
+            <span className="studio-songs__hint-item"><kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd> 切 cue</span>
           </div>
 
           {/* 本地檔案清單（選了「本地檔案」才有）：跟分享頁一樣，點哪個 LED 就放哪個，只在這台電腦播 */}
@@ -862,6 +895,7 @@ function StudioInner({ projectId }: { projectId: string }) {
               onAddFiles={addFiles}
             />
           )}
+          </div>
         </aside>
 
         <main
@@ -1483,8 +1517,7 @@ function ActivityList({ projectId }: { projectId: string }) {
             <span className="avatar avatar--sm" style={{ background: a.userAvatar }} title={a.userName}>{a.userName[0]}</span>
             <div className="activity-list__body">
               <div className="activity-list__line">
-                <strong>{a.userName}</strong> {actionLabel(a.action)} {targetLabel(a.targetType)}
-                {(a.payload?.name as string) && <span className="muted small"> · {a.payload.name as string}</span>}
+                <strong>{a.userName}</strong> {describeActivity(a)}
               </div>
               {/* 後台時間是 UTC、沒寫時區 → 用 serverTime 轉成本地時間（以前會差 8 小時） */}
               <div className="activity-list__time">{formatRelativeTime(a.createdAt)}</div>
@@ -1494,18 +1527,4 @@ function ActivityList({ projectId }: { projectId: string }) {
       </ul>
     </div>
   );
-}
-
-function actionLabel(action: string): string {
-  return ({
-    create: '建立', update: '改了', delete: '刪了', reorder: '重排',
-    reset: '重置', activate: '啟用', archive: '封存', upload: '上傳',
-    bulk_create: '批次建', seed: '初始化',
-  } as Record<string, string>)[action] || action;
-}
-function targetLabel(t: string): string {
-  return ({
-    project: '專案', song: '歌曲', cue: 'cue', cue_state: 'cue 狀態',
-    stage_object: '物件', model: '模型', drive_file: 'Drive 檔',
-  } as Record<string, string>)[t] || t;
 }
