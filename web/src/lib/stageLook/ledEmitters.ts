@@ -76,7 +76,7 @@ function collectTriangles(root: THREE.Object3D): Tri[] {
       const normal = cross.normalize();
       if (flip) normal.negate();
       const centroid = new THREE.Vector3().add(verts[0]).add(verts[1]).add(verts[2]).divideScalar(3);
-      const uvs = uv ? (ids.map(k => new THREE.Vector2().fromBufferAttribute(uv, k)) as Tri['uvs']) : null;
+      const uvs = uv ? (ids.map(k => new THREE.Vector2().fromBufferAttribute(uv as THREE.BufferAttribute, k)) as Tri['uvs']) : null;
       tris.push({ verts, uvs, normal, centroid, area });
     }
   });
