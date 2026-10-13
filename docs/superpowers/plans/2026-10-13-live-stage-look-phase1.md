@@ -223,9 +223,12 @@ describe('buildLedEmitters', () => {
   });
 
   it('朝下的面板 → 法線向下，高度軸改用 Z', () => {
+    // 結果是 root 的 local 座標 → 旋轉要放在子物件上
+    const root = new THREE.Group();
     const m = planeMesh();
     m.rotation.x = Math.PI / 2;
-    const [e] = buildLedEmitters(m);
+    root.add(m);
+    const [e] = buildLedEmitters(root);
     expect(e.normal.y).toBeCloseTo(-1);
     expect(Math.abs(e.heightAxis.z)).toBeCloseTo(1);
   });
