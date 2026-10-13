@@ -116,6 +116,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
+  // 動畫師只看：3D 工具列只剩重置攝影機、燈光照專案預設（不能自己調）
+  const isAnimatorViewer = user?.role === 'animator';
 
   const [projectName, setProjectName] = useState<string>('');
   // 專案名讀不到時不能一直停在「…」，要顯示讀取失敗 + 重試
@@ -493,10 +495,11 @@ function StudioInner({ projectId }: { projectId: string }) {
                   scaleCorrection={view.scaleCorrection}
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                   mechanismOffsets={view.mechanismOffsets}
-                  lookSettings={personalLook.effective}
-                  onLookSettingsChange={personalLook.set}
-                  lookCustomized={personalLook.customized}
-                  onLookReset={personalLook.reset}
+                  toolbarMode={isAnimatorViewer ? 'viewer' : 'full'}
+                  lookSettings={isAnimatorViewer ? view.lookSettings : personalLook.effective}
+                  onLookSettingsChange={isAnimatorViewer ? undefined : personalLook.set}
+                  lookCustomized={isAnimatorViewer ? false : personalLook.customized}
+                  onLookReset={isAnimatorViewer ? undefined : personalLook.reset}
                   onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
                   materialOverrides={view.materialOverrides}
                   homeView={view.homeView}

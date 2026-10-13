@@ -17,6 +17,7 @@ const ROLE_LABEL: Record<UserRole, string> = {
 };
 
 export default function Settings() {
+  const { user } = useAuth();
   return (
     <AdminLayout>
       <header className="admin-topbar">
@@ -25,7 +26,8 @@ export default function Settings() {
       <div className="admin-content settings">
         <AccountSection />
         <NdiSection />
-        <ThisComputerSection />
+        {/* 自己調的現場亮度：只有管理員能調燈光，其他人看不到這區 */}
+        {user?.role === 'admin' && <ThisComputerSection />}
         <AboutSection />
       </div>
     </AdminLayout>
