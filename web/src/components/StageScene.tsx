@@ -19,9 +19,9 @@ import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import { useNdiConnection } from '../lib/ndiConnection';
-import { ndiShortLabel, ndiStepMessage, showSourcePicker, type NdiGuide } from '../lib/ndiSteps';
+import { ndiShortLabel, ndiStepMessage, showSourcePicker, sourcePickerInStep, type NdiGuide } from '../lib/ndiSteps';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
-import { NdiChecklist, NdiGuideCard, NdiSourcePicker, ndiCardKey, ndiCardVisible } from './NdiGuide';
+import { NdiAutostartNote, NdiChecklist, NdiGuideCard, NdiSourcePicker, ndiCardKey, ndiCardVisible } from './NdiGuide';
 import LookSettingsPanel from './LookSettingsPanel';
 import { DEFAULT_LOOK_SETTINGS, type LookSettings } from '../lib/stageLook/lookSettings';
 import { buildLedEmitters, type LedEmitter } from '../lib/stageLook/ledEmitters';
@@ -2276,10 +2276,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                     env={ndi.env}
                     onConnect={ndi.connect}
                     onSelectSource={ndi.selectSource}
+                    showAutostartNote={false}
                   />
-                  {ndiGuideState.step !== 'waiting_frames' && showSourcePicker(ndiGuideState) && (
+                  {!sourcePickerInStep(ndiGuideState) && showSourcePicker(ndiGuideState) && (
                     <NdiSourcePicker guide={ndiGuideState} onSelectSource={ndi.selectSource} />
                   )}
+                  <NdiAutostartNote guide={ndiGuideState} />
                   {ndiGuideState.outdated && ndiGuideState.step !== 'helper_outdated' && (
                     <p className="ndi-popover__note">
                       小程序有新版（你的是 {ndiGuideState.helperVersion}）：

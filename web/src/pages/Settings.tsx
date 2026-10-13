@@ -4,7 +4,8 @@ import AdminLayout from '../components/AdminLayout';
 import { useAuth } from '../lib/auth';
 import type { UserRole } from '../lib/api';
 import { useNdiConnection } from '../lib/ndiConnection';
-import { ndiStepMessage, type NdiBrowser, type NdiGuide } from '../lib/ndiSteps';
+import { ndiAutostartNote, ndiStepMessage, showSourcePicker, type NdiBrowser, type NdiGuide } from '../lib/ndiSteps';
+import { NdiSourcePicker } from '../components/NdiGuide';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
 import { clearPersonalLooks, countPersonalLooks } from '../lib/localPrefs';
 import { toast } from '../lib/toast';
@@ -95,6 +96,12 @@ function NdiSection() {
         </button>
         {checking && <NdiCheckResult guide={g} browser={ndi.env.browser} />}
       </div>
+      {/* 這台電腦的 AE 沒在送、網路上有別台的（說明會叫他「在下面選」）/ 有好幾個來源 → 可以在這裡選 */}
+      {checking && showSourcePicker(g) && (
+        <div className="settings-ndi-source">
+          <NdiSourcePicker guide={g} onSelectSource={ndi.selectSource} />
+        </div>
+      )}
 
       <div className="settings-links">
         {mac ? [macLink, winLink] : [winLink, macLink]}
@@ -113,6 +120,7 @@ function NdiSection() {
 
 function NdiCheckResult({ guide, browser }: { guide: NdiGuide; browser: NdiBrowser }) {
   const msg = ndiStepMessage(guide, browser);
+  const autostartNote = ndiAutostartNote(guide);
   const ok = guide.step === 'ready' || guide.step === 'live';
   const neutral = guide.step === 'connecting';
   return (
@@ -120,6 +128,7 @@ function NdiCheckResult({ guide, browser }: { guide: NdiGuide; browser: NdiBrows
       <span>{msg.title}</span>
       {msg.detail.map(d => <span key={d} className="settings-status__sub">{d}</span>)}
       {guide.helperVersion && <span className="settings-status__sub">小程序版本 {guide.helperVersion}</span>}
+      {autostartNote && <span className="settings-status__sub settings-status__sub--warn">⚠ {autostartNote}</span>}
     </span>
   );
 }

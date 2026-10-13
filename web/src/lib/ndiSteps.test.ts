@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   compareVersions, decideNdiStep, detectBrowser, detectOs, FRAME_STALE_MS, isHelperOutdated, isLoopbackHost, retryDelayMs,
-  ndiChecklist, ndiShortLabel, ndiStepMessage, parseHello, parseHelperStatus, showSourcePicker, sortSources, sourceLabel,
+  MIN_HELPER_VERSION, NDI_AUTOSTART_NOTE,
+  ndiAutostartNote, ndiChecklist, ndiShortLabel, ndiStepMessage, parseHello, parseHelperStatus, showSourcePicker, sortSources,
+  sourceLabel, sourcePickerInStep, splitSourceName,
   type NdiGuide, type NdiHello, type NdiHelperStatus, type NdiStep, type NdiStepInput,
 } from './ndiSteps';
 
-const HELLO: NdiHello = { version: '0.1.9', protocol: 2, platform: 'windows', source: null };
+const HELLO: NdiHello = { version: '0.1.10', protocol: 2, platform: 'windows', source: null };
 const OLD_HELLO: NdiHello = { version: '0.1.8', protocol: null, platform: null, source: 'PC (Adobe After Effects)' };
 const AE = 'ULTRA9-285K (Adobe After Effects)';
 
@@ -13,7 +15,15 @@ const status = (patch: Partial<NdiHelperStatus> = {}): NdiHelperStatus => ({
   state: 'live', error: null, mode: 'auto', preferred: null, source: AE,
   sources: [{ name: AE, local: true, afterEffects: true }],
   receiving: true, fps: 30, width: 1920, height: 1080, framesPaused: false,
+  autostart: { wanted: true, registered: true, error: null },
   ...patch,
+});
+
+const REMOTE = { name: 'OTHER-PC (Adobe After Effects)', local: false, afterEffects: true };
+/** 0.1.10：這台電腦的 AE 沒在送，網路上只有別台的 → 不自動接 */
+const NO_LOCAL = (sources = [REMOTE]) => status({
+  state: 'searching', source: null, sources, receiving: false, fps: 0, width: 0, height: 0,
+  error: { code: 'no_local_source', message: '找不到這台電腦的 After Effects NDI 輸出' },
 });
 
 /** 預設：Chrome、允許了、連上新版小程序、正在收畫面 */
@@ -88,6 +98,22 @@ describe('decideNdiStep：每一步', () => {
   it('找不到任何來源 → no_source', () => {
     expect(step({ status: status({ state: 'searching', source: null, sources: [] }), lastFrameAt: null })).toBe('no_source');
     expect(step({ status: status({ state: 'standby', source: null }), lastFrameAt: null })).toBe('no_source');
+    expect(step({
+      status: status({ state: 'searching', source: null, sources: [], error: { code: 'no_source', message: '找不到 NDI 來源' } }),
+      lastFrameAt: null,
+    })).toBe('no_source');
+  });
+
+  it('這台電腦的 AE 沒在送、只有別台的來源（0.1.10）→ no_local_source，停在「找到 AE」', () => {
+    const g = decideNdiStep(input({ status: NO_LOCAL([REMOTE, { name: 'OBS-PC (OBS)', local: false, afterEffects: false }]), lastFrameAt: null }));
+    expect(g.step).toBe('no_local_source');
+    expect(g.row).toBe(3);
+    expect(g.source).toBeNull();
+    expect(g.sources.map(s => s.name)).toEqual(['OTHER-PC (Adobe After Effects)', 'OBS-PC (OBS)']);
+    // 設定頁的檢查（不收畫面）也一樣
+    expect(step({ wantFrames: false, status: NO_LOCAL(), lastFrameAt: null })).toBe('no_local_source');
+    // 選了別台、接上之後就照一般流程
+    expect(step({ status: status({ mode: 'manual', preferred: REMOTE.name, source: REMOTE.name, sources: [REMOTE] }) })).toBe('live');
   });
 
   it('接上來源但超過 3 秒沒畫面 → waiting_frames；3 秒內 → connecting', () => {
@@ -151,6 +177,7 @@ describe('ndiChecklist', () => {
     expect(rows(decideNdiStep(input({ socket: 'closed', hello: null, status: null, failures: 2 })))).toBe('dcttt');
     expect(rows(decideNdiStep(input({ status: status({ state: 'ndi_missing' }), lastFrameAt: null })))).toBe('ddctt');
     expect(rows(decideNdiStep(input({ status: status({ state: 'searching', source: null }), lastFrameAt: null })))).toBe('dddct');
+    expect(rows(decideNdiStep(input({ status: NO_LOCAL(), lastFrameAt: null })))).toBe('dddct');
     expect(rows(decideNdiStep(input({ status: status({ state: 'connecting' }), lastFrameAt: null, sourceSince: 0, now: 9_000 })))).toBe('ddddc');
     expect(rows(decideNdiStep(input()))).toBe('ddddd');
     // 不收畫面的檢查：最後一格不知道
@@ -182,6 +209,17 @@ describe('ndiStepMessage', () => {
     expect(msg({ wantFrames: false, lastFrameAt: null }).title).toBe(`小程序正常，找到 ${AE}`);
   });
 
+  it('這台電腦的 AE 沒在送 NDI：說怎麼檢查 + 叫他在下面選別台', () => {
+    const m = msg({ status: NO_LOCAL(), lastFrameAt: null });
+    expect(m.title).toBe('這台電腦的 AE 沒有在送 NDI');
+    expect(m.detail).toEqual([
+      '確認 AE 開著、偏好設定 → 視訊預覽 有勾 NDI、AE 在播放',
+      '要看網路上別台電腦的 AE，請在下面選',
+    ]);
+    // 設定頁一樣的說法
+    expect(msg({ wantFrames: false, status: NO_LOCAL(), lastFrameAt: null })).toEqual(m);
+  });
+
   it('被擋住時照瀏覽器教怎麼改', () => {
     const denied = { permission: 'denied' as const, socket: 'closed' as const, hello: null, status: null, failures: 1 };
     expect(msg(denied, 'chromium').detail[0]).toBe('按網址列左邊的圖示 →「這個裝置上的應用程式」→ 允許');
@@ -192,6 +230,8 @@ describe('ndiStepMessage', () => {
 
   it('短標示', () => {
     expect(ndiShortLabel(decideNdiStep(input()))).toBe('LIVE · 30 fps');
+    expect(ndiShortLabel(decideNdiStep(input({ status: NO_LOCAL(), lastFrameAt: null })))).toBe('找不到這台電腦的 AE');
+    expect(ndiShortLabel(decideNdiStep(input({ status: status({ state: 'searching', source: null, sources: [] }), lastFrameAt: null })))).toBe('找不到 AE');
     expect(ndiShortLabel(decideNdiStep(input({ socket: 'closed', hello: null, status: null, failures: 1 })))).toBe('沒有偵測到小程序');
   });
 });
@@ -217,6 +257,33 @@ describe('解析小程序訊息', () => {
     expect(s.sources).toHaveLength(2);
     expect(s.sources[0].local).toBe(true);
     expect(s.fps).toBeCloseTo(29.97);
+    expect(s.autostart).toBeNull();  // 0.1.9 沒有這欄
+  });
+
+  it('0.1.10 status：找不到這台的 AE + 開機自動啟動狀況', () => {
+    const s = parseHelperStatus({
+      type: 'status', version: '0.1.10', state: 'searching', ndi: 'ready',
+      error: { code: 'no_local_source', message: '找不到這台電腦的 After Effects NDI 輸出' }, lastError: '找不到這台電腦的 After Effects NDI 輸出',
+      mode: 'auto', preferred: null, source: null,
+      sources: [{ name: 'OTHER-PC (Adobe After Effects)', local: false, afterEffects: true }],
+      availableSources: ['OTHER-PC (Adobe After Effects)'],
+      connected: false, receiving: false, fps: 0, width: 0, height: 0, framesPaused: false,
+      autostart: { wanted: true, registered: false, error: '寫入登錄檔失敗：存取被拒' },
+    });
+    expect(s.state).toBe('searching');
+    expect(s.error).toEqual({ code: 'no_local_source', message: '找不到這台電腦的 After Effects NDI 輸出' });
+    expect(s.source).toBeNull();
+    expect(s.sources).toEqual([{ name: 'OTHER-PC (Adobe After Effects)', local: false, afterEffects: true }]);
+    expect(s.autostart).toEqual({ wanted: true, registered: false, error: '寫入登錄檔失敗：存取被拒' });
+    expect(parseHelperStatus({ autostart: { wanted: true, registered: true, error: null } }).autostart)
+      .toEqual({ wanted: true, registered: true, error: null });
+  });
+
+  it('autostart 看不懂 → null', () => {
+    expect(parseHelperStatus({ autostart: null }).autostart).toBeNull();
+    expect(parseHelperStatus({ autostart: 'yes' }).autostart).toBeNull();
+    expect(parseHelperStatus({ autostart: { wanted: 'true', registered: false } }).autostart).toBeNull();
+    expect(parseHelperStatus({ autostart: { wanted: true } }).autostart).toBeNull();
   });
 
   it('error 物件 / 舊版 lastError / 舊版 availableSources', () => {
@@ -248,7 +315,11 @@ describe('版本', () => {
     expect(compareVersions('0.1', '0.1.0')).toBe(0);
   });
   it('isHelperOutdated', () => {
+    expect(MIN_HELPER_VERSION).toBe('0.1.10');
     expect(isHelperOutdated(HELLO)).toBe(false);
+    expect(isHelperOutdated({ ...HELLO, version: '0.1.11' })).toBe(false);
+    // 0.1.9 會自己接到網路上別台電腦的畫面 → 要更新
+    expect(isHelperOutdated({ ...HELLO, version: '0.1.9' })).toBe(true);
     expect(isHelperOutdated({ ...HELLO, version: '0.2.0' })).toBe(false);
     expect(isHelperOutdated(OLD_HELLO)).toBe(true);
     expect(isHelperOutdated({ ...HELLO, protocol: 1 })).toBe(true);
@@ -295,9 +366,18 @@ describe('來源清單', () => {
       'ME (Adobe After Effects)', 'OTHER (Adobe After Effects)', 'ME (NDI Test Patterns)', 'OBS-PC (OBS)',
     ]);
   });
-  it('這台電腦的標出來', () => {
-    expect(sourceLabel(list[3])).toBe('ME (Adobe After Effects)（這台電腦）');
-    expect(sourceLabel(list[1])).toBe('OTHER (Adobe After Effects)');
+  it('這台電腦的標「這台電腦」、別台的標機器名', () => {
+    expect(sourceLabel(list[3])).toBe('這台電腦的 Adobe After Effects');
+    expect(sourceLabel(list[1])).toBe('OTHER 的 Adobe After Effects');
+    expect(sourceLabel(list[0])).toBe('OBS-PC 的 OBS');
+    // 名稱不是「機器名 (程式名)」→ 原樣（這台電腦的加註）
+    expect(sourceLabel({ name: 'Weird', local: true, afterEffects: false })).toBe('Weird（這台電腦）');
+    expect(sourceLabel({ name: 'Weird', local: false, afterEffects: false })).toBe('Weird');
+  });
+  it('splitSourceName：機器名 / 程式名（程式名裡可以有括號）', () => {
+    expect(splitSourceName('ULTRA9-285K (Adobe After Effects)')).toEqual({ machine: 'ULTRA9-285K', program: 'Adobe After Effects' });
+    expect(splitSourceName('PC (Adobe After Effects (2))')).toEqual({ machine: 'PC', program: 'Adobe After Effects (2)' });
+    expect(splitSourceName('no parens')).toBeNull();
   });
   it('多於一個來源才給選', () => {
     const g = decideNdiStep(input());
@@ -305,6 +385,70 @@ describe('來源清單', () => {
     expect(showSourcePicker(decideNdiStep(input({ status: status({ sources: list }) })))).toBe(true);
     // 手動選過、只剩一個也要能選回自動
     expect(showSourcePicker(decideNdiStep(input({ status: status({ mode: 'manual', preferred: AE }) })))).toBe(true);
+  });
+  it('這台電腦的 AE 沒在送、只有一個別台的來源 → 也要給選（小程序不會自動接別台）', () => {
+    const g = decideNdiStep(input({ status: NO_LOCAL([REMOTE]), lastFrameAt: null }));
+    expect(g.step).toBe('no_local_source');
+    expect(showSourcePicker(g)).toBe(true);
+    expect(sourcePickerInStep(g)).toBe(true);
+    // 一個來源都沒有 → 沒東西可選
+    expect(showSourcePicker({ ...g, sources: [] })).toBe(false);
+    // 一般情況（只有這台的一個、自動）→ 不用選，選單不放在說明裡
+    const live = decideNdiStep(input());
+    expect(showSourcePicker(live)).toBe(false);
+    expect(sourcePickerInStep(live)).toBe(false);
+    // 停住時的選單在說明裡
+    expect(sourcePickerInStep(decideNdiStep(input({ status: status({ state: 'connecting' }), lastFrameAt: null, sourceSince: 0, now: 9_000 })))).toBe(true);
+  });
+});
+
+describe('0.1.9 小程序（使用者電腦上現在裝的）', () => {
+  const V019: NdiHello = { version: '0.1.9', protocol: 2, platform: 'windows', source: null };
+  const st019 = status({ autostart: null });
+  const rows = (g: NdiGuide) => ndiChecklist(g).map(r => r.state[0]).join('');
+  it('沒畫面 → 叫他更新', () => {
+    const g = decideNdiStep(input({ hello: V019, status: st019, lastFrameAt: null }));
+    expect(g.step).toBe('helper_outdated');
+    expect(g.outdated).toBe(true);
+    const m = ndiStepMessage(g, 'chromium');
+    expect(m.title).toBe('小程序有新版，請下載更新');
+    expect(m.detail).toEqual(['你的版本是 0.1.9，裝好新版後會自動連上']);
+    expect(ndiShortLabel(g)).toBe('小程序要更新');
+    expect(rows(g)).toBe('dcttt');
+  });
+  it('有畫面照樣用（LIVE，只標出要更新）', () => {
+    const g = decideNdiStep(input({ hello: V019, status: st019 }));
+    expect(g.step).toBe('live');
+    expect(g.outdated).toBe(true);
+    expect(g.hasFrame).toBe(true);
+  });
+  it('設定頁的檢查 → 叫他更新', () => {
+    expect(step({ hello: V019, status: st019, wantFrames: false, lastFrameAt: null })).toBe('helper_outdated');
+  });
+});
+
+describe('開機自動啟動沒設好（0.1.10）', () => {
+  const failed = { wanted: true, registered: false, error: '寫入登錄檔失敗' };
+  it('想開、沒登記成功 → 提醒；不擋 AE 即時', () => {
+    const live = decideNdiStep(input({ status: status({ autostart: failed }) }));
+    expect(live.autostartFailed).toBe(true);
+    expect(live.step).toBe('live');
+    expect(ndiAutostartNote(live)).toBe('小程序沒辦法設成開機自動啟動（可能被電腦管家類軟體擋掉），下次開機要手動打開');
+    expect(NDI_AUTOSTART_NOTE).toBe(ndiAutostartNote(live));
+    // 其他步驟照常（例如找不到這台的 AE、設定頁的檢查）
+    const noLocal = decideNdiStep(input({ status: { ...NO_LOCAL(), autostart: failed }, lastFrameAt: null }));
+    expect(noLocal.step).toBe('no_local_source');
+    expect(noLocal.autostartFailed).toBe(true);
+    const ready = decideNdiStep(input({ wantFrames: false, lastFrameAt: null, status: status({ state: 'standby', autostart: failed }) }));
+    expect(ready.step).toBe('ready');
+    expect(ndiAutostartNote(ready)).toBe(NDI_AUTOSTART_NOTE);
+  });
+  it('有登記好 / 使用者自己關掉 / 舊版沒回報 / 還沒連上 → 不提醒', () => {
+    const note = (autostart: NdiHelperStatus['autostart']) => ndiAutostartNote(decideNdiStep(input({ status: status({ autostart }) })));
+    expect(note({ wanted: true, registered: true, error: null })).toBeNull();
+    expect(note({ wanted: false, registered: false, error: null })).toBeNull();
+    expect(note(null)).toBeNull();
+    expect(decideNdiStep(input({ socket: 'closed', hello: null, status: null, failures: 1 })).autostartFailed).toBe(false);
   });
 });
 

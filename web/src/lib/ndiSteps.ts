@@ -6,8 +6,11 @@
 //
 // 分享頁 / 動畫師工作站的引導卡片、3D 工具列的 NDI 標示、設定頁「檢查連線」都用這份，只有一個說法。
 
-/** 小程序要多新才算「新版」（0.1.9 起有 state / sources / pause） */
-export const MIN_HELPER_VERSION = '0.1.9';
+/**
+ * 小程序要多新才算「新版」：0.1.10 起只自動接這台電腦的 AE（0.1.9 會自己接到網路上別台電腦的畫面），
+ * 也會回報開機自動啟動有沒有設好
+ */
+export const MIN_HELPER_VERSION = '0.1.10';
 /** 小程序協議版本：0.1.8 以前沒有這欄（= 1） */
 export const MIN_HELPER_PROTOCOL = 2;
 /** 超過這麼久沒收到新畫面 → 「AE 沒在送畫面」 */
@@ -37,6 +40,16 @@ export interface NdiHelperSource {
   afterEffects: boolean;
 }
 
+/** 開機自動啟動的實際狀況（0.1.10 起；舊版沒有 → null） */
+export interface NdiHelperAutostart {
+  /** 設定要開機自動啟動 */
+  wanted: boolean;
+  /** 真的有登記好（指到目前這個小程序） */
+  registered: boolean;
+  /** 上次登記失敗的原因（中文）；成功 = null */
+  error: string | null;
+}
+
 export interface NdiHelperStatus {
   /** 0.1.8 以前沒有 → null */
   state: NdiHelperState | null;
@@ -50,6 +63,7 @@ export interface NdiHelperStatus {
   width: number;
   height: number;
   framesPaused: boolean;
+  autostart: NdiHelperAutostart | null;
 }
 
 export type NdiStep =
@@ -61,6 +75,7 @@ export type NdiStep =
   | 'helper_outdated'      // 小程序是舊版
   | 'ndi_missing'          // 小程序說沒裝 NDI Tools（或 NDI 啟動失敗）
   | 'no_source'            // 找不到任何 NDI 來源（AE 沒開 NDI 輸出）
+  | 'no_local_source'      // 這台電腦的 AE 沒在送 NDI；網路上有別台電腦的來源（不會自動接，要自己選）
   | 'waiting_frames'       // 接上來源了，但超過 3 秒沒畫面
   | 'live'                 // 畫面正在進來
   | 'ready';               // 不收畫面的檢查（設定頁）：小程序正常、找到來源
@@ -106,6 +121,8 @@ export interface NdiGuide {
   preferred: string | null;
   /** 小程序回報的錯誤（中文，可以直接顯示） */
   helperError: string | null;
+  /** 小程序想開機自動啟動、但沒登記成功（只是提醒，不擋 AE 即時） */
+  autostartFailed: boolean;
 }
 
 // ─── 解析小程序送來的訊息 ───
@@ -163,7 +180,15 @@ export function parseHelperStatus(msg: Record<string, unknown>): NdiHelperStatus
     width: num(msg.width) ?? 0,
     height: num(msg.height) ?? 0,
     framesPaused: msg.framesPaused === true,
+    autostart: parseAutostart(msg.autostart),
   };
+}
+
+function parseAutostart(v: unknown): NdiHelperAutostart | null {
+  if (!v || typeof v !== 'object') return null;
+  const o = v as Record<string, unknown>;
+  if (typeof o.wanted !== 'boolean' || typeof o.registered !== 'boolean') return null;
+  return { wanted: o.wanted, registered: o.registered, error: str(o.error) };
 }
 
 /** 比版本：a < b → 負數；看不懂的部分當 0 */
@@ -214,13 +239,33 @@ export function sortSources(sources: NdiHelperSource[]): NdiHelperSource[] {
   return sources.map((s, i) => ({ s, i })).sort((a, b) => rank(a.s) - rank(b.s) || a.i - b.i).map(x => x.s);
 }
 
-export function sourceLabel(s: NdiHelperSource): string {
-  return s.local ? `${s.name}（這台電腦）` : s.name;
+/** NDI 來源名稱是「機器名 (程式名)」→ 拆開；拆不開 = null */
+export function splitSourceName(name: string): { machine: string; program: string } | null {
+  const m = /^([^()]+?)\s*\((.+)\)\s*$/.exec(name.trim());
+  return m ? { machine: m[1], program: m[2] } : null;
 }
 
-/** 來源多於一個（或手動選過、要能選回自動）才顯示選單 */
+/** 選單上的字：「這台電腦的 Adobe After Effects」/「OTHER-PC 的 Adobe After Effects」 */
+export function sourceLabel(s: NdiHelperSource): string {
+  const parts = splitSourceName(s.name);
+  if (s.local) return parts ? `這台電腦的 ${parts.program}` : `${s.name}（這台電腦）`;
+  return parts ? `${parts.machine} 的 ${parts.program}` : s.name;
+}
+
+/**
+ * 什麼時候給選來源：
+ * - 這台電腦的 AE 沒在送、網路上有別台的（就算只有一個也要能選，小程序不會自動接別台）
+ * - 來源多於一個
+ * - 手動選過（只剩一個也要能選回自動）
+ */
 export function showSourcePicker(g: NdiGuide): boolean {
+  if (g.step === 'no_local_source' && g.sources.length > 0) return true;
   return g.sources.length > 1 || (g.mode === 'manual' && g.sources.length > 0);
+}
+
+/** 選單放在檢查清單卡住那一格的說明裡（說明會叫他「在下面選」）；其他時候放在清單下面 */
+export function sourcePickerInStep(g: NdiGuide): boolean {
+  return g.step === 'waiting_frames' || g.step === 'no_local_source';
 }
 
 // ─── 現在卡在哪一步 ───
@@ -240,6 +285,7 @@ export function decideNdiStep(i: NdiStepInput): NdiGuide {
     mode: 'auto',
     preferred: null,
     helperError: null,
+    autostartFailed: false,
   };
   const at = (step: NdiStep, row: number): NdiGuide => ({ ...g, step, row });
 
@@ -254,6 +300,7 @@ export function decideNdiStep(i: NdiStepInput): NdiGuide {
     g.mode = st?.mode ?? 'auto';
     g.preferred = st?.preferred ?? null;
     g.helperError = st?.error?.message ?? null;
+    g.autostartFailed = !!st?.autostart && st.autostart.wanted && !st.autostart.registered;
     g.hasFrame = i.lastFrameAt != null;
     g.hadFrames = i.lastFrameAt != null && (i.sourceSince == null || i.lastFrameAt >= i.sourceSince);
     // 剛換來源時，舊來源最後幾張不算
@@ -267,7 +314,10 @@ export function decideNdiStep(i: NdiStepInput): NdiGuide {
     if (g.outdated) return at('helper_outdated', 1);
     if (!st || !st.state || st.state === 'starting') return at('connecting', 2);
     if (st.state === 'ndi_missing' || st.state === 'ndi_error') return at('ndi_missing', 2);
-    if (st.state === 'searching' || !g.source) return at('no_source', 3);
+    if (st.state === 'searching' || !g.source) {
+      // 0.1.10 起：只有別台電腦的來源 → 不自動接，等使用者選
+      return at(st.error?.code === 'no_local_source' ? 'no_local_source' : 'no_source', 3);
+    }
     if (!i.wantFrames) return at('ready', 4);
     // 從「最後一張畫面」或「開始接這個來源」算起，超過 3 秒沒畫面
     const since = Math.max(i.lastFrameAt ?? -Infinity, i.sourceSince ?? -Infinity);
@@ -346,6 +396,14 @@ export function ndiStepMessage(g: NdiGuide, browser: NdiBrowser): NdiStepMessage
       };
     case 'no_source':
       return { title: '找不到 AE：確認 AE 有開，偏好設定 → 視訊預覽 有勾 NDI', detail: [] };
+    case 'no_local_source':
+      return {
+        title: '這台電腦的 AE 沒有在送 NDI',
+        detail: [
+          '確認 AE 開著、偏好設定 → 視訊預覽 有勾 NDI、AE 在播放',
+          '要看網路上別台電腦的 AE，請在下面選',
+        ],
+      };
     case 'waiting_frames':
       return {
         title: `已連上 ${g.source ?? 'AE'}，但 AE 沒在送畫面：AE 要在播放；偏好設定 → 視訊預覽 →『在背景時停用視訊輸出』要取消勾選`,
@@ -369,10 +427,18 @@ export function ndiShortLabel(g: NdiGuide): string {
     case 'helper_outdated': return '小程序要更新';
     case 'ndi_missing': return '沒裝 NDI Tools';
     case 'no_source': return '找不到 AE';
+    case 'no_local_source': return '找不到這台電腦的 AE';
     case 'waiting_frames': return g.hadFrames ? 'AE 停住了' : '等 AE 送畫面';
     case 'live': return g.fps != null ? `LIVE · ${g.fps} fps` : 'LIVE';
     case 'ready': return '已連上';
   }
+}
+
+/** 開機自動啟動沒設好時的提醒（不擋 AE 即時）；沒問題 = null */
+export const NDI_AUTOSTART_NOTE = '小程序沒辦法設成開機自動啟動（可能被電腦管家類軟體擋掉），下次開機要手動打開';
+
+export function ndiAutostartNote(g: NdiGuide): string | null {
+  return g.autostartFailed ? NDI_AUTOSTART_NOTE : null;
 }
 
 // ─── 重試 ───

@@ -2,7 +2,7 @@
 // 該說什麼、卡在哪一步全部來自 lib/ndiSteps.ts（只有一個說法）。
 
 import {
-  ndiChecklist, ndiStepMessage, showSourcePicker, sourceLabel,
+  ndiAutostartNote, ndiChecklist, ndiStepMessage, showSourcePicker, sourceLabel, sourcePickerInStep,
   type NdiGuide as Guide,
 } from '../lib/ndiSteps';
 import type { NdiEnv } from '../lib/ndiConnection';
@@ -76,7 +76,10 @@ function StepActions({ guide, env, onConnect }: Omit<GuideProps, 'onSelectSource
   }
 }
 
-/** 來源選單（小程序看到不只一個來源才出現）：AE 排前面、這台電腦的標出來；「自動」= null */
+/**
+ * 來源選單（不只一個來源、或這台電腦的 AE 沒在送但網路上有別台的才出現）：
+ * AE 排前面、標出這台電腦 / 哪一台電腦；「自動」= null（只接這台電腦的）
+ */
 export function NdiSourcePicker({ guide, onSelectSource }: Pick<GuideProps, 'guide' | 'onSelectSource'>) {
   if (!showSourcePicker(guide)) return null;
   const value = guide.mode === 'manual' && guide.preferred ? guide.preferred : '';
@@ -93,29 +96,44 @@ export function NdiSourcePicker({ guide, onSelectSource }: Pick<GuideProps, 'gui
   );
 }
 
-/** ☑ / ☐ 五格檢查清單；卡住的那一格展開說明 + 按鈕 */
-export function NdiChecklist({ guide, env, onConnect, onSelectSource }: GuideProps) {
+/** 小程序沒辦法開機自動啟動：一行小提醒（不擋 AE 即時） */
+export function NdiAutostartNote({ guide }: { guide: Guide }) {
+  const note = ndiAutostartNote(guide);
+  if (!note) return null;
+  return <p className="ndi-guide__note" role="note"><span aria-hidden>⚠ </span>{note}</p>;
+}
+
+/**
+ * ☑ / ☐ 五格檢查清單；卡住的那一格展開說明 + 按鈕。
+ * 下面跟著「開機自動啟動沒設好」的提醒（showAutostartNote=false → 自己放別的地方）
+ */
+export function NdiChecklist({ guide, env, onConnect, onSelectSource, showAutostartNote = true }: GuideProps & {
+  showAutostartNote?: boolean;
+}) {
   const rows = ndiChecklist(guide);
   const msg = ndiStepMessage(guide, env.browser);
   return (
-    <ol className="ndi-guide__list">
-      {rows.map(r => (
-        <li key={r.label} className={'ndi-guide__row is-' + r.state}>
-          <div className="ndi-guide__row-head">
-            <span className="ndi-guide__mark" aria-hidden>{r.state === 'done' ? '☑' : '☐'}</span>
-            <span className="ndi-guide__label">{r.label}</span>
-          </div>
-          {r.state === 'current' && (
-            <div className="ndi-guide__detail">
-              <p className="ndi-guide__title">{msg.title}</p>
-              {msg.detail.map(d => <p key={d} className="ndi-guide__sub">{d}</p>)}
-              <StepActions guide={guide} env={env} onConnect={onConnect} />
-              {guide.step === 'waiting_frames' && <NdiSourcePicker guide={guide} onSelectSource={onSelectSource} />}
+    <>
+      <ol className="ndi-guide__list">
+        {rows.map(r => (
+          <li key={r.label} className={'ndi-guide__row is-' + r.state}>
+            <div className="ndi-guide__row-head">
+              <span className="ndi-guide__mark" aria-hidden>{r.state === 'done' ? '☑' : '☐'}</span>
+              <span className="ndi-guide__label">{r.label}</span>
             </div>
-          )}
-        </li>
-      ))}
-    </ol>
+            {r.state === 'current' && (
+              <div className="ndi-guide__detail">
+                <p className="ndi-guide__title">{msg.title}</p>
+                {msg.detail.map(d => <p key={d} className="ndi-guide__sub">{d}</p>)}
+                <StepActions guide={guide} env={env} onConnect={onConnect} />
+                {sourcePickerInStep(guide) && <NdiSourcePicker guide={guide} onSelectSource={onSelectSource} />}
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
+      {showAutostartNote && <NdiAutostartNote guide={guide} />}
+    </>
   );
 }
 

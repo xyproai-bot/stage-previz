@@ -42,7 +42,7 @@ function fakePermission(initial: PermissionState) {
 }
 
 const CHROME: NdiEnv = { browser: 'chromium', os: 'windows', loopbackPage: false };
-const NEW_HELLO = { version: '0.1.9', protocol: 2, platform: 'windows', port: 7777, source: '' };
+const NEW_HELLO = { version: '0.1.10', protocol: 2, platform: 'windows', port: 7777, source: '' };
 const AE = 'ME (Adobe After Effects)';
 const LIVE_STATUS = {
   state: 'connecting', error: null, mode: 'auto', preferred: null, source: AE,
@@ -193,6 +193,66 @@ describe('NdiConnection', () => {
     expect(step()).toBe('waiting_frames');
     expect(guide().hadFrames).toBe(true);   // AE 停住：LED 留最後一格
     expect(guide().hasFrame).toBe(true);
+    conn.destroy();
+  });
+
+  it('0.1.10：這台電腦的 AE 沒在送、只有別台的 → no_local_source、給選；選了別台 → 送 select_source、接上就 LIVE', async () => {
+    const { conn, step, guide } = make();
+    conn.setActive(true);
+    await flush();
+    const ws = FakeWS.all[0];
+    ws.accept(NEW_HELLO);
+    const REMOTE = 'OTHER-PC (Adobe After Effects)';
+    ws.status({
+      state: 'searching', mode: 'auto', preferred: null, source: null,
+      error: { code: 'no_local_source', message: '找不到這台電腦的 After Effects NDI 輸出' },
+      sources: [{ name: REMOTE, local: false, afterEffects: true }],
+      receiving: false, fps: 0, width: 0, height: 0, framesPaused: false,
+      autostart: { wanted: true, registered: true, error: null },
+    });
+    expect(step()).toBe('no_local_source');
+    expect(guide().sources.map(s => s.name)).toEqual([REMOTE]);
+    conn.selectSource(REMOTE);
+    expect(ws.commands()).toContainEqual({ type: 'select_source', name: REMOTE });
+    expect(guide().mode).toBe('manual');
+    ws.status({ ...LIVE_STATUS, mode: 'manual', preferred: REMOTE, source: REMOTE, sources: [{ name: REMOTE, local: false, afterEffects: true }] });
+    expect(step()).toBe('connecting');
+    ws.frame();
+    await flush();
+    expect(step()).toBe('live');
+    expect(guide().source).toBe(REMOTE);
+    conn.destroy();
+  });
+
+  it('0.1.9（會自己接別台）→ 叫他更新；有畫面照樣 LIVE', async () => {
+    const { conn, step, guide, frames } = make();
+    conn.setActive(true);
+    await flush();
+    const ws = FakeWS.all[0];
+    ws.accept({ ...NEW_HELLO, version: '0.1.9' });
+    ws.status(LIVE_STATUS);
+    expect(step()).toBe('helper_outdated');
+    ws.frame();
+    await flush();
+    expect(frames).toHaveLength(1);
+    expect(step()).toBe('live');
+    expect(guide().outdated).toBe(true);
+    conn.destroy();
+  });
+
+  it('開機自動啟動沒設好 → 只是提醒（照樣 LIVE）', async () => {
+    const { conn, step, guide } = make();
+    conn.setActive(true);
+    await flush();
+    const ws = FakeWS.all[0];
+    ws.accept(NEW_HELLO);
+    ws.status({ ...LIVE_STATUS, autostart: { wanted: true, registered: false, error: '存取被拒' } });
+    ws.frame();
+    await flush();
+    expect(step()).toBe('live');
+    expect(guide().autostartFailed).toBe(true);
+    ws.status({ ...LIVE_STATUS, autostart: { wanted: true, registered: true, error: null } });
+    expect(guide().autostartFailed).toBe(false);
     conn.destroy();
   });
 

@@ -130,6 +130,18 @@
   font-size: 12px;
 }
 
+/* 小程序沒辦法開機自動啟動：一行小提醒（不擋 AE 即時） */
+.ndi-guide__note {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--warn-dim);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.ndi-guide__note > span { color: var(--warn); }
+
 /* 播到一半 AE 停住：只有一條小提示（LED 留在最後一格，不擋畫面） */
 .ndi-guide--banner {
   display: flex;
