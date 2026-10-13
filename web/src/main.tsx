@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { AuthProvider } from './lib/auth';
+import './lib/errorReporting';  // 畫面錯誤自動回報（正式版才送；製作在「設定 → 系統狀態」看）
 import './styles/global.css';
 
 createRoot(document.getElementById('root')!).render(

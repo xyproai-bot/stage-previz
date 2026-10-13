@@ -14,6 +14,7 @@ import { version as APP_VERSION } from '../../package.json';
 import { ROLE_LABEL } from '../lib/roleLabels';
 import Icon from '../components/Icon';
 import { BookOpen, Download, ExternalLink, TriangleAlert } from 'lucide-react';
+import SystemStatusSection from '../components/SystemStatusSection';
 import './Settings.css';
 
 export default function Settings() {
@@ -28,6 +29,7 @@ export default function Settings() {
         <NdiSection />
         {/* 自己調的現場亮度：只有管理員能調燈光，其他人看不到這區 */}
         {user?.role === 'admin' && <ThisComputerSection />}
+        {user?.role === 'admin' && <SystemStatusSection />}
         <AboutSection isAdmin={user?.role === 'admin'} />
       </div>
     </AdminLayout>

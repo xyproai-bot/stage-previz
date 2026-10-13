@@ -69,6 +69,17 @@ import {
 } from './invites.mjs';
 // 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
 import * as mech from './mechanisms.mjs';
+// 登入狀態什麼時候失效（重設登入碼 / 停用帳號 → 那個人其他裝置的登入失效）
+import {
+  SESSION_TTL_SEC, sessionIssuedAtSec, sessionTokenExp, sessionTokenHash, sessionAllowed,
+  revokeSessionsUpdate, sessionIssueSec, deactivateDecision,
+} from './sessions.mjs';
+// 3D 模型檔在 R2 的檔名（新上傳的加 128 bits 隨機，猜不到）
+import { newProjectModelKey, newSharedAssetKey, isModelVersionFile, modelCacheControl, modelVersionTimestamp } from './modelKeys.mjs';
+// 前端錯誤回報、製作的系統狀態（備份 / 錯誤）、排程裡的備份和下載檔更新、NDI 小程序下載
+import { handleClientErrorPost } from './clientErrors.mjs';
+import { handleOpsRoute, runOpsCron } from './ops.mjs';
+import { handleNdiDownload, downloadNameFromPath } from './downloads.mjs';
 
 const MAX_COMMENTS_PER_SESSION = 500;
 const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -113,6 +124,8 @@ export default {
       await cleanupStaleVideoUploads(env).catch(e => console.error('[cron video cleanup]', e?.message || e));
       await reviews.pruneNotifications(env.DB).catch(e => console.error('[cron notifications prune]', e?.message || e));
     })());
+    // 資料庫每天備份到 R2、NDI 小程序檢查新版、清掉 30 天以前的前端錯誤（ops.mjs）
+    ctx.waitUntil(runOpsCron(env).catch(e => console.error('[cron ops]', e?.message || e)));
   }
 };
 
@@ -165,6 +178,24 @@ async function routeRequest(request, env) {
   // 站內通知（只看自己的；要登入）
   if (url.pathname === '/api/notifications' || url.pathname.startsWith('/api/notifications/')) {
     return handleNotifications(request, env, url);
+  }
+
+  // 前端錯誤回報（不用登入；有登入就記是誰；每個 IP / 每天有上限）
+  if (url.pathname === '/api/client-errors') {
+    if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+    const me = await getCurrentUser(request, env).catch(() => null);
+    return handleClientErrorPost(request, env, { userId: me?.id || null });
+  }
+  // 製作的系統狀態：備份清單 / 下載、最近的前端錯誤（ops.mjs，只有全站製作）
+  if (url.pathname.startsWith('/api/admin/')) {
+    return handleOpsRoute(request, env, url, { me: await getCurrentUser(request, env) });
+  }
+  // NDI 小程序下載（R2 快取 GitHub 最新版；downloads.mjs）
+  if (url.pathname.startsWith('/downloads/')) {
+    const name = downloadNameFromPath(url.pathname);
+    if (!name) return jsonResp({ error: 'Not found' }, 404);
+    const c = execCtxByRequest.get(request);
+    return handleNdiDownload(request, env, name, { waitUntil: c?.waitUntil ? (p) => c.waitUntil(p) : null });
   }
 
   if (url.pathname === '/api/auth/login'  && request.method === 'POST')  return authLogin(request, env);
@@ -2300,9 +2331,8 @@ async function handleModel(request, env, projectId, subAction, subAction2) {
       return jsonResp({ error: `File too large (max ${MAX_MODEL_SIZE / 1024 / 1024} MB)` }, 413);
     }
 
-    // 用 timestamp + project 當 key（保留版本紀錄）
-    const ts = Date.now();
-    const key = `models/${projectId}/${ts}.glb`;
+    // 每次上傳一個新檔（保留版本紀錄）：models/<專案>/<時間>-<128 bits 隨機>.glb（modelKeys.mjs；網址不用登入就能讀，所以要猜不到）
+    const key = newProjectModelKey(projectId);
 
     // 把 body 直接串到 R2
     await env.MODELS.put(key, request.body, {
@@ -2359,10 +2389,9 @@ async function listModelVersions(env, projectId) {
   ).bind(projectId).first();
   const activeKey = row?.model_r2_key || null;
 
-  // 物件解析：key = models/{projectId}/{ts}.glb；ts 是 Date.now()
+  // 上傳時間用 R2 記的時間（不從檔名解析：舊的「時間.glb」、新的「時間-隨機.glb」都一樣）
   const versions = (listed.objects || []).map(obj => {
-    const m = obj.key.match(/\/(\d+)\.glb$/);
-    const ts = m ? parseInt(m[1], 10) : 0;
+    const ts = modelVersionTimestamp(obj);
     return {
       key: obj.key,
       url: `/r2/${obj.key}`,
@@ -2405,7 +2434,7 @@ async function activateModelVersion(request, env, projectId) {
 
 // 刪除某舊版本（不能刪當前 active）
 async function deleteModelVersion(request, env, projectId, tsFile) {
-  if (!/^\d+\.glb$/.test(tsFile)) return jsonResp({ error: 'Invalid version' }, 400);
+  if (!isModelVersionFile(tsFile)) return jsonResp({ error: 'Invalid version' }, 400);
   const key = `models/${projectId}/${tsFile}`;
 
   const row = await env.DB.prepare(
@@ -2429,14 +2458,18 @@ async function handleModelDownload(request, env, url) {
     return jsonResp({ error: 'Invalid key' }, 400);
   }
 
-  const obj = await env.MODELS.get(r2Key);
+  // If-None-Match 對上 → 304（大模型不用再下載一次）
+  const obj = await env.MODELS.get(r2Key, { onlyIf: request.headers });
   if (!obj) return jsonResp({ error: 'Not found' }, 404);
 
   const headers = new Headers();
   obj.writeHttpMetadata(headers);
-  headers.set('Cache-Control', 'public, max-age=3600');
+  // 新格式（帶隨機碼）的專案模型寫一次就不會改 → 快取一年；舊的和模型庫照舊 1 小時（modelKeys.mjs）
+  headers.set('Cache-Control', modelCacheControl(r2Key));
+  if (obj.httpEtag) headers.set('ETag', obj.httpEtag);
   Object.entries(corsHeaders()).forEach(([k, v]) => headers.set(k, v));
 
+  if (!('body' in obj) || !obj.body) return new Response(null, { status: 304, headers });
   return new Response(obj.body, { status: 200, headers });
 }
 
@@ -2961,7 +2994,7 @@ function jsonResp(obj, status = 200) {
 // ─────────────────────────────────────────────
 
 const SESSION_COOKIE = 'sp_session';
-const SESSION_TTL_SEC = 90 * 24 * 3600;
+// SESSION_TTL_SEC（90 天）在 sessions.mjs：登入是什麼時候發的用「到期時間 − 90 天」倒推，不要改
 const SETUP_TOKEN_TTL = 600; // setup token 10 分鐘
 
 function getAuthSecret(env) {
@@ -3012,8 +3045,9 @@ async function getLoginCodeMode(env) {
   }
 }
 
-async function newSessionToken(secret, userId) {
-  const exp = Math.floor(Date.now() / 1000) + SESSION_TTL_SEC;
+// issuedSec：這個登入算哪一秒發的（sessions.mjs sessionIssueSec：不早於這個人的失效時間點）
+async function newSessionToken(secret, userId, issuedSec = Math.floor(Date.now() / 1000)) {
+  const exp = issuedSec + SESSION_TTL_SEC;
   const data = `${userId}.${exp}`;
   const sig = await hmacSign(secret, data);
   return `${data}.${sig}`;
@@ -3079,11 +3113,54 @@ async function loadRequestUser(request, env) {
   const userId = await verifySessionToken(getAuthSecret(env), token);
   if (!userId) return null;
   // 確認該 user 仍然 active（停用的帳號 token 立刻失效）
-  const u = await env.DB.prepare(
-    `SELECT id, name, role, avatar_color FROM users WHERE id = ? AND deactivated = 0 LIMIT 1`
-  ).bind(userId).first();
+  // 重設登入碼 / 停用過 → 那個時間點以前發的登入不算（sessions.mjs；製作改自己時留下自己這一個）
+  const u = await loadSessionUserRow(env, userId);
   if (!u) return null;
+  const allowed = await sessionAllowed(
+    { issuedAtSec: sessionIssuedAtSec(sessionTokenExp(token)) },
+    { revokedAt: u.sessions_revoked_at, keepHash: u.session_keep_hash },
+    () => sessionTokenHash(token),
+  );
+  if (!allowed) return null;
+  requestSessionTokens.set(request, token);
   return { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color };
+}
+
+// 這個請求用的登入字串（製作重設自己的登入碼時，要留下這一個）
+const requestSessionTokens = new WeakMap();
+
+// 還沒跑 0025 migration（沒有 sessions_revoked_at 欄位）→ 照舊只查基本欄位
+async function loadSessionUserRow(env, userId) {
+  try {
+    return await env.DB.prepare(
+      `SELECT id, name, role, avatar_color, sessions_revoked_at, session_keep_hash
+         FROM users WHERE id = ? AND deactivated = 0 LIMIT 1`
+    ).bind(userId).first();
+  } catch (e) {
+    if (!/no such column/i.test(String(e?.message || e))) throw e;
+    return env.DB.prepare(
+      `SELECT id, name, role, avatar_color FROM users WHERE id = ? AND deactivated = 0 LIMIT 1`
+    ).bind(userId).first();
+  }
+}
+
+// 發一個新的登入（登入、用邀請連結進來）：不早於這個人的失效時間點（剛重設完、同一秒內登入也算數）
+async function issueSessionToken(env, userId) {
+  let revokedAt = null;
+  try {
+    const r = await env.DB.prepare(`SELECT sessions_revoked_at FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
+    revokedAt = r?.sessions_revoked_at ?? null;
+  } catch (e) {
+    if (!/no such column/i.test(String(e?.message || e))) throw e;
+  }
+  return newSessionToken(getAuthSecret(env), userId, sessionIssueSec(Date.now(), revokedAt));
+}
+
+// 讓這個人之前的登入全部失效要寫的兩個值（製作改自己 → 留下自己現在這一個登入）
+async function sessionRevokeColumns(request, me, targetUserId) {
+  const token = requestSessionTokens.get(request);
+  const actorTokenHash = me && me.id === targetUserId && token ? await sessionTokenHash(token) : null;
+  return revokeSessionsUpdate({ nowMs: Date.now(), targetUserId, actorUserId: me?.id, actorTokenHash });
 }
 
 function setSessionCookie(token) {
@@ -3170,7 +3247,7 @@ async function authLogin(request, env) {
     env.DB.prepare(`DELETE FROM login_attempts WHERE ip = ?`).bind(ipKey),  // 登入成功 → 這個 IP 的錯誤歸零
   ]);
 
-  const token = await newSessionToken(getAuthSecret(env), u.id);
+  const token = await issueSessionToken(env, u.id);
   return jsonRespWithCookie({
     user: { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color },
     token,  // 前端把這個存 localStorage，每個 request 帶 Authorization: Bearer <token>
@@ -3336,7 +3413,17 @@ async function updateUser(request, env, userId) {
     sets.push('role = ?'); values.push(body.role);
   }
   if ('avatarColor' in body) { sets.push('avatar_color = ?'); values.push(body.avatarColor); }
-  if ('deactivated' in body) { sets.push('deactivated = ?'); values.push(body.deactivated ? 1 : 0); }
+  if ('deactivated' in body) {
+    // 停用 → 那個人所有裝置的登入失效（重新啟用也不會活回來）；不能停用自己（sessions.mjs）
+    const me = await getCurrentUser(request, env);
+    const d = deactivateDecision({ targetUserId: userId, actorUserId: me?.id, deactivated: !!body.deactivated });
+    if (!d.ok) return jsonResp({ error: d.error }, d.status);
+    sets.push('deactivated = ?'); values.push(body.deactivated ? 1 : 0);
+    if (d.revoke) {
+      const rv = await sessionRevokeColumns(request, me, userId);
+      sets.push('sessions_revoked_at = ?', 'session_keep_hash = ?'); values.push(rv.revokedAt, rv.keepHash);
+    }
+  }
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
   values.push(userId);
   const r = await env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`).bind(...values).run();
@@ -3359,13 +3446,20 @@ async function setAccessCode(request, env, userId) {
     if (exists) return jsonResp({ error: '這個登入碼已被別人使用' }, 409);
   }
 
+  // 舊的登入碼不能用了 → 那個人其他裝置的登入也一起失效（製作重設自己的 → 留下自己現在這一個；sessions.mjs）
+  // 本來沒有登入碼（用邀請連結進來的人第一次拿登入碼）→ 不登出（SET 裡的欄位都是改之前的值）
+  const rv = await sessionRevokeColumns(request, await getCurrentUser(request, env), userId);
   for (let attempt = 0; ; attempt++) {
     const code = req.custom || generateLoginCode();
     const cols = await loginCodeColumns(code, mode);
     try {
       const r = await env.DB.prepare(
-        `UPDATE users SET access_code = ?, access_code_hash = ? WHERE id = ?`
-      ).bind(cols.access_code, cols.access_code_hash, userId).run();
+        `UPDATE users SET
+            sessions_revoked_at = CASE WHEN access_code IS NOT NULL OR access_code_hash IS NOT NULL THEN ? ELSE sessions_revoked_at END,
+            session_keep_hash   = CASE WHEN access_code IS NOT NULL OR access_code_hash IS NOT NULL THEN ? ELSE session_keep_hash END,
+            access_code = ?, access_code_hash = ?
+          WHERE id = ?`
+      ).bind(rv.revokedAt, rv.keepHash, cols.access_code, cols.access_code_hash, userId).run();
       if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
       return jsonResp({ ok: true, accessCode: code, shownOnce: mode === 'hashed' });
     } catch (e) {
@@ -3620,7 +3714,7 @@ async function redeemInvite(env, token) {
   ]);
 
   // 跟一般登入一樣：90 天的登入狀態（cookie + 給前端存的 token）
-  const sessionToken = await newSessionToken(getAuthSecret(env), u.id);
+  const sessionToken = await issueSessionToken(env, u.id);
   return jsonRespWithCookie({
     user: { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color },
     token: sessionToken,
@@ -3739,7 +3833,8 @@ async function createAsset(request, env, me) {
   if (!name) return jsonResp({ error: 'name 必填' }, 400);
 
   const id = 'as_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-  const r2Key = `assets/models/${id}.glb`;
+  // assets/models/<資產 id>-<128 bits 隨機>.glb（modelKeys.mjs；重新上傳蓋同一個檔）
+  const r2Key = newSharedAssetKey(id);
 
   await env.DB.prepare(`
     INSERT INTO shared_assets (id, type, name, description, r2_key, uploaded_by_user_id)

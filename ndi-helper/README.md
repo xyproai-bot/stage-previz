@@ -9,7 +9,8 @@
 
 1. 先裝 **NDI Tools**（官方免費）：https://ndi.video/tools/
 2. 下載安裝檔：
-   https://github.com/xyproai-bot/stage-previz/releases/latest/download/stage-previz-ndi-helper-windows.msi
+   https://proxy.haimiaan.com/downloads/stage-previz-ndi-helper-windows.msi
+   （連不上的話用 GitHub：https://github.com/xyproai-bot/stage-previz/releases/latest/download/stage-previz-ndi-helper-windows.msi）
 3. 雙擊安裝檔 →「Next」→「Install」→（問要不要允許變更，按「是」）→「Finish」
    - 如果跳出藍色的「Windows 已保護您的電腦」：按「其他資訊」→「仍要執行」
    - 最後一頁「Launch Stage Previz NDI Helper now」保持打勾 → 裝完馬上開始跑
@@ -22,7 +23,8 @@
 
 1. 先裝 **NDI Tools for Mac**（官方免費）：https://ndi.video/tools/ （AE 的 NDI 外掛也在裡面）
 2. 下載：
-   https://github.com/xyproai-bot/stage-previz/releases/latest/download/stage-previz-ndi-helper-mac.zip
+   https://proxy.haimiaan.com/downloads/stage-previz-ndi-helper-mac.zip
+   （連不上的話用 GitHub：https://github.com/xyproai-bot/stage-previz/releases/latest/download/stage-previz-ndi-helper-mac.zip）
 3. 雙擊 zip 解壓縮 → 把「**Stage Previz NDI Helper**」拖進「**應用程式**」資料夾
    （一定要先拖進「應用程式」，直接在「下載」裡打開的話，開機自動啟動會失效）
 4. 在「應用程式」裡雙擊打開。第一次 Mac 會問：
@@ -249,9 +251,13 @@ cargo build --release
   或 `APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_SPECIFIC_PASSWORD`。**帳號、密碼、憑證都不要放進 repo / CI。**
 
 發佈：推 tag `ndi-helper-vX.Y.Z` → GitHub Actions（`.github/workflows/ndi-helper-release.yml`）會編 Windows MSI +
-Mac universal zip、跑冒煙測試、建 Release。網站固定連：
-- `…/releases/latest/download/stage-previz-ndi-helper-windows.msi`
-- `…/releases/latest/download/stage-previz-ndi-helper-mac.zip`
+Mac universal zip、跑冒煙測試、建 Release。網站固定連我們自己的網域（中國大陸連 GitHub 很慢）：
+- `https://proxy.haimiaan.com/downloads/stage-previz-ndi-helper-windows.msi`
+- `https://proxy.haimiaan.com/downloads/stage-previz-ndi-helper-mac.zip`
+
+後台（`cf-worker/downloads.mjs`）最多 30 分鐘問一次 GitHub 最新版（`…/releases/latest`），有新的檔就複製一份到 R2；
+同一個 tag 的檔案換掉（例如下面換成公證版）也會在 30 分鐘內換過去。後台抓不到時會轉去 GitHub 的
+`…/releases/latest/download/<檔名>`。
 
 CI 沒有 Apple 憑證，Mac zip 只有 ad-hoc 簽章 → Release 建好之後，在有 Developer ID 的 Mac 上把它換成公證版
 （同一個執行檔，只換簽章；固定下載網址會自動變成公證版）：
