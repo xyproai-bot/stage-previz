@@ -22,6 +22,7 @@ import { DEFAULT_LOOK_SETTINGS, normalizeLookSettings, type LookSettings } from 
 import { normalizeMaterialOverrides, type MaterialOverride, type MaterialOverrides } from './stageLook/materialOverrides';
 import { chooseMaterials, readMaterialCache, writeMaterialCache } from './stageLook/materialCache';
 import { chooseHomeView, readHomeViewCache, writeHomeViewCache, type HomeView } from './homeView';
+import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
 
 const SAVE_DELAY_MS = 500;  // 滑桿停手多久才存
 
@@ -60,6 +61,8 @@ export interface ProjectViewSettingsState {
   materialOverrides: MaterialOverrides;
   /** 🎥 重置攝影機的畫面（null = 自動正面全景） */
   homeView: HomeView | null;
+  /** AE 畫布尺寸（NDI Webcam 預覽用；null = 還沒填） */
+  ledCanvas: LedCanvas | null;
   canEdit: boolean;
   setScaleCorrection: (n: number) => void;
   updateMechanismOffset: (objId: string, axis: 'x' | 'y', value: number) => void;
@@ -69,6 +72,8 @@ export interface ProjectViewSettingsState {
   setMaterialOverride: (name: string, patch: Partial<MaterialOverride> | null) => void;
   /** null → 回到自動正面全景 */
   setHomeView: (view: HomeView | null) => void;
+  /** null → 清掉（還沒填）；不合法的值會被當成 null */
+  setLedCanvas: (v: LedCanvas | null) => void;
 }
 
 export function useProjectViewSettings(projectId: string | undefined, canEdit: boolean): ProjectViewSettingsState {
@@ -77,6 +82,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   const [lookSettings, setLook] = useState<LookSettings>(DEFAULT_LOOK_SETTINGS);
   const [materialOverrides, setMaterials] = useState<MaterialOverrides>({});
   const [homeView, setHomeViewState] = useState<HomeView | null>(null);
+  const [ledCanvas, setLedCanvasState] = useState<LedCanvas | null>(null);
   // ref 跟 state 同步：存檔 / 失敗回滾要拿「目前值」，不想把 callback 綁在 state 上
   const scaleRef = useRef(1);
   const offsetsRef = useRef<MechanismOffsets>({});
@@ -115,6 +121,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     applyLook(DEFAULT_LOOK_SETTINGS);
     applyMaterials({});
     setHomeViewState(null);
+    setLedCanvasState(null);
     // admin 調過的材質，這台電腦有留一份 → 專案上讀不到 / 還沒存上去時用這份
     const cachedMaterials = canEdit ? readMaterialCache(localStorage, projectId) : null;
     const cachedHomeView = canEdit ? readHomeViewCache(localStorage, projectId) : null;
@@ -157,6 +164,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       applyScale(settings.scaleCorrection);
       applyOffsets(settings.mechanismOffsets);
       applyLook(settings.lookSettings);
+      setLedCanvasState(settings.ledCanvas);
 
       const materials = chooseMaterials(settings.materialOverrides, cachedMaterials);
       applyMaterials(materials.value);
@@ -247,8 +255,18 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     scheduleSave({ homeView: view });
   }, [projectId, canEdit, scheduleSave]);
 
+  // AE 畫布尺寸：admin 在管理頁填一次（按 Enter / 離開欄位才存），不用像滑桿那樣等停手，直接送出
+  const setLedCanvas = useCallback((v: LedCanvas | null) => {
+    if (!canEdit) return;
+    const next = normalizeLedCanvas(v);
+    setLedCanvasState(next);
+    scheduleSave({ ledCanvas: next });
+    flushPending();
+  }, [canEdit, scheduleSave, flushPending]);
+
   return {
-    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView, canEdit,
+    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView, ledCanvas, canEdit,
     setScaleCorrection, updateMechanismOffset, resetAllMechanismOffsets, setLookSettings, setMaterialOverride, setHomeView,
+    setLedCanvas,
   };
 }

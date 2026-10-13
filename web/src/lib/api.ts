@@ -5,6 +5,7 @@ import { saveStatus } from './saveStatus';
 import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/materialOverrides';
 import { normalizeHomeView, type HomeView } from './homeView';
+import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -254,11 +255,14 @@ export interface ProjectViewSettings {
   materialOverrides: MaterialOverrides;
   /** 🎥 重置攝影機的畫面；null = 自動正面全景 */
   homeView: HomeView | null;
+  /** AE 畫布尺寸（NDI Webcam 預覽要把 16:9 畫面放回 LED UV 用）；null = 還沒填 */
+  ledCanvas: LedCanvas | null;
 }
 
 export async function getProjectViewSettings(projectId: string): Promise<ProjectViewSettings> {
   const data = await http<{ project: {
     scale_correction?: number; mechanism_offsets?: string; look_settings?: string; material_overrides?: string; home_view?: string | null;
+    led_canvas?: string | null;
   } }>(
     `/api/projects/${encodeURIComponent(projectId)}`
   );
@@ -278,6 +282,7 @@ export async function getProjectViewSettings(projectId: string): Promise<Project
     lookSettings: normalizeLookSettings(look),
     materialOverrides: normalizeMaterialOverrides(materials),
     homeView: normalizeHomeView(data.project?.home_view ?? null),
+    ledCanvas: normalizeLedCanvas(data.project?.led_canvas ?? null),
   };
 }
 
@@ -1165,6 +1170,8 @@ export interface SharePublicData {
   lookSettings?: Partial<LookSettings>;
   materialOverrides?: MaterialOverrides;
   homeView?: unknown;
+  /** AE 畫布尺寸 { width, height }；null = 還沒填；舊版 worker 沒有 → undefined（用 normalizeLedCanvas 讀） */
+  ledCanvas?: unknown;
 }
 
 /** 公開存取 — 無需 auth，可選 password */

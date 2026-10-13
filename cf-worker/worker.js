@@ -437,7 +437,7 @@ async function updateProject(request, env, projectId, me) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets', 'look_settings', 'material_overrides', 'home_view'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets', 'look_settings', 'material_overrides', 'home_view', 'led_canvas'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
   // tags 是 array → 存成 JSON string
@@ -451,9 +451,10 @@ async function updateProject(request, env, projectId, me) {
   if ('lookSettings' in body && !('look_settings' in body)) body.look_settings = body.lookSettings;
   if ('materialOverrides' in body && !('material_overrides' in body)) body.material_overrides = body.materialOverrides;
   if ('homeView' in body && !('home_view' in body)) body.home_view = body.homeView;
-  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body || 'material_overrides' in body || 'home_view' in body;
+  if ('ledCanvas' in body && !('led_canvas' in body)) body.led_canvas = body.ledCanvas;
+  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body || 'material_overrides' in body || 'home_view' in body || 'led_canvas' in body;
   if (touchesViewSettings && me?.role !== 'admin') {
-    return jsonResp({ error: '只有 admin 能改 3D 檢視設定（校準 / 機關滑桿 / 現場設定 / 材質 / 重置視角）' }, 403);
+    return jsonResp({ error: '只有 admin 能改 3D 檢視設定（校準 / 機關滑桿 / 現場設定 / 材質 / 重置視角 / AE 畫布尺寸）' }, 403);
   }
   if ('scale_correction' in body) {
     const n = Number(body.scale_correction);
@@ -485,6 +486,16 @@ async function updateProject(request, env, projectId, me) {
       body.home_view = JSON.stringify(clean);
     }
   }
+  if ('led_canvas' in body) {
+    // null = 清掉（還沒填）
+    if (body.led_canvas === null) {
+      body.led_canvas = null;
+    } else {
+      const clean = sanitizeLedCanvas(body.led_canvas);
+      if (!clean) return jsonResp({ error: 'led_canvas 不合法（寬高要是 16~32768 的整數）' }, 400);
+      body.led_canvas = JSON.stringify(clean);
+    }
+  }
   const sets = [], values = [];
   for (const k of allowed) {
     if (k in body) { sets.push(`${k} = ?`); values.push(body[k]); }
@@ -501,7 +512,7 @@ async function updateProject(request, env, projectId, me) {
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   // 滑桿 / 現場設定拖動會一直存，不寫 activity（不然 audit log 會被洗版）
   const onlyLiveTweaks = sets.length > 0 && Object.keys(body).every(k =>
-    ['mechanism_offsets', 'mechanismOffsets', 'look_settings', 'lookSettings', 'material_overrides', 'materialOverrides', 'home_view', 'homeView'].includes(k));
+    ['mechanism_offsets', 'mechanismOffsets', 'look_settings', 'lookSettings', 'material_overrides', 'materialOverrides', 'home_view', 'homeView', 'led_canvas', 'ledCanvas'].includes(k));
   if (!onlyLiveTweaks) {
     await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
   }
@@ -560,6 +571,24 @@ function sanitizeHomeView(raw) {
   if (!position || !target || !isFinite(fov)) return null;
   if (position.every((x, i) => Math.abs(x - target[i]) < 1e-6)) return null;
   return { position, target, fov: Math.max(10, Math.min(120, fov)) };
+}
+
+// AE 畫布尺寸：{ width, height }，各是 16~32768 的整數；要跟 web/src/lib/ledCanvas.ts 的 normalizeLedCanvas 一致
+const LED_CANVAS_RANGE = [16, 32768];
+function sanitizeLedCanvas(raw) {
+  let obj = raw;
+  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { return null; } }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
+  const [min, max] = LED_CANVAS_RANGE;
+  const dim = (v) => {
+    if (typeof v !== 'number' && typeof v !== 'string') return null;
+    if (typeof v === 'string' && !/^\s*\d+\s*$/.test(v)) return null;
+    const n = Number(v);
+    return Number.isInteger(n) && n >= min && n <= max ? n : null;
+  };
+  const width = dim(obj.width), height = dim(obj.height);
+  if (width === null || height === null) return null;
+  return { width, height };
 }
 
 function sanitizeMaterialOverrides(raw) {
@@ -3878,7 +3907,7 @@ async function handleShareRouter(request, env, url, token) {
   if (sub === 'data' && request.method === 'GET') {
     // bundle 給 share viewer：project meta + songs + stage_objects + model
     const proj = await env.DB.prepare(
-      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view, led_canvas FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
     ).bind(link.project_id).first();
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
@@ -3918,6 +3947,7 @@ async function handleShareRouter(request, env, url, token) {
       lookSettings: safeJsonObj(proj.look_settings, {}),
       materialOverrides: safeJsonObj(proj.material_overrides, {}),
       homeView: proj.home_view ? safeJsonObj(proj.home_view, null) : null,
+      ledCanvas: proj.led_canvas ? sanitizeLedCanvas(proj.led_canvas) : null,
     });
   }
 
