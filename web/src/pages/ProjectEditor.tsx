@@ -19,6 +19,7 @@ import CommentSearchDialog from '../components/CommentSearchDialog';
 import { pushRecentProject } from '../components/CommandPalette';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
+import { cueTransitionSeconds } from '../lib/cueTiming';
 import './ProjectEditor.css';
 
 type RightTab = 'cues' | 'state' | 'proposals' | 'objects';
@@ -814,6 +815,8 @@ export default function ProjectEditor() {
                 await handleSetState(objId, { position, rotation });
               }}
               cueName={selectedCue ? selectedCue.name : '(default — 改的是物件預設位置)'}
+              cueKey={selectedCueId}
+              crossfadeSeconds={cueTransitionSeconds(selectedCue)}
               modelUrl={modelUrl}
               enableNdi
               bookmarkScope={projectId}
@@ -1587,7 +1590,7 @@ function CueMetaEditor({
           onBlur={save}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
         />
-        <small className="muted">0 = 硬切；大於 0 時 cue 切換用此秒數漸變</small>
+        <small className="muted">換到這個 cue 時舞台滑過去的秒數；0 = 用預設 1 秒</small>
       </div>
       <div className="cue-meta-editor__row">
         <label>對應影片時間</label>

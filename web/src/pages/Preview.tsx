@@ -606,6 +606,7 @@ function SongDetail({
                 modelUrl={modelUrl}
                 readOnly
                 defaultRenderMode="live"
+                cueKey={selectedCueId}
                 crossfadeSeconds={cueTransitionSeconds(cues.find(c => c.id === selectedCueId))}
                 comments={comments}
                 onCommentPinClick={(c) => {

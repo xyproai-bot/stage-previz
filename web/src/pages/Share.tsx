@@ -298,6 +298,7 @@ export default function Share() {
               modelUrl={data.modelUrl ? api.apiBase() + data.modelUrl : null}
               readOnly
               defaultRenderMode="live"
+              cueKey={selectedCueId}
               crossfadeSeconds={cueTransitionSeconds(selectedCue)}
               showScaleButton={false}
               scaleCorrection={data.scaleCorrection ?? 1}

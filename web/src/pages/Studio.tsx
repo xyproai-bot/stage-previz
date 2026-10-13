@@ -475,6 +475,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   readOnly
                   defaultRenderMode="live"
                   enableNdi
+                  cueKey={selectedCueId}
                   crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                   bookmarkScope={projectId}
                   scaleCorrection={view.scaleCorrection}

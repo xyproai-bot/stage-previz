@@ -79,6 +79,8 @@ interface Props {
   onNdiStatus?: (status: NdiClientStatus) => void;
   /** Cue 切換時的 crossfade 秒數（0 = 硬切，>0 = 平滑插值） */
   crossfadeSeconds?: number;
+  /** 目前 cue 的 id：有給的話，只有「換 cue」才平滑移動（編輯數值照舊即時）；沒給 = states 一換就滑 */
+  cueKey?: string | null;
   /** 顯示「👤 比例尺」按鈕（分享連結不需要） */
   showScaleButton?: boolean;
   /** ref-style 抓 scene snapshot（給 storyboard / cue 縮圖用） */
@@ -126,7 +128,7 @@ type Mode = 'translate' | 'rotate' | 'scale';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -189,6 +191,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   crossfadeRef.current = crossfadeSeconds;
   // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；機關滑桿 / 選取 / 校準變了照舊直接套
   const lastSyncedStatesRef = useRef<CueState[] | null>(null);
+  // 換 cue 了 → 下一次 states 換掉時要滑過去（cue 的位置是另外抓的，會晚一點到）
+  const lastCueKeyRef = useRef(cueKey);
+  const cueChangedRef = useRef(false);
+  if (cueKey !== undefined && cueKey !== lastCueKeyRef.current) {
+    lastCueKeyRef.current = cueKey;
+    cueChangedRef.current = true;
+  }
   // LED emissive 貼圖快取（imageUrl → Texture），避免每次 effect 重 load
   const ledTextureCacheRef = useRef<Map<string, THREE.Texture>>(new Map());
   const envLightsRef = useRef<{ ambient: THREE.AmbientLight; hemi: THREE.HemisphereLight; key: THREE.DirectionalLight | null } | null>(null);
@@ -1049,6 +1058,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
     const statesChanged = lastSyncedStatesRef.current !== states;
     lastSyncedStatesRef.current = states;
+    // 有給 cueKey：只有換 cue 後那一次滑；編輯物件位置時直接套
+    const smoothThisRun = statesChanged && (cueKey === undefined || cueChangedRef.current);
+    if (statesChanged) cueChangedRef.current = false;
 
     const currentIds = new Set(states.map(s => s.objectId));
 
@@ -1146,7 +1158,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         // 移動中又因為別的原因（機關滑桿 / 校準）重算 → 改終點、繼續滑，不要瞬間跳到終點
         running.toPos.set(p.x, p.y, p.z);
         running.toQuat.copy(worldQuat);
-      } else if (xfade > 0 && statesChanged && !justCreated && !inPivot && (obj.position.distanceTo(new THREE.Vector3(p.x, p.y, p.z)) > 0.001 || !obj.quaternion.equals(worldQuat))) {
+      } else if (xfade > 0 && smoothThisRun && !justCreated && !inPivot && (obj.position.distanceTo(new THREE.Vector3(p.x, p.y, p.z)) > 0.001 || !obj.quaternion.equals(worldQuat))) {
         tweensRef.current.set(s.objectId, {
           fromPos: obj.position.clone(),
           toPos: new THREE.Vector3(p.x, p.y, p.z),
