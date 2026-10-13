@@ -9,11 +9,25 @@ import { normalizeHomeView } from '../lib/homeView';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueAtTime, cueTransitionSeconds } from '../lib/cueTiming';
+import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
 import type { NdiClientStatus } from '../lib/ndiClient';
 import './Share.css';
 
 /** LED 畫面來源：AE 即時（NDI 小程序）或本地影片（拖進來的檔案，只在這台電腦播） */
 type LedSource = 'ndi' | 'video';
+
+/** 這首歌每個 cue 的舞台位置先全部開始抓（點 cue / 影片走到那裡時馬上有） */
+function prefetchCueStates(token: string, songId: string, list: Cue[], pwd: string | undefined) {
+  const cache = new Map<string, Promise<CueState[]>>();
+  for (const c of list) {
+    const p = api.getShareCueStates(token, songId, c.id, pwd);
+    p.catch(() => cache.delete(c.id));  // 失敗就丟掉，用到時再抓一次
+    cache.set(c.id, p);
+  }
+  return cache;
+}
+
+const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 // NDI 小程序安裝檔（跟模型放同一個公開儲存空間；上線時上傳）
 const NDI_HELPER_DOWNLOAD_PATH = '/r2/assets/downloads/stage-previz-ndi-helper-0.1.7.msi';
@@ -51,6 +65,17 @@ export default function Share() {
   const lastAutoCueRef = useRef<string | null>(null);
   // 這首歌每個 cue 的舞台位置先全部抓好 → 點 cue 馬上開始動，不用等網路
   const cueStatesCacheRef = useRef<Map<string, Promise<CueState[]>>>(new Map());
+  // 分頁切回來重抓 cue 時 +1 → 舞台位置、影片時間軸跟著換新的
+  const [cueRefresh, setCueRefresh] = useState(0);
+  // 影片時間軸：有影片時間的 cue 的移動時段 + 每個 cue 的物件位置（先算好，每幀直接拿）
+  const timelineRef = useRef<{ windows: CueWindow[]; poses: Map<string, CuePoseMap>; timedIds: Set<string> } | null>(null);
+  // 每幀要讀的值（不經過 React）
+  const sourceRef = useRef(source);
+  sourceRef.current = source;
+  const videoReadyRef = useRef(local.ready);
+  videoReadyRef.current = local.ready;
+  const selectedCueIdRef = useRef(selectedCueId);
+  selectedCueIdRef.current = selectedCueId;
 
   // 切到 AE 即時 → 本地影片先暫停（不然聲音還會在背景播）
   useEffect(() => {
@@ -97,21 +122,52 @@ export default function Share() {
   // 切歌 → 拉 cues + videos
   useEffect(() => {
     if (!token || !selectedSongId) return;
+    let cancelled = false;
+    const pwd = submittedPwd ?? undefined;
     cueStatesCacheRef.current = new Map();
-    api.getShareSongCues(token, selectedSongId, submittedPwd ?? undefined).then(list => {
-      const cache = cueStatesCacheRef.current;
-      for (const c of list) {
-        const p = api.getShareCueStates(token, selectedSongId, c.id, submittedPwd ?? undefined);
-        p.catch(() => cache.delete(c.id));  // 失敗就丟掉，點到時再抓一次
-        cache.set(c.id, p);
-      }
+    timelineRef.current = null;  // 上一首歌的時間軸不要套到這首
+    api.getShareSongCues(token, selectedSongId, pwd).then(list => {
+      if (cancelled) return;
+      cueStatesCacheRef.current = prefetchCueStates(token, selectedSongId, list, pwd);
+      lastAutoCueRef.current = null;  // 新的一首歌 → 影片時間重新對 cue
       setCues(list);
       setSelectedCueId(list[0]?.id ?? null);
-    }).catch(() => setCues([]));
-    api.getShareSongVideos(token, selectedSongId, submittedPwd ?? undefined).then(list => {
+    }).catch(() => { if (!cancelled) setCues([]); });
+    api.getShareSongVideos(token, selectedSongId, pwd).then(list => {
+      if (cancelled) return;
       setVideos(list);
       setSelectedVideoFid(list[0]?.driveFileId ?? null);
-    }).catch(() => setVideos([]));
+    }).catch(() => { if (!cancelled) setVideos([]); });
+    return () => { cancelled = true; };
+  }, [token, selectedSongId, submittedPwd]);
+
+  // 分頁切回來 → 重抓這首歌的 cue 和位置（管理頁改了淡入淡出 / 對應影片時間，不用重新整理就跟上）
+  // 現在選的 cue 和正在播的影片都不動
+  useEffect(() => {
+    if (!token || !selectedSongId) return;
+    let cancelled = false;
+    let lastTs = 0;
+    const pwd = submittedPwd ?? undefined;
+    const refresh = () => {
+      if (document.visibilityState !== 'visible') return;
+      const now = Date.now();
+      if (now - lastTs < 2000) return;  // 切分頁時 visibilitychange 和 focus 會一起來
+      lastTs = now;
+      api.getShareSongCues(token, selectedSongId, pwd).then(list => {
+        if (cancelled) return;
+        cueStatesCacheRef.current = prefetchCueStates(token, selectedSongId, list, pwd);
+        setCues(prev => sameJson(prev, list) ? prev : list);
+        setSelectedCueId(prev => (prev && list.some(c => c.id === prev)) ? prev : (list[0]?.id ?? null));
+        setCueRefresh(n => n + 1);
+      }).catch(() => { /* 網路一時不通就下次再抓 */ });
+    };
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      cancelled = true;
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
+    };
   }, [token, selectedSongId, submittedPwd]);
 
   // 切 cue → 拉 states
@@ -124,10 +180,29 @@ export default function Share() {
       p = api.getShareCueStates(token, selectedSongId, selectedCueId, submittedPwd ?? undefined);
       cache.set(selectedCueId, p);
     }
-    p.then(list => { if (!cancelled) setCueStates(list); })
+    // 內容一樣就不換（分頁切回來重抓時，沒改的話舞台不用重算）
+    p.then(list => { if (!cancelled) setCueStates(prev => sameJson(prev, list) ? prev : list); })
       .catch(() => { cache.delete(selectedCueId); if (!cancelled) setCueStates([]); });
     return () => { cancelled = true; };
-  }, [token, selectedSongId, selectedCueId, submittedPwd]);
+  }, [token, selectedSongId, selectedCueId, submittedPwd, cueRefresh]);
+
+  // 影片時間軸要用的：每個有影片時間的 cue 的物件位置（用先抓好的；全部到了才換上，換之前沿用舊的）
+  useEffect(() => {
+    const windows = cueWindows(cues);
+    if (windows.length === 0) { timelineRef.current = null; return; }
+    let cancelled = false;
+    const cache = cueStatesCacheRef.current;
+    Promise.all(windows.map(w => {
+      const p = cache.get(w.cueId);
+      return p ? p.then(states => [w.cueId, cuePoses(states)] as const, () => null) : null;
+    })).then(entries => {
+      if (cancelled) return;
+      const poses = new Map<string, CuePoseMap>();
+      for (const e of entries) if (e) poses.set(e[0], e[1]);
+      timelineRef.current = { windows, poses, timedIds: new Set(windows.map(w => w.cueId)) };
+    });
+    return () => { cancelled = true; };
+  }, [cues, cueRefresh]);
 
   // 沒選 cue 時用 default
   const viewportStates: CueState[] = useMemo(() => {
@@ -156,7 +231,6 @@ export default function Share() {
 
   // ── 本地影片播到某秒 → 自動切到對應 cue（cue 有設「對應影片時間」才會動）──
   // 只在「應該的 cue」改變時才切，手動點的 cue 會保留到影片進入下一段
-  useEffect(() => { lastAutoCueRef.current = null; }, [cues]);
   useEffect(() => {
     if (source !== 'video' || !local.fileName) return;
     const target = cueAtTime(cues, local.time);
@@ -174,6 +248,17 @@ export default function Share() {
       local.seek(cue.videoTimeSec);
     }
   }, [source, local]);
+
+  // 播本地影片時，舞台每一幀照影片時間擺：cue 在「對應影片時間」剛好到位，提前「淡入淡出時間」等速出發。
+  // 暫停就停在半路、拉時間軸就跟著退。AE 即時 / 沒影片 / 沒有 cue 設影片時間 / 點了沒設時間的 cue → null（照舊點 cue 滑過去）
+  const poseAtFrame = useCallback((): CuePoseMap | null => {
+    if (sourceRef.current !== 'video' || !videoReadyRef.current) return null;
+    const tl = timelineRef.current;
+    if (!tl) return null;
+    const sel = selectedCueIdRef.current;
+    if (sel && !tl.timedIds.has(sel)) return null;
+    return poseAtTime(tl.windows, tl.poses, local.video.currentTime);
+  }, [local.video]);
 
   if (loading) return <div className="share-loading">⏳ 載入中…</div>;
 
@@ -312,6 +397,7 @@ export default function Share() {
               enableNdi={source === 'ndi'}
               onNdiStatus={setNdiStatus}
               ledVideo={source === 'video' && local.ready ? local.video : null}
+              poseAtFrame={poseAtFrame}
             />
           ) : (
             <div className="share-empty">這個專案沒有可預覽的內容</div>

@@ -13,6 +13,7 @@ import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
+import { cueQuaternion, scenePosition, type CuePoseMap } from '../lib/cueTimeline';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
@@ -120,6 +121,11 @@ interface Props {
   onHomeViewChange?: (view: HomeView | null) => void;
   /** 本地影片（分享頁拖進來的檔案）：有給就播在 LED 上，優先於 NDI */
   ledVideo?: HTMLVideoElement | null;
+  /**
+   * 每一幀問一次：有回傳位置 → 舞台照這個擺（分享頁跟著影片時間走，暫停 / 拉時間軸都會跟）；
+   * 回傳 null → 照平常（換 cue 滑過去）。用函式而不是 states，才不會每幀重跑 React。
+   */
+  poseAtFrame?: () => CuePoseMap | null;
 }
 
 // ⚡ quick：像素 1:1 對顏色；🎤 live：暗場 + LED 照明 + 光暈（取代舊的 realistic / cinematic）
@@ -129,7 +135,7 @@ type Mode = 'translate' | 'rotate' | 'scale';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, poseAtFrame }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -190,6 +196,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   }>>(new Map());
   const crossfadeRef = useRef(crossfadeSeconds);
   crossfadeRef.current = crossfadeSeconds;
+  // 跟著影片時間擺位置（render loop 每幀讀）；上一幀有沒有在用 → 停用那一刻滑回平常的 cue 位置
+  const poseAtFrameRef = useRef(poseAtFrame);
+  poseAtFrameRef.current = poseAtFrame;
+  const timelineActiveRef = useRef(false);
+  const mechanismOffsetsRef = useRef(mechanismOffsets);
+  mechanismOffsetsRef.current = mechanismOffsets;
+  const scaleCorrectionRef = useRef(scaleCorrection);
+  scaleCorrectionRef.current = scaleCorrection;
   // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；機關滑桿 / 選取 / 校準變了照舊直接套
   const lastSyncedStatesRef = useRef<CueState[] | null>(null);
   // 換 cue 了 → 下一次 states 換掉時要滑過去（cue 的位置是另外抓的，會晚一點到）
@@ -747,9 +761,49 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       orbit.update();
 
-      // Crossfade tweens（每幀更新進行中的 mesh transform 插值）
+      // 跟著影片時間擺位置（分享頁播本地影片）：有就直接照擺，換 cue 的滑動先不用
+      const framePoses = poseAtFrameRef.current?.() ?? null;
       const tweens = tweensRef.current;
-      if (tweens.size > 0) {
+      if (framePoses) {
+        timelineActiveRef.current = true;
+        tweens.clear();
+        const meshes = meshesRef.current;
+        for (const [id, pose] of framePoses) {
+          const mesh = meshes.get(id);
+          if (!mesh || mesh.parent !== scene) continue;
+          const p = scenePosition(pose.position, pose.category, id, mechanismOffsetsRef.current, scaleCorrectionRef.current);
+          mesh.position.set(p.x, p.y, p.z);
+          mesh.quaternion.copy(pose.quaternion);
+          mesh.visible = pose.visible;
+        }
+      } else if (timelineActiveRef.current) {
+        // 剛停用（換成 AE 即時 / 移掉影片 / 點了沒設影片時間的 cue）→ 從現在的位置滑回目前 cue 的位置
+        timelineActiveRef.current = false;
+        const meshes = meshesRef.current;
+        const now = performance.now();
+        const durationMs = Math.max(crossfadeRef.current, 0) * 1000;
+        for (const s of statesRef.current || []) {
+          const mesh = meshes.get(s.objectId);
+          if (!mesh || mesh.parent !== scene) continue;
+          mesh.visible = s.effective.visible;
+          if (tweens.has(s.objectId)) continue;  // 換 cue 時已經在滑了
+          const p = scenePosition(s.effective.position, s.category, s.objectId, mechanismOffsetsRef.current, scaleCorrectionRef.current);
+          const q = cueQuaternion(s.effective.rotation);
+          if (durationMs > 0) {
+            tweens.set(s.objectId, {
+              fromPos: mesh.position.clone(), toPos: new THREE.Vector3(p.x, p.y, p.z),
+              fromQuat: mesh.quaternion.clone(), toQuat: q,
+              startTs: now, durationMs,
+            });
+          } else {
+            mesh.position.set(p.x, p.y, p.z);
+            mesh.quaternion.copy(q);
+          }
+        }
+      }
+
+      // Crossfade tweens（每幀更新進行中的 mesh transform 插值）
+      if (!framePoses && tweens.size > 0) {
         const now = performance.now();
         const meshes = meshesRef.current;
         const finished: string[] = [];
@@ -1136,19 +1190,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       obj.userData.locked = !!s.locked;
       obj.userData.objectId = s.objectId;
 
-      const rawP = s.effective.position;
-      const r = s.effective.rotation;
       // 機關 offset：純視覺加總（公尺 → scene units），不寫回 cue。
-      // 對 led_panel 才套用 — 其他類別不該被機關 slider 動到。
-      const moff = (s.category === 'led_panel') ? mechanismOffsets?.[s.objectId] : undefined;
-      const moffSceneX = moff ? moff.x / scaleCorrection : 0;
-      const moffSceneY = moff ? moff.y / scaleCorrection : 0;
-      const p = { x: rawP.x + moffSceneX, y: rawP.y + moffSceneY, z: rawP.z };
-      const worldQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(
-        THREE.MathUtils.degToRad(r.pitch),
-        THREE.MathUtils.degToRad(r.yaw),
-        THREE.MathUtils.degToRad(r.roll),
-      ));
+      // 對 led_panel 才套用 — 其他類別不該被機關 slider 動到。（跟影片時間軸共用同一個算法）
+      const p = scenePosition(s.effective.position, s.category, s.objectId, mechanismOffsets, scaleCorrection);
+      const worldQuat = cueQuaternion(s.effective.rotation);
       // Crossfade：如果開了，從 mesh 當前 transform tween 到目標
       // 前提：mesh 不在 multiPivot 下（pivot 模式表示用戶正在拖，不該 tween）
       const xfade = crossfadeRef.current;
