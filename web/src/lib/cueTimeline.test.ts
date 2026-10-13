@@ -3,7 +3,7 @@ import * as THREE from 'three';
 import type { CueState } from './api';
 import {
   cueWindows, timelineAt, cuePoses, blendCuePoses, poseAtTime, cueQuaternion, scenePosition,
-  type CuePoseMap,
+  fadeOpacity, lerpOpacity, type CuePoseMap,
 } from './cueTimeline';
 import { DEFAULT_CUE_TRANSITION_SECONDS } from './cueTiming';
 
@@ -84,8 +84,8 @@ describe('timelineAt（用戶的例子）', () => {
 
 describe('blendCuePoses / poseAtTime', () => {
   const posesByCue = new Map<string, CuePoseMap>([
-    ['c0', cuePoses([state('led', 0, 0), state('only0', 1, 0), state('hidden1', 0, 0, true)])],
-    ['c1', cuePoses([state('led', 10, 90), state('hidden1', 4, 0, false)])],
+    ['c0', cuePoses([state('led', 0, 0), state('only0', 1, 0), state('hidden1', 0, 0, true), state('appear', 0, 0, false)])],
+    ['c1', cuePoses([state('led', 10, 90), state('hidden1', 4, 0, false), state('appear', 0, 0, true)])],
   ]);
   const w = cueWindows(userCues);
 
@@ -110,11 +110,49 @@ describe('blendCuePoses / poseAtTime', () => {
     expect(poseAtTime(w, posesByCue, 20)!.get('hidden1')!.visible).toBe(true);
     expect(poseAtTime(w, posesByCue, 30)!.get('hidden1')!.visible).toBe(false);
   });
+  it('新 cue 藏起來的物件：跟著移動等速淡出（10 秒 1 → 20 秒 0.5 → 30 秒 0 並隱藏）', () => {
+    const at = (t: number) => poseAtTime(w, posesByCue, t)!.get('hidden1')!;
+    expect(at(5).opacity).toBe(1);
+    expect(at(10).opacity).toBe(1);
+    expect(at(15).opacity).toBeCloseTo(0.75);
+    expect(at(20).opacity).toBeCloseTo(0.5);
+    expect(at(30)).toMatchObject({ opacity: 0, visible: false });
+  });
+  it('新 cue 才出現的物件：等速淡入（10 秒 0 → 25 秒 0.75 → 30 秒 1）', () => {
+    const at = (t: number) => poseAtTime(w, posesByCue, t)!.get('appear')!;
+    expect(at(5)).toMatchObject({ opacity: 0, visible: false });
+    expect(at(10)).toMatchObject({ opacity: 0, visible: false });
+    expect(at(25)).toMatchObject({ visible: true });
+    expect(at(25).opacity).toBeCloseTo(0.75);
+    expect(at(30)).toMatchObject({ opacity: 1, visible: true });
+  });
+  it('兩邊都看得到 → 一直是 1', () => {
+    expect(poseAtTime(w, posesByCue, 20)!.get('led')!.opacity).toBe(1);
+  });
   it('只有一邊有的物件 → 用有的那邊', () => {
     expect(poseAtTime(w, posesByCue, 20)!.get('only0')!.position.x).toBe(1);
   });
   it('需要的 cue 位置還沒抓到 → null', () => {
     expect(poseAtTime(w, new Map([['c0', posesByCue.get('c0')!]]), 20)).toBeNull();
+  });
+});
+
+describe('fadeOpacity / lerpOpacity', () => {
+  it('只有舊 cue 看得到 → 1−p；只有新 cue 看得到 → p；兩邊都看得到 → 1；都看不到 → 0', () => {
+    expect(fadeOpacity(true, false, 0.25)).toBe(0.75);
+    expect(fadeOpacity(false, true, 0.25)).toBe(0.25);
+    expect(fadeOpacity(true, true, 0.25)).toBe(1);
+    expect(fadeOpacity(false, false, 0.25)).toBe(0);
+  });
+  it('p 超出 0..1 → 夾住', () => {
+    expect(fadeOpacity(false, true, 2)).toBe(1);
+    expect(fadeOpacity(false, true, -1)).toBe(0);
+  });
+  it('從現在的透明度等速走到目標（換 cue 中途又換 cue 時從半路接著淡）', () => {
+    expect(lerpOpacity(0, 1, 0.5)).toBe(0.5);
+    expect(lerpOpacity(1, 0, 0.25)).toBe(0.75);
+    expect(lerpOpacity(0.4, 1, 0.5)).toBeCloseTo(0.7);
+    expect(lerpOpacity(0, 1, 3)).toBe(1);
   });
 });
 

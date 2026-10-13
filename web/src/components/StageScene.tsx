@@ -13,7 +13,8 @@ import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
-import { cueQuaternion, scenePosition, type CuePoseMap } from '../lib/cueTimeline';
+import { cueQuaternion, lerpOpacity, scenePosition, type CuePoseMap } from '../lib/cueTimeline';
+import { endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
@@ -194,6 +195,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     startTs: number;
     durationMs: number;
   }>>(new Map());
+  // 換 cue 時出現 / 消失的物件：跟移動一起等速淡入淡出（render loop 每幀算透明度）
+  const fadesRef = useRef<Map<string, { from: number; to: number; startTs: number; durationMs: number }>>(new Map());
   const crossfadeRef = useRef(crossfadeSeconds);
   crossfadeRef.current = crossfadeSeconds;
   // 跟著影片時間擺位置（render loop 每幀讀）；上一幀有沒有在用 → 停用那一刻滑回平常的 cue 位置
@@ -764,9 +767,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // 跟著影片時間擺位置（分享頁播本地影片）：有就直接照擺，換 cue 的滑動先不用
       const framePoses = poseAtFrameRef.current?.() ?? null;
       const tweens = tweensRef.current;
+      const fades = fadesRef.current;
       if (framePoses) {
         timelineActiveRef.current = true;
         tweens.clear();
+        fades.clear();
         const meshes = meshesRef.current;
         for (const [id, pose] of framePoses) {
           const mesh = meshes.get(id);
@@ -774,7 +779,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           const p = scenePosition(pose.position, pose.category, id, mechanismOffsetsRef.current, scaleCorrectionRef.current);
           mesh.position.set(p.x, p.y, p.z);
           mesh.quaternion.copy(pose.quaternion);
-          mesh.visible = pose.visible;
+          setObjectOpacity(mesh, pose.opacity);
         }
       } else if (timelineActiveRef.current) {
         // 剛停用（換成 AE 即時 / 移掉影片 / 點了沒設影片時間的 cue）→ 從現在的位置滑回目前 cue 的位置
@@ -785,7 +790,16 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         for (const s of statesRef.current || []) {
           const mesh = meshes.get(s.objectId);
           if (!mesh || mesh.parent !== scene) continue;
-          mesh.visible = s.effective.visible;
+          // 淡到一半的也從現在的透明度淡回目前 cue 的樣子
+          if (!fades.has(s.objectId)) {
+            const fromOpacity = getObjectOpacity(mesh);
+            const toOpacity = s.effective.visible ? 1 : 0;
+            if (durationMs > 0 && fromOpacity !== toOpacity) {
+              fades.set(s.objectId, { from: fromOpacity, to: toOpacity, startTs: now, durationMs });
+            } else {
+              setObjectOpacity(mesh, toOpacity);
+            }
+          }
           if (tweens.has(s.objectId)) continue;  // 換 cue 時已經在滑了
           const p = scenePosition(s.effective.position, s.category, s.objectId, mechanismOffsetsRef.current, scaleCorrectionRef.current);
           const q = cueQuaternion(s.effective.rotation);
@@ -817,6 +831,19 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           if (t >= 1) finished.push(id);
         }
         for (const id of finished) tweens.delete(id);
+      }
+
+      // 出現 / 消失的淡入淡出（等速；淡完換回原本材質，不留半透明）
+      if (!framePoses && fades.size > 0) {
+        const now = performance.now();
+        const meshes = meshesRef.current;
+        for (const [id, f] of fades) {
+          const mesh = meshes.get(id);
+          if (!mesh) { fades.delete(id); continue; }
+          const k = cueMoveProgress(now - f.startTs, f.durationMs);
+          setObjectOpacity(mesh, lerpOpacity(f.from, f.to, k));
+          if (k >= 1) fades.delete(id);
+        }
       }
 
       // Animate NDI mock texture (cheap procedural — only updates in live mode)
@@ -1229,7 +1256,23 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         // 跳過 tween → 確保 tweensRef 沒留 stale
         tweensRef.current.delete(s.objectId);
       }
-      obj.visible = s.effective.visible;
+      // 出現 / 消失：換 cue 時跟移動一起等速淡入淡出（同一個秒數、同時開始）；
+      // 編輯時切顯示 / 隱藏（不是換 cue）照舊馬上變
+      const targetOpacity = s.effective.visible ? 1 : 0;
+      const fading = fadesRef.current.has(s.objectId);
+      if (fading && !statesChanged) {
+        // 淡到一半因為別的原因（選取 / 機關滑桿）重算 → 繼續淡
+      } else if (xfade > 0 && smoothThisRun && !justCreated && !inPivot && getObjectOpacity(obj) !== targetOpacity) {
+        fadesRef.current.set(s.objectId, {
+          from: getObjectOpacity(obj),
+          to: targetOpacity,
+          startTs: performance.now(),
+          durationMs: xfade * 1000,
+        });
+      } else {
+        fadesRef.current.delete(s.objectId);
+        setObjectOpacity(obj, targetOpacity);
+      }
 
       // emissive 決策統一處理（避免兩個 useEffect 覆蓋）：
       //   1. selected → 綠色 highlight
@@ -1418,6 +1461,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const scene = sceneRef.current;
     if (!scene) return;
     const meshes = meshesRef.current;
+    // 淡入淡出中的物件先換回原本材質再改設定（下一幀淡入淡出會讓複本跟上）
+    meshes.forEach(suspendObjectFade);
     const accentGreen = new THREE.Color(0x10c78a);
     const black = new THREE.Color(0x000000);
     const ledIds = new Set<string>();
@@ -1652,6 +1697,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   useEffect(() => {
     const meshes = meshesRef.current;
     meshes.forEach((obj) => {
+      suspendObjectFade(obj);  // 淡入淡出中 → 改原本材質（下一幀複本會跟上）
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
         const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
@@ -2308,6 +2354,7 @@ function NdiStatusRows({ status, active, url }: { status: NdiClientStatus; activ
 }
 
 function disposeObject3D(obj: THREE.Object3D) {
+  endObjectFade(obj);  // 淡到一半的半透明複本先丟掉、換回原本材質
   obj.traverse((child) => {
     const m = child as THREE.Mesh;
     if (m.geometry) m.geometry.dispose?.();

@@ -4,7 +4,8 @@
 //
 //   cueWindows   — 每個 cue 什麼時候開始動、什麼時候到
 //   timelineAt   — 影片某一秒：停在哪個 cue，或正在從哪個 cue 走到哪個 cue、走了幾成
-//   cuePoses / blendCuePoses / poseAtTime — 物件位置（位置直線走、旋轉走近路、顯示/隱藏）
+//   cuePoses / blendCuePoses / poseAtTime — 物件位置（位置直線走、旋轉走近路、出現/消失等速淡入淡出）
+//   fadeOpacity / lerpOpacity — 出現 / 消失的透明度
 //   cueQuaternion / scenePosition — cue 存的角度 / 位置 → 3D 場景用的（管理頁、分享頁共用）
 
 import * as THREE from 'three';
@@ -68,7 +69,28 @@ export interface CuePose {
   category: StageObjectCategory;
   position: Vec3;
   quaternion: THREE.Quaternion;
+  /** 0 = 完全看不到、1 = 完全看得到（換 cue 時出現 / 消失會淡入淡出） */
+  opacity: number;
+  /** opacity > 0 */
   visible: boolean;
+}
+
+/**
+ * 換 cue 移動走了 p（0..1）時的透明度：只有舊 cue 看得到 → 1−p（淡出）；只有新 cue 看得到 → p（淡入）；
+ * 兩邊都看得到 → 1；都看不到 → 0。跟移動同一個進度，所以也是等速。
+ */
+export function fadeOpacity(visibleFrom: boolean, visibleTo: boolean, p: number): number {
+  const q = Math.min(Math.max(p, 0), 1);
+  if (visibleFrom && visibleTo) return 1;
+  if (visibleFrom) return 1 - q;
+  if (visibleTo) return q;
+  return 0;
+}
+
+/** 從現在的透明度等速走到目標（換 cue 時淡到一半又換 cue → 從半路接著淡） */
+export function lerpOpacity(from: number, to: number, p: number): number {
+  const q = Math.min(Math.max(p, 0), 1);
+  return from + (to - from) * q;
 }
 export type CuePoseMap = Map<string, CuePose>;
 
@@ -102,6 +124,7 @@ export function cuePoses(states: CueState[]): CuePoseMap {
       category: s.category,
       position: { ...s.effective.position },
       quaternion: cueQuaternion(s.effective.rotation),
+      opacity: s.effective.visible ? 1 : 0,
       visible: s.effective.visible,
     });
   }
@@ -110,13 +133,14 @@ export function cuePoses(states: CueState[]): CuePoseMap {
 
 /**
  * 從 from 走到 to 走了 p（0..1）：位置直線走、旋轉走近路（四元數 slerp，不會繞一大圈）。
- * 移動中兩邊有一邊看得到就顯示；到了（p ≥ 1）照 to 的。只有一邊有的物件用有的那邊。
+ * 出現 / 消失的物件跟著 p 等速淡入淡出（fadeOpacity）。只有一邊有的物件用有的那邊。
  */
 export function blendCuePoses(from: CuePoseMap, to: CuePoseMap, p: number): CuePoseMap {
   const out: CuePoseMap = new Map();
   for (const [id, b] of to) {
     const a = from.get(id);
     if (!a) { out.set(id, b); continue; }
+    const opacity = fadeOpacity(a.visible, b.visible, p);
     out.set(id, {
       category: b.category,
       position: {
@@ -125,7 +149,8 @@ export function blendCuePoses(from: CuePoseMap, to: CuePoseMap, p: number): CueP
         z: a.position.z + (b.position.z - a.position.z) * p,
       },
       quaternion: new THREE.Quaternion().slerpQuaternions(a.quaternion, b.quaternion, p),
-      visible: p >= 1 ? b.visible : (a.visible || b.visible),
+      opacity,
+      visible: opacity > 0,
     });
   }
   for (const [id, a] of from) {
