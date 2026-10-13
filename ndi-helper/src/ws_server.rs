@@ -30,7 +30,11 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub const PROTOCOL_VERSION: u32 = 2;
 
+/// 自己的網域（只限 https、預設 port、完全一樣的主機名；子網域不算）
+const OWN_HOSTS: [&str; 2] = ["previz.haimiaan.com", "test.previz.haimiaan.com"];
+
 /// 哪些網頁可以連 helper（看 WebSocket 握手的 Origin header）：
+///   - https://previz.haimiaan.com、https://test.previz.haimiaan.com（自己的網域）
 ///   - https://stage-previz.vercel.app（正式站）
 ///   - https://stage-previz-xxxx.vercel.app（這個專案的 Vercel 預覽網址，單一層子網域）
 ///   - http://localhost[:port]、http://127.0.0.1[:port]、http://xxx.localhost[:port]（本機開發）
@@ -66,7 +70,7 @@ pub fn origin_allowed(origin: Option<&str>) -> bool {
             if port.is_some() {
                 return false;
             }
-            if host == "stage-previz.vercel.app" {
+            if host == "stage-previz.vercel.app" || OWN_HOSTS.contains(&host) {
                 return true;
             }
             match host.strip_suffix(".vercel.app") {
@@ -365,6 +369,40 @@ mod tests {
         assert!(origin_allowed(Some("https://stage-previz-git-feat-live-stage-look-xyproai.vercel.app")));
         assert!(origin_allowed(Some("https://stage-previz-abc123-xyproai.vercel.app")));
         assert!(origin_allowed(Some("HTTPS://Stage-Previz.Vercel.App")));
+    }
+
+    #[test]
+    fn allows_own_domains() {
+        assert!(origin_allowed(Some("https://previz.haimiaan.com")));
+        assert!(origin_allowed(Some("https://test.previz.haimiaan.com")));
+        assert!(origin_allowed(Some("HTTPS://Previz.Haimiaan.com")));
+        assert!(origin_allowed(Some(" https://test.previz.haimiaan.com ")));
+    }
+
+    #[test]
+    fn rejects_lookalikes_of_own_domains() {
+        for o in [
+            "http://previz.haimiaan.com",
+            "http://test.previz.haimiaan.com",
+            "https://previz.haimiaan.com:8443",
+            "https://previz.haimiaan.com:443",
+            "https://previz.haimiaan.com.evil.com",
+            "https://evilpreviz.haimiaan.com",
+            "https://evil.previz.haimiaan.com",
+            "https://a.test.previz.haimiaan.com",
+            "https://haimiaan.com",
+            "https://www.haimiaan.com",
+            "https://test.haimiaan.com",
+            "https://previz-haimiaan.com",
+            "https://previz.haimiaan.co",
+            "https://previz.haimiaan.com/",
+            "https://previz.haimiaan.com/share/x",
+            "https://user@previz.haimiaan.com",
+            "https://previz.haimiaan.com.",
+            "wss://previz.haimiaan.com",
+        ] {
+            assert!(!origin_allowed(Some(o)), "should reject {o:?}");
+        }
     }
 
     #[test]

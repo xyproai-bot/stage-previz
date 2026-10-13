@@ -119,6 +119,15 @@ def main():
     s.close()
     if " 101 " not in status_line:
         sys.exit("FAIL: production origin should be allowed, got: %s" % status_line)
+    for origin in ("https://previz.haimiaan.com", "https://test.previz.haimiaan.com"):
+        s, status_line, _ = connect(port, origin=origin)
+        s.close()
+        if " 101 " not in status_line:
+            sys.exit("FAIL: %s should be allowed, got: %s" % (origin, status_line))
+    s, status_line, _ = connect(port, origin="https://evil.previz.haimiaan.com")
+    s.close()
+    if " 403 " not in status_line:
+        sys.exit("FAIL: subdomain of own domain should get 403, got: %s" % status_line)
     print("OK")
 
 

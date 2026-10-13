@@ -231,5 +231,5 @@ jobs:
           make_latest: true
           body: |
             - Windows 安裝檔（固定檔名，網站連這個）：`stage-previz-ndi-helper-windows.msi`
-            - Mac（Apple Silicon + Intel 通用版，固定檔名）：`stage-previz-ndi-helper-mac.zip` — 解壓後把 App 拖進「應用程式」，第一次打開見 ndi-helper/README.md
+            - Mac（Apple Silicon + Intel 通用版，固定檔名）：`stage-previz-ndi-helper-mac.zip` — 解壓後把 App 拖進「應用程式」；發佈後會在 Mac 上換成 Apple 公證版（見 ndi-helper/README.md「發佈」）
           generate_release_notes: true

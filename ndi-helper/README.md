@@ -25,14 +25,12 @@
    https://github.com/xyproai-bot/stage-previz/releases/latest/download/stage-previz-ndi-helper-mac.zip
 3. 雙擊 zip 解壓縮 → 把「**Stage Previz NDI Helper**」拖進「**應用程式**」資料夾
    （一定要先拖進「應用程式」，直接在「下載」裡打開的話，開機自動啟動會失效）
-4. 第一次打開（這個 App 沒有向 Apple 付費簽章，所以 Mac 會先擋一次，只有第一次要做）：
-   - **macOS 14 或更舊**：在「應用程式」裡對它按**右鍵 →「打開」**→ 再按一次「打開」
-   - **macOS 15 以後**（右鍵沒有用時）：先雙擊一次 → 跳出「無法打開」按「完成」→
-     打開「**系統設定 → 隱私權與安全性**」→ 拉到最下面 → 按「**仍要打開**」→ 輸入密碼 → 「打開」
-   - 都不行的話（進階）：打開「終端機」貼上
-     `xattr -dr com.apple.quarantine "/Applications/Stage Previz NDI Helper.app"` 再雙擊
-5. Mac 問「要允許 Stage Previz NDI Helper 尋找本地網路上的裝置嗎？」→ 按「**允許**」
-   （這是找 AE 的 NDI 畫面用的；按了不允許會找不到 AE，可以到「系統設定 → 隱私權與安全性 → 本地網路」打開）
+4. 在「應用程式」裡雙擊打開。第一次 Mac 會問：
+   「**「Stage Previz NDI Helper」是一個從網際網路下載的 App。確定要打開嗎？**」→ 按「**打開**」（只有第一次）
+   （0.1.11 起有經過 Apple 公證，不用再去系統設定。舊版被擋「無法打開」的話，請直接下載新版）
+5. 如果 Mac 問「**要允許「Stage Previz NDI Helper」尋找區域網路上的裝置嗎？**」→ 按「**允許**」
+   （看別台電腦的 AE 會用到；不是每台 Mac 都會問，沒問就不用管。按了不允許的話，到
+   「系統設定 → 隱私權與安全性 → 區域網路」把 Stage Previz NDI Helper 打開）
 6. 右上角選單列出現一個圓點就成功了。**以後開機會自動啟動**（點圓點可以關掉）。
 
 ## 使用
@@ -65,6 +63,7 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 
 - 位址：`ws://127.0.0.1:7777`（只聽本機）
 - **Origin 檢查**：瀏覽器的 Origin 必須是下面其中之一，不然握手回 **403**：
+  - `https://previz.haimiaan.com`、`https://test.previz.haimiaan.com`（0.1.11 起；只限這兩個，子網域不算）
   - `https://stage-previz.vercel.app`
   - `https://stage-previz-*.vercel.app`（這個專案的 Vercel 預覽網址，單一層子網域）
   - `http://localhost[:port]`、`http://127.0.0.1[:port]`、`http://*.localhost[:port]`（本機開發）
@@ -76,7 +75,7 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 **1. `hello`**：連上後第一則，只送一次。
 
 ```json
-{ "type": "hello", "version": "0.1.10", "protocol": 2, "platform": "windows", "port": 7777,
+{ "type": "hello", "version": "0.1.11", "protocol": 2, "platform": "windows", "port": 7777,
   "source": "ULTRA9-285K (Adobe After Effects)" }
 ```
 
@@ -90,7 +89,7 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 ```json
 {
   "type": "status",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "state": "live",
   "ndi": "ready",
   "error": null,
@@ -239,12 +238,28 @@ cargo build --release
 
 - Windows：Visual Studio C++ Build Tools（含 CMake）、NASM；安裝檔：`cargo install cargo-wix` → `cargo wix --no-build`
   （範本在 `wix/main.wxs`，已客製：開始選單捷徑、裝完自動啟動、升級前自動關掉舊版、不用 Restart Manager 也不建系統還原點（更新幾秒就好）、移除時清掉開機啟動。**不要**再跑 `cargo wix init --force`）
-- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.10 dist`
+- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.11 dist`
+  （ad-hoc 簽章，使用者第一次打開會被擋；要發給別人用一定要再做下面的公證）
+- macOS 公證（要在鑰匙圈裡有 Developer ID Application 憑證的 Mac 上做）：
+  `bash macos/notarize.sh <make-app 做的 .app 或 Release 上的 zip> <輸出資料夾>` →
+  Developer ID 簽章（hardened runtime + `macos/entitlements.plist`）→ Apple 公證 → staple → 輸出 `stage-previz-ndi-helper-mac.zip`。
+  公證帳號用環境變數給：`NOTARY_PROFILE`（先跑過 `xcrun notarytool store-credentials`），
+  或 `APPLE_ID` + `APPLE_TEAM_ID` + `APPLE_APP_SPECIFIC_PASSWORD`。**帳號、密碼、憑證都不要放進 repo / CI。**
 
 發佈：推 tag `ndi-helper-vX.Y.Z` → GitHub Actions（`.github/workflows/ndi-helper-release.yml`）會編 Windows MSI +
 Mac universal zip、跑冒煙測試、建 Release。網站固定連：
 - `…/releases/latest/download/stage-previz-ndi-helper-windows.msi`
 - `…/releases/latest/download/stage-previz-ndi-helper-mac.zip`
+
+CI 沒有 Apple 憑證，Mac zip 只有 ad-hoc 簽章 → Release 建好之後，在有 Developer ID 的 Mac 上把它換成公證版
+（同一個執行檔，只換簽章；固定下載網址會自動變成公證版）：
+
+```bash
+cd ndi-helper
+gh release download ndi-helper-vX.Y.Z -p stage-previz-ndi-helper-mac.zip -D /tmp/ndi-mac --clobber
+bash macos/notarize.sh /tmp/ndi-mac/stage-previz-ndi-helper-mac.zip /tmp/ndi-mac/notarized
+gh release upload ndi-helper-vX.Y.Z /tmp/ndi-mac/notarized/stage-previz-ndi-helper-mac.zip --clobber
+```
 
 只想測編譯不發佈：Actions 頁面手動跑 workflow（workflow_dispatch）。
 

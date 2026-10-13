@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- 公證一定要開 hardened runtime；Apple 文件：hardened runtime 預設只准載入「同一個開發者簽的」函式庫。
+	     NDI 函式庫（libndi.dylib）是 NewTek 簽的、執行時才載入 → 關掉 library validation，
+	     免得 NDI Tools 有裝卻載不進來（會回報「沒裝 NDI」）。
+	     （macOS 26.6 實測不加也載得進 NewTek 簽的 libndi；其他 macOS 版本 / 其他地方來的 libndi 不保證，所以留著） -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+</dict>
+</plist>
