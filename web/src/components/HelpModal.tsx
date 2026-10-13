@@ -39,15 +39,17 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
               <dt><kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd></dt>
               <dd>切到下一個 / 上一個 cue</dd>
               <dt><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Z</kbd></dt>
-              <dd>Undo（最近 50 步 cue 位置改動）</dd>
+              <dd>復原（這個 cue 最近 50 步的位置 / 角度 / 顯示改動；換 cue 不會改到別的 cue）</dd>
+              <dt><kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd> 或 <kbd>Ctrl</kbd>+<kbd>Y</kbd></dt>
+              <dd>重做（把剛剛復原的再做一次）</dd>
             </dl>
           </section>
 
           <section>
             <h3>🎮 3D Viewport</h3>
             <dl>
-              <dt><kbd>W</kbd> / <kbd>E</kbd> / <kbd>R</kbd></dt>
-              <dd>切換 移動 / 旋轉 / 縮放 工具</dd>
+              <dt><kbd>W</kbd> / <kbd>E</kbd></dt>
+              <dd>切換 移動 / 旋轉 工具</dd>
               <dt><kbd>Q</kbd></dt>
               <dd>切換 World / Local 軸向</dd>
               <dt><kbd>L</kbd></dt>

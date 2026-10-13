@@ -14,6 +14,7 @@ import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, scenePosition, type CuePoseMap } from '../lib/cueTimeline';
+import { cuePositionFromScene } from '../lib/mechanismOffset';
 import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
@@ -74,7 +75,7 @@ interface Props {
   onTransform: (objectId: string, position: Vec3, rotation: Euler) => Promise<void> | void;
   cueName?: string;
   modelUrl?: string | null;
-  /** 唯讀模式：不顯示移動/旋轉/縮放工具，不啟用 transform gizmo（給動畫師/導演 view） */
+  /** 唯讀模式：不顯示移動/旋轉工具，不啟用 transform gizmo（給動畫師/導演 view） */
   readOnly?: boolean;
   /** 預設 render mode（沒給 = live；舊值 realistic / cinematic 當 live） */
   defaultRenderMode?: RenderMode | 'realistic' | 'cinematic';
@@ -150,7 +151,8 @@ interface Props {
 // ⚡ quick：像素 1:1 對顏色；🎤 live：暗場 + LED 照明 + 光暈（取代舊的 realistic / cinematic）
 type RenderMode = 'quick' | 'live';
 
-type Mode = 'translate' | 'rotate' | 'scale';
+// 沒有縮放工具：cue 不存縮放（模型尺寸對不上走測距校準），縮了也存不起來、換 cue 就不見
+type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
@@ -595,6 +597,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       orbit.enabled = (event.value === null);
     });
 
+    // 3D 畫面上的位置 → 要存進 cue 的位置：LED 面板先扣掉機關滑桿的位移
+    // （顯示時會再加回去；沒扣的話位移會被加兩次，放手後 LED 跳走）
+    const toCuePosition = (id: string, p: THREE.Vector3): Vec3 => {
+      const category = statesRef.current?.find(s => s.objectId === id)?.category;
+      const c = cuePositionFromScene({ x: p.x, y: p.y, z: p.z }, category, id, mechanismOffsetsRef.current, scaleCorrectionRef.current);
+      return { x: round(c.x), y: round(c.y), z: round(c.z) };
+    };
+
     // dragging-changed：drag 結束時自動存（支援單選 / 多選共動）
     transform.addEventListener('dragging-changed', (event: any) => {
       if (event.value === false) {
@@ -616,7 +626,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             scene.attach(m); // 拿回 scene（保留 world matrix）
             if (id) {
               onTransformRef.current(id,
-                { x: round(wpos.x), y: round(wpos.y), z: round(wpos.z) },
+                toCuePosition(id, wpos),
                 { pitch: round(THREE.MathUtils.radToDeg(euler.x)),
                   yaw:   round(THREE.MathUtils.radToDeg(euler.y)),
                   roll:  round(THREE.MathUtils.radToDeg(euler.z)) });
@@ -631,7 +641,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // ── 單選
           const id = obj.userData.objectId as string | undefined;
           if (!id) return;
-          const pos = { x: round(obj.position.x), y: round(obj.position.y), z: round(obj.position.z) };
+          const pos = toCuePosition(id, obj.position);
           const rot = {
             pitch: round(THREE.MathUtils.radToDeg(obj.rotation.x)),
             yaw:   round(THREE.MathUtils.radToDeg(obj.rotation.y)),
@@ -1987,7 +1997,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       // 只看模式：快捷鍵全部關掉
       if (viewerRef.current) return;
-      // 唯讀模式：保留 L / X，不啟用 W/E/R/Q/Esc
+      // 唯讀模式：保留 L / X，不啟用 W/E/Q/Esc
       if (readOnlyRef.current) {
         if (e.key === 'l' || e.key === 'L') setShowLabels(s => !s);
         else if (e.key === 'x' || e.key === 'X') setWireframe(w => !w);
@@ -1995,7 +2005,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       }
       if (e.key === 'w' || e.key === 'W') setMode('translate');
       else if (e.key === 'e' || e.key === 'E') setMode('rotate');
-      else if (e.key === 'r' || e.key === 'R') setMode('scale');
       else if (e.key === 'q' || e.key === 'Q') setSpace(s => s === 'world' ? 'local' : 'world');
       else if (e.key === 'l' || e.key === 'L') setShowLabels(s => !s);
       else if (e.key === 'x' || e.key === 'X') setWireframe(w => !w);
@@ -2105,11 +2114,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
               onClick={() => setMode('rotate')}
               title="旋轉 (E)"
             >↻ 旋轉</button>
-            <button
-              className={'tool ' + (mode === 'scale' ? 'is-active' : '')}
-              onClick={() => setMode('scale')}
-              title="縮放 (R)"
-            >⤢ 縮放</button>
             <span className="tool-sep" />
             <button
               className="tool"
@@ -2455,7 +2459,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           ? <>拖拉旋轉視角 · 滾輪縮放</>
           : readOnly
           ? <><kbd>L</kbd> label · 拖拉旋轉視角 · 滾輪縮放</>
-          : <><kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>R</kbd> 縮放 · <kbd>Q</kbd> world/local · <kbd>L</kbd> label · <kbd>Esc</kbd> 取消選取</>
+          : <><kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>Q</kbd> world/local · <kbd>L</kbd> label · <kbd>Esc</kbd> 取消選取</>
         }
       </div>
     </div>
