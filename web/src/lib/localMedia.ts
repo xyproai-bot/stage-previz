@@ -1,6 +1,8 @@
 // 本地檔案清單（分享頁拖進來的影片 / 圖片）：只在這台電腦放到 LED 上，不上傳。
 //   mediaKindOf / splitMediaFiles / skippedFilesMessage — 看檔案是影片、圖片，還是不能用
-//   addMediaItems / removeMediaItem / selectMediaItem — 清單操作（純函式，回傳新的清單）
+//   addMediaItems / removeMediaItem / selectMediaItem / moveMediaItem / stepMediaItem / updateMediaItem
+//     — 清單操作（純函式，回傳新的清單）
+//   thumbnailTime / fitSize / makeMediaThumbnail — 清單縮圖（影片抓一格、圖片縮小；一次做一個）
 //   useLocalMedia — 管清單 + 影片播放器（useLocalVideo）+ 正在放的圖片
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -51,8 +53,14 @@ export interface LocalMediaItem {
   name: string;
   kind: LocalMediaKind;
   file: File;
-  /** 圖片才有（縮圖 + LED 用）；影片的網址由 useLocalVideo 自己管 */
+  /** 圖片才有（LED 用）；影片的網址由 useLocalVideo 自己管 */
   url: string | null;
+  /** 清單縮圖（小張 JPEG data URL）；還沒做好 / 做不出來 → null */
+  thumb: string | null;
+  /** 縮圖做完了沒（做不出來也算做完 → 顯示圖示） */
+  thumbReady: boolean;
+  /** 影片長度（秒）；圖片 / 還不知道 → null */
+  duration: number | null;
 }
 
 export interface LocalMediaList {
@@ -105,6 +113,139 @@ export function activeMediaItem(list: LocalMediaList): LocalMediaItem | null {
   return list.items.find(x => x.id === list.activeId) ?? null;
 }
 
+/**
+ * 拖曳排順序：把 id 移到「原本清單第 insertAt 個的前面」（insertAt = 清單長度 → 移到最後）。
+ * 正在放的不變。不在清單 / 位置沒變 → 原樣。
+ */
+export function moveMediaItem(list: LocalMediaList, id: string, insertAt: number): LocalMediaList {
+  const from = list.items.findIndex(x => x.id === id);
+  if (from < 0 || !Number.isFinite(insertAt)) return list;
+  const at = Math.min(Math.max(Math.round(insertAt), 0), list.items.length);
+  const to = at > from ? at - 1 : at;  // 先拿掉自己，後面的位置往前一格
+  if (to === from) return list;
+  const items = [...list.items];
+  const [moved] = items.splice(from, 1);
+  items.splice(to, 0, moved);
+  return { ...list, items };
+}
+
+/**
+ * ↑ / ↓ 換上一個 / 下一個：回傳要放的 id。
+ * 沒有在放的 → ↓ 從第一個、↑ 從最後一個開始；已經在頭 / 尾、清單空的 → null（不繞回去）
+ */
+export function stepMediaItem(list: LocalMediaList, delta: number): string | null {
+  const n = list.items.length;
+  if (n === 0 || delta === 0) return null;
+  const cur = list.items.findIndex(x => x.id === list.activeId);
+  const next = cur < 0 ? (delta > 0 ? 0 : n - 1) : cur + Math.sign(delta);
+  if (next < 0 || next >= n || next === cur) return null;
+  return list.items[next].id;
+}
+
+/** 改清單裡某一個的資料（縮圖、長度做好時填回去）；不在清單 → 原樣 */
+export function updateMediaItem(
+  list: LocalMediaList, id: string, patch: Partial<Pick<LocalMediaItem, 'thumb' | 'thumbReady' | 'duration'>>,
+): LocalMediaList {
+  const i = list.items.findIndex(x => x.id === id);
+  if (i < 0) return list;
+  const items = [...list.items];
+  items[i] = { ...items[i], ...patch };
+  return { ...list, items };
+}
+
+// ── 清單縮圖 ──
+
+/** 顯示框（CSS 88×40）的 2 倍 → 高解析螢幕也清楚，一張只有幾 KB */
+export const THUMB_BOX = { w: 176, h: 80 };
+
+/**
+ * 影片縮圖抓哪一秒：片長的 10%，但至少 1 秒（太短的片子取一半）——
+ * 開頭常常是黑畫面淡入，抓 0 秒會一片黑。不知道片長 → 0（抓第一格）
+ */
+export function thumbnailTime(duration: number): number {
+  if (duration === Infinity) return 1;
+  if (!Number.isFinite(duration) || duration <= 0) return 0;
+  return Math.max(duration * 0.1, Math.min(1, duration / 2));
+}
+
+/** 整張畫面縮進框裡（不裁切，LED 畫布再寬也看得到全部），至少 1px */
+export function fitSize(w: number, h: number, boxW: number, boxH: number): { w: number; h: number } {
+  if (!(w > 0) || !(h > 0)) return { w: boxW, h: boxH };
+  const s = Math.min(boxW / w, boxH / h);
+  return { w: Math.max(1, Math.round(w * s)), h: Math.max(1, Math.round(h * s)) };
+}
+
+function drawThumb(source: CanvasImageSource, w: number, h: number): string | null {
+  const size = fitSize(w, h, THUMB_BOX.w, THUMB_BOX.h);
+  const canvas = document.createElement('canvas');
+  canvas.width = size.w;
+  canvas.height = size.h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  ctx.imageSmoothingQuality = 'high';
+  ctx.drawImage(source, 0, 0, size.w, size.h);
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+async function imageThumb(file: File): Promise<string | null> {
+  const bmp = await createImageBitmap(file);
+  try {
+    return drawThumb(bmp, bmp.width, bmp.height);
+  } finally {
+    bmp.close();
+  }
+}
+
+/** 另開一個靜音的 <video> 抓一格（跟 LED 用的播放器分開，抓完就放掉解碼器） */
+function videoThumb(file: File): Promise<{ thumb: string | null; duration: number | null }> {
+  return new Promise((resolve) => {
+    const v = document.createElement('video');
+    v.muted = true;
+    v.playsInline = true;
+    v.preload = 'auto';
+    const src = URL.createObjectURL(file);
+    let duration: number | null = null;
+    let done = false;
+    const finish = (thumb: string | null) => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timer);
+      v.removeAttribute('src');
+      v.load();
+      URL.revokeObjectURL(src);
+      resolve({ thumb, duration });
+    };
+    const grab = () => {
+      try { finish(drawThumb(v, v.videoWidth, v.videoHeight)); } catch { finish(null); }
+    };
+    // 很大的檔案 / 解不開的編碼：等太久就放棄（只是縮圖，播放器那邊會自己報錯）
+    const timer = window.setTimeout(() => finish(null), 20000);
+    v.addEventListener('loadedmetadata', () => {
+      duration = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : null;
+      if (!v.videoWidth) { finish(null); return; }
+      const t = thumbnailTime(v.duration);
+      if (t > 0) {
+        v.addEventListener('seeked', grab, { once: true });
+        v.currentTime = t;
+      } else {
+        v.addEventListener('loadeddata', grab, { once: true });
+      }
+    }, { once: true });
+    v.addEventListener('error', () => finish(null), { once: true });
+    v.src = src;
+  });
+}
+
+/** 做一張清單縮圖（影片順便拿到片長）；做不出來 → thumb null */
+export async function makeMediaThumbnail(item: Pick<LocalMediaItem, 'kind' | 'file'>): Promise<{ thumb: string | null; duration: number | null }> {
+  if (item.kind === 'video') return videoThumb(item.file);
+  try {
+    return { thumb: await imageThumb(item.file), duration: null };
+  } catch {
+    return { thumb: null, duration: null };
+  }
+}
+
 export interface LocalMediaState {
   items: LocalMediaItem[];
   active: LocalMediaItem | null;
@@ -117,6 +258,10 @@ export interface LocalMediaState {
   add: (files: File[]) => { rejected: string[]; shown: boolean };
   select: (id: string) => void;
   remove: (id: string) => void;
+  /** 拖曳排順序：移到原本第 insertAt 個的前面 */
+  move: (id: string, insertAt: number) => void;
+  /** 換上一個（-1）/ 下一個（+1）；有換回 true */
+  step: (delta: number) => boolean;
 }
 
 export function useLocalMedia(): LocalMediaState {
@@ -144,6 +289,26 @@ export function useLocalMedia(): LocalMediaState {
     }
   }, [video, loadVideo]);
 
+  // 縮圖：排隊一次做一個（不跟 LED 正在播的影片搶解碼），做好填回清單；已經拿掉的就跳過
+  const thumbQueueRef = useRef<LocalMediaItem[]>([]);
+  const thumbBusyRef = useRef(false);
+  const aliveRef = useRef(true);
+  const pumpThumbs = useCallback(() => {
+    if (thumbBusyRef.current || !aliveRef.current) return;
+    const inList = (it: LocalMediaItem) => listRef.current.items.some(x => x.id === it.id);
+    const queue = thumbQueueRef.current;
+    while (queue.length > 0 && !inList(queue[0])) queue.shift();
+    const item = queue.shift();
+    if (!item) return;
+    thumbBusyRef.current = true;
+    makeMediaThumbnail(item).then(({ thumb, duration }) => {
+      thumbBusyRef.current = false;
+      if (!aliveRef.current) return;
+      commit(updateMediaItem(listRef.current, item.id, { thumb, thumbReady: true, ...(duration != null ? { duration } : {}) }));
+      pumpThumbs();
+    });
+  }, [commit]);
+
   const add = useCallback((files: File[]) => {
     const { accepted, rejected } = splitMediaFiles(files);
     const incoming: LocalMediaItem[] = accepted.map(({ file, kind }) => ({
@@ -153,14 +318,19 @@ export function useLocalMedia(): LocalMediaState {
       kind,
       file,
       url: kind === 'image' ? URL.createObjectURL(file) : null,
+      thumb: null,
+      thumbReady: false,
+      duration: null,
     }));
     const prev = listRef.current;
     const { list: next, added } = addMediaItems(prev, incoming);
     for (const it of incoming) if (it.url && !added.includes(it)) URL.revokeObjectURL(it.url);
     commit(next);
     if (next.activeId !== prev.activeId) show(activeMediaItem(next));
+    thumbQueueRef.current.push(...added);
+    pumpThumbs();
     return { rejected, shown: incoming.length > 0 };
-  }, [commit, show]);
+  }, [commit, show, pumpThumbs]);
 
   const select = useCallback((id: string) => {
     const prev = listRef.current;
@@ -181,9 +351,27 @@ export function useLocalMedia(): LocalMediaState {
     }
   }, [commit, clearVideo]);
 
-  // 離開頁面 → 收掉所有圖片網址（影片的由 useLocalVideo 收）
-  useEffect(() => () => {
-    for (const it of listRef.current.items) if (it.url) URL.revokeObjectURL(it.url);
+  const move = useCallback((id: string, insertAt: number) => {
+    const prev = listRef.current;
+    const next = moveMediaItem(prev, id, insertAt);
+    if (next !== prev) commit(next);
+  }, [commit]);
+
+  const step = useCallback((delta: number) => {
+    const id = stepMediaItem(listRef.current, delta);
+    if (!id) return false;
+    select(id);
+    return true;
+  }, [select]);
+
+  // 離開頁面 → 收掉所有圖片網址（影片的由 useLocalVideo 收）、縮圖不再做
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      thumbQueueRef.current = [];
+      for (const it of listRef.current.items) if (it.url) URL.revokeObjectURL(it.url);
+    };
   }, []);
 
   // 正在放的圖片先解碼好再交給 LED（換圖時舊的留著，新的好了才換上）
@@ -209,5 +397,5 @@ export function useLocalMedia(): LocalMediaState {
     return () => { cancelled = true; };
   }, [activeImageUrl]);
 
-  return { items: list.items, active, player, image, imageError, add, select, remove };
+  return { items: list.items, active, player, image, imageError, add, select, remove, move, step };
 }

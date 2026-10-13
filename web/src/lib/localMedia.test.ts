@@ -1,13 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
-  activeMediaItem, addMediaItems, EMPTY_MEDIA_LIST, mediaFileKey, mediaKindOf,
-  removeMediaItem, selectMediaItem, skippedFilesMessage, splitMediaFiles,
-  type LocalMediaItem, type LocalMediaKind,
+  activeMediaItem, addMediaItems, EMPTY_MEDIA_LIST, fitSize, mediaFileKey, mediaKindOf, moveMediaItem,
+  removeMediaItem, selectMediaItem, skippedFilesMessage, splitMediaFiles, stepMediaItem, thumbnailTime,
+  updateMediaItem, type LocalMediaItem, type LocalMediaKind, type LocalMediaList,
 } from './localMedia';
 
 const item = (id: string, kind: LocalMediaKind = 'video', key = id): LocalMediaItem => ({
   id, key, name: `${id}.${kind === 'video' ? 'mp4' : 'png'}`, kind, file: {} as File, url: kind === 'image' ? `blob:${id}` : null,
+  thumb: null, thumbReady: false, duration: null,
 });
+const ids = (list: LocalMediaList) => list.items.map(x => x.id);
 
 describe('mediaKindOf', () => {
   it('看 MIME type', () => {
@@ -117,5 +119,101 @@ describe('selectMediaItem', () => {
   it('點正在放的 / 不在清單的 → 原樣', () => {
     expect(selectMediaItem(start, 'a')).toBe(start);
     expect(selectMediaItem(start, 'zzz')).toBe(start);
+  });
+});
+
+describe('moveMediaItem（拖曳排順序）', () => {
+  // a b c d，b 在放
+  const start = selectMediaItem(addMediaItems(EMPTY_MEDIA_LIST, [item('a'), item('b'), item('c'), item('d')]).list, 'b');
+
+  it('往下拖：放到 d 前面 → a c b d', () => {
+    expect(ids(moveMediaItem(start, 'b', 3))).toEqual(['a', 'c', 'b', 'd']);
+  });
+  it('往上拖：放到 a 前面 → c a b d', () => {
+    expect(ids(moveMediaItem(start, 'c', 0))).toEqual(['c', 'a', 'b', 'd']);
+  });
+  it('拖到最後（insertAt = 長度）', () => {
+    expect(ids(moveMediaItem(start, 'a', 4))).toEqual(['b', 'c', 'd', 'a']);
+  });
+  it('正在放的不變', () => {
+    expect(moveMediaItem(start, 'b', 0).activeId).toBe('b');
+    expect(moveMediaItem(start, 'd', 0).activeId).toBe('b');
+  });
+  it('放回自己前面 / 後面、不在清單、位置亂給 → 原樣或夾在範圍內', () => {
+    expect(moveMediaItem(start, 'b', 1)).toBe(start);
+    expect(moveMediaItem(start, 'b', 2)).toBe(start);
+    expect(moveMediaItem(start, 'zzz', 0)).toBe(start);
+    expect(moveMediaItem(start, 'b', NaN)).toBe(start);
+    expect(ids(moveMediaItem(start, 'a', 99))).toEqual(['b', 'c', 'd', 'a']);
+    expect(ids(moveMediaItem(start, 'd', -5))).toEqual(['d', 'a', 'b', 'c']);
+  });
+  it('不改到原本的清單', () => {
+    moveMediaItem(start, 'a', 4);
+    expect(ids(start)).toEqual(['a', 'b', 'c', 'd']);
+  });
+});
+
+describe('stepMediaItem（↑ / ↓ 換上一個 / 下一個）', () => {
+  const list = addMediaItems(EMPTY_MEDIA_LIST, [item('a'), item('b'), item('c')]).list; // a 在放
+  it('下一個 / 上一個', () => {
+    expect(stepMediaItem(list, 1)).toBe('b');
+    expect(stepMediaItem(selectMediaItem(list, 'b'), -1)).toBe('a');
+    expect(stepMediaItem(selectMediaItem(list, 'b'), 1)).toBe('c');
+  });
+  it('到頭 / 到尾 → null（不繞回去）', () => {
+    expect(stepMediaItem(list, -1)).toBeNull();
+    expect(stepMediaItem(selectMediaItem(list, 'c'), 1)).toBeNull();
+  });
+  it('沒有在放的 → ↓ 從第一個、↑ 從最後一個', () => {
+    const none = removeMediaItem(list, 'a').list; // b c，沒有在放
+    expect(stepMediaItem(none, 1)).toBe('b');
+    expect(stepMediaItem(none, -1)).toBe('c');
+  });
+  it('清單空的 → null', () => {
+    expect(stepMediaItem(EMPTY_MEDIA_LIST, 1)).toBeNull();
+  });
+});
+
+describe('updateMediaItem', () => {
+  const list = addMediaItems(EMPTY_MEDIA_LIST, [item('a'), item('b', 'image')]).list;
+  it('填回縮圖和片長，其他不動', () => {
+    const next = updateMediaItem(list, 'a', { thumb: 'data:x', thumbReady: true, duration: 83 });
+    expect(next.items[0]).toMatchObject({ id: 'a', thumb: 'data:x', thumbReady: true, duration: 83, name: 'a.mp4' });
+    expect(next.items[1]).toBe(list.items[1]);
+    expect(next.activeId).toBe('a');
+    expect(list.items[0].thumb).toBeNull();
+  });
+  it('已經拿掉的 → 原樣', () => {
+    expect(updateMediaItem(list, 'zzz', { thumbReady: true })).toBe(list);
+  });
+});
+
+describe('thumbnailTime（影片縮圖抓哪一秒）', () => {
+  it('長片抓 10%', () => {
+    expect(thumbnailTime(180)).toBeCloseTo(18);
+    expect(thumbnailTime(30)).toBeCloseTo(3);
+  });
+  it('短片至少 1 秒；比 2 秒還短抓一半', () => {
+    expect(thumbnailTime(5)).toBe(1);
+    expect(thumbnailTime(1)).toBe(0.5);
+  });
+  it('不知道片長 → 第一格；無限長（直播錄的 webm）→ 1 秒', () => {
+    expect(thumbnailTime(0)).toBe(0);
+    expect(thumbnailTime(NaN)).toBe(0);
+    expect(thumbnailTime(Infinity)).toBe(1);
+  });
+});
+
+describe('fitSize（縮圖整張縮進框裡）', () => {
+  it('很寬的 LED 畫布 → 寬度填滿', () => {
+    expect(fitSize(8800, 2024, 176, 80)).toEqual({ w: 176, h: 40 });
+  });
+  it('16:9 → 高度填滿', () => {
+    expect(fitSize(1920, 1080, 176, 80)).toEqual({ w: 142, h: 80 });
+  });
+  it('直的 / 超細的也至少 1px；沒有尺寸 → 整個框', () => {
+    expect(fitSize(1080, 1920, 176, 80)).toEqual({ w: 45, h: 80 });
+    expect(fitSize(100000, 10, 176, 80).h).toBe(1);
+    expect(fitSize(0, 0, 176, 80)).toEqual({ w: 176, h: 80 });
   });
 });

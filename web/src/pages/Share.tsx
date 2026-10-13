@@ -14,6 +14,7 @@ import { cueAtTime, cueTransitionSeconds } from '../lib/cueTiming';
 import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
 import type { NdiClientStatus } from '../lib/ndiClient';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_TOOLS_URL } from '../lib/downloads';
+import ShareSetlist from './ShareSetlist';
 import './Share.css';
 
 /** LED 畫面來源：AE 即時（NDI 小程序）或本地檔案（拖進來的影片 / 圖片，只在這台電腦播） */
@@ -61,7 +62,6 @@ export default function Share() {
   // 剛打開 / 剛切到 AE 時給一點時間連線，連不上才顯示安裝步驟
   const [ndiGraceOver, setNdiGraceOver] = useState(false);
   const [dragOver, setDragOver] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAutoCueRef = useRef<string | null>(null);
   // 這首歌每個 cue 的舞台位置先全部抓好 → 點 cue 馬上開始動，不用等網路
   const cueStatesCacheRef = useRef<Map<string, Promise<CueState[]>>>(new Map());
@@ -99,6 +99,21 @@ export default function Share() {
     if (skipped) toast.warn(skipped);
     if (shown) setSource('file');
   }, [media]);
+
+  // 本地檔案：↑ / ↓ 換清單上一個 / 下一個（焦點在輸入框、拉桿、走路模式時不搶方向鍵）
+  const stepMedia = media.step;
+  useEffect(() => {
+    if (source !== 'file') return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+      if (e.defaultPrevented || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || document.pointerLockElement) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+      if (stepMedia(e.key === 'ArrowDown' ? 1 : -1)) e.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [source, stepMedia]);
 
   const load = useCallback(async (pwd?: string) => {
     if (!token) return;
@@ -306,29 +321,53 @@ export default function Share() {
         <span className="share-top__hint">公開預覽 · 唯讀</span>
       </header>
 
-      <div className="share-body">
-        {data.songs.length > 1 && !data.restrictedToSongId && (
-          <aside className="share-songs">
-            <div className="share-songs__title">歌曲</div>
-            <ul>
-              {data.songs.map(s => (
-                <li key={s.id}>
-                  <button
-                    className={'share-songs__item' + (s.id === selectedSongId ? ' is-active' : '')}
-                    onClick={() => setSelectedSongId(s.id)}
-                  >{s.name}</button>
-                </li>
-              ))}
-            </ul>
+      {/* 檔案拖到頁面哪裡都收（左邊清單、舞台都可以）；清單裡拖曳排順序的不算（沒有 'Files'） */}
+      <div
+        className="share-body"
+        onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragOver(true); } }}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragOver(false); }}
+        onDrop={(e) => {
+          if (!e.dataTransfer.types.includes('Files')) return;
+          e.preventDefault();
+          setDragOver(false);
+          addFiles(e.dataTransfer.files);
+        }}
+      >
+        {/* 左邊欄：歌曲（多首歌才有）在上、本地檔案清單（選了本地檔案才有）在下；兩個都沒有 → 舞台吃滿寬度 */}
+        {((data.songs.length > 1 && !data.restrictedToSongId) || source === 'file') && (
+          <aside className="share-side">
+            {data.songs.length > 1 && !data.restrictedToSongId && (
+              <section className="share-songs">
+                <div className="share-side__title">歌曲</div>
+                <ul>
+                  {data.songs.map(s => (
+                    <li key={s.id}>
+                      <button
+                        className={'share-songs__item' + (s.id === selectedSongId ? ' is-active' : '')}
+                        onClick={() => setSelectedSongId(s.id)}
+                      >{s.name}</button>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+            {source === 'file' && (
+              <ShareSetlist
+                items={media.items}
+                activeId={media.active?.id ?? null}
+                activePlaying={local.playing}
+                activeDuration={local.duration}
+                fileDragOver={dragOver}
+                onSelect={media.select}
+                onRemove={media.remove}
+                onMove={media.move}
+                onAddFiles={addFiles}
+              />
+            )}
           </aside>
         )}
 
-        <main
-          className="share-stage"
-          onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragOver(true); } }}
-          onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false); }}
-          onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
-        >
+        <main className="share-stage">
           <div className="share-source">
             <div className="share-source__switch">
               <button className={source === 'ndi' ? 'is-active' : ''} onClick={() => setSource('ndi')}>🔴 AE 即時</button>
@@ -342,37 +381,9 @@ export default function Share() {
                   : ndiStatus.kind === 'connecting' ? '連線 NDI 小程序中…' : '沒偵測到 NDI 小程序')
                 : media.active?.kind === 'video' ? `${local.playing ? '▶' : '⏸'} ${media.active.name}`
                 : media.active ? `🖼 ${media.active.name}`
-                : media.items.length > 0 ? '點下面清單裡的檔案，放到 LED 上' : '還沒選檔案'}
+                : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
             </span>
-            <span className="grow" />
-            <button className="btn btn--ghost btn--sm" onClick={() => fileInputRef.current?.click()}>＋ 加入影片 / 圖片…</button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="video/*,image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif"
-              multiple
-              hidden
-              onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
-            />
           </div>
-
-          {source === 'file' && media.items.length > 0 && (
-            <div className="share-files">
-              {media.items.map(it => (
-                <div key={it.id} className={'share-files__item' + (it.id === media.active?.id ? ' is-active' : '')}>
-                  <button className="share-files__pick" onClick={() => media.select(it.id)} title={`${it.name}（點了放到 LED 上）`}>
-                    {it.url
-                      ? <img className="share-files__thumb" src={it.url} alt="" />
-                      : <span className="share-files__thumb">🎬</span>}
-                    <span className="share-files__name">{it.name}</span>
-                    <span className="share-files__tag">{it.kind === 'video' ? '影片' : '圖片'}</span>
-                  </button>
-                  <button className="share-files__remove" onClick={() => media.remove(it.id)} title="從清單移除">✕</button>
-                </div>
-              ))}
-              <span className="share-files__hint">檔案只在這台電腦播放，不會上傳</span>
-            </div>
-          )}
 
           {videos.length > 0 && selectedVideoFid && (
             <div className="share-video-pane">
