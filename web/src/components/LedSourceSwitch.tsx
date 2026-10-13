@@ -23,7 +23,8 @@ export function saveLedSource(key: string, s: LedSource) {
 }
 
 interface Props {
-  source: LedSource;
+  /** null = 什麼都沒選（分享連結：這首歌沒有影片 → LED 顯示測試圖） */
+  source: LedSource | null;
   onChange: (s: LedSource) => void;
   /** 有影片可以放時才出現「影片」；label = V3 / Drive 最新 */
   showVersion: boolean;

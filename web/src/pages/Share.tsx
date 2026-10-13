@@ -18,6 +18,7 @@ import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useShareMechanisms } from '../lib/mechanisms/useMechanisms';
 import { shareVersionFetcher, useSongVersions, type VersionFetcher } from '../lib/useSongVersions';
 import { versionChoiceStorageKey } from '../lib/songVersions';
+import { noSourceStatus, resolveShareSource, shareSourceStorageKey } from '../lib/shareSource';
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import ShareSetlist from './ShareSetlist';
@@ -27,8 +28,6 @@ import {
 } from 'lucide-react';
 import './Share.css';
 
-/** 記住這台電腦上次選的來源（影片 / AE 即時 / 本地檔案） */
-const SOURCE_KEY = 'sp_led_source:share';
 
 /** 這首歌每個 cue 的舞台位置先全部開始抓（點 cue / 影片走到那裡時馬上有） */
 function prefetchCueStates(ref: ShareRef, songId: string, list: Cue[], access: string | undefined) {
@@ -80,8 +79,16 @@ export default function Share() {
   // 一頁只有一個 <video>：歌曲影片、本地檔案輪流用它（同時是 LED 貼圖、也是小視窗的畫面）
   const local = useLocalVideo();
   const media = useLocalMedia(local);
-  // 上次選的來源；沒選過 = 有影片就放影片，沒有就 AE 即時
-  const [sourcePref, setSourcePref] = useState<LedSource | null>(() => readLedSource(SOURCE_KEY));
+  // 這個人在這個分享連結上次自己選的來源（影片 / AE 即時 / 本地檔案；每個連結分開記）。
+  // 沒選過 = 有影片就放影片，沒有就什麼都不放（測試圖）；AE 即時要自己按了才連（lib/shareSource.ts）
+  const sourceKey = shareRef ? shareSourceStorageKey(shareRef) : null;
+  const [sourcePref, setSourcePref] = useState<LedSource | null>(() => (sourceKey ? readLedSource(sourceKey) : null));
+  const [sourcePrefFor, setSourcePrefFor] = useState(sourceKey);
+  if (sourcePrefFor !== sourceKey) {
+    // 同一個分頁換到另一個分享連結 → 換成那個連結記的
+    setSourcePrefFor(sourceKey);
+    setSourcePref(sourceKey ? readLedSource(sourceKey) : null);
+  }
   // AE 即時現在卡在哪一步（3D 畫面上的檢查清單卡片會帶著做；這裡只顯示一句狀態）
   const [ndiGuide, setNdiGuide] = useState<NdiGuide | null>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -92,8 +99,8 @@ export default function Share() {
 
   const chooseSource = useCallback((s: LedSource) => {
     setSourcePref(s);
-    saveLedSource(SOURCE_KEY, s);
-  }, []);
+    if (sourceKey) saveLedSource(sourceKey, s);
+  }, [sourceKey]);
 
   // 拖進來 / 選的檔案加進清單，第一個馬上放在 LED 上；不是影片或圖片的略過
   const addFiles = useCallback((files: FileList | null | undefined) => {
@@ -123,10 +130,8 @@ export default function Share() {
   });
   const hasVideo = versions.items.length > 0;
   const versionsSettled = versions.status !== 'loading';
-  // 選了「影片」（或沒選過）但這首歌沒有影片 → AE 即時；還在讀清單時先不要跳（不然 AE 即時的卡片會閃一下）
-  const source: LedSource = sourcePref === 'ndi' || sourcePref === 'file'
-    ? sourcePref
-    : (hasVideo || !versionsSettled ? 'version' : 'ndi');
+  // 選了「影片」（或沒選過）但這首歌沒有影片 → 什麼都不放（LED 測試圖、上面寫「這首歌還沒有影片」）
+  const source = resolveShareSource({ pref: sourcePref, hasVideo, settled: versionsSettled });
   const selectedVersion = source === 'version' ? versions.selected : null;
 
   // 切到某一版 → 載進播放器（同一版不重載，不會從頭播）
@@ -138,16 +143,21 @@ export default function Share() {
   }, [selectedVersion?.key, local.loadUrl, local.getSrcKey]);
 
   // 切來源：AE 即時 → 影片先暫停（不然聲音還會在背景播）；
-  // 回到本地檔案 → 正在放的那支被換掉了就重新載入；清單裡沒有影片 → 歌曲影片也先暫停
-  const { pause: pausePlayer, getSrcKey } = local;
+  // 回到本地檔案 → 正在放的那支被換掉了就重新載入；清單裡沒有影片 → 歌曲影片也先暫停；
+  // 什麼都不放（換到沒有影片的歌）→ 上一首的影片不要繼續放
+  const { pause: pausePlayer, getSrcKey, clear: clearPlayer } = local;
   const { reshow: reshowMedia } = media;
   useEffect(() => {
     if (source === 'ndi') pausePlayer();
     else if (source === 'file') {
       reshowMedia();
       if (!getSrcKey()?.startsWith('local:')) pausePlayer();
+    } else if (source === null) {
+      const k = getSrcKey();
+      if (k && !k.startsWith('local:')) clearPlayer();
+      else pausePlayer();
     }
-  }, [source, pausePlayer, reshowMedia, getSrcKey]);
+  }, [source, pausePlayer, reshowMedia, getSrcKey, clearPlayer, selectedSongId]);
 
   // 影片播放網址過期 / 網路斷掉 → 拿新網址接著同一秒播
   const retryVersion = useCallback(async () => {
@@ -444,6 +454,8 @@ export default function Share() {
                 : ndiGuide.step === 'live'
                 ? <><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiGuide.source ?? 'AE'}{ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}</>
                 : ndiShortLabel(ndiGuide))
+              : source === null
+              ? noSourceStatus(versions.status === 'error' ? versions.error : null)
               : source === 'version'
               ? (selectedVersion
                 ? `${local.playing ? '播放中' : '暫停'} · ${selectedVersion.label}${selectedVersion.title ? ` · ${selectedVersion.title}` : ''}`
