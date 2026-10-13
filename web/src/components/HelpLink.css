@@ -1,0 +1,20 @@
+/* 「?」說明連結：跟旁邊的關閉鈕差不多大，平常淡淡的 */
+.help-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-muted, #8a8f98);
+  line-height: 0;
+}
+/* 放在對話框標題列：靠右、緊貼關閉鈕左邊 */
+.dialog__header > .help-link { margin-left: auto; margin-right: 4px; }
+.help-link:hover,
+.help-link:focus-visible {
+  background: var(--surface-2, rgba(255, 255, 255, 0.06));
+  color: var(--text, #fff);
+  text-decoration: none;
+}

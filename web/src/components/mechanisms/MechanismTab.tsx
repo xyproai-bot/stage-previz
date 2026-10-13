@@ -15,6 +15,8 @@ import { toast } from '../../lib/toast';
 import { confirmDialog } from '../dialogs';
 import MechanismCueRow from './MechanismCueRow';
 import MechanismSetupForm from './MechanismSetupForm';
+import HelpLink from '../HelpLink';
+import { HELP_ANCHORS } from '../../lib/helpLinks';
 import './mechanisms.css';
 
 interface Props {
@@ -212,13 +214,16 @@ export default function MechanismTab({
       <section className="mech-section">
         <header className="mech-section__head">
           <h3 className="mech-section__title">這個 cue 的機關位置 · <span className="mech-section__cue">{title}</span></h3>
-          <button
-            type="button"
-            className="btn btn--ghost btn--sm"
-            onClick={() => void exportSheet()}
-            disabled={exporting || mechanisms.length === 0}
-            title="用 Excel 打開；整個專案每首歌、每個 cue、每個機關一行"
-          ><Icon icon={exporting ? LoaderCircle : FileSpreadsheet} spin={exporting} /> 匯出機關總表</button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => void exportSheet()}
+              disabled={exporting || mechanisms.length === 0}
+              title="用 Excel 打開；整個專案每首歌、每個 cue、每個機關一行"
+            ><Icon icon={exporting ? LoaderCircle : FileSpreadsheet} spin={exporting} /> 匯出機關總表</button>
+            <HelpLink anchor={HELP_ANCHORS.prodMechanisms} />
+          </span>
         </header>
         <label className="mech-speed-toggle" title="開了：換 cue 時機關照最高速度走（跟導演頁、分享連結一樣，太快就晚到）。關了：照轉場秒數，跟物件一起到">
           <input type="checkbox" checked={mech.realSpeed} onChange={e => mech.setRealSpeed(e.target.checked)} />

@@ -204,7 +204,7 @@ function AboutSection({ isAdmin }: { isAdmin: boolean }) {
         <div><dt>版本</dt><dd>{APP_VERSION}</dd></div>
         {/* 管理頁右下角有 ? 按鈕；動畫師 / 導演的上方列是「使用說明」 */}
         <div><dt>使用說明</dt><dd>{isAdmin ? '按右下角的 ?（或鍵盤 ?）' : '按上方的「使用說明」'}</dd></div>
-        <div><dt>AE 即時預覽</dt><dd><a href={helpUrl()} target="_blank" rel="noopener">{isAdmin ? '圖文說明（不用登入，可以直接傳給動畫師）' : '圖文說明（不用登入）'} <Icon icon={ExternalLink} size="xs" /></a></dd></div>
+        <div><dt>AE 即時預覽</dt><dd><a href={helpUrl(HELP_ANCHORS.aeLive)} target="_blank" rel="noopener">{isAdmin ? '圖文說明（不用登入，可以直接傳給動畫師）' : '圖文說明（不用登入）'} <Icon icon={ExternalLink} size="xs" /></a></dd></div>
       </dl>
     </section>
   );

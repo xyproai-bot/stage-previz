@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { FolderOpen, Link2, LoaderCircle, MonitorPlay, Upload, X } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
+import HelpLink from './HelpLink';
+import { HELP_ANCHORS } from '../lib/helpLinks';
 import { VIDEO_ACCEPT, videoMimeForFile, type VideoApiError } from '../lib/videoApi';
 import { isJobActive, useVideoJobDone, videoJobs, type VideoJob } from '../lib/videoJobs';
 import { detectVideoLink, videoLinkHint } from '../lib/videoLink';
@@ -140,6 +142,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
       >
         <header className="addvid__head">
           <h2 id="addvid-title">加影片 · <span className="addvid__song">{label}</span></h2>
+          <HelpLink anchor={HELP_ANCHORS.animAddVideo} />
           <button type="button" className="addvid__close" onClick={onClose} title="關閉" aria-label="關閉">
             <Icon icon={X} size="md" />
           </button>

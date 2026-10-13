@@ -40,6 +40,8 @@ import {
   friendlyError, projectGoneMessage, canModifyComment, isOwnComment, sameSongs, sameComments,
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
+import HelpLink from '../components/HelpLink';
+import { HELP_ANCHORS } from '../lib/helpLinks';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Clock, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin, Pause, Play,
   Plus, RefreshCw, Square, X,
@@ -945,6 +947,7 @@ function SongDetail({
           </div>
         )}
         {actionsHint && <span className="muted small song-detail__hint">{actionsHint}</span>}
+        <HelpLink anchor={HELP_ANCHORS.dirDecide} />
       </div>
 
       <div className="song-detail__body">

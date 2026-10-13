@@ -32,7 +32,8 @@ import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummar
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { crossfadeLabel, cueTransitionSeconds } from '../lib/cueTiming';
-import { helpUrl } from '../lib/helpLinks';
+import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
+import HelpLink from '../components/HelpLink';
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { useLiveRefresh } from '../lib/liveRefresh';
@@ -743,7 +744,7 @@ function StudioInner({ projectId }: { projectId: string }) {
       </span>
       <span className="grow" />
       {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
-      <a className="studio-top__help ovf-hide-narrow" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
+      <a className="studio-top__help ovf-hide-narrow" href={helpUrl(HELP_ANCHORS.animator)} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
       {/* 設定頁有 NDI / AE 連線檢查 */}
       <Link className="studio-top__help ovf-hide-narrow" to="/settings">設定</Link>
       <NotificationBell />
@@ -752,7 +753,7 @@ function StudioInner({ projectId }: { projectId: string }) {
         className="ovf-only-narrow"
         header={user ? `${user.name} · 動畫師工作站` : undefined}
         items={[
-          { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(), external: true },
+          { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(HELP_ANCHORS.animator), external: true },
           { key: 'settings', label: '設定（AE 即時連線檢查）', icon: Settings, onSelect: () => navigate('/settings') },
           ...(user ? [{ key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: async () => { await logout(); navigate('/login'); } }] : []),
         ]}
@@ -929,7 +930,9 @@ function StudioInner({ projectId }: { projectId: string }) {
                   : media.active?.kind === 'video' ? <><Icon icon={player.playing ? Play : Pause} size="xs" /> {media.active.name}</>
                   : media.active ? <><Icon icon={Image} size="xs" /> {media.active.name}</>
                   : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
-              />
+              >
+                <HelpLink anchor={HELP_ANCHORS.animSource} />
+              </LedSourceSwitch>
               {/* 這首歌交上來的影片：V3、V2、V1…（點哪一版就放到 LED 上）＋ 加影片 */}
               <SongVersionBar
                 status={versions.status}

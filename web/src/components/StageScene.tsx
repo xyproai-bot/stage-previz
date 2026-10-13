@@ -40,7 +40,7 @@ import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOv
 import MaterialPanel from './MaterialPanel';
 import { detectFloorPlane } from '../lib/stageLook/floorPlane';
 import {
-  BookOpen, Box, Camera, ChevronDown, Download, ExternalLink, FileBraces, FileSpreadsheet, Footprints, Globe, Grid3x3, ImageDown,
+  BookOpen, Box, Camera, ChevronDown, CircleHelp, Download, ExternalLink, FileBraces, FileSpreadsheet, Footprints, Globe, Grid3x3, ImageDown,
   MapPin, MonitorCheck, Move, Palette, Pause, PersonStanding, Ratio, RefreshCw, Rotate3d, Ruler, SlidersHorizontal, Sparkles,
   Tag, Target, Video, X, Zap, type LucideIcon,
 } from 'lucide-react';
@@ -204,6 +204,8 @@ interface Props {
   onLedCanvasChange?: (v: LedCanvas | null) => void;
   /** 「更多」選單裡的 LED 對位圖（下載 PNG / CSV / JSON、LED 顯示測試圖）；預設有 */
   ledMapMenu?: boolean;
+  /** 有給 →「更多」選單最下面多一個「說明」（新分頁打開使用說明的這一段） */
+  helpHref?: string;
 }
 
 /** 設定機關時問舞台的事（StageScene 的 sceneQueryRef） */
@@ -231,7 +233,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -2728,12 +2730,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       </>
     ),
   }] : [];
+  // 「說明」：新分頁打開使用說明（分享頁給客戶用）
+  const menuSections: ToolMenuSection[] = helpHref ? [...ledSections, {
+    id: 'help',
+    title: '使用說明',
+    items: [{ icon: CircleHelp, label: '說明', hint: '說明', onSelect: () => { window.open(helpHref, '_blank', 'noopener'); } }],
+  }] : ledSections;
 
   return (
     <div className="stage-scene" ref={containerRef}>
       <StageToolbar
         tools={tools}
-        sections={ledSections}
+        sections={menuSections}
         className={viewer ? 'is-viewer' : undefined}
         menuOpen={moreMenuOpen}
         onMenuOpenChange={setMoreMenuOpen}

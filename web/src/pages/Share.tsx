@@ -19,7 +19,7 @@ import { useShareMechanisms } from '../lib/mechanisms/useMechanisms';
 import { shareVersionFetcher, useSongVersions, type VersionFetcher } from '../lib/useSongVersions';
 import { versionChoiceStorageKey } from '../lib/songVersions';
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
-import { helpUrl } from '../lib/helpLinks';
+import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import ShareSetlist from './ShareSetlist';
 import Icon from '../components/Icon';
 import {
@@ -495,6 +495,7 @@ export default function Share() {
                 poseAtFrame={poseAtFrame}
                 projectName={data.project.name}
                 ledCanvas={ledCanvas}
+                helpHref={helpUrl(HELP_ANCHORS.client)}
               />
               {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
               {selectedVersion && (

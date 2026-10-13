@@ -12,6 +12,8 @@ import { toast } from '../lib/toast';
 import { Check, Copy, Link, LoaderCircle, UserPlus, X } from 'lucide-react';
 import Icon from './Icon';
 import OpenInvitesList from './OpenInvitesList';
+import HelpLink from './HelpLink';
+import { HELP_ANCHORS } from '../lib/helpLinks';
 import './NewProjectDialog.css';
 import './InviteDialog.css';
 
@@ -154,6 +156,7 @@ export default function InviteDialog({ open, onClose, projectId, projectName, pr
       <div className="dialog acct-dialog" role="dialog" aria-modal="true" aria-label="邀請連結" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__header">
           <h2><Icon icon={UserPlus} size="md" /> 邀請連結{projectName ? ` — ${projectName}` : ''}</h2>
+          <HelpLink anchor={HELP_ANCHORS.prodInvite} />
           <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dialog__body">
