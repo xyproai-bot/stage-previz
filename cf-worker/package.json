@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test loginThrottle.test.mjs"
+    "test": "node --test loginThrottle.test.mjs origins.test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.150.0"

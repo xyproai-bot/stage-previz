@@ -71,7 +71,7 @@
 
 .share-link-row {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 10px;
   padding: 10px 12px;
   background: var(--surface-2);
@@ -101,4 +101,123 @@
 .share-link-row__actions {
   display: flex;
   gap: 4px;
+}
+
+.share-link-row__top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.share-link-row__alt {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.share-link-row__alt span { flex: none; }
+.share-link-row__alt code {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.share-link-row__mini {
+  flex: none;
+  background: none;
+  border: none;
+  padding: 0 2px;
+  cursor: pointer;
+  font-size: 12px;
+  opacity: 0.75;
+}
+.share-link-row__mini:hover { opacity: 1; }
+.share-link-row__edit {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.share-link-row__edit-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+.share-link-row__danger { margin-left: auto; color: var(--danger); }
+
+/* 好讀網址名稱（建立 / 修改共用） */
+.share-slug { margin-bottom: 10px; }
+.share-slug__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.share-slug__field > span {
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+.share-slug__input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.share-slug__input input {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12.5px;
+  font-family: var(--font-mono);
+}
+.share-slug__affix {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+.share-slug__affix--suffix { color: var(--accent); }
+.share-slug__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+.share-slug__preview,
+.share-slug__hint,
+.share-slug__err,
+.share-slug__note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.share-slug__preview { color: var(--text-dim); }
+.share-slug__preview code,
+.share-slug__note code {
+  font-family: var(--font-mono);
+  color: var(--accent);
+}
+.share-slug__hint,
+.share-slug__note { color: var(--text-muted); }
+.share-slug__err { color: var(--danger); }
+.share-slug__warn { margin-left: 4px; color: var(--warn, #f5a524); }
+
+/* 窄螢幕（手機）：建立表單一欄一欄排、連結列的按鈕換到下一行 */
+@media (max-width: 560px) {
+  .share-dlg__row { grid-template-columns: 1fr; }
+  .share-link-row__top { flex-wrap: wrap; }
+  .share-link-row__main { flex-basis: 100%; }
+  .share-slug__input { flex-wrap: wrap; }
+  .share-slug__input input { flex-basis: 100%; }
+  .share-slug__affix:first-child { display: none; }
 }

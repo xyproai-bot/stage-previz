@@ -22,8 +22,12 @@
 
 import {
   loginThrottleDecision, loginLockedMessage, loginClientKey, shareAttemptKey,
+  slugMissKey, slugLockedMessage, SLUG_MISS_MAX,
   LOGIN_ATTEMPT_KEEP_MS, LOGIN_LOOKBACK_MS,
 } from './loginThrottle.mjs';
+import { isTrustedOrigin } from './origins.mjs';
+// 好讀分享網址的規則跟前端共用同一個檔（純判斷，wrangler 打包時會一起編進來）
+import { normalizeSlugInput, slugProblem, slugProblemMessage } from '../web/src/lib/shareSlug.ts';
 
 const MAX_COMMENTS_PER_SESSION = 500;
 const MAX_TEXT_LEN = 2000;
@@ -59,15 +63,22 @@ export default {
   }
 };
 
-// 把 response 的 CORS header 改成 reflect 真實 origin + 支援 cookie credentials
-// 為什麼：fetch 端用 credentials: 'include'，瀏覽器要求 Access-Control-Allow-Origin 是具體 origin
-// 不可以是 '*'，且必須有 Allow-Credentials: true
+// 把 response 的 CORS header 依「從哪個網站來」調整：
+// - 自己的網站（origins.mjs 的清單：previz.haimiaan.com、test.previz…、stage-previz.vercel.app、Vercel 預覽、本機）
+//   → 回具體 origin + Allow-Credentials: true（前端 fetch 用 credentials: 'include'，瀏覽器要求這樣才肯帶 cookie）
+// - 其他網站 → 回 '*'、不帶 credentials：公開的東西（分享連結、Drive 代理、留言）照樣能讀，
+//   但不能用已登入使用者的 cookie 讀資料
 function applyCorsToResponse(response, request) {
   const origin = request.headers.get('origin');
   if (!origin) return response;
   const headers = new Headers(response.headers);
-  headers.set('Access-Control-Allow-Origin', origin);
-  headers.set('Access-Control-Allow-Credentials', 'true');
+  if (isTrustedOrigin(origin)) {
+    headers.set('Access-Control-Allow-Origin', origin);
+    headers.set('Access-Control-Allow-Credentials', 'true');
+  } else {
+    headers.set('Access-Control-Allow-Origin', '*');
+    headers.delete('Access-Control-Allow-Credentials');
+  }
   headers.set('Vary', 'Origin');
   // 確保 OPTIONS preflight 也帶 methods / headers
   if (!headers.has('Access-Control-Allow-Methods')) {
@@ -94,9 +105,15 @@ async function routeRequest(request, env) {
   if (url.pathname === '/api/auth/me'     && request.method === 'GET')   return authMe(request, env);
 
   // 公開分享連結（read-only，無需登入）
+  //   /api/share/<連結碼>/...   舊式網址（/share/<連結碼>）只拿來查連結碼
+  //   /api/s/<網址名稱>/...      好讀網址（/s/<網址名稱>）只拿來查網址名稱 → 兩邊永遠不會互相查到
   if (url.pathname.startsWith('/api/share/')) {
     const token = url.pathname.replace('/api/share/', '').split('/')[0];
-    return handleShareRouter(request, env, url, token);
+    return handleShareRouter(request, env, url, { kind: 'token', key: token });
+  }
+  if (url.pathname.startsWith('/api/s/')) {
+    const slug = url.pathname.slice('/api/s/'.length).split('/')[0];
+    return handleShareRouter(request, env, url, { kind: 'slug', key: slug });
   }
   if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
     // 短路：share-links 子路由屬於 admin 管理
@@ -2653,8 +2670,11 @@ async function getRequestUserId(request, env) {
   if (auth.toLowerCase().startsWith('bearer ')) {
     token = auth.slice(7).trim();
   }
-  // fallback：cookie（同 origin 部署時用）
+  // fallback：cookie（<video src> 這種帶不了 header 的請求靠它）
+  // 別人的網站帶著 cookie 打過來（瀏覽器會附上 Origin）→ 不認，防止冒用登入身分改資料
   if (!token) {
+    const origin = request.headers.get('origin');
+    if (origin && !isTrustedOrigin(origin)) return null;
     const cookies = parseCookies(request);
     token = cookies[SESSION_COOKIE] || null;
   }
@@ -2679,8 +2699,10 @@ async function getCurrentUser(request, env) {
 }
 
 function setSessionCookie(token) {
-  // SameSite=None 必填：前端在 localhost / vercel.app / haimiaan.com 等等 cross-origin
+  // SameSite=None 必填：前端在 localhost / stage-previz.vercel.app 等等 cross-site
   // fetch 到 proxy.haimiaan.com，瀏覽器才會送 cookie。SameSite=None 必須配 Secure。
+  // （previz.haimiaan.com → proxy.haimiaan.com 是同一個網站，連擋第三方 cookie 的瀏覽器也會送）
+  // 哪些網站的請求會被認 cookie：見 getRequestUserId + origins.mjs
   return `${SESSION_COOKIE}=${token}; HttpOnly; Secure; SameSite=None; Path=/; Max-Age=${SESSION_TTL_SEC}`;
 }
 function clearSessionCookie() {
@@ -3805,12 +3827,32 @@ function sanitizeReturnUrl(raw) {
 // 公開分享連結（share_links）
 //
 // admin / director 可建立 token → 寄給外部人；對方瀏覽器
-// 開 https://stage-previz.vercel.app/share/<token> 直接看 read-only preview
+// 開 https://previz.haimiaan.com/share/<token>（舊式）或 /s/<網址名稱>（好讀網址，可選）
+// 直接看 read-only preview
 // ─────────────────────────────────────────────
+
+// 網址名稱（slug）：沒給 / 空字串 → null（不用好讀網址）；給了就整理 + 檢查
+// 回 { slug } 或 { error }（中文說明）
+function parseSlugInput(raw) {
+  if (raw === undefined || raw === null) return { slug: null };
+  if (typeof raw !== 'string') return { error: '網址名稱格式不對' };
+  const slug = normalizeSlugInput(raw);
+  if (!slug) return { slug: null };
+  const problem = slugProblem(slug);
+  if (problem) return { error: slugProblemMessage(problem, slug) };
+  return { slug };
+}
+
+function isSlugTakenError(e) {
+  const msg = String(e?.message || e || '');
+  return /UNIQUE/i.test(msg) && /slug/i.test(msg);
+}
+
+const SLUG_TAKEN_MESSAGE = '這個網址已經有人用了，請換一個名字（或勾「加上隨機碼」）';
 
 async function handleProjectShareLinks(request, env, url) {
   // /api/projects/:projectId/share-links               GET / POST
-  // /api/projects/:projectId/share-links/:token        DELETE
+  // /api/projects/:projectId/share-links/:token        DELETE / PATCH（改網址名稱 { slug: '...' | null }）
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
 
@@ -3830,13 +3872,14 @@ async function handleProjectShareLinks(request, env, url) {
   if (!token) {
     if (request.method === 'GET') {
       const r = await env.DB.prepare(
-        `SELECT token, project_id, song_id, password IS NOT NULL AS has_password,
+        `SELECT token, slug, project_id, song_id, password IS NOT NULL AS has_password,
                 expires_at, view_count, last_viewed_at, created_at
            FROM share_links WHERE project_id = ? ORDER BY created_at DESC`
       ).bind(projectId).all();
       return jsonResp({
         links: (r.results || []).map(l => ({
           token: l.token,
+          slug: l.slug || null,
           projectId: l.project_id,
           songId: l.song_id,
           hasPassword: !!l.has_password,
@@ -3853,13 +3896,20 @@ async function handleProjectShareLinks(request, env, url) {
       const songId = body?.songId && /^[a-zA-Z0-9_-]{1,64}$/.test(body.songId) ? body.songId : null;
       const password = typeof body?.password === 'string' && body.password ? body.password.slice(0, 60) : null;
       const expiresInDays = typeof body?.expiresInDays === 'number' && body.expiresInDays > 0 ? Math.min(body.expiresInDays, 365) : null;
+      const parsed = parseSlugInput(body?.slug);
+      if (parsed.error) return jsonResp({ error: parsed.error }, 400);
       const tk = randHex(16);
       const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400_000).toISOString() : null;
-      await env.DB.prepare(`
-        INSERT INTO share_links (token, project_id, song_id, password, expires_at, created_by_user_id)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `).bind(tk, projectId, songId, password, expiresAt, me.id).run();
-      return jsonResp({ token: tk, expiresAt }, 201);
+      try {
+        await env.DB.prepare(`
+          INSERT INTO share_links (token, project_id, song_id, password, expires_at, created_by_user_id, slug)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).bind(tk, projectId, songId, password, expiresAt, me.id, parsed.slug).run();
+      } catch (e) {
+        if (isSlugTakenError(e)) return jsonResp({ error: SLUG_TAKEN_MESSAGE, slugTaken: true }, 409);
+        throw e;
+      }
+      return jsonResp({ token: tk, slug: parsed.slug, expiresAt }, 201);
     }
     return jsonResp({ error: 'Method not allowed' }, 405);
   }
@@ -3870,41 +3920,109 @@ async function handleProjectShareLinks(request, env, url) {
     ).bind(token, projectId).run();
     return jsonResp({ ok: true });
   }
+  if (request.method === 'PATCH') {
+    // 設定 / 換 / 拿掉好讀網址。換掉之後舊的網址名稱馬上失效（舊式 /share/<連結碼> 照樣能用）
+    let body = {};
+    try { body = await request.json(); } catch {}
+    if (!body || !('slug' in body)) return jsonResp({ error: '缺少 slug' }, 400);
+    const parsed = parseSlugInput(body.slug);
+    if (parsed.error) return jsonResp({ error: parsed.error }, 400);
+    let changes = 0;
+    try {
+      const r = await env.DB.prepare(
+        `UPDATE share_links SET slug = ? WHERE token = ? AND project_id = ?`
+      ).bind(parsed.slug, token, projectId).run();
+      changes = r.meta?.changes ?? 0;
+    } catch (e) {
+      if (isSlugTakenError(e)) return jsonResp({ error: SLUG_TAKEN_MESSAGE, slugTaken: true }, 409);
+      throw e;
+    }
+    if (!changes) return jsonResp({ error: '找不到這個分享連結' }, 404);
+    return jsonResp({ ok: true, token, slug: parsed.slug });
+  }
   return jsonResp({ error: 'Method not allowed' }, 405);
 }
 
+// 分享連結過期了沒。expires_at 存的是 toISOString()（有 Z）；沒有時區的（SQLite datetime 格式）當 UTC。
+// （以前寫成 expires_at + 'Z' → 變成「…ZZ」解析失敗，設了有效期的連結永遠不會過期）
+function shareLinkExpired(expiresAt, now = Date.now()) {
+  if (!expiresAt) return false;
+  const s = String(expiresAt).trim();
+  const t = Date.parse(/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+  return Number.isFinite(t) && t < now;
+}
+
 // ── 公開存取（read-only，無需登入）──
-async function handleShareRouter(request, env, url, token) {
-  if (!token || !/^[a-zA-Z0-9_-]{1,64}$/.test(token)) return jsonResp({ error: 'Invalid token' }, 400);
+// ref ={ kind: 'token', key: 連結碼 }（/api/share/...）或 { kind: 'slug', key: 網址名稱 }（/api/s/...）
+async function handleShareRouter(request, env, url, ref) {
+  const bySlug = ref?.kind === 'slug';
+  let key = ref?.key || '';
+  if (bySlug) {
+    // 網址名稱：大小寫不分（一律轉小寫），格式不對的一定不存在 → 直接 404，不查資料庫
+    try { key = normalizeSlugInput(decodeURIComponent(key)); } catch { key = ''; }
+    if (slugProblem(key)) return jsonResp({ error: 'Share link not found' }, 404);
+  } else if (!key || !/^[a-zA-Z0-9_-]{1,64}$/.test(key)) {
+    return jsonResp({ error: 'Invalid token' }, 400);
+  }
 
   const segs = url.pathname.split('/').filter(Boolean);
-  // [api, share, token, ...rest]
+  // [api, share|s, token|slug, ...rest]
   const sub = segs[3] || null;        // 'data' / 'cues' / 'states' / 'comments'
+  // 回給前端的影片網址用同一種開頭（用好讀網址開的人，看不到連結碼）
+  const shareBase = bySlug ? `/api/s/${key}` : `/api/share/${key}`;
 
   const provided = request.headers.get('x-share-password') || url.searchParams.get('p') || '';
-  // 防猜密碼：跟登入同一套（同一個 IP 對同一條連結 15 分鐘內錯 10 次 → 鎖 15 分鐘，鎖定中密碼對也擋）
-  // 有帶密碼才需要查錯誤紀錄 → 跟查連結合成一次往返；沒帶密碼（第一次打開頁面）不多查
   const now = Date.now();
-  const attemptKey = provided
-    ? shareAttemptKey(token, loginClientKey(request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')))
-    : null;
+  const ipKey = loginClientKey(request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for'));
+  const failuresStmt = (k) => env.DB.prepare(
+    `SELECT attempted_at FROM login_attempts WHERE ip = ? AND attempted_at > ?`
+  ).bind(k, now - LOGIN_LOOKBACK_MS);
   const linkStmt = env.DB.prepare(
-    `SELECT token, project_id, song_id, password, expires_at FROM share_links WHERE token = ? LIMIT 1`
-  ).bind(token);
-  let link, recentFailures = [];
-  if (attemptKey) {
-    const [linkR, failR] = await env.DB.batch([
-      linkStmt,
-      env.DB.prepare(`SELECT attempted_at FROM login_attempts WHERE ip = ? AND attempted_at > ?`)
-        .bind(attemptKey, now - LOGIN_LOOKBACK_MS),
-    ]);
+    `SELECT token, project_id, song_id, password, expires_at FROM share_links WHERE ${bySlug ? 'slug' : 'token'} = ? LIMIT 1`
+  ).bind(key);
+
+  // 防猜密碼：跟登入同一套（同一個 IP 對同一條連結 15 分鐘內錯 10 次 → 鎖 15 分鐘，鎖定中密碼對也擋）
+  // 錯誤紀錄一律記在「查到的那條連結的連結碼」底下（shareAttemptKey(link.token, ...)），
+  // 所以用舊式網址或好讀網址、換了網址名稱，猜同一條連結都算在一起
+  let link, recentFailures = null;
+  if (bySlug) {
+    // 好讀網址比較短 → 這個 IP 最近一直打不存在的網址名稱就先擋（防一個一個猜）；跟查連結合成一次往返
+    const missKey = slugMissKey(ipKey);
+    const [linkR, missR] = await env.DB.batch([linkStmt, failuresStmt(missKey)]);
+    link = (linkR.results || [])[0] || null;
+    const gate = loginThrottleDecision((missR.results || []).map(r => r.attempted_at), now, { maxFailures: SLUG_MISS_MAX });
+    if (!gate.allowed) {
+      const retryAfterSec = Math.ceil(gate.retryAfterMs / 1000);
+      return new Response(JSON.stringify({ error: slugLockedMessage(gate.retryAfterMs), retryAfterSec }), {
+        status: 429,
+        headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Retry-After': String(retryAfterSec) }
+      });
+    }
+    if (!link) {
+      await env.DB.batch([
+        env.DB.prepare(`DELETE FROM login_attempts WHERE attempted_at < ?`).bind(now - LOGIN_ATTEMPT_KEEP_MS),
+        env.DB.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(missKey, now),
+      ]);
+      return jsonResp({ error: 'Share link not found' }, 404);
+    }
+  } else if (provided) {
+    // 舊式網址：連結碼就是網址上那串 → 有帶密碼時跟查連結合成一次往返；沒帶密碼（第一次打開頁面）不多查
+    const [linkR, failR] = await env.DB.batch([linkStmt, failuresStmt(shareAttemptKey(key, ipKey))]);
     link = (linkR.results || [])[0] || null;
     recentFailures = (failR.results || []).map(r => r.attempted_at);
   } else {
     link = await linkStmt.first();
   }
   if (!link) return jsonResp({ error: 'Share link not found' }, 404);
-  if (link.expires_at && new Date(link.expires_at + 'Z').getTime() < Date.now()) {
+  const token = link.token;
+  const attemptKey = provided ? shareAttemptKey(token, ipKey) : null;
+  if (provided && link.password && recentFailures === null) {
+    // 好讀網址：查到連結才知道連結碼 → 這時才查密碼錯誤紀錄
+    const failR = await failuresStmt(attemptKey).all();
+    recentFailures = (failR.results || []).map(r => r.attempted_at);
+  }
+  recentFailures = recentFailures || [];
+  if (shareLinkExpired(link.expires_at, now)) {
     return jsonResp({ error: 'Share link expired' }, 410);
   }
 
@@ -4028,8 +4146,8 @@ async function handleShareRouter(request, env, url, token) {
           mimeType: f.mime_type,
           modifiedTime: f.modified_time,
           sizeBytes: f.size_bytes,
-          // 公開存取的 stream URL：用 share token 認證
-          streamUrl: `/api/share/${token}/videos/${f.drive_file_id}/stream`,
+          // 公開存取的 stream URL：用同一條分享連結認證（跟這次用的網址同一種開頭）
+          streamUrl: `${shareBase}/videos/${f.drive_file_id}/stream`,
         })),
       });
     }

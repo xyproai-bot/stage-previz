@@ -985,6 +985,7 @@ export default function ProjectEditor() {
       <ShareLinksDialog
         open={shareOpen}
         projectId={projectId || ''}
+        projectName={projectMeta?.name}
         songs={songs}
         onClose={() => setShareOpen(false)}
       />

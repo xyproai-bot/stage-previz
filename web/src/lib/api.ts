@@ -1133,6 +1133,8 @@ export async function updateProjectDriveSettings(projectId: string, patch: Parti
 
 export interface ShareLink {
   token: string;
+  /** 好讀網址名稱（/s/<slug>）；null = 沒設（舊版 worker 沒這欄 → undefined） */
+  slug?: string | null;
   projectId: string;
   songId: string | null;
   hasPassword: boolean;
@@ -1147,15 +1149,32 @@ export async function listShareLinks(projectId: string): Promise<ShareLink[]> {
   return Array.isArray(data?.links) ? data.links : [];
 }
 
-export async function createShareLink(projectId: string, input: { songId?: string | null; password?: string; expiresInDays?: number }): Promise<{ token: string; expiresAt: string | null }> {
+export async function createShareLink(projectId: string, input: { songId?: string | null; password?: string; expiresInDays?: number; slug?: string | null }): Promise<{ token: string; slug?: string | null; expiresAt: string | null }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/share-links`, {
     method: 'POST',
     body: JSON.stringify(input || {}),
   });
 }
 
+/** 設定 / 換 / 拿掉（null）好讀網址名稱；被別條連結用掉了 → 丟 409 */
+export async function updateShareLinkSlug(projectId: string, token: string, slug: string | null): Promise<{ slug: string | null }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(token)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ slug }),
+  });
+}
+
 export async function deleteShareLink(projectId: string, token: string): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(token)}`, { method: 'DELETE' });
+}
+
+/** 分享頁是用哪種網址打開的：舊式 /share/<連結碼> 或好讀 /s/<網址名稱> */
+export type ShareRef = { kind: 'token' | 'slug'; key: string };
+
+function shareApiPath(ref: ShareRef): string {
+  return ref.kind === 'slug'
+    ? `/api/s/${encodeURIComponent(ref.key)}`
+    : `/api/share/${encodeURIComponent(ref.key)}`;
 }
 
 export interface SharePublicData {
@@ -1175,10 +1194,10 @@ export interface SharePublicData {
 }
 
 /** 公開存取 — 無需 auth，可選 password */
-export async function getSharePublicData(token: string, password?: string): Promise<SharePublicData> {
+export async function getSharePublicData(ref: ShareRef, password?: string): Promise<SharePublicData> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (password) headers['x-share-password'] = password;
-  const r = await fetch(`${apiBase()}/api/share/${encodeURIComponent(token)}/data`, { headers });
+  const r = await fetch(`${apiBase()}${shareApiPath(ref)}/data`, { headers });
   if (!r.ok) {
     const err = await r.json().catch(() => ({}));
     const e: Error & { status?: number; requiresPassword?: boolean } = new Error(err.error || `HTTP ${r.status}`);
@@ -1189,10 +1208,10 @@ export async function getSharePublicData(token: string, password?: string): Prom
   return r.json();
 }
 
-export async function getShareSongCues(token: string, songId: string, password?: string): Promise<Cue[]> {
+export async function getShareSongCues(ref: ShareRef, songId: string, password?: string): Promise<Cue[]> {
   const headers: Record<string, string> = {};
   if (password) headers['x-share-password'] = password;
-  const r = await fetch(`${apiBase()}/api/share/${encodeURIComponent(token)}/songs/${encodeURIComponent(songId)}/cues`, { headers });
+  const r = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/cues`, { headers });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   const data = await r.json() as { cues: Cue[] };
   return data.cues;
@@ -1205,25 +1224,25 @@ export interface ShareVideo {
   mimeType: string | null;
   modifiedTime: string | null;
   sizeBytes: number | null;
-  streamUrl: string;  // 相對路徑 /api/share/:token/videos/:fid/stream
+  streamUrl: string;  // 相對路徑 /api/share/:token/videos/:fid/stream（用好讀網址打開時是 /api/s/:slug/...）
 }
 
-export async function getShareSongVideos(token: string, songId: string, password?: string): Promise<ShareVideo[]> {
+export async function getShareSongVideos(ref: ShareRef, songId: string, password?: string): Promise<ShareVideo[]> {
   const headers: Record<string, string> = {};
   if (password) headers['x-share-password'] = password;
   try {
-    const r = await fetch(`${apiBase()}/api/share/${encodeURIComponent(token)}/songs/${encodeURIComponent(songId)}/videos`, { headers });
+    const r = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/videos`, { headers });
     if (!r.ok) return [];
     const data = await r.json() as { videos: ShareVideo[] };
     return Array.isArray(data?.videos) ? data.videos : [];
   } catch { return []; }
 }
 
-export async function getShareCueStates(token: string, songId: string, cueId: string, password?: string): Promise<CueState[]> {
+export async function getShareCueStates(ref: ShareRef, songId: string, cueId: string, password?: string): Promise<CueState[]> {
   const headers: Record<string, string> = {};
   if (password) headers['x-share-password'] = password;
   const r = await fetch(
-    `${apiBase()}/api/share/${encodeURIComponent(token)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states`,
+    `${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states`,
     { headers }
   );
   if (!r.ok) throw new Error(`HTTP ${r.status}`);

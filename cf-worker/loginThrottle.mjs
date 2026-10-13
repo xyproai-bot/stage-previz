@@ -80,3 +80,21 @@ export function loginClientKey(rawIp) {
 export function shareAttemptKey(token, ipKey) {
   return `share:${String(token || '').slice(0, 64)}|${String(ipKey || 'unknown').slice(0, 64)}`;
 }
+
+/**
+ * 好讀分享網址（/s/<網址名稱>）防亂猜：網址名稱比舊式連結碼短很多（名稱 + 4 個隨機字），
+ * 所以「找不到的網址名稱」也記一次錯，同一個 IP 15 分鐘內找不到 20 次 → 鎖 15 分鐘（所有 /s/ 網址都擋）。
+ * 只擋好讀網址；舊式 /share/<連結碼> 很長猜不到，不用擋。
+ * key 以 'slug:' 開頭，跟登入（純 IP）、分享密碼（'share:'）的紀錄分得開。
+ */
+export const SLUG_MISS_MAX = 20;
+
+export function slugMissKey(ipKey) {
+  return `slug:${String(ipKey || 'unknown').slice(0, 64)}`;
+}
+
+/** 被鎖時給使用者看的話 */
+export function slugLockedMessage(retryAfterMs) {
+  const minutes = Math.max(1, Math.ceil(retryAfterMs / 60000));
+  return `打開太多次不存在的網址了，請 ${minutes} 分鐘後再試`;
+}

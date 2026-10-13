@@ -91,3 +91,15 @@ test('分享密碼 key：每條連結、每個 IP 分開算，不會跟登入的
   assert.equal(shareAttemptKey('abc123', loginClientKey('')), 'share:abc123|unknown');
   assert.equal(shareAttemptKey('t', null), 'share:t|unknown');
 });
+
+test('好讀網址找不到的紀錄：key 跟登入 / 分享密碼分開，20 次才鎖', async () => {
+  const { slugMissKey, slugLockedMessage, SLUG_MISS_MAX } = await import('./loginThrottle.mjs');
+  assert.equal(slugMissKey('1.2.3.4'), 'slug:1.2.3.4');
+  assert.equal(slugMissKey(''), 'slug:unknown');
+  assert.notEqual(slugMissKey('1.2.3.4'), shareAttemptKey('x', '1.2.3.4'));
+  assert.notEqual(slugMissKey('1.2.3.4'), loginClientKey('1.2.3.4'));
+  assert.equal(SLUG_MISS_MAX, 20);
+  assert.equal(loginThrottleDecision(failures(19), NOW, { maxFailures: SLUG_MISS_MAX }).allowed, true);
+  assert.equal(loginThrottleDecision(failures(20), NOW, { maxFailures: SLUG_MISS_MAX }).allowed, false);
+  assert.match(slugLockedMessage(LOGIN_LOCK_MS), /15 分鐘/);
+});

@@ -48,6 +48,8 @@ export default function App() {
             <Route path="/preview" element={<RequireAuth><ErrorBoundary><Preview /></ErrorBoundary></RequireAuth>} />
             <Route path="/preview/:projectId" element={<RequireAuth><ErrorBoundary><Preview /></ErrorBoundary></RequireAuth>} />
             <Route path="/share/:token" element={<ErrorBoundary><Share /></ErrorBoundary>} />
+            {/* 好讀分享網址（/s/jinma2026-k7p2），同一個分享頁 */}
+            <Route path="/s/:slug" element={<ErrorBoundary><Share /></ErrorBoundary>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
