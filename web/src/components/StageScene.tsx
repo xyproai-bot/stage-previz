@@ -5,7 +5,6 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { RectAreaLightHelper } from 'three/examples/jsm/helpers/RectAreaLightHelper.js';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -14,6 +13,13 @@ import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import { NdiClient, type NdiClientStatus } from '../lib/ndiClient';
+import LookSettingsPanel from './LookSettingsPanel';
+import { DEFAULT_LOOK_SETTINGS, type LookSettings } from '../lib/stageLook/lookSettings';
+import { buildLedEmitters, type LedEmitter } from '../lib/stageLook/ledEmitters';
+import { LedLightRig, type LedLightProps } from '../lib/stageLook/ledLightRig';
+import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
+import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
+import { QUALITY, detectQualityProfile } from '../lib/stageLook/quality';
 import './StageScene.css';
 
 // RectAreaLight 必須先 init uniforms（Three.js 內建）
@@ -55,8 +61,8 @@ interface Props {
   modelUrl?: string | null;
   /** 唯讀模式：不顯示移動/旋轉/縮放工具，不啟用 transform gizmo（給動畫師/導演 view） */
   readOnly?: boolean;
-  /** 預設 render mode（quick / realistic / cinematic） */
-  defaultRenderMode?: RenderMode;
+  /** 預設 render mode（quick / live；舊值 realistic / cinematic 當 live） */
+  defaultRenderMode?: RenderMode | 'realistic' | 'cinematic';
   /** NDI helper 連線：true 時連 ws://127.0.0.1:7777 把 frames 餵給 LED 面板 */
   enableNdi?: boolean;
   /** NDI helper URL（預設 ws://127.0.0.1:7777） */
@@ -81,13 +87,18 @@ interface Props {
   scaleCorrection?: number;
   /** 有傳才顯示「設為已知距離 / 重設」— 只有 admin 能改校準 */
   onScaleCorrectionChange?: (n: number) => void;
+  /** 現場模式設定（存在專案上全員共用）；沒傳用預設 */
+  lookSettings?: LookSettings;
+  /** 有傳才顯示「🎚 設定」面板 — 只有 admin */
+  onLookSettingsChange?: (patch: Partial<LookSettings>) => void;
 }
 
-type RenderMode = 'quick' | 'realistic' | 'cinematic';
+// ⚡ quick：像素 1:1 對顏色；🎤 live：暗場 + LED 照明 + 光暈（取代舊的 realistic / cinematic）
+type RenderMode = 'quick' | 'live';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -111,7 +122,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const [mode, setMode] = useState<Mode>('translate');
   const [space, setSpace] = useState<'world' | 'local'>('world');
   const [showLabels, setShowLabels] = useState(true);
-  const [renderMode, setRenderMode] = useState<RenderMode>(defaultRenderMode || 'quick');
+  // 舊的 realistic / cinematic 都併成「現場」
+  const [renderMode, setRenderMode] = useState<RenderMode>(
+    defaultRenderMode && defaultRenderMode !== 'quick' ? 'live' : 'quick',
+  );
+  const [lookPanelOpen, setLookPanelOpen] = useState(false);
   const [, setModelLoading] = useState(false);
   // 每次 GLB 載入完 +1，讓依賴 meshesRef 的 effect 重建 / 重套材質
   const [modelVersion, setModelVersion] = useState(0);
@@ -134,17 +149,32 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   }>>(new Map());
   const crossfadeRef = useRef(crossfadeSeconds);
   crossfadeRef.current = crossfadeSeconds;
-  const ledLightsRef = useRef<Map<string, THREE.RectAreaLight>>(new Map());
   // LED emissive 貼圖快取（imageUrl → Texture），避免每次 effect 重 load
   const ledTextureCacheRef = useRef<Map<string, THREE.Texture>>(new Map());
   const envLightsRef = useRef<{ ambient: THREE.AmbientLight; hemi: THREE.HemisphereLight; key: THREE.DirectionalLight | null } | null>(null);
 
-  // ── Material Phase C ──
-  // HDR IBL：Cinematic 模式時把 RoomEnvironment 烘成 PMREM cubemap，當作 scene.environment
-  const envRTRef = useRef<THREE.WebGLRenderTarget | null>(null);
-  // PostFX：EffectComposer + UnrealBloomPass（cinematic 模式啟用）
+  // PostFX：EffectComposer + UnrealBloomPass（現場模式啟用）
   const composerRef = useRef<EffectComposer | null>(null);
   const bloomPassRef = useRef<UnrealBloomPass | null>(null);
+  // 現場模式：LED 燈組 / 只拍 LED 的環境光 / 取色器 / 每個 LED 物件的發光面
+  const ledRigRef = useRef<LedLightRig | null>(null);
+  const ledEnvRef = useRef<LedEnvironment | null>(null);
+  const colorReaderRef = useRef<TextureColorReader | null>(null);
+  const emitterCacheRef = useRef<WeakMap<THREE.Object3D, LedEmitter[]>>(new WeakMap());
+  // objectId → 目前 LED 用的貼圖（取色用）/ 燈的參數
+  const ledSourcesRef = useRef<Map<string, LedColorSource | null>>(new Map());
+  const ledLightPropsRef = useRef<Map<string, LedLightProps>>(new Map());
+  const helpersRef = useRef<{ grid: THREE.GridHelper; axes: THREE.AxesHelper } | null>(null);
+  // 舞台中心 / 大小（環境光 CubeCamera 放這裡）
+  const stageBoundsRef = useRef<{ center: THREE.Vector3; radius: number }>({ center: new THREE.Vector3(0, 1, 0), radius: 10 });
+  const qualityRef = useRef(QUALITY[detectQualityProfile({
+    maxTouchPoints: navigator.maxTouchPoints || 0,
+    hardwareConcurrency: navigator.hardwareConcurrency || 0,
+    userAgent: navigator.userAgent,
+  })]);
+  const lookRef = useRef<LookSettings>(lookSettings);
+  lookRef.current = lookSettings;
+  const showLabelsRef = useRef(true);
   // NDI mock：當 LED 在 realistic/cinematic 模式且沒有 imageUrl，
   // 套一張動態 procedural canvas 貼圖當作「即將接 NDI」的預覽
   const ndiMockTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
@@ -284,7 +314,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     cameraRef.current = camera;
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, qualityRef.current.pixelRatioCap));
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.0;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -322,21 +352,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       console.warn('[StageScene] VRButton failed (no WebXR support?):', e);
     }
 
-    // ── Material Phase C：HDR IBL ──
-    // RoomEnvironment 是 three.js 內建的「攝影棚式環境」程序貼圖，
-    // 用 PMREMGenerator 烘成 cubemap 後當 scene.environment 給 PBR 反射 / 真實打光
+    // ── 現場模式：LED 燈組 + 只拍 LED 的環境光 + 取色器 ──
+    ledRigRef.current = new LedLightRig(scene);
+    ledRigRef.current.setMaxLights(qualityRef.current.maxLights);
     try {
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      const envScene = new RoomEnvironment();
-      const envRT = pmrem.fromScene(envScene, 0.04);
-      envRTRef.current = envRT;
-      pmrem.dispose();
-      // 預設 quick 模式不掛 environment（避免太亮反射），切到 realistic/cinematic 時才掛
+      ledEnvRef.current = new LedEnvironment(renderer);
     } catch (e) {
-      console.warn('[StageScene] PMREM init failed:', e);
+      console.warn('[StageScene] LED environment init failed:', e);
     }
+    colorReaderRef.current = new TextureColorReader();
 
-    // ── EffectComposer（給 cinematic 模式 bloom 用） ──
+    // ── EffectComposer（現場模式 bloom 用） ──
     try {
       const composer = new EffectComposer(renderer);
       const renderPass = new RenderPass(scene, camera);
@@ -430,6 +456,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     (axes.material as THREE.LineBasicMaterial).depthTest = false;
     axes.renderOrder = 1;
     scene.add(axes);
+    helpersRef.current = { grid, axes };
 
     // Orbit
     const orbit = new OrbitControls(camera, renderer.domElement);
@@ -631,6 +658,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     let stopped = false;
     let frameStart = performance.now();
     let lastTickTs = performance.now();
+    let lastColorTs = 0;
+    let lastEnvTs = 0;
     const tick = () => {
       if (stopped) return;
       const nowTs = performance.now();
@@ -677,7 +706,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         for (const id of finished) tweens.delete(id);
       }
 
-      // Animate NDI mock texture (cheap procedural — only updates when realistic/cinematic)
+      // Animate NDI mock texture (cheap procedural — only updates in live mode)
       const ndiMock = ndiMockTextureRef.current;
       const rmode = renderModeRef.current;
       if (ndiMock && rmode !== 'quick') {
@@ -686,9 +715,36 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         ndiMock.texture.needsUpdate = true;
       }
 
-      // VR 模式時 EffectComposer 不能用（需要單一 framebuffer）→ 強制直接 render
+      // VR 模式時 EffectComposer / CubeCamera 不能用（需要單一 framebuffer）
       const inXR = renderer.xr.isPresenting;
-      if (rmode === 'cinematic' && composerRef.current && !inXR) {
+      const live = rmode === 'live';
+      const rig = ledRigRef.current;
+      if (live && rig) {
+        rig.updatePoses(meshesRef.current);
+        // 取色：每 100ms 一次（燈色跟著畫面內容變）
+        if (nowTs - lastColorTs > 100 && colorReaderRef.current) {
+          lastColorTs = nowTs;
+          const reader = colorReaderRef.current;
+          reader.beginFrame();
+          const sources = ledSourcesRef.current;
+          const props = ledLightPropsRef.current;
+          const fallback: LedLightProps = { brightness: 1, castStrength: 1, tint: new THREE.Color(1, 1, 1) };
+          rig.updateColors(
+            (id, uv) => { const src = sources.get(id); return src ? reader.sample(src, uv) : null; },
+            (id) => props.get(id) || fallback,
+            lookRef.current.ledLightStrength,
+          );
+        }
+        // 環境光（反射 / 染色）：依畫質檔定時更新
+        const env = ledEnvRef.current;
+        if (env && !inXR && nowTs - lastEnvTs > qualityRef.current.envIntervalMs) {
+          lastEnvTs = nowTs;
+          const b = stageBoundsRef.current;
+          scene.environment = env.update(scene, b.center, b.radius);
+        }
+      }
+
+      if (live && composerRef.current && !inXR) {
         composerRef.current.render();
       } else {
         renderer.render(scene, camera);
@@ -696,8 +752,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       // update HTML labels（layer.style 控制全體顯隱，個別 label 仍會被 updateLabels 算位置）
       if (!inXR) updateLabels(labelsRef.current, meshesRef.current, camera, container);
-      // 鎖頭 pin（永遠顯示）
-      if (!inXR) updateLockPins(lockPinLayerRef.current, statesRef.current || [], meshesRef.current, camera, container);
+      // 鎖頭 pin：只在可編輯頁、Label 開著時顯示
+      if (!inXR && !readOnlyRef.current && showLabelsRef.current) {
+        updateLockPins(lockPinLayerRef.current, statesRef.current || [], meshesRef.current, camera, container);
+      }
 
       // 3D-anchored comment pins — 用 displayName map 補強 mesh lookup
       if (!inXR) {
@@ -726,7 +784,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       camera.updateProjectionMatrix();
       // composer 也要同步尺寸
       composerRef.current?.setSize(w, h);
-      bloomPassRef.current?.setSize(w, h);
+      // iPad 等低畫質檔 bloom 用半解析度
+      const bs = qualityRef.current.bloomScale;
+      bloomPassRef.current?.setSize(Math.round(w * bs), Math.round(h * bs));
     });
     ro.observe(container);
 
@@ -740,9 +800,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       try { transform.detach(); } catch {}
       try { transform.dispose(); } catch (e) { console.warn('TransformControls dispose:', e); }
       try { orbit.dispose(); } catch {}
-      // Material Phase C cleanup
-      try { envRTRef.current?.dispose(); } catch {}
-      envRTRef.current = null;
+      // 現場模式 cleanup
+      try { ledRigRef.current?.dispose(); } catch {}
+      ledRigRef.current = null;
+      try { ledEnvRef.current?.dispose(); } catch {}
+      ledEnvRef.current = null;
+      colorReaderRef.current = null;
+      helpersRef.current = null;
       try { composerRef.current?.dispose(); } catch {}
       composerRef.current = null;
       bloomPassRef.current = null;
@@ -850,6 +914,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           cam.far  = Math.max(200, finalDiag * 10);
           cam.updateProjectionMatrix();
           homeViewRef.current = { position: cam.position.clone(), target: finalCenter.clone() };
+          stageBoundsRef.current = { center: finalCenter.clone(), radius: finalDiag / 2 };
         }
 
         // 觸發 mesh 重建：清掉舊 mesh + label，bump modelVersion 讓 sync / 材質 / wireframe effect 重跑
@@ -961,14 +1026,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
         const lbl = document.createElement('div');
         lbl.className = 'stage-scene__label';
-        lbl.textContent = (s.locked ? '🔒 ' : '') + s.displayName;
+        lbl.textContent = (s.locked && !readOnly ? '🔒 ' : '') + s.displayName;
         lbl.dataset.objectId = s.objectId;
         layer.appendChild(lbl);
         labels.set(s.objectId, lbl);
       } else {
         const lbl = labels.get(s.objectId);
         if (lbl) {
-          const lblText = (s.locked ? '🔒 ' : '') + s.displayName;
+          const lblText = (s.locked && !readOnly ? '🔒 ' : '') + s.displayName;
           if (lbl.textContent !== lblText) lbl.textContent = lblText;
         }
       }
@@ -1034,7 +1099,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         lbl.classList.toggle('has-override', !!s.override);
       }
     }
-  }, [states, selectedObjectIds, mechanismOffsets, scaleCorrection, modelVersion]);
+  }, [states, selectedObjectIds, mechanismOffsets, scaleCorrection, modelVersion, readOnly]);
 
   // ── Attach gizmo：單選 attach mesh、多選建 pivot 把 mesh reparent 進去 ──
   useEffect(() => {
@@ -1095,11 +1160,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   useEffect(() => { transformRef.current?.setMode(mode); }, [mode]);
   useEffect(() => { transformRef.current?.setSpace(space); }, [space]);
 
-  // ── Label visibility ──
+  // ── Label visibility（鎖頭 pin 跟著 Label，且唯讀頁不顯示）──
   useEffect(() => {
+    showLabelsRef.current = showLabels;
     const layer = labelLayerRef.current;
     if (layer) layer.style.display = showLabels ? '' : 'none';
-  }, [showLabels]);
+    const lockLayer = lockPinLayerRef.current;
+    if (lockLayer) lockLayer.style.display = showLabels && !readOnly ? '' : 'none';
+  }, [showLabels, readOnly]);
 
   // ── NDI client（連 ndi-helper.exe）──
   useEffect(() => {
@@ -1145,49 +1213,51 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     // ndiActive intentionally excluded — 用它做 first-frame 判斷不重連
   }, [enableNdi, ndiUrl, onNdiStatus]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Render mode (quick / realistic / cinematic) ──
+  // ── Render mode（quick / live）+ 現場設定 ──
   useEffect(() => {
     const env = envLightsRef.current;
     const scene = sceneRef.current;
     const renderer = rendererRef.current;
-    if (!env || !scene) return;
-    if (renderMode === 'cinematic') {
-      // 最強：HDR IBL + bloom + LED 主導 + 暗環境
-      env.ambient.intensity = 0.05;
-      env.hemi.intensity = 0.1;
-      if (env.key) env.key.intensity = 0.15;
-      scene.environment = envRTRef.current?.texture || null;
-      if (renderer) renderer.toneMappingExposure = 1.1;
-    } else if (renderMode === 'realistic') {
-      env.ambient.intensity = 0.15;
-      env.hemi.intensity = 0.2;
-      if (env.key) env.key.intensity = 0.3;
-      // realistic 也掛 environment（PBR 反射），但比 cinematic 弱
-      scene.environment = envRTRef.current?.texture || null;
-      if (renderer) renderer.toneMappingExposure = 1.0;
-    } else {
-      env.ambient.intensity = 0.55;
-      env.hemi.intensity = 0.3;
-      if (env.key) env.key.intensity = 0.7;
-      scene.environment = null;
-      if (renderer) renderer.toneMappingExposure = 1.0;
+    if (!env || !scene || !renderer) return;
+    const live = renderMode === 'live';
+    const look = lookSettings;
+    // 現場：暗場，底光可調；Quick：維持原本明亮工作燈
+    env.ambient.intensity = live ? 0.02 + look.houseLight * 0.5 : 0.55;
+    env.hemi.intensity = live ? 0.03 + look.houseLight * 0.6 : 0.3;
+    if (env.key) env.key.intensity = live ? look.houseLight * 0.4 : 0.7;
+    (scene.background as THREE.Color).set(live ? 0x050506 : 0x16181c);
+    if (helpersRef.current) {
+      helpersRef.current.grid.visible = !live;
+      helpersRef.current.axes.visible = !live;
     }
-  }, [renderMode]);
+    // 現場：Neutral tone mapping 保留 LED 飽和色；Quick 維持 ACES（畫面不變）
+    renderer.toneMapping = live ? THREE.NeutralToneMapping : THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = live ? look.exposure : 1;
+    if (!live) scene.environment = null;
+    scene.environmentIntensity = live ? 0.5 + look.ledLightStrength * 0.5 : 1;
+    const bloom = bloomPassRef.current;
+    if (bloom) {
+      bloom.strength = look.bloomStrength;
+      bloom.radius = 0.55;
+      bloom.threshold = 0.6;
+    }
+    ledRigRef.current?.setEnabled(live);
+  }, [renderMode, lookSettings]);
 
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
     const meshes = meshesRef.current;
-    const ledLights = ledLightsRef.current;
     const accentGreen = new THREE.Color(0x10c78a);
     const black = new THREE.Color(0x000000);
+    const ledIds = new Set<string>();
 
     meshes.forEach((obj, id) => {
       const so = stageObjMap.get(id);
       const isSelected = selectedObjectIds.includes(id);
       const isLed = so?.category === 'led_panel';
-      const isLit = renderMode !== 'quick'; // realistic + cinematic 都打 LED
+      const isLit = renderMode !== 'quick'; // 現場模式才打 LED
       const mat = so?.materialProps || {};
       const ledTint = so?.ledProps?.tint ? new THREE.Color(so.ledProps.tint) : new THREE.Color(0xffffff);
       const ledBrightness = so?.ledProps?.brightness ?? 1.0;
@@ -1221,6 +1291,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
+        // LED 也放進 LED_LAYER → 環境光的 CubeCamera 只拍這層
+        if (isLed) c.layers.enable(LED_LAYER);
         const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
         if (!m || !('color' in m)) return;
 
@@ -1339,37 +1411,29 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         }
       });
 
-      // 3. LED RectAreaLight（realistic / cinematic 都打）
-      let light = ledLights.get(id);
-      if (isLit && isLed && so) {
-        const led = so.ledProps || {};
-        const brightness = led.brightness ?? 1.0;
-        const castStrength = led.castLightStrength ?? 1.0;
-
-        if (!light) {
-          const w = 2 * (so.defaultScale.x || 1);
-          const h = 1.2 * (so.defaultScale.y || 1);
-          light = new THREE.RectAreaLight(0xffffff, 1, w, h);
-          scene.add(light);
-          ledLights.set(id, light);
+      // 3. LED 照明：記下取色來源 / 燈參數；發光面只算一次（換模型才重算）
+      if (isLed && so) {
+        ledSourcesRef.current.set(id, ledTexture
+          ? { image: ledTexture.image as CanvasImageSource, flipY: ledTexture.flipY }
+          : null);
+        ledLightPropsRef.current.set(id, {
+          brightness: ledBrightness,
+          castStrength: so.ledProps?.castLightStrength ?? 1,
+          tint: ledTint.clone(),
+        });
+        let emitters = emitterCacheRef.current.get(obj);
+        if (!emitters) {
+          emitters = buildLedEmitters(obj, { maxAngleDeg: 35, maxPerObject: 4 });
+          emitterCacheRef.current.set(obj, emitters);
         }
-        light.position.copy(obj.position);
-        light.position.y += 0.05;
-        light.lookAt(obj.position.x, obj.position.y - 1, obj.position.z + 0.5);
-        light.color.copy(ledTint);
-        light.intensity = brightness * castStrength * 5;
-        light.visible = obj.visible;
-      } else if (light) {
-        scene.remove(light);
-        ledLights.delete(id);
+        ledRigRef.current?.setObjectEmitters(id, emitters);
+        ledIds.add(id);
       }
     });
 
-    for (const [id, light] of ledLights) {
-      if (!meshes.has(id)) {
-        scene.remove(light);
-        ledLights.delete(id);
-      }
+    ledRigRef.current?.retainObjects(ledIds);
+    for (const id of [...ledSourcesRef.current.keys()]) {
+      if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
   }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion]);
 
@@ -1575,16 +1639,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     cam.updateProjectionMatrix();
   }, []);
 
-  // 3-state render mode：quick → realistic → cinematic → quick
+  // 兩個模式：⚡ 快速（像素 1:1 對顏色）↔ 🎤 現場（暗場 + LED 照明 + 光暈）
   const cycleRenderMode = useCallback(() => {
-    setRenderMode(m => m === 'quick' ? 'realistic' : (m === 'realistic' ? 'cinematic' : 'quick'));
+    setRenderMode(m => (m === 'quick' ? 'live' : 'quick'));
   }, []);
-  const renderModeLabel = renderMode === 'cinematic' ? '✨ Cinematic'
-    : renderMode === 'realistic' ? '🎬 Realistic'
-    : '⚡ Quick';
-  const renderModeNext = renderMode === 'cinematic' ? 'Quick'
-    : renderMode === 'realistic' ? 'Cinematic（HDR + Bloom）'
-    : 'Realistic（LED 發光）';
+  const renderModeLabel = renderMode === 'live' ? '🎤 現場' : '⚡ 快速';
+  const renderModeNext = renderMode === 'live' ? '快速（像素 1:1 對顏色）' : '現場（暗場 + LED 照明 + 光暈）';
 
   return (
     <div className="stage-scene" ref={containerRef}>
@@ -1620,6 +1680,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           onClick={cycleRenderMode}
           title={`切到 ${renderModeNext}`}
         >{renderModeLabel}</button>
+        {renderMode === 'live' && onLookSettingsChange && (
+          <button
+            className={'tool ' + (lookPanelOpen ? 'is-active' : '')}
+            onClick={() => setLookPanelOpen(o => !o)}
+            title="現場設定：底光 / 曝光 / LED 照明 / 光暈（所有人共用）"
+          >🎚 設定</button>
+        )}
         <button
           className={'tool ' + (wireframe ? 'is-active' : '')}
           onClick={() => setWireframe(w => !w)}
@@ -1774,6 +1841,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         )}
         {cueName && <span className="cue-tag">當前 cue：<strong>{cueName}</strong></span>}
       </div>
+      {lookPanelOpen && renderMode === 'live' && onLookSettingsChange && (
+        <LookSettingsPanel settings={lookSettings} onChange={onLookSettingsChange} onClose={() => setLookPanelOpen(false)} />
+      )}
       {/* Measure result overlay */}
       {measureMode && (
         <div className="stage-scene__measure-overlay">
