@@ -12,6 +12,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeFrontView } from '../lib/stageCamera';
+import { cueMoveProgress } from '../lib/cueTiming';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
@@ -755,11 +756,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         for (const [id, tw] of tweens) {
           const mesh = meshes.get(id);
           if (!mesh) { finished.push(id); continue; }
-          const t = Math.min((now - tw.startTs) / tw.durationMs, 1);
-          // ease-in-out cubic（給 cue 切換的「重」感覺）
-          const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-          mesh.position.lerpVectors(tw.fromPos, tw.toPos, e);
-          mesh.quaternion.slerpQuaternions(tw.fromQuat, tw.toQuat, e);
+          // 等速移動：使用者要舞台從頭到尾同一個速度滑過去，不要一開始慢、最後拖很久
+          const t = cueMoveProgress(now - tw.startTs, tw.durationMs);
+          mesh.position.lerpVectors(tw.fromPos, tw.toPos, t);
+          mesh.quaternion.slerpQuaternions(tw.fromQuat, tw.toQuat, t);
           if (t >= 1) finished.push(id);
         }
         for (const id of finished) tweens.delete(id);

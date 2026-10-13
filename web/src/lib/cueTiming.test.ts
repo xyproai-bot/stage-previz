@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cueAtTime, cueTransitionSeconds, DEFAULT_CUE_TRANSITION_SECONDS } from './cueTiming';
+import { cueAtTime, cueTransitionSeconds, cueMoveProgress, DEFAULT_CUE_TRANSITION_SECONDS } from './cueTiming';
 
 const cues = [
   { id: 'intro', videoTimeSec: 0 },
@@ -35,5 +35,23 @@ describe('cueTransitionSeconds', () => {
     expect(cueTransitionSeconds({ crossfadeSeconds: 0 })).toBe(DEFAULT_CUE_TRANSITION_SECONDS);
     expect(cueTransitionSeconds(undefined)).toBe(DEFAULT_CUE_TRANSITION_SECONDS);
     expect(DEFAULT_CUE_TRANSITION_SECONDS).toBeGreaterThan(0);
+  });
+});
+
+describe('cueMoveProgress', () => {
+  it('等速：走到一半時間就走一半路、四分之一時間就走四分之一', () => {
+    expect(cueMoveProgress(10000, 20000)).toBe(0.5);
+    expect(cueMoveProgress(5000, 20000)).toBe(0.25);
+    expect(cueMoveProgress(15000, 20000)).toBe(0.75);
+  });
+  it('還沒開始 → 0；超過時間 → 1', () => {
+    expect(cueMoveProgress(-100, 20000)).toBe(0);
+    expect(cueMoveProgress(0, 20000)).toBe(0);
+    expect(cueMoveProgress(20000, 20000)).toBe(1);
+    expect(cueMoveProgress(99999, 20000)).toBe(1);
+  });
+  it('時間是 0 → 直接到位', () => {
+    expect(cueMoveProgress(0, 0)).toBe(1);
+    expect(cueMoveProgress(500, -1)).toBe(1);
   });
 });

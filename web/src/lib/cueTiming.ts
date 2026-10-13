@@ -23,3 +23,10 @@ export const DEFAULT_CUE_TRANSITION_SECONDS = 1;
 export function cueTransitionSeconds(cue: { crossfadeSeconds: number } | null | undefined): number {
   return cue && cue.crossfadeSeconds > 0 ? cue.crossfadeSeconds : DEFAULT_CUE_TRANSITION_SECONDS;
 }
+
+// 換 cue 時舞台移動走到哪了（0 = 還在舊位置、1 = 到新位置）
+// 等速：從頭到尾同一個速度，不會一開始慢、最後拖很久（長秒數時特別明顯）
+export function cueMoveProgress(elapsedMs: number, durationMs: number): number {
+  if (!(durationMs > 0)) return 1;
+  return Math.min(Math.max(elapsedMs / durationMs, 0), 1);
+}
