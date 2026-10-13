@@ -403,16 +403,25 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     const m = rowToMechanism(raw);
     const n = normalizeMechanismInput({ ...m, parentId: null, objectIds: [] }, {});
     if (!n.ok) return;
-    const id = newId('mech_', i + 1);
+    // 從舊滑桿轉來的：換成新物件的 mlx_ / mly_ id（舊網站改滑桿時還找得到、不會多出一個）
+    const legacyObj = raw.legacy_object_id && (raw.legacy_axis === 'x' || raw.legacy_axis === 'y')
+      ? (objIdMap.get(raw.legacy_object_id) ?? null) : null;
+    const id = legacyObj ? (raw.legacy_axis === 'x' ? 'mlx_' : 'mly_') + legacyObj : newId('mech_', i + 1);
+    if (legacyObj && rows.some(r => r.id === id)) return;
     idMap.set(raw.id, id);
-    rows.push({ id, c: inputToColumns(n.value), order: m.order, parentOld: m.parentId });
+    rows.push({
+      id, c: inputToColumns(n.value), order: m.order, parentOld: m.parentId,
+      legacyObj, legacyAxis: legacyObj ? raw.legacy_axis : null,
+      // 沒在新介面改過的舊滑桿機關照樣讓舊網站同步；其他一律算改過
+      editedAt: legacyObj ? (raw.edited_at ?? null) : 'now',
+    });
   });
   const stmts = rows.map(r => env.DB.prepare(
-    `INSERT INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
-                             presets, parent_id, console_label, "order", metadata, edited_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, datetime('now'))`
+    `INSERT OR IGNORE INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
+                             presets, parent_id, console_label, "order", metadata, legacy_object_id, legacy_axis, edited_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
   ).bind(r.id, projectId, r.c.name, r.c.kind, r.c.axis, r.c.pivot, r.c.travel_min, r.c.travel_max, r.c.default_value,
-    r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata));
+    r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
   for (const r of rows) {
     const p = r.parentOld ? idMap.get(r.parentOld) : null;
     if (p && p !== r.id) stmts.push(env.DB.prepare(`UPDATE mechanisms SET parent_id = ? WHERE id = ?`).bind(p, r.id));

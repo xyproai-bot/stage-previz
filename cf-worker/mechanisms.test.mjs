@@ -13,7 +13,7 @@ import {
   rowToMechanism, findObjectConflicts, conflictMessage, inputToColumns,
   loadMechanisms, createMechanism, updateMechanism, deleteMechanism, reorderMechanisms,
   putCuePosition, deleteCuePosition, loadSongPositions, mechanismSheet, syncLegacyMechanismOffsets,
-  copyMechanismsToProject, exportMechanisms, cloneCuePositions, snapshotCuePositions, templateMechanismPositions,
+  copyMechanismsToProject, exportMechanisms, importMechanisms, cloneCuePositions, snapshotCuePositions, templateMechanismPositions,
   applyNamedPositions, clearCuePositions, countMechanismObjects, convertCuePositions,
 } from './mechanisms.mjs';
 
@@ -320,6 +320,14 @@ test('複製專案 / 匯出：機關、帶的物件、每個 cue 的位置都跟
   assert.deepEqual((await loadSongPositions(env, 's9')).map(p => [p.cueId, p.mechanismId, p.value]), [['c9', cl.id, 2]]);
   const exp = await exportMechanisms(env, 'p1');
   assert.equal(exp.mechanisms.length, 2);
+  // 從舊滑桿轉來、沒改過的機關：換成新物件的 mlx_ id，舊網站同步照樣找得到
+  await syncLegacyMechanismOffsets(env, 'p1', {}, { led: { x: 1 } });
+  seedProject(db, 'p8');
+  seedObject(db, 'led8', 'p8', 'led_panel', 1, null, 'LED8');
+  const exp2 = await exportMechanisms(env, 'p1');
+  await importMechanisms(env, 'p8', { ...exp2, mechanisms: exp2.mechanisms.filter(m => m.legacy_object_id) }, new Map([['led', 'led8']]), new Map());
+  const p8 = db.prepare(`SELECT id, legacy_object_id, edited_at FROM mechanisms WHERE project_id = 'p8'`).all().map(r => ({ ...r }));
+  assert.deepEqual(p8, [{ id: 'mlx_led8', legacy_object_id: 'led8', edited_at: null }]);
   assert.equal(exp.cueMechanismPositions.length, 1);
 });
 

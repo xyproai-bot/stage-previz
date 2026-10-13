@@ -67,6 +67,8 @@ import {
   generateInviteToken, isInviteTokenShape, hashInviteToken, newInviteId, parseInviteCreate,
   inviteUserDecision, inviteState, inviteProblem, inviteLandingPath, inviteToApi,
 } from './invites.mjs';
+// 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
+import * as mech from './mechanisms.mjs';
 
 const MAX_COMMENTS_PER_SESSION = 500;
 const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -290,7 +292,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -309,6 +311,7 @@ async function handleProjectsRouter(request, env, url) {
     if (route.cueId && !ctx.cueFound) return jsonResp({ error: '這首歌裡找不到這個 cue' }, 404);
     if (route.objId && !ctx.objFound) return jsonResp({ error: '這個專案裡找不到這個物件' }, 404);
     if (route.videoId && !ctx.video) return jsonResp({ error: '這首歌裡找不到這一版影片' }, 404);
+    if (route.mechId && !ctx.mechanism) return jsonResp({ error: '這個專案裡找不到這個機關' }, 404);
 
     return await dispatchProjectRoute(request, env, url, ctx, route, segs);
   } catch (e) {
@@ -354,6 +357,12 @@ async function loadProjectContext(env, me, projectId, route) {
       `SELECT id FROM stage_objects WHERE id = ? AND project_id = ? LIMIT 1`
     ).bind(route.objId, projectId));
   }
+  if (route.mechId) {
+    at.mechanism = stmts.length;
+    stmts.push(env.DB.prepare(
+      `SELECT id, kind, travel_min, travel_max FROM mechanisms WHERE id = ? AND project_id = ? LIMIT 1`
+    ).bind(route.mechId, projectId));
+  }
   const results = stmts.length === 1 ? [await stmts[0].all()] : await env.DB.batch(stmts);
   const first = (i) => (i === undefined ? null : ((results[i]?.results || [])[0] || null));
   const project = first(0);
@@ -367,6 +376,7 @@ async function loadProjectContext(env, me, projectId, route) {
     cueFound: !!first(at.cue),
     objFound: !!first(at.obj),
     video: first(at.video),
+    mechanism: first(at.mechanism),
   };
 }
 
@@ -450,10 +460,34 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
       return request.method === 'PUT'
         ? upsertCueState(request, env, cueId, objId)
         : deleteCueState(request, env, projectId, cueId, objId);
+
+    // 機關（mechanisms.mjs）
+    case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx));
+    case 'mechanisms.create':     return mechResp(mech.createMechanism(request, env, ctx, mechLog(request, env, projectId)));
+    case 'mechanisms.reorder':    return mechResp(mech.reorderMechanisms(request, env, ctx, mechLog(request, env, projectId)));
+    case 'mechanisms.item':
+      return mechResp(request.method === 'PATCH'
+        ? mech.updateMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId))
+        : mech.deleteMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
+    case 'mechanisms.convert':    return mechResp(mech.convertCuePositions(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
+    case 'mechanisms.sheet':      return mechResp(mech.mechanismSheet(env, ctx));
+    case 'mechPositions.list':    return mechResp(mech.listSongPositions(env, ctx, songId));
+    case 'mechPositions.item':
+      return mechResp(request.method === 'PUT'
+        ? mech.putCuePosition(request, env, ctx, cueId)
+        : mech.deleteCuePosition(request, env, ctx, cueId));
     default:
       return jsonResp({ error: 'Not found' }, 404);
   }
 }
+
+// mechanisms.mjs 的 handler 回 { status, body } → JSON 回應
+async function mechResp(p) {
+  const r = await p;
+  return jsonResp(r.body, r.status);
+}
+const mechLog = (request, env, projectId) => (action, targetType, targetId, payload) =>
+  logActivity(request, env, projectId, action, targetType, targetId, payload);
 
 // 還原封存的專案（只有全站 admin；router 已檢查）
 async function restoreProject(request, env, projectId) {
@@ -705,7 +739,7 @@ async function updateProject(request, env, ctx) {
   }
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
 
-  const before = await env.DB.prepare(`SELECT name FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+  const before = await env.DB.prepare(`SELECT name, mechanism_offsets FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
 
   values.push(projectId);
   const result = await env.DB.prepare(
@@ -713,6 +747,14 @@ async function updateProject(request, env, ctx) {
   ).bind(...values).run();
 
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  // 舊網站還在用「全專案機關滑桿」→ 同步到新的機關（在新介面改過的就不再同步）。新網站上線後拿掉
+  if ('mechanism_offsets' in body) {
+    try {
+      await mech.syncLegacyMechanismOffsets(env, projectId, safeJson(before?.mechanism_offsets) || {}, JSON.parse(body.mechanism_offsets));
+    } catch (e) {
+      console.warn('[mechanisms] legacy sync failed', e?.message || e);
+    }
+  }
   // 滑桿 / 現場設定拖動會一直存，不寫 activity（不然 audit log 會被洗版）
   const onlyLiveTweaks = sets.length > 0 && Object.keys(body).every(k =>
     ['mechanism_offsets', 'mechanismOffsets', 'look_settings', 'lookSettings', 'material_overrides', 'materialOverrides', 'home_view', 'homeView', 'led_canvas', 'ledCanvas'].includes(k));
@@ -842,7 +884,7 @@ async function duplicateProject(request, env, projectId) {
 
   // 抓原 project
   const src = await env.DB.prepare(
-    `SELECT id, name, description, model_r2_key, show_id, scale_correction FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+    `SELECT id, name, description, model_r2_key, show_id, scale_correction, mechanism_offsets FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
   ).bind(projectId).first();
   if (!src) return jsonResp({ error: 'Source project not found' }, 404);
 
@@ -940,6 +982,15 @@ async function duplicateProject(request, env, projectId) {
   }
   if (stateStmts.length > 0) await env.DB.batch(stateStmts);
 
+  // 7. 機關（定義、帶的物件、每個 cue 的位置）；舊網站的機關滑桿數值也換成新物件的 id 一起帶過去
+  const oldOffsets = safeJson(src.mechanism_offsets) || {};
+  const newOffsets = {};
+  for (const [oid, v] of Object.entries(oldOffsets)) if (objIdMap.has(oid)) newOffsets[objIdMap.get(oid)] = v;
+  if (Object.keys(newOffsets).length) {
+    await env.DB.prepare(`UPDATE projects SET mechanism_offsets = ? WHERE id = ?`).bind(JSON.stringify(newOffsets), newId).run();
+  }
+  const mechCopy = await mech.copyMechanismsToProject(env, projectId, newId, objIdMap, cueIdMap);
+
   await logActivity(request, env, newId, 'create', 'project', newId, {
     name: newName,
     duplicatedFrom: projectId,
@@ -958,6 +1009,7 @@ async function duplicateProject(request, env, projectId) {
       songs: oldSongs.results?.length || 0,
       cues: oldCues.results?.length || 0,
       cueStates: oldStates.results?.length || 0,
+      mechanisms: mechCopy.mechanisms,
     },
   }, 201);
 }
@@ -1022,6 +1074,8 @@ async function createCueTemplate(request, env, ctx) {
       rotation: safe(r.rotation),
       scale: safe(r.scale),
     })),
+    // 這個 cue 自己設的機關位置（用機關名稱存 → 別的專案有同名的機關也套得上）
+    mechanismPositions: await mech.templateMechanismPositions(env, fromCueId),
   };
 
   const id = 'tpl_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -1135,6 +1189,8 @@ async function exportProject(request, env, projectId) {
       modelR2Key: project.model_r2_key, showId: project.show_id,
     },
     stageObjects, songs, cues, cueObjectStates: states,
+    // 機關：mechanisms / mechanismObjects / cueMechanismPositions（資料庫原樣；舊的匯出檔沒有）
+    ...(await mech.exportMechanisms(env, projectId)),
   };
   return new Response(JSON.stringify(payload, null, 2), {
     status: 200,
@@ -1241,6 +1297,9 @@ async function importProject(request, env) {
     `).bind(newStateId, newCueId, newObjId, cs.position, cs.rotation, cs.scale, cs.visible, cs.custom_props));
   }
   if (stateStmts.length > 0) await env.DB.batch(stateStmts);
+
+  // 機關（舊的匯出檔沒有 → 什麼都不做）
+  await mech.importMechanisms(env, newId, body, objIdMap, cueIdMap);
 
   await logActivity(request, env, newId, 'create', 'project', newId, {
     name: newName,
@@ -1742,6 +1801,8 @@ async function importCuesFromSong(request, env, targetProjectId, targetSongId) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'master')
     `).bind(newCueId, targetSongId, c.name, nextOrder++, c.position_xyz, c.rotation_xyz, c.fov, c.crossfade_seconds, c.video_time_sec).run();
     cuesInserted++;
+    // 機關位置：同一個專案照機關 id，別的專案照機關名稱
+    await mech.copyCuePositionsAcross(env, { srcProjectId: srcSong.project_id, dstProjectId: targetProjectId, srcCueId: c.id, dstCueId: newCueId });
 
     // 複製 cue_object_states，依 mesh_name 重新對應到 target obj id
     const states = (await env.DB.prepare(
@@ -1872,6 +1933,8 @@ async function createCue(request, env, projectId, songId) {
       `).bind(newId, id, r.stage_object_id, r.position, r.rotation, r.scale, r.visible, r.custom_props));
     }
     if (stmts.length > 0) await env.DB.batch(stmts);
+    // 來源 cue 自己設的機關位置也一起複製
+    await mech.cloneCuePositions(env, body.cloneFrom, id);
   } else if (Array.isArray(body?.snapshotStates) && body.snapshotStates.length > 0) {
     // 顯式 snapshot：每個 object 的 position/rotation
     const stmts = [];
@@ -1925,7 +1988,13 @@ async function createCue(request, env, projectId, songId) {
         `).bind(cosId, id, oid, sPos, sRot, sScl));
       }
       if (stmts.length > 0) await env.DB.batch(stmts);
+      // 常用擺位裡的機關位置（用機關名稱對到這個專案的機關）
+      await mech.applyNamedPositions(env, projectId, id, payload.mechanismPositions);
     }
+  }
+  // 從目前 3D 畫面建立：前端給每個機關現在的值 → 存成這個 cue 自己的
+  if (!body?.cloneFrom && !body?.fromTemplateId && body?.snapshotMechanisms) {
+    await mech.snapshotCuePositions(env, projectId, id, body.snapshotMechanisms);
   }
   // 都沒給 → 空白 cue（無 override）
 
@@ -1943,8 +2012,10 @@ async function resetCue(request, env, projectId, cueId) {
   const result = await env.DB.prepare(
     `DELETE FROM cue_object_states WHERE cue_id = ?`
   ).bind(cueId).run();
-  await logActivity(request, env, projectId, 'reset', 'cue', cueId, { name: before?.name, removed: result.meta.changes });
-  return jsonResp({ ok: true, removed: result.meta.changes });
+  // 這個 cue 自己設的機關位置也清掉（回到沿用上一個 cue）
+  const removedMechanismPositions = await mech.clearCuePositions(env, cueId);
+  await logActivity(request, env, projectId, 'reset', 'cue', cueId, { name: before?.name, removed: result.meta.changes, removedMechanismPositions });
+  return jsonResp({ ok: true, removed: result.meta.changes, removedMechanismPositions });
 }
 
 async function reorderCues(request, env, projectId, songId) {
@@ -2392,12 +2463,15 @@ async function bulkCreateStageObjects(request, env, projectId) {
       stageObjects: objN.results?.[0]?.n || 0,
       cueStates: stateN.results?.[0]?.n || 0,
       cuesAffected: cueN.results?.[0]?.n || 0,
+      // 機關裡選的物件也會被清掉（機關的設定和每個 cue 的位置留著，之後重新選物件）
+      mechanismObjects: await mech.countMechanismObjects(env, projectId),
     };
+    const mechNote = willDelete.mechanismObjects > 0 ? `，也會清掉 ${willDelete.mechanismObjects} 個機關裡選的物件` : '';
     if (body?.confirmReplace !== true) {
       return jsonResp({
         error: willDelete.cueStates > 0
-          ? `清除現有物件會一起刪掉 ${willDelete.cuesAffected} 個 cue 裡的 ${willDelete.cueStates} 筆物件位置，而且不能復原。確定要清除的話請再確認一次。`
-          : `清除現有物件會刪掉 ${willDelete.stageObjects} 個物件。確定要清除的話請再確認一次。`,
+          ? `清除現有物件會一起刪掉 ${willDelete.cuesAffected} 個 cue 裡的 ${willDelete.cueStates} 筆物件位置${mechNote}，而且不能復原。確定要清除的話請再確認一次。`
+          : `清除現有物件會刪掉 ${willDelete.stageObjects} 個物件${mechNote}。確定要清除的話請再確認一次。`,
         requiresConfirmation: true,
         willDelete,
       }, 409);
@@ -5649,6 +5723,8 @@ async function handleShareRouter(request, env, url, ref) {
       restrictedToSongId: link.song_id,
       scaleCorrection: proj.scale_correction ?? 1,
       mechanismOffsets: safeJsonObj(proj.mechanism_offsets, {}),
+      // 機關（定義）；每個 cue 的位置：GET songs/:songId/mechanism-positions
+      mechanisms: await mech.loadMechanisms(env, link.project_id).catch(() => []),
       lookSettings: safeJsonObj(proj.look_settings, {}),
       materialOverrides: safeJsonObj(proj.material_overrides, {}),
       homeView: proj.home_view ? safeJsonObj(proj.home_view, null) : null,
@@ -5663,6 +5739,7 @@ async function handleShareRouter(request, env, url, ref) {
     const cuesOnly = segs[5] === 'cues' && !segs[6];
     const cueId = segs[5] === 'cues' && segs[6] ? segs[6] : null;
     const wantStates = cueId && segs[7] === 'states' && !segs[8];
+    const wantMechPositions = segs[5] === 'mechanism-positions' && !segs[6];
     const wantVideos = segs[5] === 'videos' && !segs[6];
     const wantVersions = segs[5] === 'versions' && !segs[6];
     if (!songId || !/^[a-zA-Z0-9_-]{1,64}$/.test(songId)) return jsonResp({ error: 'Missing songId' }, 400);
@@ -5714,6 +5791,10 @@ async function handleShareRouter(request, env, url, ref) {
       ).bind(songId, link.project_id).first();
       const videos = v ? [videoToShareApi(v, withAccess(`${shareBase}/song-videos/${v.id}/stream`))] : [];
       return jsonResp({ videos, latestVideoId: v?.id || null });
+    }
+    if (wantMechPositions) {
+      // 每個 cue 自己設的機關位置（只有正式 cue；跟管理頁同一套沿用規則在前端算）
+      return jsonResp({ positions: await mech.loadSongPositions(env, songId, { masterOnly: true }) });
     }
     if (wantStates) {
       // 跟管理頁 / 導演頁同一份計算（loadCueStates）→ 沒改的物件一樣沿用前面 cue 的位置
