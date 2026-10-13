@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cueAtTime } from './cueTiming';
+import { cueAtTime, cueTransitionSeconds, DEFAULT_CUE_TRANSITION_SECONDS } from './cueTiming';
 
 const cues = [
   { id: 'intro', videoTimeSec: 0 },
@@ -24,5 +24,16 @@ describe('cueAtTime', () => {
   it('都沒設時間 → null', () => {
     expect(cueAtTime([{ id: 'a', videoTimeSec: null }], 3)).toBeNull();
     expect(cueAtTime([], 3)).toBeNull();
+  });
+});
+
+describe('cueTransitionSeconds', () => {
+  it('cue 有設 crossfade → 用 cue 的', () => {
+    expect(cueTransitionSeconds({ crossfadeSeconds: 2.5 })).toBe(2.5);
+  });
+  it('沒設（0）或還沒選 cue → 預設平滑秒數', () => {
+    expect(cueTransitionSeconds({ crossfadeSeconds: 0 })).toBe(DEFAULT_CUE_TRANSITION_SECONDS);
+    expect(cueTransitionSeconds(undefined)).toBe(DEFAULT_CUE_TRANSITION_SECONDS);
+    expect(DEFAULT_CUE_TRANSITION_SECONDS).toBeGreaterThan(0);
   });
 });

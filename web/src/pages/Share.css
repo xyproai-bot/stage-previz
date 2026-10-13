@@ -160,8 +160,10 @@
   background: var(--surface-1);
   display: flex;
   gap: 6px;
+  align-items: center;
   padding: 8px 14px;
-  height: 56px;
+  min-height: 56px;
+  flex-shrink: 0;
   overflow-x: auto;
 }
 .share-cuebar__cue {
@@ -175,6 +177,8 @@
   padding: 5px 10px;
   min-width: 80px;
   max-width: 140px;
+  flex-shrink: 0;
+  line-height: 1.25;
   color: var(--text-dim);
   font-size: 12px;
   flex-shrink: 0;
@@ -200,6 +204,9 @@
   .share-songs { border-right: none; border-bottom: 1px solid var(--border); padding: 8px; }
   .share-songs ul { flex-direction: row; overflow-x: auto; }
   .share-songs__item { white-space: nowrap; }
+  /* 只有一首歌：沒有上面那排歌單，舞台吃滿高度（不然會被塞進 100px 那一列） */
+  .share-body:not(:has(> .share-songs)),
+  .share-body:has(.share-songs:empty) { grid-template-rows: 1fr; }
 }
 
 /* ── LED 畫面來源（AE 即時 / 本地影片）── */

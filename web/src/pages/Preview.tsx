@@ -10,6 +10,7 @@ import ActivityDrawer from '../components/ActivityDrawer';
 import { ProjectCardSkeleton, CommentSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
+import { cueTransitionSeconds } from '../lib/cueTiming';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import './Preview.css';
 
@@ -605,7 +606,7 @@ function SongDetail({
                 modelUrl={modelUrl}
                 readOnly
                 defaultRenderMode="live"
-                crossfadeSeconds={cues.find(c => c.id === selectedCueId)?.crossfadeSeconds ?? 0}
+                crossfadeSeconds={cueTransitionSeconds(cues.find(c => c.id === selectedCueId))}
                 comments={comments}
                 onCommentPinClick={(c) => {
                   const el = document.getElementById(`comment-${c.id}`);

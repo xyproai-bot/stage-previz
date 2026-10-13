@@ -11,6 +11,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
+import { computeFrontView } from '../lib/stageCamera';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import { NdiClient, type NdiClientStatus } from '../lib/ndiClient';
 import LookSettingsPanel from './LookSettingsPanel';
@@ -76,6 +77,8 @@ interface Props {
   onNdiStatus?: (status: NdiClientStatus) => void;
   /** Cue 切換時的 crossfade 秒數（0 = 硬切，>0 = 平滑插值） */
   crossfadeSeconds?: number;
+  /** 顯示「👤 比例尺」按鈕（分享連結不需要） */
+  showScaleButton?: boolean;
   /** ref-style 抓 scene snapshot（給 storyboard / cue 縮圖用） */
   snapshotApiRef?: React.MutableRefObject<{ snapshot: () => Promise<Blob | null> } | null>;
   /** 3D-anchored 留言（顯示為投影到螢幕的 pin），有 anchor=world|mesh 才 render */
@@ -115,7 +118,9 @@ type RenderMode = 'quick' | 'live';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, ledVideo }: Props) {
+const DEFAULT_FOV = 50;
+
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, ledVideo }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -123,6 +128,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const orbitRef = useRef<OrbitControls | null>(null);
   // 模型載入後自動對準舞台的視角（🎥 重置會回到這裡）
   const homeViewRef = useRef<{ position: THREE.Vector3; target: THREE.Vector3 } | null>(null);
+  const stageObjectsRef = useRef(stageObjects);
+  stageObjectsRef.current = stageObjects;
   const transformRef = useRef<TransformControls | null>(null);
   const meshesRef = useRef<Map<string, THREE.Object3D>>(new Map());
   const modelMeshMapRef = useRef<Map<string, THREE.Object3D>>(new Map()); // mesh_name → top-level node from .glb
@@ -170,6 +177,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   }>>(new Map());
   const crossfadeRef = useRef(crossfadeSeconds);
   crossfadeRef.current = crossfadeSeconds;
+  // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；機關滑桿 / 選取 / 校準變了照舊直接套
+  const lastSyncedStatesRef = useRef<CueState[] | null>(null);
   // LED emissive 貼圖快取（imageUrl → Texture），避免每次 effect 重 load
   const ledTextureCacheRef = useRef<Map<string, THREE.Texture>>(new Map());
   const envLightsRef = useRef<{ ambient: THREE.AmbientLight; hemi: THREE.HemisphereLight; key: THREE.DirectionalLight | null } | null>(null);
@@ -288,16 +297,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   }
 
   function loadBookmark(bm: Bookmark) {
+    flyCamera(new THREE.Vector3(...bm.pos), new THREE.Vector3(...bm.target), bm.fov);
+  }
+
+  // 平滑飛行 0.6 秒到指定視角
+  function flyCamera(toPos: THREE.Vector3, toTarget: THREE.Vector3, toFov: number) {
     const cam = cameraRef.current;
     const orb = orbitRef.current;
     if (!cam || !orb) return;
-    // 平滑飛行 0.6 秒
     const fromPos = cam.position.clone();
-    const toPos = new THREE.Vector3(...bm.pos);
     const fromTarget = orb.target.clone();
-    const toTarget = new THREE.Vector3(...bm.target);
     const fromFov = cam.fov;
-    const toFov = bm.fov;
     const startTs = performance.now();
     const dur = 600;
     const stepCam = cam;
@@ -334,7 +344,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     scene.background = new THREE.Color(0x16181c);
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 200);
+    const camera = new THREE.PerspectiveCamera(DEFAULT_FOV, 1, 0.1, 200);
     camera.position.set(8, 6, 10);
     camera.lookAt(0, 1, 0);
     cameraRef.current = camera;
@@ -958,14 +968,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const cam = cameraRef.current;
         const orb = orbitRef.current;
         if (cam && orb && finalDiag > 0) {
-          const fitDist = (finalDiag * 0.6) / Math.tan((cam.fov * Math.PI) / 360);
-          const dir = new THREE.Vector3(1, 0.6, 1).normalize();
-          cam.position.copy(finalCenter).addScaledVector(dir, fitDist);
-          orb.target.copy(finalCenter);
+          // 正面全景：從 LED 面朝的那一側（觀眾席）稍微高一點看，整個舞台剛好入鏡
+          const home = computeFrontView([...map.values()], ledModelRoots(map), cam.fov, viewAspect());
+          cam.position.copy(home.position);
+          orb.target.copy(home.target);
           cam.near = Math.max(0.01, finalDiag / 1000);
           cam.far  = Math.max(200, finalDiag * 10);
           cam.updateProjectionMatrix();
-          homeViewRef.current = { position: cam.position.clone(), target: finalCenter.clone() };
+          homeViewRef.current = { position: home.position.clone(), target: home.target.clone() };
           stageBoundsRef.current = { center: finalCenter.clone(), radius: finalDiag / 2 };
         }
 
@@ -1021,6 +1031,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       });
     }
 
+    const statesChanged = lastSyncedStatesRef.current !== states;
+    lastSyncedStatesRef.current = states;
+
     const currentIds = new Set(states.map(s => s.objectId));
 
     // Remove gone
@@ -1037,6 +1050,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     // Add / update
     for (const s of states) {
       let obj = meshes.get(s.objectId);
+      const justCreated = !obj;
       if (!obj) {
         // 優先：從 GLB 模型 clone 對應 mesh_name 的物件；沒有 → 用 primitive
         const fromModel = modelMeshMapRef.current.get(s.meshName);
@@ -1111,7 +1125,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // 前提：mesh 不在 multiPivot 下（pivot 模式表示用戶正在拖，不該 tween）
       const xfade = crossfadeRef.current;
       const inPivot = obj.parent && obj.parent !== scene;
-      if (xfade > 0 && !inPivot && (obj.position.distanceTo(new THREE.Vector3(p.x, p.y, p.z)) > 0.001 || !obj.quaternion.equals(worldQuat))) {
+      const running = tweensRef.current.get(s.objectId);
+      if (running && !statesChanged && !inPivot) {
+        // 移動中又因為別的原因（機關滑桿 / 校準）重算 → 改終點、繼續滑，不要瞬間跳到終點
+        running.toPos.set(p.x, p.y, p.z);
+        running.toQuat.copy(worldQuat);
+      } else if (xfade > 0 && statesChanged && !justCreated && !inPivot && (obj.position.distanceTo(new THREE.Vector3(p.x, p.y, p.z)) > 0.001 || !obj.quaternion.equals(worldQuat))) {
         tweensRef.current.set(s.objectId, {
           fromPos: obj.position.clone(),
           toPos: new THREE.Vector3(p.x, p.y, p.z),
@@ -1744,17 +1763,36 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const cam = cameraRef.current;
     const orb = orbitRef.current;
     if (!cam || !orb) return;
-    // 有載入模型 → 回到對準舞台的視角；沒模型才用預設位置
-    const home = homeViewRef.current;
-    if (home) {
-      cam.position.copy(home.position);
-      orb.target.copy(home.target);
-    } else {
-      cam.position.set(8, 6, 10);
-      orb.target.set(0, 1, 0);
+    // 正面全景（用現在的畫面比例重算）；沒模型時用場上的物件；什麼都沒有才用預設位置
+    const modelRoots = [...modelMeshMapRef.current.values()];
+    let home: { position: THREE.Vector3; target: THREE.Vector3 } | null = null;
+    if (modelRoots.length > 0) {
+      home = computeFrontView(modelRoots, ledModelRoots(modelMeshMapRef.current), DEFAULT_FOV, viewAspect());
+    } else if (meshesRef.current.size > 0) {
+      const ledIds = new Set((stageObjectsRef.current || []).filter(o => o.category === 'led_panel').map(o => o.id));
+      const leds = [...meshesRef.current].filter(([id]) => ledIds.has(id)).map(([, m]) => m);
+      home = computeFrontView([...meshesRef.current.values()], leds, DEFAULT_FOV, viewAspect());
     }
-    cam.updateProjectionMatrix();
-  }, []);
+    if (home) homeViewRef.current = home;
+    flyCamera(
+      home ? home.position : new THREE.Vector3(8, 6, 10),
+      home ? home.target : new THREE.Vector3(0, 1, 0),
+      DEFAULT_FOV,
+    );
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 畫面寬高比：直接量容器（不靠 camera.aspect，畫面剛出現 / 分頁在背景時它可能還沒更新） */
+  function viewAspect(): number {
+    const el = containerRef.current;
+    const w = el?.clientWidth || 0, h = el?.clientHeight || 0;
+    return w > 0 && h > 0 ? w / h : (cameraRef.current?.aspect || 16 / 9);
+  }
+
+  /** 模型裡屬於 LED 的那些物件（看 stage objects 的分類） */
+  function ledModelRoots(map: Map<string, THREE.Object3D>): THREE.Object3D[] {
+    const names = new Set((stageObjectsRef.current || []).filter(o => o.category === 'led_panel').map(o => o.meshName));
+    return [...map].filter(([name]) => names.has(name)).map(([, o]) => o);
+  }
 
   // 兩個模式：⚡ 快速（像素 1:1 對顏色）↔ 🎤 現場（暗場 + LED 照明 + 光暈）
   const cycleRenderMode = useCallback(() => {
@@ -1816,11 +1854,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           onClick={() => setWireframe(w => !w)}
           title={wireframe ? '切回實心 (X)' : 'Wireframe / X-ray 模式（看穿模型）(X)'}
         >🔳 Wire</button>
-        <button
-          className={'tool ' + (showScaleRef ? 'is-active' : '')}
-          onClick={() => setShowScaleRef(s => !s)}
-          title={showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格'}
-        >👤 比例尺</button>
+        {showScaleButton && (
+          <button
+            className={'tool ' + (showScaleRef ? 'is-active' : '')}
+            onClick={() => setShowScaleRef(s => !s)}
+            title={showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格'}
+          >👤 比例尺</button>
+        )}
         <button
           className={'tool ' + (showLabels ? 'is-active' : '')}
           onClick={() => setShowLabels(s => !s)}
@@ -1944,7 +1984,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                   >↻ 重掃 sources</button>
                   <a
                     className="btn btn--ghost btn--sm"
-                    href="https://www.ndi.tv/tools/"
+                    href="https://ndi.video/tools/"
                     target="_blank"
                     rel="noreferrer"
                   >NDI Tools ↗</a>

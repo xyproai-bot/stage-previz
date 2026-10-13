@@ -9,6 +9,7 @@ import { ProjectCardSkeleton } from '../components/Skeleton';
 import { toast } from '../lib/toast';
 import { markSeen, songUnread } from '../lib/unreadComments';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
+import { cueTransitionSeconds } from '../lib/cueTiming';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import './Studio.css';
 
@@ -474,7 +475,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   readOnly
                   defaultRenderMode="live"
                   enableNdi
-                  crossfadeSeconds={selectedCue?.crossfadeSeconds ?? 0}
+                  crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                   bookmarkScope={projectId}
                   scaleCorrection={view.scaleCorrection}
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}

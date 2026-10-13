@@ -7,7 +7,7 @@ import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
 import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
-import { cueAtTime } from '../lib/cueTiming';
+import { cueAtTime, cueTransitionSeconds } from '../lib/cueTiming';
 import type { NdiClientStatus } from '../lib/ndiClient';
 import './Share.css';
 
@@ -48,6 +48,8 @@ export default function Share() {
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const lastAutoCueRef = useRef<string | null>(null);
+  // 這首歌每個 cue 的舞台位置先全部抓好 → 點 cue 馬上開始動，不用等網路
+  const cueStatesCacheRef = useRef<Map<string, Promise<CueState[]>>>(new Map());
 
   // 切到 AE 即時 → 本地影片先暫停（不然聲音還會在背景播）
   useEffect(() => {
@@ -94,7 +96,14 @@ export default function Share() {
   // 切歌 → 拉 cues + videos
   useEffect(() => {
     if (!token || !selectedSongId) return;
+    cueStatesCacheRef.current = new Map();
     api.getShareSongCues(token, selectedSongId, submittedPwd ?? undefined).then(list => {
+      const cache = cueStatesCacheRef.current;
+      for (const c of list) {
+        const p = api.getShareCueStates(token, selectedSongId, c.id, submittedPwd ?? undefined);
+        p.catch(() => cache.delete(c.id));  // 失敗就丟掉，點到時再抓一次
+        cache.set(c.id, p);
+      }
       setCues(list);
       setSelectedCueId(list[0]?.id ?? null);
     }).catch(() => setCues([]));
@@ -107,9 +116,16 @@ export default function Share() {
   // 切 cue → 拉 states
   useEffect(() => {
     if (!token || !selectedSongId || !selectedCueId) { setCueStates([]); return; }
-    api.getShareCueStates(token, selectedSongId, selectedCueId, submittedPwd ?? undefined)
-      .then(list => setCueStates(list))
-      .catch(() => setCueStates([]));
+    let cancelled = false;  // 連點好幾個 cue 時，只套最後點的那個
+    const cache = cueStatesCacheRef.current;
+    let p = cache.get(selectedCueId);
+    if (!p) {
+      p = api.getShareCueStates(token, selectedSongId, selectedCueId, submittedPwd ?? undefined);
+      cache.set(selectedCueId, p);
+    }
+    p.then(list => { if (!cancelled) setCueStates(list); })
+      .catch(() => { cache.delete(selectedCueId); if (!cancelled) setCueStates([]); });
+    return () => { cancelled = true; };
   }, [token, selectedSongId, selectedCueId, submittedPwd]);
 
   // 沒選 cue 時用 default
@@ -280,7 +296,8 @@ export default function Share() {
               modelUrl={data.modelUrl ? api.apiBase() + data.modelUrl : null}
               readOnly
               defaultRenderMode="live"
-              crossfadeSeconds={selectedCue?.crossfadeSeconds ?? 0}
+              crossfadeSeconds={cueTransitionSeconds(selectedCue)}
+              showScaleButton={false}
               scaleCorrection={data.scaleCorrection ?? 1}
               mechanismOffsets={data.mechanismOffsets}
               lookSettings={personalLook.effective}

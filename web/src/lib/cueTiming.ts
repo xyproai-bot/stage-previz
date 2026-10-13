@@ -16,3 +16,10 @@ export function cueAtTime(
   }
   return target.id;
 }
+
+// 換 cue 時舞台移動要花幾秒：cue 有設 crossfade 就用它，沒設（0）就用預設，讓切換是滑過去不是瞬間跳
+export const DEFAULT_CUE_TRANSITION_SECONDS = 1;
+
+export function cueTransitionSeconds(cue: { crossfadeSeconds: number } | null | undefined): number {
+  return cue && cue.crossfadeSeconds > 0 ? cue.crossfadeSeconds : DEFAULT_CUE_TRANSITION_SECONDS;
+}
