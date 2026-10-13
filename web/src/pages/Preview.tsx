@@ -15,7 +15,7 @@ import ReviewHistory from '../components/ReviewHistory';
 import HelpModal from '../components/HelpModal';
 import CommentThreadList from '../components/CommentThreadList';
 import { buildThreads, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, canPostComment, canResolveComment, type CommentScope } from '../lib/commentThreads';
-import { compareOptions, defaultCompareKey, flipTarget, isCompareShortcut, otherKey, startCompare, syncPair, type AbPair } from '../lib/abCompare';
+import { useAbCompare } from '../lib/useAbCompare';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
 import { CommentSkeleton } from '../components/Skeleton';
@@ -742,43 +742,8 @@ function SongDetail({
   }, [versions, selected, player]);
   const videoMode = !!selected && player.srcKey === selected.key;
 
-  // ── 比較（A/B）：選第二個版本，一個按鈕（或按 C）在兩版之間切，停在同一秒、播放 / 暫停照舊 ──
-  //    只有一個 <video>：換網址再跳到同一秒（localVideo.replaceUrl），不會同時放兩支
-  const [pair, setPair] = useState<AbPair | null>(null);
-  const currentKey = selected?.key ?? null;
-  const itemKeys = useMemo(() => versions.items.filter(it => it.url).map(it => it.key), [versions.items]);
-  useEffect(() => { setPair(null); }, [song.id]);
-  useEffect(() => {
-    setPair(p => { const next = syncPair(p, currentKey, itemKeys); return next === p ? p : next; });
-  }, [currentKey, itemKeys]);
-  const switchToVersion = useCallback((key: string) => {
-    const it = versions.items.find(x => x.key === key);
-    if (!it?.url) return;
-    // 先換網址（停在同一秒、播放 / 暫停照舊），再記住選了哪一版（上面載入影片的 effect 看到同一個 key 就不會從頭載）
-    player.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
-    versions.select(it.key);
-  }, [versions, player]);
-  // 切到另一版；還沒選比較的版本 → 先跟上一版比、直接切過去（按 C、收起來時的「比較」按鈕）
-  const flipCompare = useCallback(() => {
-    if (pair) { switchToVersion(flipTarget(pair, currentKey)); return; }
-    const other = defaultCompareKey(versions.items, currentKey);
-    if (!other || !currentKey) return;
-    setPair(startCompare(currentKey, other));
-    switchToVersion(other);
-  }, [pair, currentKey, versions.items, switchToVersion]);
-  const pickCompare = useCallback((key: string | null) => {
-    setPair(key ? startCompare(currentKey, key) : null);
-  }, [currentKey]);
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!isCompareShortcut(e)) return;
-      if (compareOptions(versions.items, currentKey).length === 0) return;
-      e.preventDefault();
-      flipCompare();
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [currentKey, versions.items, flipCompare]);
+  // ── 比較（A/B）：選第二個版本，一個按鈕（或按 C）在兩版之間切，停在同一秒、播放 / 暫停照舊（lib/useAbCompare.ts，工作站共用）──
+  const compare = useAbCompare({ resetKey: song.id, items: versions.items, currentKey: selected?.key ?? null, select: versions.select, player });
   const viewedReview = selected?.kind === 'version' ? { videoId: selected.id, label: selected.label } : { videoId: null, label: '' };
   const latestVersionItem = versions.items.find(it => it.kind === 'version' && it.version != null) ?? null;
 
@@ -1016,12 +981,7 @@ function SongDetail({
                   onCommentPinClick={handlePinClick}
                   onAddCommentAtTime={(t) => setPendingCommentTime(t)}
                   onRetry={retryVersion}
-                  compare={{
-                    options: compareOptions(versions.items, currentKey),
-                    value: pair ? otherKey(pair, currentKey) : null,
-                    onPick: pickCompare,
-                    onFlip: flipCompare,
-                  }}
+                  compare={compare}
                 />
               )}
             </div>

@@ -24,6 +24,7 @@ import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localM
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
+import { useAbCompare } from '../lib/useAbCompare';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
@@ -466,6 +467,18 @@ function StudioInner({ projectId }: { projectId: string }) {
     const it = r?.items.find(x => x.key === selectedVersion?.key) ?? selectedVersion;
     if (it?.url) player.replaceUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
   }, [versions, selectedVersion, player]);
+
+  // 比較（A/B）：跟導演頁同一套（lib/useAbCompare.ts）——拿自己的 V3 跟 V2 比，停在同一秒，按 C 切換
+  const { select: selectVersion } = versions;
+  const selectVersionForCompare = useCallback((key: string) => { selectVersion(key); chooseSource('version'); }, [selectVersion, chooseSource]);
+  const compare = useAbCompare({
+    resetKey: selectedSongId,
+    items: versions.items,
+    currentKey: selectedVersion?.key ?? null,
+    select: selectVersionForCompare,
+    player,
+    enabled: !!selectedVersion,
+  });
 
   // 通知點進來：等這首歌的版本清單抓到 → 選那一版、放到 LED 上；捲到那則留言
   useEffect(() => {
@@ -933,6 +946,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     detail={versionByline(selectedVersion) || selectedVersion.title}
                     storageKey="sp_mini_player:studio"
                     onRetry={retryVersion}
+                    compare={compare}
                   />
                 )}
                 {dragOver && (
