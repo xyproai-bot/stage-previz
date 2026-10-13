@@ -22,7 +22,7 @@ import ShareLinksDialog from '../components/ShareLinksDialog';
 import InviteDialog from '../components/InviteDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import NotificationBell from '../components/NotificationBell';
-import OverflowMenu from '../components/OverflowMenu';
+import OverflowMenu, { type OverflowItem } from '../components/OverflowMenu';
 import DecisionDialog from '../components/DecisionDialog';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { pushRecentProject } from '../components/CommandPalette';
@@ -1553,16 +1553,13 @@ function CueList({
                   {c.status === 'proposal' && <span className="proposal-tag">提案</span>}
                 </div>
               </div>
-              <div className="cue-item__actions" onClick={(e) => e.stopPropagation()}>
-                {onMove && <>
-                  <button title="上移" aria-label="上移" onClick={() => onMove(c.id, -1)} disabled={i === 0}><Icon icon={ArrowUp} /></button>
-                  <button title="下移" aria-label="下移" onClick={() => onMove(c.id, 1)} disabled={i === cues.length - 1}><Icon icon={ArrowDown} /></button>
-                </>}
-                {onDuplicateQuick && <button title="複製這個 cue" aria-label="複製這個 cue" onClick={() => onDuplicateQuick(c.id)}><Icon icon={Copy} /></button>}
-                {onSaveTemplate && <button title="存成常用擺位（之後可以用它建類似的 cue）" aria-label="存成常用擺位" onClick={() => onSaveTemplate(c.id, c.name)}><Icon icon={BookmarkPlus} /></button>}
-                {onReset && <button title="重置（清掉這個 cue 的所有調整）" aria-label="重置這個 cue" onClick={() => onReset(c.id, c.name)}><Icon icon={RotateCcw} /></button>}
-                {onRename && <button title="改名" aria-label="改名" onClick={() => onRename(c.id, c.name)}><Icon icon={Pencil} /></button>}
-                <button title="刪除" aria-label="刪除" onClick={() => onDelete(c.id, c.name)}><Icon icon={Trash2} /></button>
+              {/* 上移 / 下移、複製、改名、刪除…都收在最右邊的「⋯」：點一列的中間只會選這個 cue
+                  （以前滑鼠移上去，按鈕會蓋住右半邊，點中間可能按到「上移」把 cue 換了順序） */}
+              <div className="cue-item__more" onClick={(e) => e.stopPropagation()}>
+                <OverflowMenu
+                  label={`「${c.name}」的動作（上移、下移、複製、改名、刪除）`}
+                  items={cueRowMenuItems(c, i, cues.length, { onMove, onDuplicateQuick, onSaveTemplate, onReset, onRename, onDelete })}
+                />
               </div>
             </li>
           ))}
@@ -1579,6 +1576,33 @@ function CueList({
       )}
     </>
   );
+}
+
+/** cue 列「⋯」裡的動作（有給 handler 的才出現） */
+function cueRowMenuItems(
+  c: Cue, i: number, count: number,
+  h: {
+    onMove?: (cueId: string, direction: -1 | 1) => void;
+    onDuplicateQuick?: (cueId: string) => void;
+    onSaveTemplate?: (cueId: string, name: string) => void;
+    onReset?: (cueId: string, name: string) => void;
+    onRename?: (cueId: string, name: string) => void;
+    onDelete: (id: string, name: string) => void;
+  },
+): OverflowItem[] {
+  const items: OverflowItem[] = [];
+  const { onMove, onDuplicateQuick, onSaveTemplate, onReset, onRename, onDelete } = h;
+  if (onMove) {
+    items.push({ key: 'up', label: '上移', icon: ArrowUp, disabled: i === 0, onSelect: () => onMove(c.id, -1) });
+    items.push({ key: 'down', label: '下移', icon: ArrowDown, disabled: i === count - 1, onSelect: () => onMove(c.id, 1) });
+  }
+  const sep = items.length > 0;
+  if (onDuplicateQuick) items.push({ key: 'dup', label: '複製這個 cue', icon: Copy, separatorBefore: sep, onSelect: () => onDuplicateQuick(c.id) });
+  if (onSaveTemplate) items.push({ key: 'tpl', label: '存成常用擺位', icon: BookmarkPlus, separatorBefore: sep && !onDuplicateQuick, onSelect: () => onSaveTemplate(c.id, c.name) });
+  if (onRename) items.push({ key: 'rename', label: '改名', icon: Pencil, onSelect: () => onRename(c.id, c.name) });
+  if (onReset) items.push({ key: 'reset', label: '重置（清掉這個 cue 的所有調整）', icon: RotateCcw, onSelect: () => onReset(c.id, c.name) });
+  items.push({ key: 'delete', label: '刪除', icon: Trash2, danger: true, separatorBefore: true, onSelect: () => onDelete(c.id, c.name) });
+  return items;
 }
 
 function CueAddSplitButton({
@@ -1619,7 +1643,7 @@ function CueAddSplitButton({
           <button
             onClick={() => { setOpen(false); onClone && onClone(); }}
             disabled={!onClone || !hasSelectedCue}
-            title={!hasSelectedCue ? '先在左側選一個 cue' : ''}
+            title={!hasSelectedCue ? '先選一個 cue' : ''}
           >
             <span><Icon icon={Copy} /> 沿用目前的 cue</span>
             <small>{hasSelectedCue ? '複製目前 cue 的所有調整' : '要先選一個 cue'}</small>

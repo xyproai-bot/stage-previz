@@ -181,12 +181,25 @@
   background: var(--accent-dim);
   border-color: var(--accent);
 }
-.studio-songs__item-name {
+/* 歌名 + 「有新版」「新留言」：放不下時小標籤換到第二行（歌名先保住，不會被擠成「S01 ··」） */
+.studio-songs__item-body {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+}
+.studio-songs__item-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.studio-songs__item-unread,
+.studio-songs__item-count { flex-shrink: 0; }
 .studio-songs__item-count {
   font-family: var(--font-mono);
   font-size: 11px;

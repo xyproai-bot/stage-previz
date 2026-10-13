@@ -107,7 +107,7 @@ export default function NewProjectDialog({ open, onClose, onCreate, submitting =
             <label>3D 模型（.glb / .gltf）</label>
             <div className="upload-placeholder">
               <span>稍後再上傳</span>
-              <small>建立後到「模型」分頁拖放或選檔</small>
+              <small>建立後到編輯頁右邊的「物件」分頁上傳（拖放或選檔）</small>
             </div>
           </div>
 

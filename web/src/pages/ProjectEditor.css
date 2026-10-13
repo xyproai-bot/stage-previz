@@ -623,31 +623,27 @@
   border-radius: 3px;
   font-size: 9px;
 }
-.cue-item__actions {
-  display: none;
-  gap: 2px;
+/* 每一列最右邊的「⋯」（上移 / 下移、複製、改名、刪除）：一直在、很小，滑鼠移上去也不會長出一排按鈕蓋住列 */
+.cue-item__more { flex-shrink: 0; display: flex; margin-right: -2px; }
+.cue-item__more .ovf__btn {
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-muted);
+  opacity: 0.55;
 }
-.cue-item:hover .cue-item__actions {
-  display: flex;
+.cue-item:hover .cue-item__more .ovf__btn,
+.cue-item.is-active .cue-item__more .ovf__btn,
+.cue-item__more .ovf__btn:focus-visible,
+.cue-item__more .ovf__btn.is-open {
+  opacity: 1;
+  border-color: var(--border);
+  background: var(--surface-1);
 }
-.cue-item__actions button {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--border-strong);
-  color: var(--text-dim);
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  font-size: 11px;
-  cursor: pointer;
-  padding: 0;
-}
-.cue-item__actions button:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.cue-item__actions button:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
+.cue-item__more .ovf__btn:hover { color: var(--text); border-color: var(--border-strong); }
+@media (hover: none) and (pointer: coarse) {
+  .cue-item__more .ovf__btn { width: 34px; height: 34px; opacity: 1; }
 }
 .editor-cues__add {
   margin: 12px;
@@ -1378,7 +1374,6 @@
 
 /* ─── 線條圖示（取代 emoji 後）：圖示按鈕置中、空狀態圖示顏色 ─── */
 .song-item__actions button,
-.cue-item__actions button,
 .editor-back {
   display: inline-flex;
   align-items: center;

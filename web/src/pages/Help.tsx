@@ -1089,7 +1089,7 @@ function ProducerChapter() {
         <Note title="沿用上一個 cue">
           <p>cue 沒有另外設定的物件，會<strong>沿用同一首歌前一個 cue 的位置</strong>（不會跳回預設）。物件旁邊有小點 = 這個 cue 自己設定的。在前面的 cue 動了東西，後面沒另外設定的 cue 會跟著。</p>
         </Note>
-        <p>滑鼠移到 cue 上會出現按鈕：上移 / 下移、複製、存成常用擺位、<strong>重置</strong>（清掉這個 cue 自己設的物件位置和機關位置，改回沿用上一個 cue）、改名、刪除。</p>
+        <p>每個 cue 最右邊的「<Ui>⋯</Ui>」裡有：上移 / 下移、複製、存成常用擺位、<strong>重置</strong>（清掉這個 cue 自己設的物件位置和機關位置，改回沿用上一個 cue）、改名、刪除。</p>
         <p>每個 cue 上面有兩個重要的數字（在「物件狀態」分頁最上面）：</p>
         <ul className="help-list">
           <li><strong>轉場（秒）</strong>：換到這個 cue 時，舞台花幾秒滑過去。<strong>0 = 直接切換</strong>（不滑）。cue 清單上寫「轉場 6 秒」或「直接切換」。</li>
@@ -1113,7 +1113,7 @@ function ProducerChapter() {
         <Section id={A.prodTemplates} level={3} title="常用擺位">
           <p>常常用到的舞台畫面（例如「主唱升起」）可以存起來，下次新增 cue 直接套用。</p>
           <ol className="help-steps">
-            <li>滑鼠移到 cue 上，按書籤圖示「<Ui>存成常用擺位</Ui>」。</li>
+            <li>按 cue 最右邊的「<Ui>⋯</Ui>」→「<Ui>存成常用擺位</Ui>」。</li>
             <li>取名字 →「<Ui>下一步</Ui>」→ 選「<Ui>只給這個專案</Ui>」或「<Ui>所有專案都能用</Ui>」。</li>
             <li>要用的時候：「新增 cue」旁的小箭頭 →「<Ui>從常用擺位建立</Ui>」→ 選一個按「<Ui>套用</Ui>」。</li>
           </ol>

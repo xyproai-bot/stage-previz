@@ -869,20 +869,23 @@ function StudioInner({ projectId }: { projectId: string }) {
                     onClick={() => { setSelectedSongId(s.id); setSongsSheetOpen(false); }}
                   >
                     <span className={'status-dot status-dot--' + s.status} title={STATUS_LABEL[s.status]} />
-                    <span className="studio-songs__item-name">
-                      {s.code && <span className="song-code" title="歌曲代號">{s.code}</span>}
-                      {s.name}
+                    {/* 歌名放不下時「有新版」「新留言」換到第二行，歌名不會被擠成「S01 ··」 */}
+                    <span className="studio-songs__item-body">
+                      <span className="studio-songs__item-name">
+                        {s.code && <span className="song-code" title="歌曲代號">{s.code}</span>}
+                        {s.name}
+                      </span>
+                      {newer && (
+                        <span className="studio-songs__item-newer" title={`導演上次看的是 V${s.reviewedVersion ?? s.lastReview?.version ?? ''}，${newer} 還沒審`}>
+                          <Icon icon={Film} size="xs" /> 有新版 {newer}
+                        </span>
+                      )}
+                      {unread > 0 && (
+                        <span className="studio-songs__item-unread" title={`${unread} 則新留言`}>
+                          <CommentIcon />{unread}
+                        </span>
+                      )}
                     </span>
-                    {newer && (
-                      <span className="studio-songs__item-newer" title={`導演上次看的是 V${s.reviewedVersion ?? s.lastReview?.version ?? ''}，${newer} 還沒審`}>
-                        <Icon icon={Film} size="xs" /> 有新版 {newer}
-                      </span>
-                    )}
-                    {unread > 0 && (
-                      <span className="studio-songs__item-unread" title={`${unread} 則新留言`}>
-                        <CommentIcon />{unread}
-                      </span>
-                    )}
                     <span className="studio-songs__item-count">{s.cueCount}</span>
                   </button>
                 </li>
