@@ -19,6 +19,7 @@ import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
 import { NdiClient, type NdiClientStatus } from '../lib/ndiClient';
+import { NDI_TOOLS_URL } from '../lib/downloads';
 import LookSettingsPanel from './LookSettingsPanel';
 import { DEFAULT_LOOK_SETTINGS, type LookSettings } from '../lib/stageLook/lookSettings';
 import { buildLedEmitters, type LedEmitter } from '../lib/stageLook/ledEmitters';
@@ -122,6 +123,8 @@ interface Props {
   onHomeViewChange?: (view: HomeView | null) => void;
   /** 本地影片（分享頁拖進來的檔案）：有給就播在 LED 上，優先於 NDI */
   ledVideo?: HTMLVideoElement | null;
+  /** 本地圖片（分享頁拖進來的檔案，要先載好）：當靜態畫面放在 LED 上；跟 ledVideo 都有給時影片優先 */
+  ledImage?: HTMLImageElement | null;
   /**
    * 每一幀問一次：有回傳位置 → 舞台照這個擺（分享頁跟著影片時間走，暫停 / 拉時間軸都會跟）；
    * 回傳 null → 照平常（換 cue 滑過去）。用函式而不是 states，才不會每幀重跑 React。
@@ -136,7 +139,7 @@ type Mode = 'translate' | 'rotate' | 'scale';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, poseAtFrame }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -251,8 +254,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // NDI 真連線：connect 後拿到 frames 就 update CanvasTexture（替代 mock）
   const ndiLiveTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
   const ndiClientRef = useRef<NdiClient | null>(null);
-  // 本地影片 → VideoTexture（ledVideo prop 變了就重建）
-  const ledVideoTextureRef = useRef<THREE.VideoTexture | null>(null);
+  // 本地影片 / 圖片 → LED 貼圖（ledVideo / ledImage prop 變了就重建）
+  const ledMediaTextureRef = useRef<THREE.Texture | null>(null);
   const [ndiActive, setNdiActive] = useState(false);  // 有真 frames 進來嗎
   const [ndiStatus, setNdiStatus] = useState<NdiClientStatus>({ kind: 'idle' });
   const [ndiPopoverOpen, setNdiPopoverOpen] = useState(false);
@@ -1440,21 +1443,29 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     floorReflRef.current?.setEnabled(live && qualityRef.current.reflectionScale > 0);
   }, [renderMode, lookSettings]);
 
-  // ── 本地影片 → LED 貼圖（跟 NDI 貼圖同樣設定：flipY false、超出 0~1 繞回）──
+  // ── 本地影片 / 圖片 → LED 貼圖（跟 NDI 貼圖同樣設定：flipY false、超出 0~1 繞回）──
+  // 圖片跟影片用一模一樣的設定 → 同一張畫面放成圖片或影片，方向、顏色都一樣
   useEffect(() => {
-    if (!ledVideo) { ledVideoTextureRef.current = null; return; }
-    const tex = new THREE.VideoTexture(ledVideo);
+    const image = ledVideo ? null : ledImage;
+    if (!ledVideo && !image) { ledMediaTextureRef.current = null; return; }
+    const tex = ledVideo ? new THREE.VideoTexture(ledVideo) : new THREE.Texture(image!);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.minFilter = THREE.LinearFilter;
     tex.magFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;  // VideoTexture 本來就不做；圖片跟著一樣
     tex.flipY = false;
     tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
-    ledVideoTextureRef.current = tex;
+    if (image) {
+      // 圖片只要傳一次（還沒載好就等載好再傳）
+      if (image.complete) tex.needsUpdate = true;
+      else image.addEventListener('load', () => { tex.needsUpdate = true; }, { once: true });
+    }
+    ledMediaTextureRef.current = tex;
     return () => {
-      if (ledVideoTextureRef.current === tex) ledVideoTextureRef.current = null;
+      if (ledMediaTextureRef.current === tex) ledMediaTextureRef.current = null;
       tex.dispose();
     };
-  }, [ledVideo]);
+  }, [ledVideo, ledImage]);
 
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
   useEffect(() => {
@@ -1480,7 +1491,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       // LED 貼圖 priority（不分 render mode，Quick 也要吃 NDI）：
       //   1. user imageUrl（admin 在物件設定的）
-      //   2. 本地影片（分享頁拖進來的檔案，ledVideo prop）
+      //   2. 本地影片 / 圖片（分享頁拖進來的檔案，ledVideo / ledImage prop）
       //   3. NDI 真連線（ndi-helper 推 frames 進來）
       //   4. NDI mock（程序動態貼圖，等 helper 連上前的預覽）— 只在 isLit 開
       const ledImageUrl = (isLed && so?.ledProps?.imageUrl) || null;
@@ -1498,9 +1509,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           cache.set(ledImageUrl, tex);
         }
         ledTexture = cache.get(ledImageUrl) || null;
-      } else if (isLed && ledVideoTextureRef.current) {
-        // 本地影片（分享頁拖進來的）→ 優先於 NDI
-        ledTexture = ledVideoTextureRef.current;
+      } else if (isLed && ledMediaTextureRef.current) {
+        // 本地影片 / 圖片（分享頁拖進來的）→ 優先於 NDI
+        ledTexture = ledMediaTextureRef.current;
       } else if (isLed && ndiActive && ndiLiveTextureRef.current) {
         // NDI 連上了 → 用真實 NDI frame texture（Quick 模式也要）
         ledTexture = ndiLiveTextureRef.current.texture;
@@ -1654,7 +1665,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage]);
 
   // ── 地板倒影的反射平面 + 材質面板的材質清單（換模型 / 物件移動 / 改材質後重算）──
   useEffect(() => {
@@ -2174,7 +2185,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                   >↻ 重掃 sources</button>
                   <a
                     className="btn btn--ghost btn--sm"
-                    href="https://ndi.video/tools/"
+                    href={NDI_TOOLS_URL}
                     target="_blank"
                     rel="noreferrer"
                   >NDI Tools ↗</a>

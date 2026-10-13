@@ -6,7 +6,9 @@ import StageScene from '../components/StageScene';
 import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
 import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import { normalizeHomeView } from '../lib/homeView';
-import { formatClock, useLocalVideo } from '../lib/localVideo';
+import { formatClock } from '../lib/localVideo';
+import { skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
+import { toast } from '../lib/toast';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueAtTime, cueTransitionSeconds } from '../lib/cueTiming';
 import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
@@ -14,8 +16,8 @@ import type { NdiClientStatus } from '../lib/ndiClient';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_TOOLS_URL } from '../lib/downloads';
 import './Share.css';
 
-/** LED 畫面來源：AE 即時（NDI 小程序）或本地影片（拖進來的檔案，只在這台電腦播） */
-type LedSource = 'ndi' | 'video';
+/** LED 畫面來源：AE 即時（NDI 小程序）或本地檔案（拖進來的影片 / 圖片，只在這台電腦播） */
+type LedSource = 'ndi' | 'file';
 
 /** 這首歌每個 cue 的舞台位置先全部開始抓（點 cue / 影片走到那裡時馬上有） */
 function prefetchCueStates(token: string, songId: string, list: Cue[], pwd: string | undefined) {
@@ -33,7 +35,7 @@ const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringif
 /**
  * 公開分享連結 viewer — 無需登入。
  * 路由：/share/:token
- * 動畫師拿到這個連結：開著 AE → LED 顯示 AE 即時畫面；沒開 AE → 拖影片進來播在 LED 上
+ * 動畫師拿到這個連結：開著 AE → LED 顯示 AE 即時畫面；沒開 AE → 拖影片 / 圖片進來放在 LED 上
  */
 export default function Share() {
   const { token } = useParams();
@@ -52,7 +54,8 @@ export default function Share() {
   const [selectedVideoFid, setSelectedVideoFid] = useState<string | null>(null);
 
   // ── LED 畫面來源 ──
-  const local = useLocalVideo();
+  const media = useLocalMedia();
+  const local = media.player;
   const [source, setSource] = useState<LedSource>('ndi');
   const [ndiStatus, setNdiStatus] = useState<NdiClientStatus>({ kind: 'idle' });
   // 剛打開 / 剛切到 AE 時給一點時間連線，連不上才顯示安裝步驟
@@ -67,8 +70,10 @@ export default function Share() {
   // 影片時間軸：有影片時間的 cue 的移動時段 + 每個 cue 的物件位置（先算好，每幀直接拿）
   const timelineRef = useRef<{ windows: CueWindow[]; poses: Map<string, CuePoseMap>; timedIds: Set<string> } | null>(null);
   // 每幀要讀的值（不經過 React）
-  const sourceRef = useRef(source);
-  sourceRef.current = source;
+  // 正在 LED 上放本地影片（不是圖片 / AE）→ 影片時間軸、自動切 cue 才開
+  const videoMode = source === 'file' && media.active?.kind === 'video' && !!local.fileName;
+  const videoModeRef = useRef(videoMode);
+  videoModeRef.current = videoMode;
   const videoReadyRef = useRef(local.ready);
   videoReadyRef.current = local.ready;
   const selectedCueIdRef = useRef(selectedCueId);
@@ -86,10 +91,14 @@ export default function Share() {
     return () => window.clearTimeout(t);
   }, [source]);
 
-  const openFile = useCallback((file: File | undefined | null) => {
-    if (!file) return;
-    if (local.load(file)) setSource('video');
-  }, [local]);
+  // 拖進來 / 選的檔案加進清單，第一個馬上放在 LED 上；不是影片或圖片的略過
+  const addFiles = useCallback((files: FileList | null | undefined) => {
+    if (!files || files.length === 0) return;
+    const { rejected, shown } = media.add(Array.from(files));
+    const skipped = skippedFilesMessage(rejected);
+    if (skipped) toast.warn(skipped);
+    if (shown) setSource('file');
+  }, [media]);
 
   const load = useCallback(async (pwd?: string) => {
     if (!token) return;
@@ -229,27 +238,27 @@ export default function Share() {
   // ── 本地影片播到某秒 → 自動切到對應 cue（cue 有設「對應影片時間」才會動）──
   // 只在「應該的 cue」改變時才切，手動點的 cue 會保留到影片進入下一段
   useEffect(() => {
-    if (source !== 'video' || !local.fileName) return;
+    if (!videoMode) return;
     const target = cueAtTime(cues, local.time);
     if (target && target !== lastAutoCueRef.current) {
       lastAutoCueRef.current = target;
       setSelectedCueId(target);
     }
-  }, [source, local.fileName, local.time, cues]);
+  }, [videoMode, local.time, cues]);
 
   // 手動點 cue → 有影片的話跳到那個 cue 的時間
   const selectCue = useCallback((cue: Cue) => {
     setSelectedCueId(cue.id);
-    if (source === 'video' && local.fileName && cue.videoTimeSec != null) {
+    if (videoMode && cue.videoTimeSec != null) {
       lastAutoCueRef.current = cue.id;
       local.seek(cue.videoTimeSec);
     }
-  }, [source, local]);
+  }, [videoMode, local]);
 
   // 播本地影片時，舞台每一幀照影片時間擺：cue 在「對應影片時間」剛好到位，提前「淡入淡出時間」等速出發。
-  // 暫停就停在半路、拉時間軸就跟著退。AE 即時 / 沒影片 / 沒有 cue 設影片時間 / 點了沒設時間的 cue → null（照舊點 cue 滑過去）
+  // 暫停就停在半路、拉時間軸就跟著退。AE 即時 / 放圖片 / 沒影片 / 沒有 cue 設影片時間 / 點了沒設時間的 cue → null（照舊點 cue 滑過去）
   const poseAtFrame = useCallback((): CuePoseMap | null => {
-    if (sourceRef.current !== 'video' || !videoReadyRef.current) return null;
+    if (!videoModeRef.current || !videoReadyRef.current) return null;
     const tl = timelineRef.current;
     if (!tl) return null;
     const sel = selectedCueIdRef.current;
@@ -318,12 +327,12 @@ export default function Share() {
           className="share-stage"
           onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragOver(true); } }}
           onDragLeave={(e) => { if (e.currentTarget === e.target) setDragOver(false); }}
-          onDrop={(e) => { e.preventDefault(); setDragOver(false); openFile(e.dataTransfer.files?.[0]); }}
+          onDrop={(e) => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}
         >
           <div className="share-source">
             <div className="share-source__switch">
               <button className={source === 'ndi' ? 'is-active' : ''} onClick={() => setSource('ndi')}>🔴 AE 即時</button>
-              <button className={source === 'video' ? 'is-active' : ''} onClick={() => setSource('video')}>🎬 本地影片</button>
+              <button className={source === 'file' ? 'is-active' : ''} onClick={() => setSource('file')}>🎬 本地檔案</button>
             </div>
             <span className="share-source__status">
               {source === 'ndi'
@@ -331,18 +340,39 @@ export default function Share() {
                 ? (ndiStatus.kind === 'connected'
                   ? `已連上 NDI 小程序${ndiStatus.source ? ` · 來源：${ndiStatus.source}` : '（還沒選來源）'}`
                   : ndiStatus.kind === 'connecting' ? '連線 NDI 小程序中…' : '沒偵測到 NDI 小程序')
-                : (local.fileName ? `${local.playing ? '▶' : '⏸'} ${local.fileName}` : '還沒選影片')}
+                : media.active?.kind === 'video' ? `${local.playing ? '▶' : '⏸'} ${media.active.name}`
+                : media.active ? `🖼 ${media.active.name}`
+                : media.items.length > 0 ? '點下面清單裡的檔案，放到 LED 上' : '還沒選檔案'}
             </span>
             <span className="grow" />
-            <button className="btn btn--ghost btn--sm" onClick={() => fileInputRef.current?.click()}>🎬 選擇影片…</button>
+            <button className="btn btn--ghost btn--sm" onClick={() => fileInputRef.current?.click()}>＋ 加入影片 / 圖片…</button>
             <input
               ref={fileInputRef}
               type="file"
-              accept="video/*"
+              accept="video/*,image/png,image/jpeg,image/webp,image/gif,image/bmp,image/avif"
+              multiple
               hidden
-              onChange={(e) => { openFile(e.target.files?.[0]); e.target.value = ''; }}
+              onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }}
             />
           </div>
+
+          {source === 'file' && media.items.length > 0 && (
+            <div className="share-files">
+              {media.items.map(it => (
+                <div key={it.id} className={'share-files__item' + (it.id === media.active?.id ? ' is-active' : '')}>
+                  <button className="share-files__pick" onClick={() => media.select(it.id)} title={`${it.name}（點了放到 LED 上）`}>
+                    {it.url
+                      ? <img className="share-files__thumb" src={it.url} alt="" />
+                      : <span className="share-files__thumb">🎬</span>}
+                    <span className="share-files__name">{it.name}</span>
+                    <span className="share-files__tag">{it.kind === 'video' ? '影片' : '圖片'}</span>
+                  </button>
+                  <button className="share-files__remove" onClick={() => media.remove(it.id)} title="從清單移除">✕</button>
+                </div>
+              ))}
+              <span className="share-files__hint">檔案只在這台電腦播放，不會上傳</span>
+            </div>
+          )}
 
           {videos.length > 0 && selectedVideoFid && (
             <div className="share-video-pane">
@@ -393,7 +423,8 @@ export default function Share() {
               homeView={homeView}
               enableNdi={source === 'ndi'}
               onNdiStatus={setNdiStatus}
-              ledVideo={source === 'video' && local.ready ? local.video : null}
+              ledVideo={videoMode && local.ready ? local.video : null}
+              ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
               poseAtFrame={poseAtFrame}
             />
           ) : (
@@ -402,7 +433,7 @@ export default function Share() {
 
           {/* 拖檔提示 / AE 安裝步驟 / 選影片提示 / 播放錯誤 */}
           {dragOver && (
-            <div className="share-overlay share-overlay--drop">放開，影片會播在 LED 上（只在這台電腦播，不會上傳）</div>
+            <div className="share-overlay share-overlay--drop">放開，影片 / 圖片會加進清單、放在 LED 上（只在這台電腦播，不會上傳）</div>
           )}
           {!dragOver && source === 'ndi' && ndiGraceOver && ndiStatus.kind !== 'connected' && (
             <div className="share-overlay">
@@ -412,23 +443,23 @@ export default function Share() {
                 <li>下載並打開 NDI 小程序：<a className="btn btn--sm" href={NDI_HELPER_DOWNLOAD_URL}>⬇ 下載安裝檔</a></li>
                 <li>AE 的「視訊預覽」輸出選 NDI（NDI Tools 裡的 Adobe 外掛）</li>
               </ol>
-              <span className="share-overlay__hint">接上後這裡會自動變成 LIVE。沒有 AE？按上面「🎬 本地影片」把影片拖進來。</span>
+              <span className="share-overlay__hint">接上後這裡會自動變成 LIVE。沒有 AE？按上面「🎬 本地檔案」把影片或圖片拖進來。</span>
             </div>
           )}
-          {!dragOver && source === 'video' && !local.fileName && !local.error && (
+          {!dragOver && source === 'file' && media.items.length === 0 && (
             <div className="share-overlay">
-              <strong>把影片拖進來，或按「🎬 選擇影片…」</strong>
-              <span>影片會直接播在 LED 上，只在這台電腦播，不會上傳。</span>
-              <span className="share-overlay__hint">影片要是跟 AE 送 NDI 時一樣的整張畫布，才會對到每一片 LED。</span>
+              <strong>把影片或圖片拖進來，或按「＋ 加入影片 / 圖片…」</strong>
+              <span>可以一次放好幾個，點清單裡的哪個，LED 就放哪個。只在這台電腦播，不會上傳。</span>
+              <span className="share-overlay__hint">畫面要是跟 AE 送 NDI 時一樣的整張畫布，才會對到每一片 LED。</span>
             </div>
           )}
-          {!dragOver && source === 'video' && local.error && (
+          {!dragOver && source === 'file' && media.active && (media.active.kind === 'video' ? local.error : media.imageError) && (
             <div className="share-overlay share-overlay--error">
-              <strong>⚠ {local.error}</strong>
+              <strong>⚠ {media.active.kind === 'video' ? local.error : media.imageError}</strong>
             </div>
           )}
 
-          {source === 'video' && local.fileName && (
+          {videoMode && media.active && (
             <div className="share-player">
               <button className="share-player__btn" onClick={local.togglePlay} title={local.playing ? '暫停' : '播放'}>
                 {local.playing ? '⏸' : '▶'}
@@ -448,8 +479,8 @@ export default function Share() {
               <button className="share-player__btn" onClick={() => local.setMuted(!local.muted)} title={local.muted ? '開聲音' : '靜音'}>
                 {local.muted ? '🔇' : '🔊'}
               </button>
-              <span className="share-player__name" title={local.fileName}>{local.fileName}</span>
-              <button className="share-player__btn" onClick={local.clear} title="移除這支影片">✕</button>
+              <span className="share-player__name" title={media.active.name}>{media.active.name}</span>
+              <button className="share-player__btn" onClick={() => { if (media.active) media.remove(media.active.id); }} title="從清單移除這支影片">✕</button>
             </div>
           )}
 
