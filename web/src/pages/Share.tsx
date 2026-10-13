@@ -10,7 +10,7 @@ import { formatClock } from '../lib/localVideo';
 import { skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { toast } from '../lib/toast';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
-import { cueAtTime, cueTransitionSeconds } from '../lib/cueTiming';
+import { cueTransitionSeconds, videoCueSelection } from '../lib/cueTiming';
 import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
 import type { NdiClientStatus } from '../lib/ndiClient';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_TOOLS_URL } from '../lib/downloads';
@@ -250,16 +250,15 @@ export default function Share() {
   const materialOverrides = useMemo(() => normalizeMaterialOverrides(data?.materialOverrides), [data]);
   const homeView = useMemo(() => normalizeHomeView(data?.homeView ?? null), [data]);
 
-  // ── 本地影片播到某秒 → 自動切到對應 cue（cue 有設「對應影片時間」才會動）──
-  // 只在「應該的 cue」改變時才切，手動點的 cue 會保留到影片進入下一段
+  // ── 本地影片播到某秒 → cue 列亮的跟著影片時間（cue 有設「對應影片時間」才會動）──
+  // 亮的永遠跟舞台一致：舞台照時間軸擺時亮 cueAtTime；手動點了沒設時間的 cue → 舞台照那個 cue，
+  // 留到影片走進下一段才回到時間軸（規則在 videoCueSelection）
   useEffect(() => {
     if (!videoMode) return;
-    const target = cueAtTime(cues, local.time);
-    if (target && target !== lastAutoCueRef.current) {
-      lastAutoCueRef.current = target;
-      setSelectedCueId(target);
-    }
-  }, [videoMode, local.time, cues]);
+    const next = videoCueSelection(cues, local.time, selectedCueId, lastAutoCueRef.current);
+    lastAutoCueRef.current = next.targetId;
+    if (next.selectedId !== selectedCueId) setSelectedCueId(next.selectedId);
+  }, [videoMode, local.time, cues, selectedCueId]);
 
   // 手動點 cue → 有影片的話跳到那個 cue 的時間
   const selectCue = useCallback((cue: Cue) => {

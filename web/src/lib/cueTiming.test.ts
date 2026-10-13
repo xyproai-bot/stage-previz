@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { cueAtTime, cueTransitionSeconds, cueMoveProgress, DEFAULT_CUE_TRANSITION_SECONDS } from './cueTiming';
+import { cueAtTime, cueTransitionSeconds, cueMoveProgress, DEFAULT_CUE_TRANSITION_SECONDS, videoCueSelection } from './cueTiming';
 
 const cues = [
   { id: 'intro', videoTimeSec: 0 },
@@ -53,5 +53,28 @@ describe('cueMoveProgress', () => {
   it('時間是 0 → 直接到位', () => {
     expect(cueMoveProgress(0, 0)).toBe(1);
     expect(cueMoveProgress(500, -1)).toBe(1);
+  });
+});
+
+describe('videoCueSelection（播影片時 cue 列亮哪個，要跟舞台一致）', () => {
+  it('亮的是有時間的 cue → 一律照影片時間（就算影片時間沒換段也會改過來）', () => {
+    // 例：放圖片時點了 chorus，切回影片時影片在 verse 那段 → 改亮 verse（舞台也在 verse）
+    expect(videoCueSelection(cues, 20, 'chorus', 'verse')).toEqual({ selectedId: 'verse', targetId: 'verse' });
+    expect(videoCueSelection(cues, 45, 'verse', 'verse')).toEqual({ selectedId: 'chorus', targetId: 'chorus' });
+    expect(videoCueSelection(cues, 20, null, null)).toEqual({ selectedId: 'verse', targetId: 'verse' });
+  });
+  it('點有時間的 cue（已經跳到那個時間）→ 就是它', () => {
+    expect(videoCueSelection(cues, 40, 'chorus', 'verse')).toEqual({ selectedId: 'chorus', targetId: 'chorus' });
+  });
+  it('手動點沒時間的 cue → 留著，影片在同一段時不搶回來', () => {
+    expect(videoCueSelection(cues, 20, 'nope', 'verse')).toEqual({ selectedId: 'nope', targetId: 'verse' });
+    expect(videoCueSelection(cues, 30, 'nope', 'verse')).toEqual({ selectedId: 'nope', targetId: 'verse' });
+  });
+  it('手動點沒時間的 cue → 影片走進下一段就回到時間軸', () => {
+    expect(videoCueSelection(cues, 40, 'nope', 'verse')).toEqual({ selectedId: 'chorus', targetId: 'chorus' });
+  });
+  it('都沒設時間 → 不動', () => {
+    const none = [{ id: 'a', videoTimeSec: null }, { id: 'b', videoTimeSec: null }];
+    expect(videoCueSelection(none, 10, 'b', null)).toEqual({ selectedId: 'b', targetId: null });
   });
 });

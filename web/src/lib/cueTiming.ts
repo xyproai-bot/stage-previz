@@ -17,6 +17,27 @@ export function cueAtTime(
   return target.id;
 }
 
+/**
+ * 播本地影片時 cue 列該亮哪一個（亮的要跟舞台一致）：
+ *   - 亮的是有影片時間的 cue（或沒亮）→ 舞台照影片時間軸擺 → 一律亮 cueAtTime
+ *   - 亮的是沒設影片時間的 cue（手動點的）→ 舞台照那個 cue 擺（時間軸暫停）→ 留著，
+ *     直到影片走進下一段（應該的 cue 跟上次不同）才回到時間軸
+ * lastTargetId = 上一次算的 cueAtTime；回傳要亮的 + 這次的 cueAtTime（下次當 lastTargetId）
+ */
+export function videoCueSelection(
+  cues: { id: string; videoTimeSec: number | null }[],
+  currentTime: number,
+  selectedId: string | null,
+  lastTargetId: string | null,
+): { selectedId: string | null; targetId: string | null } {
+  const targetId = cueAtTime(cues, currentTime);
+  if (!targetId) return { selectedId, targetId };  // 都沒設時間 → 不自動切
+  const selected = cues.find(c => c.id === selectedId);
+  const manual = !!selected && selected.videoTimeSec == null;
+  if (manual && targetId === lastTargetId) return { selectedId, targetId };
+  return { selectedId: targetId, targetId };
+}
+
 // 換 cue 時舞台移動要花幾秒：cue 有設 crossfade 就用它，沒設（0）就用預設，讓切換是滑過去不是瞬間跳
 export const DEFAULT_CUE_TRANSITION_SECONDS = 1;
 
