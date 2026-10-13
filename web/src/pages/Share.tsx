@@ -71,6 +71,8 @@ export default function Share() {
 
   const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
   const [cues, setCues] = useState<Cue[]>([]);
+  // cues 是哪首歌的：剛切歌、新的還沒讀到時不能拿上一首的 cue 去問位置（以前每切一次歌就有一個 404）
+  const [cuesSongId, setCuesSongId] = useState<string | null>(null);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
   const [cueStates, setCueStates] = useState<CueState[]>([]);
 
@@ -240,6 +242,7 @@ export default function Share() {
       if (cancelled) return;
       cueStatesCacheRef.current = prefetchCueStates(shareRef, selectedSongId, list, access);
       setCues(list);  // 新的一首歌 → 影片時間重新對 cue（useVideoCueTimeline）
+      setCuesSongId(selectedSongId);
       setSelectedCueId(list[0]?.id ?? null);
     }).catch((e) => { if (!cancelled) { setCues([]); onShareFetchError(e); } });
     return () => { cancelled = true; };
@@ -276,7 +279,7 @@ export default function Share() {
 
   // 切 cue → 拉 states
   useEffect(() => {
-    if (!shareRef || !selectedSongId || !selectedCueId) { setCueStates([]); return; }
+    if (!shareRef || !selectedSongId || !selectedCueId || cuesSongId !== selectedSongId) { setCueStates([]); return; }
     let cancelled = false;  // 連點好幾個 cue 時，只套最後點的那個
     const cache = cueStatesCacheRef.current;
     let p = cache.get(selectedCueId);
@@ -288,7 +291,7 @@ export default function Share() {
     p.then(list => { if (!cancelled) setCueStates(prev => sameJson(prev, list) ? prev : list); })
       .catch((e) => { cache.delete(selectedCueId); if (!cancelled) { setCueStates([]); onShareFetchError(e); } });
     return () => { cancelled = true; };
-  }, [shareRef, selectedSongId, selectedCueId, accessToken, cueRefresh, onShareFetchError]);
+  }, [shareRef, selectedSongId, selectedCueId, cuesSongId, accessToken, cueRefresh, onShareFetchError]);
 
   // 沒選 cue 時用 default
   const viewportStates: CueState[] = useMemo(() => {

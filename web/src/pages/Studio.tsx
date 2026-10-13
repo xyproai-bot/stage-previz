@@ -915,7 +915,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                 source={source}
                 onChange={chooseSource}
                 showVersion
-                versionLabel={versions.items[0]?.label ?? (selectedSong.latestVideoVersion ? `V${selectedSong.latestVideoVersion}` : null)}
+                /* 正在放哪一版就寫哪一版（比較時切到 V1 不會還寫「影片 V2」） */
+                versionLabel={(source === 'version' ? selectedVersion?.label : null) || versions.items[0]?.label || (selectedSong.latestVideoVersion ? `V${selectedSong.latestVideoVersion}` : null)}
                 status={source === 'ndi'
                   ? (!ndiGuide ? '連線中…'
                     : ndiGuide.step === 'live'
