@@ -49,12 +49,16 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
     });
     if (!resp.ok) {
       let msg = `HTTP ${resp.status}`;
+      let errBody: Record<string, unknown> | undefined;
       try {
         const err = await resp.json();
+        if (err && typeof err === 'object') errBody = err;
         if (err?.error) msg = err.error;
       } catch { /* ignore */ }
-      const e: Error & { status?: number } = new Error(msg);
+      // data = 後台回的整個錯誤內容（例如 409 時的 currentStatus / willDelete），畫面需要時可以讀
+      const e: Error & { status?: number; data?: Record<string, unknown> } = new Error(msg);
       e.status = resp.status;
+      e.data = errBody;
       throw e;
     }
     const result = await resp.json() as T;
@@ -385,7 +389,8 @@ export async function createSong(projectId: string, name: string): Promise<{ id:
 export async function updateSong(
   projectId: string,
   songId: string,
-  patch: Partial<{ name: string; order: number; status: Song['status']; animator_user_id: string }>
+  // expectedStatus：畫面上以為的目前狀態。改狀態時帶上 → 別人剛改過的話後台回 409（error.data.currentStatus = 現在的狀態），不會蓋掉
+  patch: Partial<{ name: string; order: number; status: Song['status']; expectedStatus: Song['status']; animator_user_id: string | null }>
 ): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}`, {
     method: 'PATCH',
@@ -816,11 +821,14 @@ export async function bulkCreateStageObjects(
     defaultRotation?: Euler;
     defaultScale?: Vec3;
   }>,
-  options?: { replace?: boolean }
-): Promise<{ inserted: number; skipped: number }> {
+  // replace = 先清掉專案所有物件（每個 cue 裡這些物件的位置也會一起刪）。
+  // 只帶 replace 不帶 confirmReplace → 後台回 409，error.data = { requiresConfirmation: true, willDelete: { stageObjects, cueStates, cuesAffected } }
+  // 給使用者看過、按確定後再帶 confirmReplace: true 呼叫一次。
+  options?: { replace?: boolean; confirmReplace?: boolean }
+): Promise<{ inserted: number; skipped: number; deleted?: { stageObjects: number; cueStates: number; cuesAffected: number } }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects/bulk`, {
     method: 'POST',
-    body: JSON.stringify({ items, replace: options?.replace ?? false }),
+    body: JSON.stringify({ items, replace: options?.replace ?? false, confirmReplace: options?.confirmReplace === true }),
   });
 }
 
@@ -1191,28 +1199,39 @@ export interface SharePublicData {
   homeView?: unknown;
   /** AE 畫布尺寸 { width, height }；null = 還沒填；舊版 worker 沒有 → undefined（用 normalizeLedCanvas 讀） */
   ledCanvas?: unknown;
+  /**
+   * 有密碼的連結：密碼對了後台發的通行證（8 小時）。之後的請求帶它（getShareSongCues 等的 access 參數），
+   * 不用每次都送密碼；影片網址（streamUrl）後台已經接好通行證。沒密碼的連結 = null；舊版 worker 沒有 → undefined
+   */
+  access?: { token: string; expiresAt: number } | null;
 }
 
-/** 公開存取 — 無需 auth，可選 password */
-export async function getSharePublicData(ref: ShareRef, password?: string): Promise<SharePublicData> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+async function shareError(r: Response): Promise<Error & { status?: number; requiresPassword?: boolean }> {
+  const err = await r.json().catch(() => ({} as { error?: string; requiresPassword?: boolean }));
+  const e: Error & { status?: number; requiresPassword?: boolean } = new Error(err.error || `HTTP ${r.status}`);
+  e.status = r.status;
+  e.requiresPassword = !!err.requiresPassword;
+  return e;
+}
+
+/** 分享連結的通行證 header（密碼只在第一次 getSharePublicData 送，之後都用通行證） */
+function shareAccessHeaders(access?: string): Record<string, string> {
+  return access ? { 'x-share-access': access } : {};
+}
+
+/** 公開存取 — 無需 auth；有密碼的連結第一次帶 password（只放 header，不放網址） */
+export async function getSharePublicData(ref: ShareRef, password?: string, access?: string): Promise<SharePublicData> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...shareAccessHeaders(access) };
   if (password) headers['x-share-password'] = password;
   const r = await fetch(`${apiBase()}${shareApiPath(ref)}/data`, { headers });
-  if (!r.ok) {
-    const err = await r.json().catch(() => ({}));
-    const e: Error & { status?: number; requiresPassword?: boolean } = new Error(err.error || `HTTP ${r.status}`);
-    e.status = r.status;
-    e.requiresPassword = !!err.requiresPassword;
-    throw e;
-  }
+  if (!r.ok) throw await shareError(r);
   return r.json();
 }
 
-export async function getShareSongCues(ref: ShareRef, songId: string, password?: string): Promise<Cue[]> {
-  const headers: Record<string, string> = {};
-  if (password) headers['x-share-password'] = password;
-  const r = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/cues`, { headers });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+/** access = getSharePublicData 回的 access.token（沒密碼的連結不用給）；通行證過期 → 丟 status 401 */
+export async function getShareSongCues(ref: ShareRef, songId: string, access?: string): Promise<Cue[]> {
+  const r = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/cues`, { headers: shareAccessHeaders(access) });
+  if (!r.ok) throw await shareError(r);
   const data = await r.json() as { cues: Cue[] };
   return data.cues;
 }
@@ -1224,28 +1243,31 @@ export interface ShareVideo {
   mimeType: string | null;
   modifiedTime: string | null;
   sizeBytes: number | null;
-  streamUrl: string;  // 相對路徑 /api/share/:token/videos/:fid/stream（用好讀網址打開時是 /api/s/:slug/...）
+  // 相對路徑 /api/share/:token/videos/:fid/stream（用好讀網址打開時是 /api/s/:slug/...）；
+  // 有密碼的連結後面已經接好 ?access=<通行證>（<video> 帶不了 header），直接當 src 用
+  streamUrl: string;
 }
 
-export async function getShareSongVideos(ref: ShareRef, songId: string, password?: string): Promise<ShareVideo[]> {
-  const headers: Record<string, string> = {};
-  if (password) headers['x-share-password'] = password;
+/** 抓不到就回空陣列；只有通行證過期（401）會丟出來，讓分享頁重新換通行證 */
+export async function getShareSongVideos(ref: ShareRef, songId: string, access?: string): Promise<ShareVideo[]> {
+  let r: Response;
   try {
-    const r = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/videos`, { headers });
-    if (!r.ok) return [];
+    r = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/videos`, { headers: shareAccessHeaders(access) });
+  } catch { return []; }
+  if (r.status === 401) throw await shareError(r);
+  if (!r.ok) return [];
+  try {
     const data = await r.json() as { videos: ShareVideo[] };
     return Array.isArray(data?.videos) ? data.videos : [];
   } catch { return []; }
 }
 
-export async function getShareCueStates(ref: ShareRef, songId: string, cueId: string, password?: string): Promise<CueState[]> {
-  const headers: Record<string, string> = {};
-  if (password) headers['x-share-password'] = password;
+export async function getShareCueStates(ref: ShareRef, songId: string, cueId: string, access?: string): Promise<CueState[]> {
   const r = await fetch(
     `${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/cues/${encodeURIComponent(cueId)}/states`,
-    { headers }
+    { headers: shareAccessHeaders(access) }
   );
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  if (!r.ok) throw await shareError(r);
   const data = await r.json() as { states: CueState[] };
   return data.states;
 }

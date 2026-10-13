@@ -20,10 +20,10 @@ import './Share.css';
 type LedSource = 'ndi' | 'file';
 
 /** 這首歌每個 cue 的舞台位置先全部開始抓（點 cue / 影片走到那裡時馬上有） */
-function prefetchCueStates(ref: ShareRef, songId: string, list: Cue[], pwd: string | undefined) {
+function prefetchCueStates(ref: ShareRef, songId: string, list: Cue[], access: string | undefined) {
   const cache = new Map<string, Promise<CueState[]>>();
   for (const c of list) {
-    const p = api.getShareCueStates(ref, songId, c.id, pwd);
+    const p = api.getShareCueStates(ref, songId, c.id, access);
     p.catch(() => cache.delete(c.id));  // 失敗就丟掉，用到時再抓一次
     cache.set(c.id, p);
   }
@@ -50,6 +50,8 @@ export default function Share() {
   const [requiresPassword, setRequiresPassword] = useState(false);
   const [password, setPassword] = useState('');
   const [submittedPwd, setSubmittedPwd] = useState<string | null>(null);
+  /** 有密碼的連結：密碼對了後台發的通行證，之後的請求都帶它（密碼只送一次） */
+  const [accessToken, setAccessToken] = useState<string | null>(null);
   /** 密碼框下面的提示（密碼不對 / 錯太多次被擋） */
   const [pwdError, setPwdError] = useState<string | null>(null);
 
@@ -120,6 +122,7 @@ export default function Share() {
     try {
       const d = await api.getSharePublicData(shareRef, pwd);
       setData(d);
+      setAccessToken(d.access?.token ?? null);
       setRequiresPassword(false);
       setPwdError(null);
       const firstSong = d.songs[0];
@@ -148,27 +151,46 @@ export default function Share() {
 
   useEffect(() => { load(); }, [load]);
 
+  // 通行證過期（開著頁面超過 8 小時）→ 用剛剛輸入的密碼再換一張；換到之後下面的抓資料會自動重跑。
+  // 密碼被改了 → 回到密碼畫面
+  const renewingRef = useRef(false);
+  const submittedPwdRef = useRef(submittedPwd);
+  submittedPwdRef.current = submittedPwd;
+  const onShareFetchError = useCallback((e: unknown) => {
+    const pwd = submittedPwdRef.current;
+    if ((e as { status?: number }).status !== 401 || !shareRef || !pwd || renewingRef.current) return;
+    renewingRef.current = true;
+    api.getSharePublicData(shareRef, pwd)
+      .then(d => setAccessToken(d.access?.token ?? null))
+      .catch((err) => {
+        if ((err as { status?: number }).status !== 401) return;  // 網路一時不通 → 下次再試
+        setPwdError('密碼已更改，請重新輸入');
+        setRequiresPassword(true);
+      })
+      .finally(() => { renewingRef.current = false; });
+  }, [shareRef]);
+
   // 切歌 → 拉 cues + videos
   useEffect(() => {
     if (!shareRef || !selectedSongId) return;
     let cancelled = false;
-    const pwd = submittedPwd ?? undefined;
+    const access = accessToken ?? undefined;
     cueStatesCacheRef.current = new Map();
     timelineRef.current = null;  // 上一首歌的時間軸不要套到這首
-    api.getShareSongCues(shareRef, selectedSongId, pwd).then(list => {
+    api.getShareSongCues(shareRef, selectedSongId, access).then(list => {
       if (cancelled) return;
-      cueStatesCacheRef.current = prefetchCueStates(shareRef, selectedSongId, list, pwd);
+      cueStatesCacheRef.current = prefetchCueStates(shareRef, selectedSongId, list, access);
       lastAutoCueRef.current = null;  // 新的一首歌 → 影片時間重新對 cue
       setCues(list);
       setSelectedCueId(list[0]?.id ?? null);
-    }).catch(() => { if (!cancelled) setCues([]); });
-    api.getShareSongVideos(shareRef, selectedSongId, pwd).then(list => {
+    }).catch((e) => { if (!cancelled) { setCues([]); onShareFetchError(e); } });
+    api.getShareSongVideos(shareRef, selectedSongId, access).then(list => {
       if (cancelled) return;
       setVideos(list);
       setSelectedVideoFid(list[0]?.driveFileId ?? null);
-    }).catch(() => { if (!cancelled) setVideos([]); });
+    }).catch((e) => { if (!cancelled) { setVideos([]); onShareFetchError(e); } });
     return () => { cancelled = true; };
-  }, [shareRef, selectedSongId, submittedPwd]);
+  }, [shareRef, selectedSongId, accessToken, onShareFetchError]);
 
   // 分頁切回來 → 重抓這首歌的 cue 和位置（管理頁改了淡入淡出 / 對應影片時間，不用重新整理就跟上）
   // 現在選的 cue 和正在播的影片都不動
@@ -176,19 +198,19 @@ export default function Share() {
     if (!shareRef || !selectedSongId) return;
     let cancelled = false;
     let lastTs = 0;
-    const pwd = submittedPwd ?? undefined;
+    const access = accessToken ?? undefined;
     const refresh = () => {
       if (document.visibilityState !== 'visible') return;
       const now = Date.now();
       if (now - lastTs < 2000) return;  // 切分頁時 visibilitychange 和 focus 會一起來
       lastTs = now;
-      api.getShareSongCues(shareRef, selectedSongId, pwd).then(list => {
+      api.getShareSongCues(shareRef, selectedSongId, access).then(list => {
         if (cancelled) return;
-        cueStatesCacheRef.current = prefetchCueStates(shareRef, selectedSongId, list, pwd);
+        cueStatesCacheRef.current = prefetchCueStates(shareRef, selectedSongId, list, access);
         setCues(prev => sameJson(prev, list) ? prev : list);
         setSelectedCueId(prev => (prev && list.some(c => c.id === prev)) ? prev : (list[0]?.id ?? null));
         setCueRefresh(n => n + 1);
-      }).catch(() => { /* 網路一時不通就下次再抓 */ });
+      }).catch((e) => { if (!cancelled) onShareFetchError(e); /* 網路一時不通就下次再抓 */ });
     };
     document.addEventListener('visibilitychange', refresh);
     window.addEventListener('focus', refresh);
@@ -197,7 +219,7 @@ export default function Share() {
       document.removeEventListener('visibilitychange', refresh);
       window.removeEventListener('focus', refresh);
     };
-  }, [shareRef, selectedSongId, submittedPwd]);
+  }, [shareRef, selectedSongId, accessToken, onShareFetchError]);
 
   // 切 cue → 拉 states
   useEffect(() => {
@@ -206,14 +228,14 @@ export default function Share() {
     const cache = cueStatesCacheRef.current;
     let p = cache.get(selectedCueId);
     if (!p) {
-      p = api.getShareCueStates(shareRef, selectedSongId, selectedCueId, submittedPwd ?? undefined);
+      p = api.getShareCueStates(shareRef, selectedSongId, selectedCueId, accessToken ?? undefined);
       cache.set(selectedCueId, p);
     }
     // 內容一樣就不換（分頁切回來重抓時，沒改的話舞台不用重算）
     p.then(list => { if (!cancelled) setCueStates(prev => sameJson(prev, list) ? prev : list); })
-      .catch(() => { cache.delete(selectedCueId); if (!cancelled) setCueStates([]); });
+      .catch((e) => { cache.delete(selectedCueId); if (!cancelled) { setCueStates([]); onShareFetchError(e); } });
     return () => { cancelled = true; };
-  }, [shareRef, selectedSongId, selectedCueId, submittedPwd, cueRefresh]);
+  }, [shareRef, selectedSongId, selectedCueId, accessToken, cueRefresh, onShareFetchError]);
 
   // 影片時間軸要用的：每個有影片時間的 cue 的物件位置（用先抓好的；全部到了才換上，換之前沿用舊的）
   useEffect(() => {
