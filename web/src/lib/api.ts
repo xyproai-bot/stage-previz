@@ -3,6 +3,7 @@
 import type { Project } from './mockData';
 import { saveStatus } from './saveStatus';
 import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
+import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/materialOverrides';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -249,10 +250,13 @@ export interface ProjectViewSettings {
   scaleCorrection: number;
   mechanismOffsets: MechanismOffsets;
   lookSettings: LookSettings;
+  materialOverrides: MaterialOverrides;
 }
 
 export async function getProjectViewSettings(projectId: string): Promise<ProjectViewSettings> {
-  const data = await http<{ project: { scale_correction?: number; mechanism_offsets?: string; look_settings?: string } }>(
+  const data = await http<{ project: {
+    scale_correction?: number; mechanism_offsets?: string; look_settings?: string; material_overrides?: string;
+  } }>(
     `/api/projects/${encodeURIComponent(projectId)}`
   );
   const n = Number(data.project?.scale_correction);
@@ -263,10 +267,13 @@ export async function getProjectViewSettings(projectId: string): Promise<Project
   } catch { /* 壞資料當沒有 */ }
   let look: unknown = {};
   try { look = JSON.parse(data.project?.look_settings || '{}'); } catch { /* 壞資料當沒有 */ }
+  let materials: unknown = {};
+  try { materials = JSON.parse(data.project?.material_overrides || '{}'); } catch { /* 壞資料當沒有 */ }
   return {
     scaleCorrection: isFinite(n) && n > 0 ? n : 1,
     mechanismOffsets: offsets,
     lookSettings: normalizeLookSettings(look),
+    materialOverrides: normalizeMaterialOverrides(materials),
   };
 }
 
@@ -1152,6 +1159,7 @@ export interface SharePublicData {
   scaleCorrection?: number;
   mechanismOffsets?: MechanismOffsets;
   lookSettings?: Partial<LookSettings>;
+  materialOverrides?: MaterialOverrides;
 }
 
 /** 公開存取 — 無需 auth，可選 password */

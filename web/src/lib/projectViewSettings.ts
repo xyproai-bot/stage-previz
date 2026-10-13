@@ -6,7 +6,9 @@
 //               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
 //               mechanismOffsets={view.mechanismOffsets}
 //               lookSettings={view.lookSettings}
-//               onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined} />
+//               onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
+//               materialOverrides={view.materialOverrides}
+//               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined} />
 //
 // 之前校準 / 滑桿存在各自瀏覽器的 localStorage → 導演 / 動畫師 / 換電腦都看不到。
 // 現在存在 project 上（worker 只允許 admin 改）；admin 第一次打開時會把舊瀏覽器裡的值搬上去。
@@ -16,6 +18,7 @@ import * as api from './api';
 import type { MechanismOffsets } from './api';
 import { toast } from './toast';
 import { DEFAULT_LOOK_SETTINGS, normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
+import { normalizeMaterialOverrides, type MaterialOverride, type MaterialOverrides } from './stageLook/materialOverrides';
 
 const SAVE_DELAY_MS = 500;  // 滑桿停手多久才存
 
@@ -51,27 +54,33 @@ export interface ProjectViewSettingsState {
   scaleCorrection: number;
   mechanismOffsets: MechanismOffsets;
   lookSettings: LookSettings;
+  materialOverrides: MaterialOverrides;
   canEdit: boolean;
   setScaleCorrection: (n: number) => void;
   updateMechanismOffset: (objId: string, axis: 'x' | 'y', value: number) => void;
   resetAllMechanismOffsets: () => void;
   setLookSettings: (patch: Partial<LookSettings>) => void;
+  /** patch = null → 這個材質回到 C4D 原本 */
+  setMaterialOverride: (name: string, patch: Partial<MaterialOverride> | null) => void;
 }
 
 export function useProjectViewSettings(projectId: string | undefined, canEdit: boolean): ProjectViewSettingsState {
   const [scaleCorrection, setScale] = useState(1);
   const [mechanismOffsets, setOffsets] = useState<MechanismOffsets>({});
   const [lookSettings, setLook] = useState<LookSettings>(DEFAULT_LOOK_SETTINGS);
+  const [materialOverrides, setMaterials] = useState<MaterialOverrides>({});
   // ref 跟 state 同步：存檔 / 失敗回滾要拿「目前值」，不想把 callback 綁在 state 上
   const scaleRef = useRef(1);
   const offsetsRef = useRef<MechanismOffsets>({});
   const lookRef = useRef<LookSettings>(DEFAULT_LOOK_SETTINGS);
+  const materialsRef = useRef<MaterialOverrides>({});
   // 還沒送出的修改（滑桿 / 現場設定），停手 SAVE_DELAY_MS 後合併成一次存
   const pendingRef = useRef<{ timer: number; projectId: string; patch: Partial<api.ProjectViewSettings> } | null>(null);
 
   const applyScale = (n: number) => { scaleRef.current = n; setScale(n); };
   const applyOffsets = (o: MechanismOffsets) => { offsetsRef.current = o; setOffsets(o); };
   const applyLook = (s: LookSettings) => { lookRef.current = s; setLook(s); };
+  const applyMaterials = (m: MaterialOverrides) => { materialsRef.current = m; setMaterials(m); };
 
   // 立刻送出還沒存的修改（切專案 / 離開頁面 / 關分頁時）
   const flushPending = useCallback((keepalive = false) => {
@@ -90,6 +99,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     applyScale(1);
     applyOffsets({});
     applyLook(DEFAULT_LOOK_SETTINGS);
+    applyMaterials({});
     (async () => {
       let settings: api.ProjectViewSettings;
       try {
@@ -126,6 +136,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       applyScale(settings.scaleCorrection);
       applyOffsets(settings.mechanismOffsets);
       applyLook(settings.lookSettings);
+      applyMaterials(settings.materialOverrides);
     })();
     return () => {
       cancelled = true;
@@ -184,8 +195,19 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     scheduleSave({ lookSettings: next });
   }, [canEdit, scheduleSave]);
 
+  const setMaterialOverride = useCallback((name: string, patch: Partial<MaterialOverride> | null) => {
+    if (!canEdit) return;
+    const cur = materialsRef.current;
+    const merged: MaterialOverrides = { ...cur };
+    if (patch === null) delete merged[name];
+    else merged[name] = { ...(cur[name] || {}), ...patch };
+    const next = normalizeMaterialOverrides(merged);
+    applyMaterials(next);
+    scheduleSave({ materialOverrides: next });
+  }, [canEdit, scheduleSave]);
+
   return {
-    scaleCorrection, mechanismOffsets, lookSettings, canEdit,
-    setScaleCorrection, updateMechanismOffset, resetAllMechanismOffsets, setLookSettings,
+    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, canEdit,
+    setScaleCorrection, updateMechanismOffset, resetAllMechanismOffsets, setLookSettings, setMaterialOverride,
   };
 }
