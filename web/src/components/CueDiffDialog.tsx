@@ -4,6 +4,7 @@ import type { Cue, CueState } from '../lib/api';
 import { ArrowRight, X } from 'lucide-react';
 import Icon from './Icon';
 import './CueDiffDialog.css';
+import { useEscapeClose } from '../lib/useEscapeClose';
 
 interface Props {
   open: boolean;
@@ -27,6 +28,7 @@ interface DiffRow {
 }
 
 export default function CueDiffDialog({ open, projectId, songId, cues, onClose }: Props) {
+  useEscapeClose(open, onClose);
   const [aId, setAId] = useState<string>('');
   const [bId, setBId] = useState<string>('');
   const [aStates, setAStates] = useState<CueState[]>([]);

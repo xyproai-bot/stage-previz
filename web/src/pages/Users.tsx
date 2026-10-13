@@ -16,6 +16,7 @@ import OpenInvitesList from '../components/OpenInvitesList';
 import LoginCodeDialog from '../components/LoginCodeDialog';
 import { Copy, FolderPlus, KeyRound, Link, LoaderCircle, RefreshCw, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
 import './Users.css';
+import { useEscapeClose } from '../lib/useEscapeClose';
 
 const PALETTE = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];
 
@@ -272,6 +273,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
   onClose: () => void;
   onCreated: (shown: ShownCode) => void;
 }) {
+  useEscapeClose(open, onClose);
   const [name, setName] = useState('');
   const [role, setRole] = useState<UserRole>('animator');
   const [color, setColor] = useState(PALETTE[0]);
@@ -386,6 +388,7 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
   onChanged: () => void;
 }) {
   const [busy, setBusy] = useState(false);
+  useEscapeClose(true, onClose);
 
   async function toggle(pid: string, currentRole: UserRole | null) {
     setBusy(true);

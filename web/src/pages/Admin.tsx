@@ -140,7 +140,7 @@ function ProjectsTab() {
     if (duplicating) return;
     const newName = await promptDialog({
       title: `複製專案「${p.name}」`,
-      message: '新專案會帶著全部物件、歌曲、cue 和每個 cue 裡的物件位置。模型檔共用同一份，不用重新上傳。',
+      message: '會帶過去：模型（共用同一份，不用重新上傳）、物件、歌曲（代號、狀態、負責動畫師）、cue 和每個 cue 的位置、機關。\n不會帶過去：影片版本、留言、審片紀錄、成員和分享連結。新專案要用的話，請再邀請導演和動畫師、讓動畫師重新交影片。',
       label: '新專案名稱',
       defaultValue: `${p.name} (副本)`,
       confirmLabel: '複製',

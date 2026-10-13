@@ -8,6 +8,7 @@ import { normalizeHomeView, type HomeView } from './homeView';
 import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
 import type { SongReviewFields } from './reviewApi';
+import { friendlyError } from './songReview';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -61,6 +62,8 @@ async function http<T>(path: string, init?: RequestInit): Promise<T> {
       const e: ApiError = new Error(msg);
       e.status = resp.status;
       e.data = errBody;
+      // 後台回英文（例：Not found）或沒有說明時換成白話；中文的說明照原樣（songReview.ts friendlyError）
+      e.message = friendlyError(e);
       throw e;
     }
     const result = await resp.json() as T;

@@ -491,6 +491,14 @@
   gap: 14px;
   text-align: center;
 }
+/* 還沒有物件：直接給「上傳模型」「加入範例物件」 */
+.viewport-placeholder__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
 .viewport-cue-info {
   margin-top: 10px;
   padding: 14px 22px;
@@ -1242,13 +1250,16 @@
 }
 .objects-manager__bar {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
   margin-bottom: 12px;
 }
+/* 字不要擠成直的：放不下就換到下一行 */
 .objects-manager__bar .btn {
-  flex: 1;
+  flex: 1 0 auto;
   padding: 7px 10px;
   font-size: 12px;
+  white-space: nowrap;
 }
 .object-mgr-list {
   list-style: none;

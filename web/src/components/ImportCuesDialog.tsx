@@ -6,6 +6,7 @@ import { toast } from '../lib/toast';
 import { Folder, Import, X } from 'lucide-react';
 import Icon from './Icon';
 import './ImportCuesDialog.css';
+import { useEscapeClose } from '../lib/useEscapeClose';
 
 interface Props {
   open: boolean;
@@ -22,6 +23,7 @@ interface ProjectWithSongs {
 }
 
 export default function ImportCuesDialog({ open, projectId, songId, songName, onClose, onImported }: Props) {
+  useEscapeClose(open, onClose);
   const [projects, setProjects] = useState<ProjectWithSongs[]>([]);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);

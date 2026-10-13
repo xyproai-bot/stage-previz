@@ -11,6 +11,7 @@ import {
 import Icon from './Icon';
 import { DRIVE_MATCH_RULE } from '../lib/songCode';
 import './DriveSettingsDialog.css';
+import { useEscapeClose } from '../lib/useEscapeClose';
 
 interface Props {
   open: boolean;
@@ -27,6 +28,7 @@ export default function DriveSettingsDialog({
   open, onClose, projectId, songs,
   initialFolderId, initialAccountId, onChanged,
 }: Props) {
+  useEscapeClose(open, onClose);
   const [accounts, setAccounts] = useState<DriveAccount[] | null>(null);
   const [accountsConfigured, setAccountsConfigured] = useState(true);
   const [accountsErr, setAccountsErr] = useState<string | null>(null);

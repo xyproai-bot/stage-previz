@@ -33,6 +33,9 @@ import { EditHistory, historyScope } from '../lib/editHistory';
 import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
+import { useLiveRefresh } from '../lib/liveRefresh';
+import { isTextEntryTarget, isTypingTarget } from '../lib/keyTarget';
+import { useEscapeClose } from '../lib/useEscapeClose';
 import { chooseDialog, confirmDialog, promptDialog } from '../components/dialogs';
 import { friendlyError, staleStatusMessage } from '../lib/songReview';
 import type { ProjectMember } from '../lib/mockData';
@@ -41,6 +44,7 @@ import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
 import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { songTitle } from '../lib/songCode';
+import { songCueCounts } from '../lib/editorSongs';
 import Icon from '../components/Icon';
 import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
@@ -87,19 +91,38 @@ export default function ProjectEditor() {
   const [mineSongIds, setMineSongIds] = useState<Set<string>>(new Set());
   // 專案成員（「負責動畫師」選單只列這個專案裡角色是動畫師的人）
   const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
-  useEffect(() => {
+  // 有人用邀請連結進來之後要看得到 → 一進來讀一次、每 25 秒和切回分頁時再讀、關掉邀請視窗時也讀
+  const refreshMembers = useCallback(async () => {
     if (!projectId) return;
-    let cancelled = false;
-    api.getProjectMeta(projectId)
-      .then(p => { if (!cancelled) setProjectMembers(p?.members || []); })
-      .catch(() => { /* 讀不到就只顯示「還沒指派」 */ });
-    return () => { cancelled = true; };
+    try {
+      const p = await api.getProjectMeta(projectId);
+      const next = p?.members || [];
+      setProjectMembers(prev => (sameMembers(prev, next) ? prev : next));
+    } catch { /* 讀不到就照舊（只顯示「還沒指派」） */ }
   }, [projectId]);
+  useEffect(() => { setProjectMembers([]); void refreshMembers(); }, [refreshMembers]);
+  useLiveRefresh(refreshMembers, { enabled: !!projectId });
   const animatorMembers = useMemo(() => projectMembers.filter(m => m.role === 'animator'), [projectMembers]);
+  // 指派的人已經不是這個專案的成員（例如複製專案後，成員不會帶過去）→ 拿全部用戶的名字，選單上才寫得出是誰
+  const [userNames, setUserNames] = useState<Map<string, string> | null>(null);
+  const needUserNames = useMemo(
+    () => songs.some(s => s.animatorUserId && !projectMembers.some(m => m.id === s.animatorUserId)),
+    [songs, projectMembers],
+  );
+  useEffect(() => {
+    if (!needUserNames || userNames) return;
+    let cancelled = false;
+    api.listUsers()
+      .then(list => { if (!cancelled) setUserNames(new Map(list.map(u => [u.id, u.name]))); })
+      .catch(() => { /* 讀不到就寫「已刪除的帳號」 */ });
+    return () => { cancelled = true; };
+  }, [needUserNames, userNames]);
 
   // Cues
   const [cues, setCues] = useState<Cue[]>([]);
   const [cuesLoading, setCuesLoading] = useState(false);
+  // cues 是哪一首歌的（剛換歌、新的還沒讀到時，cues / selectedCueId 還是上一首的）
+  const [cuesSongId, setCuesSongId] = useState<string | null>(null);
   const [selectedCueId, setSelectedCueId] = useState<string | null>(null);
 
   // Stage objects (project-level)
@@ -154,6 +177,7 @@ export default function ProjectEditor() {
   const [activityOpen, setActivityOpen] = useState(false);
   const [driveOpen, setDriveOpen] = useState(false);
   const [storyboardOpen, setStoryboardOpen] = useState(false);
+  useEscapeClose(storyboardOpen, () => setStoryboardOpen(false));
   const [shareOpen, setShareOpen] = useState(false);
   // 邀請連結（幫這個專案加導演 / 動畫師）
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -234,16 +258,14 @@ export default function ProjectEditor() {
   const navRef = useRef({ masterCues: [] as Cue[], visibleSongs: [] as Song[], selectedCueId: null as string | null, selectedSongId: null as string | null });
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      const t = e.target as HTMLElement | null;
-      const inField = t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
-
-      // Cmd/Ctrl+Z = 復原；Cmd/Ctrl+Shift+Z 或 Ctrl+Y = 重做（在欄位裡打字時交給瀏覽器自己的復原）
+      // Cmd/Ctrl+Z = 復原；Cmd/Ctrl+Shift+Z 或 Ctrl+Y = 重做
+      // 在會打字的欄位裡交給瀏覽器自己的復原；勾選框、機關滑桿上照樣復原（lib/keyTarget.ts）
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
         const key = e.key.toLowerCase();
         const isUndo = key === 'z' && !e.shiftKey;
         const isRedo = (key === 'z' && e.shiftKey) || (key === 'y' && !e.shiftKey);
         if (isUndo || isRedo) {
-          if (inField) return;
+          if (isTextEntryTarget(e.target)) return;
           e.preventDefault();
           runHistory(isUndo ? 'undo' : 'redo');
           return;
@@ -251,7 +273,7 @@ export default function ProjectEditor() {
       }
 
       // j/k = 切歌；Shift+J/K = 切 cue
-      if (inField || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (isTypingTarget(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
       const k = e.key.toLowerCase();
       if (k !== 'j' && k !== 'k') return;
       e.preventDefault();
@@ -293,12 +315,17 @@ export default function ProjectEditor() {
   }, [projectId]);
 
   const refreshCues = useCallback(async () => {
-    if (!projectId || !selectedSongId) { setCues([]); setSelectedCueId(null); return; }
+    if (!projectId || !selectedSongId) { setCues([]); setCuesSongId(null); setSelectedCueId(null); return; }
+    const songId = selectedSongId;
     setCuesLoading(true);
     try {
-      const list = await api.listCues(projectId, selectedSongId);
+      const list = await api.listCues(projectId, songId);
       setCues(list);
+      setCuesSongId(songId);
       setSelectedCueId(prev => list.find(c => c.id === prev) ? prev : (list[0]?.id ?? null));
+      // 歌單上的「N 個 cue」跟著改（新增 / 刪除 / 沿用 / 匯入 cue 之後不用重新整理）
+      const counts = songCueCounts(list);
+      setSongs(ss => ss.map(s => (s.id === songId && (s.cueCount !== counts.cueCount || s.proposalCount !== counts.proposalCount) ? { ...s, ...counts } : s)));
     } finally {
       setCuesLoading(false);
     }
@@ -332,7 +359,8 @@ export default function ProjectEditor() {
   const statesRequestRef = useRef(0);
   const refreshCueStates = useCallback(async () => {
     const req = ++statesRequestRef.current;
-    if (!projectId || !selectedSongId || !selectedCueId) { commitCueStates(null, []); setStatesError(false); return; }
+    // 剛換歌：cue 清單還是上一首的（選的 cue 也是上一首的）→ 等這首歌的 cue 讀到再讀，不然會拿錯的組合去問（404）
+    if (!projectId || !selectedSongId || !selectedCueId || cuesSongId !== selectedSongId) { commitCueStates(null, []); setStatesError(false); return; }
     const cueId = selectedCueId;
     if (cueStatesForRef.current !== cueId) setStatesError(false);
     try {
@@ -344,7 +372,7 @@ export default function ProjectEditor() {
       console.warn('load cue states failed', e);
       if (req === statesRequestRef.current && cueStatesForRef.current !== cueId) setStatesError(true);
     }
-  }, [projectId, selectedSongId, selectedCueId, commitCueStates]);
+  }, [projectId, selectedSongId, selectedCueId, cuesSongId, commitCueStates]);
   refreshCueStatesRef.current = refreshCueStates;
   refreshStageObjectsRef.current = refreshStageObjects;
 
@@ -446,7 +474,7 @@ export default function ProjectEditor() {
   // ── Song actions ──
   async function handleAddSong() {
     if (!projectId) return;
-    const name = (await promptDialog({ title: '新增歌曲', label: '歌名', placeholder: '例：S03 主題曲', confirmLabel: '新增', maxLength: 100 }))?.trim();
+    const name = (await promptDialog({ title: '新增歌曲', label: '歌名', placeholder: '例：主題曲', hint: '歌曲代號（S01、S02…）會自動編好，之後在歌單上點代號可以改', confirmLabel: '新增', maxLength: 100 }))?.trim();
     if (!name) return;
     try { await api.createSong(projectId, name); await refreshSongs(); }
     catch (e) { toast.error('歌曲沒有新增：' + msg(e)); }
@@ -1010,7 +1038,7 @@ export default function ProjectEditor() {
                       <label
                         className="song-item__assign"
                         onClick={(e) => e.stopPropagation()}
-                        style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}
+                        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px', marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}
                       >
                         <span style={{ flexShrink: 0 }}>負責動畫師</span>
                         <select
@@ -1019,7 +1047,7 @@ export default function ProjectEditor() {
                           disabled={animatorMembers.length === 0 && !s.animatorUserId}
                           title={animatorMembers.length === 0 ? '這個專案還沒有動畫師：先到「用戶」把動畫師加進這個專案' : '指派後，動畫師在工作站的「我的」就看得到這首歌'}
                           style={{
-                            flex: 1, minWidth: 0, fontSize: 11, padding: '1px 4px',
+                            flex: '1 1 64px', minWidth: 0, fontSize: 11, padding: '1px 4px',
                             background: 'var(--bg)', color: 'var(--text)',
                             border: '1px solid var(--border)', borderRadius: 4,
                           }}
@@ -1028,7 +1056,7 @@ export default function ProjectEditor() {
                           {animatorMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                           {s.animatorUserId && !animatorMembers.some(m => m.id === s.animatorUserId) && (
                             <option value={s.animatorUserId}>
-                              {(projectMembers.find(m => m.id === s.animatorUserId)?.name || '已不在專案的人') + '（不是這個專案的動畫師）'}
+                              {(projectMembers.find(m => m.id === s.animatorUserId)?.name || userNames?.get(s.animatorUserId) || '已刪除的帳號') + '（還不是這個專案的動畫師，請邀請或到「用戶」指派）'}
                             </option>
                           )}
                         </select>
@@ -1077,7 +1105,11 @@ export default function ProjectEditor() {
               <div className="viewport-placeholder">
                 <Icon icon={Shapes} size="xxl" className="editor-empty__icon" />
                 <div className="muted">這個專案還沒有物件</div>
-                <small className="muted">到右側「物件」分頁上傳模型，或一鍵加入範例</small>
+                <small className="muted">上傳舞台的 3D 模型（.glb / .gltf），或先用範例物件試試看</small>
+                <div className="viewport-placeholder__actions">
+                  <button className="btn btn--primary" onClick={() => { setRightTab('objects'); setUploadOpen(true); }}><Icon icon={Upload} /> 上傳模型</button>
+                  <button className="btn btn--ghost" onClick={() => { setRightTab('objects'); void handleSeedObjects(); }}><Icon icon={Sprout} /> 加入範例物件</button>
+                </div>
               </div>
             </div>
           ) : (
@@ -1142,10 +1174,52 @@ export default function ProjectEditor() {
 
           <div className="editor-cues__body">
             <MechanismHintProvider value={mech}>
-            {songsLoading && !selectedSongId ? (
+            {rightTab === 'objects' ? (
+              // 物件（模型）是整個專案的，還沒有歌也能上傳模型、加物件
+              <ObjectsManager
+                objects={stageObjects}
+                status={stageObjectsStatus}
+                onSeed={handleSeedObjects}
+                onAdd={handleAddObject}
+                onUpload={() => setUploadOpen(true)}
+                onShowVersions={() => setVersionsOpen(true)}
+                onPickFromLibrary={() => setPickerOpen(true)}
+                hasModel={!!modelUrl}
+                onRename={handleRenameObject}
+                onChangeCategory={handleChangeCategory}
+                onToggleLock={handleToggleLock}
+                onDelete={handleDeleteObject}
+              />
+            ) : rightTab === 'mechanisms' && (selectedSongId || !songsLoading) ? (
+              // 機關的設定也是整個專案的；沒選歌時只能設定機關和預設位置
+              <MechanismTab
+                mech={mech}
+                projectId={projectId || ''}
+                projectName={projectMeta?.name}
+                cues={selectedSongId ? cues : []}
+                selectedCue={selectedSongId ? selectedCue : null}
+                onSelectCue={setSelectedCueId}
+                stageObjects={stageObjects}
+                selectedObjectIds={selectedObjectIds}
+                scaleCorrection={view.scaleCorrection}
+                onSetCrossfade={(s) => handleUpdateCueMeta({ crossfadeSeconds: s })}
+                onStatesChanged={() => { void refreshCueStates(); }}
+              />
+            ) : songsLoading && !selectedSongId ? (
               <div className="editor-empty muted">載入中…</div>
             ) : !selectedSongId ? (
-              <div className="editor-empty muted">先在左側選一首歌</div>
+              songs.length === 0 ? (
+                <div className="editor-empty">
+                  <Icon icon={Music} size="xl" className="editor-empty__icon" />
+                  <div>還沒有歌</div>
+                  <small className="muted">cue 是跟著歌走的：先在左邊按「新增歌曲」加第一首歌。模型可以先到「物件」分頁上傳。</small>
+                  <button className="btn btn--ghost" style={{ marginTop: 12 }} onClick={() => setRightTab('objects')}>
+                    <Icon icon={Upload} /> 到「物件」上傳模型
+                  </button>
+                </div>
+              ) : (
+                <div className="editor-empty muted">先在左側選一首歌</div>
+              )
             ) : rightTab === 'cues' ? (
               <CueList
                 cues={masterCues}
@@ -1184,20 +1258,6 @@ export default function ProjectEditor() {
                 onUpdateLed={handleUpdateLed}
                 onJumpToObjects={() => setRightTab('objects')}
               />
-            ) : rightTab === 'mechanisms' ? (
-              <MechanismTab
-                mech={mech}
-                projectId={projectId || ''}
-                projectName={projectMeta?.name}
-                cues={cues}
-                selectedCue={selectedCue}
-                onSelectCue={setSelectedCueId}
-                stageObjects={stageObjects}
-                selectedObjectIds={selectedObjectIds}
-                scaleCorrection={view.scaleCorrection}
-                onSetCrossfade={(s) => handleUpdateCueMeta({ crossfadeSeconds: s })}
-                onStatesChanged={() => { void refreshCueStates(); }}
-              />
             ) : rightTab === 'proposals' ? (
               <>
                 <div className="editor-proposals-note">
@@ -1213,22 +1273,7 @@ export default function ProjectEditor() {
                   emptyText="這首歌沒有提案"
                 />
               </>
-            ) : (
-              <ObjectsManager
-                objects={stageObjects}
-                status={stageObjectsStatus}
-                onSeed={handleSeedObjects}
-                onAdd={handleAddObject}
-                onUpload={() => setUploadOpen(true)}
-                onShowVersions={() => setVersionsOpen(true)}
-                onPickFromLibrary={() => setPickerOpen(true)}
-                hasModel={!!modelUrl}
-                onRename={handleRenameObject}
-                onChangeCategory={handleChangeCategory}
-                onToggleLock={handleToggleLock}
-                onDelete={handleDeleteObject}
-              />
-            )}
+            ) : null}
             </MechanismHintProvider>
           </div>
         </aside>
@@ -1305,7 +1350,7 @@ export default function ProjectEditor() {
         open={inviteOpen}
         projectId={projectId || ''}
         projectName={projectMeta?.name}
-        onClose={() => setInviteOpen(false)}
+        onClose={() => { setInviteOpen(false); void refreshMembers(); }}
       />
 
       <CommentSearchDialog
@@ -2441,7 +2486,11 @@ function ObjectsManager({
   );
 }
 
-function msg(e: unknown) { return e instanceof Error ? e.message : String(e); }
+// 後台回的錯誤是英文（例：Not found）或沒有內容時，換成白話（lib/songReview.ts friendlyError）
+function msg(e: unknown) { return friendlyError(e); }
+function sameMembers(a: readonly ProjectMember[], b: readonly ProjectMember[]): boolean {
+  return a.length === b.length && a.every((m, i) => m.id === b[i].id && m.role === b[i].role && m.name === b[i].name);
+}
 function formatVideoTime(s: number): string {
   if (!isFinite(s) || s < 0) return '00:00';
   const m = Math.floor(s / 60);

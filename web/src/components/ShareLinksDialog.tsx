@@ -11,6 +11,7 @@ import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, Music, Pencil, Tra
 import Icon from './Icon';
 import { confirmDialog, promptDialog } from './dialogs';
 import './ShareLinksDialog.css';
+import { useEscapeClose } from '../lib/useEscapeClose';
 
 interface Props {
   open: boolean;
@@ -43,6 +44,7 @@ function tidyTyping(raw: string): string {
 }
 
 export default function ShareLinksDialog({ open, projectId, projectName, songs, onClose }: Props) {
+  useEscapeClose(open, onClose);
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
