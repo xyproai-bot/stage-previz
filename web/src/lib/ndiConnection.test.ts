@@ -42,7 +42,7 @@ function fakePermission(initial: PermissionState) {
 }
 
 const CHROME: NdiEnv = { browser: 'chromium', os: 'windows', loopbackPage: false };
-const NEW_HELLO = { version: '0.1.10', protocol: 2, platform: 'windows', port: 7777, source: '' };
+const NEW_HELLO = { version: '0.1.11', protocol: 2, platform: 'windows', port: 7777, source: '' };
 const AE = 'ME (Adobe After Effects)';
 const LIVE_STATUS = {
   state: 'connecting', error: null, mode: 'auto', preferred: null, source: AE,
@@ -364,6 +364,31 @@ describe('NdiConnection', () => {
     expect(FakeWS.all).toHaveLength(1);
     fire('focus');
     expect(FakeWS.all).toHaveLength(2);
+    conn.destroy();
+  });
+
+  it('新網址（舊版小程序會擋）：連不到 → helper_missing + 可能是舊版；連上舊版 → helper_outdated', async () => {
+    const { conn, step, guide } = make({ env: { ...CHROME, oldHelperBlocked: true } });
+    conn.setActive(true);
+    await flush();
+    FakeWS.all[0].refuse();
+    expect(step()).toBe('helper_missing');
+    expect(guide().maybeOldHelper).toBe(true);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(FakeWS.all).toHaveLength(2);   // 照原本的重試
+    FakeWS.all[1].accept({ ...NEW_HELLO, version: '0.1.10' });
+    expect(step()).toBe('helper_outdated');
+    expect(guide().maybeOldHelper).toBe(false);
+    conn.destroy();
+  });
+
+  it('0.1.10 小程序（不認得新網址，在舊網址連得上）→ 叫他更新', async () => {
+    const { conn, step } = make();
+    conn.setActive(true);
+    await flush();
+    FakeWS.all[0].accept({ ...NEW_HELLO, version: '0.1.10' });
+    FakeWS.all[0].status(LIVE_STATUS);
+    expect(step()).toBe('helper_outdated');
     conn.destroy();
   });
 

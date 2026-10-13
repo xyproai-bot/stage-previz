@@ -7,10 +7,19 @@
 // 分享頁 / 動畫師工作站的引導卡片、3D 工具列的 NDI 標示、設定頁「檢查連線」都用這份，只有一個說法。
 
 /**
- * 小程序要多新才算「新版」：0.1.10 起只自動接這台電腦的 AE（0.1.9 會自己接到網路上別台電腦的畫面），
- * 也會回報開機自動啟動有沒有設好
+ * 小程序要多新才算「新版」：0.1.11 起認得新網址 previz.haimiaan.com / test.previz.haimiaan.com
+ * （0.1.10 以前在這兩個網址會把連線擋掉）；0.1.10 起只自動接這台電腦的 AE、會回報開機自動啟動有沒有設好
  */
-export const MIN_HELPER_VERSION = '0.1.10';
+export const MIN_HELPER_VERSION = '0.1.11';
+
+/**
+ * 0.1.10 以前的小程序不認得的網址（握手直接被擋，瀏覽器看起來跟「小程序沒開」一模一樣，
+ * 網頁也沒辦法分辨：小程序對一般網頁請求不回任何東西）
+ */
+export function oldHelperBlocksHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === 'previz.haimiaan.com' || h === 'test.previz.haimiaan.com';
+}
 /** 小程序協議版本：0.1.8 以前沒有這欄（= 1） */
 export const MIN_HELPER_PROTOCOL = 2;
 /** 超過這麼久沒收到新畫面 → 「AE 沒在送畫面」 */
@@ -98,6 +107,8 @@ export interface NdiStepInput {
   sourceSince: number | null;
   /** 瀏覽器自己量的每秒張數（舊版小程序沒回報 fps 時用） */
   measuredFps?: number | null;
+  /** 這個網址 0.1.10 以前的小程序不認得（連不到時也可能是舊版擋掉的） */
+  oldHelperBlocked?: boolean;
   now: number;
 }
 
@@ -123,6 +134,8 @@ export interface NdiGuide {
   helperError: string | null;
   /** 小程序想開機自動啟動、但沒登記成功（只是提醒，不擋 AE 即時） */
   autostartFailed: boolean;
+  /** 連不到小程序，但也可能是裝了舊版、不認得這個網址（分不出來，兩種都要說） */
+  maybeOldHelper: boolean;
 }
 
 // ─── 解析小程序送來的訊息 ───
@@ -286,8 +299,9 @@ export function decideNdiStep(i: NdiStepInput): NdiGuide {
     preferred: null,
     helperError: null,
     autostartFailed: false,
+    maybeOldHelper: false,
   };
-  const at = (step: NdiStep, row: number): NdiGuide => ({ ...g, step, row });
+  const at =(step: NdiStep, row: number): NdiGuide => ({ ...g, step, row });
 
   if (i.browser === 'safari') return at('browser_unsupported', 0);
 
@@ -330,7 +344,7 @@ export function decideNdiStep(i: NdiStepInput): NdiGuide {
   if (i.permission === 'prompt' && !i.everConnected) return at('need_permission', 0);
   if (i.permission === 'checking' || i.socket === 'idle') return at('connecting', 1);
   if (i.socket === 'connecting' && i.failures === 0) return at('connecting', 1);
-  return at('helper_missing', 1);
+  return { ...at('helper_missing', 1), maybeOldHelper: i.oldHelperBlocked === true };
 }
 
 // ─── 檢查清單 ───
@@ -359,6 +373,9 @@ export interface NdiStepMessage {
 
 export const PERMISSION_PROMPT_TEXT = '允許存取這台裝置上的應用程式和服務';
 
+/** 新網址上連不到小程序時多說的一句（舊版小程序在這裡跟沒開看起來一樣） */
+export const OLD_HELPER_HINT = '已經裝了也開著的話：可能是小程序版本太舊，不認得這個網址，請下載最新版';
+
 export function permissionFixSteps(browser: NdiBrowser): string[] {
   const chrome = 'Chrome / Edge：按網址列左邊的圖示 →「這個裝置上的應用程式」→ 允許';
   const firefox = 'Firefox：按網址列的權限圖示，或 設定 → 隱私與安全性 → 權限 →「裝置上的 App 與服務」→ 允許';
@@ -383,7 +400,13 @@ export function ndiStepMessage(g: NdiGuide, browser: NdiBrowser): NdiStepMessage
     case 'connecting':
       return { title: '正在連接 NDI 小程序…', detail: [] };
     case 'helper_missing':
-      return { title: '沒有偵測到 NDI 小程序', detail: ['裝好打開後會自動連上'] };
+      return {
+        title: '沒有偵測到 NDI 小程序',
+        detail: [
+          ...(g.maybeOldHelper ? [OLD_HELPER_HINT] : []),
+          '裝好打開後會自動連上',
+        ],
+      };
     case 'helper_outdated':
       return {
         title: '小程序有新版，請下載更新',

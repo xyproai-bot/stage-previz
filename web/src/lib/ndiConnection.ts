@@ -6,6 +6,8 @@
 //   （按了才連 → 瀏覽器跳詢問；詢問中不重試）
 // - 按了封鎖 → 不重試；權限改成允許時自動連
 // - 允許了但連不到小程序 → 安靜地重試（2、3、5、8、10 秒…），切回這個分頁時馬上再試一次
+//   （新網址 previz.haimiaan.com 上，0.1.10 以前的小程序會擋掉連線，看起來跟沒開一樣、網頁分不出來
+//    → 「沒有偵測到」的說明多一句「可能是版本太舊」）
 // - 不需要畫面時（分享頁切到本地檔案、設定頁的檢查）→ 送 pause，小程序就不解碼
 //
 // 用法（React）：const ndi = useNdiConnection({ enabled, onFrame });  ndi.guide.step …
@@ -13,7 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { NdiClient, type NdiClientStatus } from './ndiClient';
 import {
-  decideNdiStep, detectBrowser, detectOs, isLoopbackHost, parseHello, parseHelperStatus, retryDelayMs,
+  decideNdiStep, detectBrowser, detectOs, isLoopbackHost, oldHelperBlocksHost, parseHello, parseHelperStatus, retryDelayMs,
   FRAME_STALE_MS,
   type NdiBrowser, type NdiGuide, type NdiHello, type NdiHelperStatus, type NdiOs, type NdiPermission, type NdiSocketState,
 } from './ndiSteps';
@@ -25,14 +27,18 @@ export interface NdiEnv {
   os: NdiOs;
   /** 網頁本身在這台電腦（開發用 localhost）：連 127.0.0.1 瀏覽器不會問 */
   loopbackPage: boolean;
+  /** 這個網址 0.1.10 以前的小程序不認得（連不到時也可能是舊版擋掉的） */
+  oldHelperBlocked?: boolean;
 }
 
 export function detectNdiEnv(): NdiEnv {
   if (typeof navigator === 'undefined') return { browser: 'other', os: 'other', loopbackPage: false };
+  const hostname = typeof location !== 'undefined' ? location.hostname : '';
   return {
     browser: detectBrowser(navigator.userAgent || ''),
     os: detectOs(navigator.userAgent || '', navigator.platform || ''),
-    loopbackPage: typeof location !== 'undefined' && isLoopbackHost(location.hostname),
+    loopbackPage: !!hostname && isLoopbackHost(hostname),
+    oldHelperBlocked: !!hostname && oldHelperBlocksHost(hostname),
   };
 }
 
@@ -130,6 +136,7 @@ export class NdiConnection {
       lastFrameAt: this.lastFrameAt,
       sourceSince: this.sourceSince,
       measuredFps: this.measuredFps,
+      oldHelperBlocked: this.env.oldHelperBlocked,
       now: at,
     });
   }

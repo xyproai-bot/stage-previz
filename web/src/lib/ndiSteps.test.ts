@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import {
   compareVersions, decideNdiStep, detectBrowser, detectOs, FRAME_STALE_MS, isHelperOutdated, isLoopbackHost, retryDelayMs,
-  MIN_HELPER_VERSION, NDI_AUTOSTART_NOTE,
+  MIN_HELPER_VERSION, NDI_AUTOSTART_NOTE, OLD_HELPER_HINT, oldHelperBlocksHost,
   ndiAutostartNote, ndiChecklist, ndiShortLabel, ndiStepMessage, parseHello, parseHelperStatus, showSourcePicker, sortSources,
   sourceLabel, sourcePickerInStep, splitSourceName,
   type NdiGuide, type NdiHello, type NdiHelperStatus, type NdiStep, type NdiStepInput,
 } from './ndiSteps';
 
-const HELLO: NdiHello = { version: '0.1.10', protocol: 2, platform: 'windows', source: null };
+const HELLO: NdiHello = { version: '0.1.11', protocol: 2, platform: 'windows', source: null };
 const OLD_HELLO: NdiHello = { version: '0.1.8', protocol: null, platform: null, source: 'PC (Adobe After Effects)' };
 const AE = 'ULTRA9-285K (Adobe After Effects)';
 
@@ -228,6 +228,26 @@ describe('ndiStepMessage', () => {
     expect(msg(denied).detail).toContain('改好後會自動連上');
   });
 
+  it('新網址上連不到：可能沒開、也可能是舊版擋掉（分不出來）→ 兩種都說，一樣給下載', () => {
+    const closed = { socket: 'closed' as const, hello: null, status: null, failures: 1, lastFrameAt: null };
+    const g = decideNdiStep(input({ ...closed, oldHelperBlocked: true }));
+    expect(g.step).toBe('helper_missing');
+    expect(g.maybeOldHelper).toBe(true);
+    expect(ndiStepMessage(g, 'chromium')).toEqual({
+      title: '沒有偵測到 NDI 小程序',
+      detail: [OLD_HELPER_HINT, '裝好打開後會自動連上'],
+    });
+    expect(OLD_HELPER_HINT).toBe('已經裝了也開著的話：可能是小程序版本太舊，不認得這個網址，請下載最新版');
+    expect(ndiShortLabel(g)).toBe('沒有偵測到小程序');
+    // 舊網址 / 本機開發：舊版小程序連得上 → 不多說
+    const old = decideNdiStep(input(closed));
+    expect(old.maybeOldHelper).toBe(false);
+    expect(ndiStepMessage(old, 'chromium').detail).toEqual(['裝好打開後會自動連上']);
+    // 其他步驟不受影響
+    expect(decideNdiStep(input({ oldHelperBlocked: true })).maybeOldHelper).toBe(false);
+    expect(decideNdiStep(input({ ...closed, permission: 'denied', oldHelperBlocked: true })).maybeOldHelper).toBe(false);
+  });
+
   it('短標示', () => {
     expect(ndiShortLabel(decideNdiStep(input()))).toBe('LIVE · 30 fps');
     expect(ndiShortLabel(decideNdiStep(input({ status: NO_LOCAL(), lastFrameAt: null })))).toBe('找不到這台電腦的 AE');
@@ -315,9 +335,11 @@ describe('版本', () => {
     expect(compareVersions('0.1', '0.1.0')).toBe(0);
   });
   it('isHelperOutdated', () => {
-    expect(MIN_HELPER_VERSION).toBe('0.1.10');
+    expect(MIN_HELPER_VERSION).toBe('0.1.11');
     expect(isHelperOutdated(HELLO)).toBe(false);
-    expect(isHelperOutdated({ ...HELLO, version: '0.1.11' })).toBe(false);
+    expect(isHelperOutdated({ ...HELLO, version: '0.1.12' })).toBe(false);
+    // 0.1.10 不認得新網址 previz.haimiaan.com → 要更新
+    expect(isHelperOutdated({ ...HELLO, version: '0.1.10' })).toBe(true);
     // 0.1.9 會自己接到網路上別台電腦的畫面 → 要更新
     expect(isHelperOutdated({ ...HELLO, version: '0.1.9' })).toBe(true);
     expect(isHelperOutdated({ ...HELLO, version: '0.2.0' })).toBe(false);
@@ -351,6 +373,16 @@ describe('瀏覽器 / 作業系統', () => {
     expect(isLoopbackHost('127.0.0.1')).toBe(true);
     expect(isLoopbackHost('app.localhost')).toBe(true);
     expect(isLoopbackHost('stage-previz.vercel.app')).toBe(false);
+  });
+  it('oldHelperBlocksHost：只有新網址（0.1.10 以前的小程序不認得）', () => {
+    expect(oldHelperBlocksHost('previz.haimiaan.com')).toBe(true);
+    expect(oldHelperBlocksHost('test.previz.haimiaan.com')).toBe(true);
+    expect(oldHelperBlocksHost('Previz.Haimiaan.com')).toBe(true);
+    expect(oldHelperBlocksHost('stage-previz.vercel.app')).toBe(false);
+    expect(oldHelperBlocksHost('stage-previz-git-feat-live-stage-look-xyproai.vercel.app')).toBe(false);
+    expect(oldHelperBlocksHost('localhost')).toBe(false);
+    expect(oldHelperBlocksHost('evil.previz.haimiaan.com')).toBe(false);
+    expect(oldHelperBlocksHost('')).toBe(false);
   });
 });
 
