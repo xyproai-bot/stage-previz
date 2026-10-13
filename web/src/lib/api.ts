@@ -2,6 +2,7 @@
 
 import type { Project } from './mockData';
 import { saveStatus } from './saveStatus';
+import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -247,10 +248,11 @@ export type MechanismOffsets = Record<string, { x: number; y: number }>;
 export interface ProjectViewSettings {
   scaleCorrection: number;
   mechanismOffsets: MechanismOffsets;
+  lookSettings: LookSettings;
 }
 
 export async function getProjectViewSettings(projectId: string): Promise<ProjectViewSettings> {
-  const data = await http<{ project: { scale_correction?: number; mechanism_offsets?: string } }>(
+  const data = await http<{ project: { scale_correction?: number; mechanism_offsets?: string; look_settings?: string } }>(
     `/api/projects/${encodeURIComponent(projectId)}`
   );
   const n = Number(data.project?.scale_correction);
@@ -259,7 +261,13 @@ export async function getProjectViewSettings(projectId: string): Promise<Project
     const parsed = JSON.parse(data.project?.mechanism_offsets || '{}');
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) offsets = parsed;
   } catch { /* 壞資料當沒有 */ }
-  return { scaleCorrection: isFinite(n) && n > 0 ? n : 1, mechanismOffsets: offsets };
+  let look: unknown = {};
+  try { look = JSON.parse(data.project?.look_settings || '{}'); } catch { /* 壞資料當沒有 */ }
+  return {
+    scaleCorrection: isFinite(n) && n > 0 ? n : 1,
+    mechanismOffsets: offsets,
+    lookSettings: normalizeLookSettings(look),
+  };
 }
 
 export async function updateProjectViewSettings(
@@ -1143,6 +1151,7 @@ export interface SharePublicData {
   /** 舊版 worker 沒有這兩個欄位 → undefined */
   scaleCorrection?: number;
   mechanismOffsets?: MechanismOffsets;
+  lookSettings?: Partial<LookSettings>;
 }
 
 /** 公開存取 — 無需 auth，可選 password */
