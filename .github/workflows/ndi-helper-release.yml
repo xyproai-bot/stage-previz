@@ -7,6 +7,10 @@ on:
     tags:
       - 'ndi-helper-v*'
 
+# 預設只讀；只有 release job 需要寫入權限（建立 GitHub Release）
+permissions:
+  contents: read
+
 jobs:
   build-windows:
     runs-on: windows-latest
@@ -14,7 +18,7 @@ jobs:
       run:
         working-directory: ndi-helper
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -22,7 +26,7 @@ jobs:
 
       # turbojpeg 系統套件 — 用 vcpkg
       - name: Setup vcpkg
-        uses: johnwason/vcpkg-action@v6
+        uses: johnwason/vcpkg-action@v8
         with:
           pkgs: libjpeg-turbo
           triplet: x64-windows
@@ -40,13 +44,13 @@ jobs:
           cargo wix --no-build
 
       - name: Upload MSI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ndi-helper-windows-msi
           path: ndi-helper/target/wix/*.msi
 
       - name: Upload exe artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ndi-helper-windows-exe
           path: ndi-helper/target/release/stage-previz-ndi-helper.exe
@@ -59,7 +63,7 @@ jobs:
       run:
         working-directory: ndi-helper
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -72,7 +76,7 @@ jobs:
         run: cargo build --release
 
       - name: Upload macOS binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ndi-helper-macos
           path: ndi-helper/target/release/stage-previz-ndi-helper
@@ -85,7 +89,7 @@ jobs:
       run:
         working-directory: ndi-helper
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
@@ -100,7 +104,7 @@ jobs:
         run: cargo build --release
 
       - name: Upload Linux binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ndi-helper-linux
           path: ndi-helper/target/release/stage-previz-ndi-helper
@@ -109,15 +113,38 @@ jobs:
     needs: [build-windows]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    # 建立 Release + 上傳檔案需要寫入權限（之前每次都卡在這：Resource not accessible by integration）
+    permissions:
+      contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
 
+      # 網站固定連到 releases/latest/download/stage-previz-ndi-helper-windows.msi
+      # → 每版都多放一份固定檔名的 MSI，換版本網站不用改
+      - name: Prepare release files
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          msis=(artifacts/ndi-helper-windows-msi/*.msi)
+          if [ "${#msis[@]}" -ne 1 ]; then
+            echo "Expected exactly 1 MSI, found ${#msis[@]}"
+            ls -laR artifacts
+            exit 1
+          fi
+          mkdir -p dist
+          cp "${msis[0]}" dist/
+          cp "${msis[0]}" dist/stage-previz-ndi-helper-windows.msi
+          cp artifacts/ndi-helper-windows-exe/stage-previz-ndi-helper.exe dist/
+          ls -la dist
+
       - name: Make release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
-          files: |
-            artifacts/ndi-helper-windows-msi/*.msi
-            artifacts/ndi-helper-windows-exe/*.exe
+          files: dist/*
+          fail_on_unmatched_files: true
+          make_latest: true
+          body: |
+            Windows 安裝檔（固定檔名，網站連這個）：`stage-previz-ndi-helper-windows.msi`
           generate_release_notes: true
