@@ -16,13 +16,14 @@ const mechs = [lift, rev, slide];
 const sampleCues = [
   cue('c1', 0, 0, 0), cue('c2', 1, 30, 20), cue('c3', 2, 65, 5), cue('c4', 3, 72, 10), cue('c5', 4, null, 8),
 ];
-const sampleOwn = new Map(Object.entries({
+const sampleOwnObj: Record<string, Record<string, number>> = {
   c1: { lift: 0, rev: 0, slide: 0 },
   c2: { lift: 3.5 },
   c3: { rev: 90, slide: 4 },
   c4: { lift: 0 },
   c5: { rev: 0, slide: 0 },
-}));
+};
+const sampleOwn = new Map(Object.entries(sampleOwnObj));
 
 describe('需要幾秒 / 照機器速度要改成幾秒', () => {
   it('需要秒數 = 距離 ÷ 最高速度；沒填速度 = 0', () => {

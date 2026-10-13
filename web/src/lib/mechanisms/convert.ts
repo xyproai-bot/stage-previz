@@ -135,7 +135,7 @@ const roundVec = (v: CVec): CVec => ({ x: r6(v.x), y: r6(v.y), z: r6(v.z) });
 const roundEuler = (e: CEuler): CEuler => ({ pitch: r4(e.pitch), yaw: r4(e.yaw), roll: r4(e.roll) });
 
 interface Pose { position: CVec; rotation: CEuler; q: Q }
-interface SourceRow { position: CVec | null; rotation: CEuler | null; scale: unknown; visible: unknown }
+interface SourceRow { position: CVec | null; rotation: CEuler | null; scale?: unknown; visible?: unknown }
 
 export function planCueConversion(input: ConvertInput): ConversionPlan {
   const { mechanism: m, objects, scaleCorrection } = input;

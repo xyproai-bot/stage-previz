@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { compileRig, applyChain, basePoseFromScene, rigValue } from './pose';
+import { compileRig, applyChain, basePoseFromScene, rigValue, travelGeometry } from './pose';
 import { legacyOffsetsToMechanisms, legacyRowToMechanism, type Mechanism } from './model';
 import { scenePosition } from '../cueTimeline';
 import { cuePositionFromScene } from '../mechanismOffset';
@@ -143,5 +143,30 @@ describe('來回換算一定回到原點（拖到哪就停在哪）', () => {
     const again = scene(rig, 'lift', values, saved.pos, saved.quat);
     expectVec(again.pos, dropPos);
     expectQuat(again.quat, dropQuat);
+  });
+});
+
+describe('行程的線（管理頁點到機關時畫在 3D 上）', () => {
+  it('直線：從最低到最高（公尺 → 場景單位），常用位置有刻度', () => {
+    const rig = compileRig([mech({ id: 'l', travelMin: 0, travelMax: 3.2, presets: [{ name: '半開', value: 1.6 }] })], 1.6);
+    const g = travelGeometry(rig.byId.get('l')!, v3(1, 0, 0), 1, [1.6]);
+    expectVec(g.path[0], { x: 1, y: 0, z: 0 });
+    expectVec(g.path[1], { x: 1, y: 2, z: 0 });
+    expect(g.ticks).toHaveLength(1);
+    expect(g.ticks[0][0].y).toBeCloseTo(1, 9);
+    expect(g.ends).toHaveLength(2);
+  });
+  it('旋轉：圓弧繞著轉軸，半徑 = 物件離轉軸多遠；轉超過一圈畫整個圓', () => {
+    const rig = compileRig([mech({ id: 'r', kind: 'rotary', pivot: { x: 0, y: 0, z: 0 }, travelMin: -90, travelMax: 90 })], 1);
+    const g = travelGeometry(rig.byId.get('r')!, v3(2, 1, 0), 1, [0]);
+    for (const p of g.path) {
+      expect(Math.hypot(p.x, p.z)).toBeCloseTo(2, 9);
+      expect(p.y).toBeCloseTo(1, 9);
+    }
+    expect(g.ends).toHaveLength(2);
+    const full = compileRig([mech({ id: 'r', kind: 'rotary', pivot: { x: 0, y: 0, z: 0 }, travelMin: 0, travelMax: 720 })], 1);
+    const gf = travelGeometry(full.byId.get('r')!, v3(0, 0, 0), 1, []);
+    expect(gf.ends).toHaveLength(0);
+    expect(gf.path[0].distanceTo(gf.path[gf.path.length - 1])).toBeLessThan(1e-9);
   });
 });

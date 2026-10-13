@@ -131,3 +131,66 @@ export function basePoseFromScene(
     }
   }
 }
+
+// ─────────────────────────────────────────────
+// 管理頁點到某個機關時，3D 畫面上畫它的行程（cue 位置的座標；外層機關在 StageScene 每幀套上）
+// ─────────────────────────────────────────────
+
+export interface TravelGeometry {
+  /** 行程的線（直線兩點；旋轉 = 圓弧上的點） */
+  path: THREE.Vector3[];
+  /** 常用位置的刻度（每個兩點） */
+  ticks: [THREE.Vector3, THREE.Vector3][];
+  /** 兩端（最低 / 最高）的刻度 */
+  ends: [THREE.Vector3, THREE.Vector3][];
+}
+
+/**
+ * @param center   帶的物件在 cue 位置時的中心
+ * @param size     物件大小（刻度長度、物件就在轉軸中心時的半徑）
+ */
+export function travelGeometry(m: RigMechanism, center: THREE.Vector3, size: number, presetValues: number[]): TravelGeometry {
+  const tick = Math.max(size * 0.12, 0.05);
+  if (m.kind === 'linear') {
+    const at = (v: number) => center.clone().addScaledVector(m.axis, v * m.linearSceneScale);
+    // 刻度方向：跟方向垂直的一個方向
+    const side = new THREE.Vector3(0, 1, 0).cross(m.axis);
+    if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
+    side.normalize().multiplyScalar(tick);
+    const mark = (v: number, k = 1): [THREE.Vector3, THREE.Vector3] => {
+      const p = at(v);
+      return [p.clone().addScaledVector(side, -k), p.clone().addScaledVector(side, k)];
+    };
+    return {
+      path: [at(m.travelMin), at(m.travelMax)],
+      ticks: presetValues.map(v => mark(v)),
+      ends: [mark(m.travelMin, 2), mark(m.travelMax, 2)],
+    };
+  }
+  // 旋轉：在跟轉軸垂直、通過物件中心的平面上，以轉軸為圓心
+  const rel = center.clone().sub(m.pivot);
+  rel.addScaledVector(m.axis, -rel.dot(m.axis));
+  if (rel.length() < size * 0.25) {
+    // 物件就在轉軸上 → 用物件大小當半徑，從任一個跟轉軸垂直的方向開始
+    rel.set(1, 0, 0).addScaledVector(m.axis, -m.axis.x);
+    if (rel.lengthSq() < 1e-8) rel.set(0, 0, 1).addScaledVector(m.axis, -m.axis.z);
+    rel.normalize().multiplyScalar(Math.max(size * 0.6, 0.5));
+  }
+  const planeCenter = m.pivot.clone().addScaledVector(m.axis, center.clone().sub(m.pivot).dot(m.axis));
+  const q = new THREE.Quaternion();
+  const at = (deg: number, scale = 1) => {
+    q.setFromAxisAngle(m.axis, THREE.MathUtils.degToRad(deg));
+    return planeCenter.clone().add(rel.clone().multiplyScalar(scale).applyQuaternion(q));
+  };
+  const span = Math.min(m.travelMax - m.travelMin, 360);
+  const steps = Math.max(8, Math.ceil(span / 5));
+  const path: THREE.Vector3[] = [];
+  for (let i = 0; i <= steps; i++) path.push(at(m.travelMin + (span * i) / steps));
+  const k = Math.min(tick / rel.length(), 0.3);
+  const mark = (deg: number, mul = 1): [THREE.Vector3, THREE.Vector3] => [at(deg, 1 - k * mul), at(deg, 1 + k * mul)];
+  return {
+    path,
+    ticks: presetValues.map(v => mark(v)),
+    ends: span >= 360 ? [] : [mark(m.travelMin, 2), mark(m.travelMax, 2)],
+  };
+}

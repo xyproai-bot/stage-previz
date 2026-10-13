@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
@@ -13,8 +13,11 @@ import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
-import { cueQuaternion, lerpOpacity, scenePosition, type CuePoseMap } from '../lib/cueTimeline';
-import { cuePositionFromScene } from '../lib/mechanismOffset';
+import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
+import { legacyOffsetsToMechanisms, legacyRowToMechanism, type Mechanism, type MechanismValues, type MechVec3 } from '../lib/mechanisms/model';
+import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type RigMechanism } from '../lib/mechanisms/pose';
+import { MechanismTweener } from '../lib/mechanisms/motion';
+import { stageFrontDirection } from '../lib/stageCamera';
 import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
@@ -129,8 +132,23 @@ interface Props {
   onAddAnchoredComment?: (anchor: import('../lib/api').CommentAnchor) => void;
   /** Camera bookmarks 儲存範圍 — 用 projectId 當 localStorage key 前綴；不傳則停用功能 */
   bookmarkScope?: string;
-  /** 機關 offset：per-objectId 的 X/Y 偏移量，單位「真實公尺」。純視覺加總，不寫回 cue。 */
+  /**
+   * 舊的「全專案機關滑桿」位移（per-objectId X/Y，公尺）。有給 mechanisms 就不用；
+   * 還沒換成機關的頁面照舊給，會自動換算成機關（畫面一樣）。新網站上線後拿掉
+   */
   mechanismOffsets?: Record<string, { x: number; y: number }>;
+  /** 機關定義（每個專案設定一次）；沒給 = 沒有機關（還有給 mechanismOffsets 的舊頁面會自動換算） */
+  mechanisms?: Mechanism[] | null;
+  /** 目前這個 cue 的機關位置（已經沿用 / 夾在行程內）；換 cue 時照機器速度走過去，同一個 cue 裡改值直接跳 */
+  mechanismTargets?: MechanismValues;
+  /** 跟著影片時間：只在 poseAtFrame 有回傳位置的那幾幀才問；回傳 null = 用 mechanismTargets */
+  mechanismAtFrame?: () => MechanismValues | null;
+  /** 'real'（預設）= 照機器速度；'instant' = 直接到位（分鏡縮圖） */
+  mechanismMotion?: 'real' | 'instant';
+  /** 查舞台：舞台正面方向、一組物件的中心（設定機關用） */
+  sceneQueryRef?: React.MutableRefObject<StageSceneQuery | null>;
+  /** 管理頁正在看的機關：3D 畫面上畫出它的行程（直線 / 圓弧，常用位置有刻度） */
+  focusedMechanismId?: string | null;
   /** 測距校準倍率（模型 scene units → 真實公尺），存在專案上全員共用；預設 1 = 未校準 */
   scaleCorrection?: number;
   /** 有傳才顯示「設為已知距離 / 重設」— 只有 admin 能改校準 */
@@ -169,6 +187,23 @@ interface Props {
   toolbarMode?: 'full' | 'viewer';
 }
 
+/** 設定機關時問舞台的事（StageScene 的 sceneQueryRef） */
+export interface StageSceneQuery {
+  /** 舞台正面（水平、指向觀眾）＝ LED 朝的方向 */
+  stageFront(): MechVec3;
+  /** 這些物件在 cue 位置（沒加機關）時的外框中心；都找不到 → null */
+  groupCenter(ids: string[]): MechVec3 | null;
+}
+
+// 機關：每幀共用的暫存（不配置記憶體）
+const EMPTY_VALUES: MechanismValues = {};
+const mechTmpPos = new THREE.Vector3();
+const mechTmpQuat = new THREE.Quaternion();
+const mechTmpQuat2 = new THREE.Quaternion();
+const ZERO_VEC = new THREE.Vector3();
+const IDENTITY_QUAT = new THREE.Quaternion();
+const UNSET_CUE = Symbol('unset');
+
 // ⚡ quick：像素 1:1 對顏色；🎤 live：暗場 + LED 照明 + 光暈（取代舊的 realistic / cinematic）
 type RenderMode = 'quick' | 'live';
 
@@ -177,7 +212,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full' }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -249,10 +284,43 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const poseAtFrameRef = useRef(poseAtFrame);
   poseAtFrameRef.current = poseAtFrame;
   const timelineActiveRef = useRef(false);
-  const mechanismOffsetsRef = useRef(mechanismOffsets);
-  mechanismOffsetsRef.current = mechanismOffsets;
   const scaleCorrectionRef = useRef(scaleCorrection);
   scaleCorrectionRef.current = scaleCorrection;
+  // ── 機關 ──
+  // 存在這裡的是「cue 位置」（物件在 cue 裡的位置 / 角度，還沒加機關）；每幀最後一次套上機關寫到 mesh（只有這一個地方）。
+  // 換 cue 滑動、影片時間軸、拖完存檔都只動 cue 位置 → 機關位移不會被加兩次
+  const basePoseRef = useRef<Map<string, { pos: THREE.Vector3; quat: THREE.Quaternion }>>(new Map());
+  const setBasePose = (id: string, pos: { x: number; y: number; z: number }, quat: THREE.Quaternion) => {
+    const cur = basePoseRef.current.get(id);
+    if (cur) { cur.pos.set(pos.x, pos.y, pos.z); cur.quat.copy(quat); }
+    else basePoseRef.current.set(id, { pos: new THREE.Vector3(pos.x, pos.y, pos.z), quat: quat.clone() });
+  };
+  // 機關定義 → 每個物件的機關鏈（定義或校準倍率變了才重算）；舊頁面給的 mechanismOffsets 自動換算
+  const legacyLedKey = mechanisms == null && mechanismOffsets
+    ? states.filter(s => s.category === 'led_panel').map(s => s.objectId).join(',')
+    : '';
+  const rig = useMemo(() => {
+    if (mechanisms) return compileRig(mechanisms, scaleCorrection);
+    if (mechanismOffsets && Object.keys(mechanismOffsets).length > 0) {
+      const objs = states.map(s => ({ id: s.objectId, category: s.category, order: s.order, displayName: s.displayName, meshName: s.meshName }));
+      return compileRig(legacyOffsetsToMechanisms(mechanismOffsets, objs).map(legacyRowToMechanism), scaleCorrection);
+    }
+    return EMPTY_RIG;
+  }, [mechanisms, mechanismOffsets, scaleCorrection, legacyLedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const rigRef = useRef(rig);
+  rigRef.current = rig;
+  const mechTweenerRef = useRef(new MechanismTweener());
+  // 這一幀畫面上用的機關值（拖完存檔要用「放手那一幀」的值）
+  const displayedMechRef = useRef<MechanismValues>({});
+  const mechTimelineActiveRef = useRef(false);
+  const mechTargetsRef = useRef(mechanismTargets);
+  mechTargetsRef.current = mechanismTargets;
+  const mechAtFrameRef = useRef(mechanismAtFrame);
+  mechAtFrameRef.current = mechanismAtFrame;
+  const mechMotionRef = useRef(mechanismMotion);
+  mechMotionRef.current = mechanismMotion;
+  /** 套上機關、寫到 mesh（render loop 每幀最後一次；states 換了也馬上一次） */
+  const commitPosesRef = useRef<(nowTs: number, timelineActive: boolean) => void>(() => {});
   // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；機關滑桿 / 選取 / 校準變了照舊直接套
   const lastSyncedStatesRef = useRef<CueState[] | null>(null);
   // 換 cue 了 → 下一次 states 換掉時要滑過去（cue 的位置是另外抓的，會晚一點到）
@@ -618,12 +686,20 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       orbit.enabled = (event.value === null);
     });
 
-    // 3D 畫面上的位置 → 要存進 cue 的位置：LED 面板先扣掉機關滑桿的位移
-    // （顯示時會再加回去；沒扣的話位移會被加兩次，放手後 LED 跳走）
-    const toCuePosition = (id: string, p: THREE.Vector3): Vec3 => {
-      const category = statesRef.current?.find(s => s.objectId === id)?.category;
-      const c = cuePositionFromScene({ x: p.x, y: p.y, z: p.z }, category, id, mechanismOffsetsRef.current, scaleCorrectionRef.current);
-      return { x: round(c.x), y: round(c.y), z: round(c.z) };
+    // 3D 畫面上放手的位置 / 角度 → 要存進 cue 的：倒回機關（用放手那一幀畫面上的機關值，pose.ts 的 basePoseFromScene），
+    // 先放進 cue 位置（不然存檔回來之前會跳回舊位置一下），再存
+    const toCuePose = (id: string, worldPos: THREE.Vector3, worldQuat: THREE.Quaternion): { position: Vec3; rotation: Euler } => {
+      const bp = new THREE.Vector3(), bq = new THREE.Quaternion();
+      basePoseFromScene(rigRef.current.chains.get(id), displayedMechRef.current, worldPos, worldQuat, bp, bq);
+      const e = new THREE.Euler().setFromQuaternion(bq, 'XYZ');
+      const position = { x: round(bp.x), y: round(bp.y), z: round(bp.z) };
+      const rotation = {
+        pitch: round(THREE.MathUtils.radToDeg(e.x)),
+        yaw: round(THREE.MathUtils.radToDeg(e.y)),
+        roll: round(THREE.MathUtils.radToDeg(e.z)),
+      };
+      setBasePose(id, position, cueQuaternion(rotation));
+      return { position, rotation };
     };
 
     // dragging-changed：drag 結束時自動存（支援單選 / 多選共動）
@@ -642,15 +718,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             const wquat = new THREE.Quaternion();
             m.getWorldPosition(wpos);
             m.getWorldQuaternion(wquat);
-            const euler = new THREE.Euler().setFromQuaternion(wquat, 'XYZ');
             const id = m.userData.objectId as string | undefined;
             scene.attach(m); // 拿回 scene（保留 world matrix）
             if (id) {
-              onTransformRef.current(id,
-                toCuePosition(id, wpos),
-                { pitch: round(THREE.MathUtils.radToDeg(euler.x)),
-                  yaw:   round(THREE.MathUtils.radToDeg(euler.y)),
-                  roll:  round(THREE.MathUtils.radToDeg(euler.z)) });
+              const pose = toCuePose(id, wpos, wquat);
+              onTransformRef.current(id, pose.position, pose.rotation);
             }
           }
           transform.detach();
@@ -662,13 +734,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // ── 單選
           const id = obj.userData.objectId as string | undefined;
           if (!id) return;
-          const pos = toCuePosition(id, obj.position);
-          const rot = {
-            pitch: round(THREE.MathUtils.radToDeg(obj.rotation.x)),
-            yaw:   round(THREE.MathUtils.radToDeg(obj.rotation.y)),
-            roll:  round(THREE.MathUtils.radToDeg(obj.rotation.z)),
-          };
-          onTransformRef.current(id, pos, rot);
+          const pose = toCuePose(id, obj.position, obj.quaternion);
+          onTransformRef.current(id, pose.position, pose.rotation);
         }
       } else {
         orbit.enabled = false;
@@ -832,6 +899,58 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (rs > 0) floorReflRef.current?.setSize(w * rs, h * rs);
     };
 
+    // ── 機關：每幀最後把「cue 位置 + 機關」寫到 mesh（只有這裡寫）──
+    //   正在 3D 拖的物件不動（拖完會把放手的位置倒回 cue 位置）；多選的物件暫時在 pivot 底下 → 換算成 pivot 裡的位置
+    const mechValuesFor = (nowTs: number, timelineActive: boolean): MechanismValues => {
+      const rigNow = rigRef.current;
+      const shown = displayedMechRef.current;
+      if (rigNow.mechanisms.length === 0) return EMPTY_VALUES;
+      const tweener = mechTweenerRef.current;
+      let v: MechanismValues | null = timelineActive ? (mechAtFrameRef.current?.() ?? null) : null;
+      if (v) {
+        mechTimelineActiveRef.current = true;
+      } else {
+        if (mechTimelineActiveRef.current) {
+          // 影片時間軸剛停（點了沒設時間的 cue / 換 AE 即時）→ 從畫面上最後的位置照機器速度走回目前 cue 的位置
+          mechTimelineActiveRef.current = false;
+          tweener.setCurrent(shown, nowTs);
+          tweener.retarget(rigNow.mechanisms, mechTargetsRef.current || EMPTY_VALUES, nowTs, {
+            animate: mechMotionRef.current !== 'instant', minSeconds: crossfadeRef.current,
+          });
+        }
+        v = tweener.valuesAt(nowTs);
+      }
+      for (const k in shown) if (!(k in v)) delete shown[k];
+      for (const k in v) shown[k] = v[k];
+      return shown;
+    };
+    const commitPoses = (nowTs: number, timelineActive: boolean) => {
+      const values = mechValuesFor(nowTs, timelineActive);
+      const travel = travelRef.current;
+      if (travel) applyChain(travel.outer, values, ZERO_VEC, IDENTITY_QUAT, travel.group.position, travel.group.quaternion);
+      const chains = rigRef.current.chains;
+      const dragging = transform.dragging;
+      const dragObj = dragging ? transform.object : null;
+      const pivot = multiPivotRef.current;
+      let pivotReady = false;
+      for (const [id, mesh] of meshesRef.current) {
+        const base = basePoseRef.current.get(id);
+        if (!base) continue;
+        const inPivot = !!pivot && mesh.parent === pivot;
+        if (dragging && (mesh === dragObj || inPivot)) continue;
+        applyChain(chains.get(id), values, base.pos, base.quat, mechTmpPos, mechTmpQuat);
+        if (mesh.parent === scene) {
+          mesh.position.copy(mechTmpPos);
+          mesh.quaternion.copy(mechTmpQuat);
+        } else if (inPivot) {
+          if (!pivotReady) { pivot.updateMatrixWorld(); pivot.getWorldQuaternion(mechTmpQuat2).invert(); pivotReady = true; }
+          mesh.position.copy(pivot.worldToLocal(mechTmpPos));
+          mesh.quaternion.multiplyQuaternions(mechTmpQuat2, mechTmpQuat);
+        }
+      }
+    };
+    commitPosesRef.current = commitPoses;
+
     // Render loop（用 setAnimationLoop 而非 rAF — 才能支援 WebXR）
     let stopped = false;
     let frameStart = performance.now();
@@ -889,10 +1008,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const meshes = meshesRef.current;
         for (const [id, pose] of framePoses) {
           const mesh = meshes.get(id);
-          if (!mesh || mesh.parent !== scene) continue;
-          const p = scenePosition(pose.position, pose.category, id, mechanismOffsetsRef.current, scaleCorrectionRef.current);
-          mesh.position.set(p.x, p.y, p.z);
-          mesh.quaternion.copy(pose.quaternion);
+          if (!mesh) continue;
+          // cue 位置（機關最後在 commitPoses 一起套）
+          setBasePose(id, pose.position, pose.quaternion);
           setObjectOpacity(mesh, pose.opacity);
         }
       } else if (timelineActiveRef.current) {
@@ -915,17 +1033,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             }
           }
           if (tweens.has(s.objectId)) continue;  // 換 cue 時已經在滑了
-          const p = scenePosition(s.effective.position, s.category, s.objectId, mechanismOffsetsRef.current, scaleCorrectionRef.current);
+          const p = s.effective.position;
           const q = cueQuaternion(s.effective.rotation);
-          if (durationMs > 0) {
+          const base = basePoseRef.current.get(s.objectId);
+          if (durationMs > 0 && base) {
             tweens.set(s.objectId, {
-              fromPos: mesh.position.clone(), toPos: new THREE.Vector3(p.x, p.y, p.z),
-              fromQuat: mesh.quaternion.clone(), toQuat: q,
+              fromPos: base.pos.clone(), toPos: new THREE.Vector3(p.x, p.y, p.z),
+              fromQuat: base.quat.clone(), toQuat: q,
               startTs: now, durationMs,
             });
           } else {
-            mesh.position.set(p.x, p.y, p.z);
-            mesh.quaternion.copy(q);
+            setBasePose(s.objectId, p, q);
           }
         }
       }
@@ -937,11 +1055,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const finished: string[] = [];
         for (const [id, tw] of tweens) {
           const mesh = meshes.get(id);
-          if (!mesh) { finished.push(id); continue; }
-          // 等速移動：使用者要舞台從頭到尾同一個速度滑過去，不要一開始慢、最後拖很久
+          const base = basePoseRef.current.get(id);
+          if (!mesh || !base) { finished.push(id); continue; }
+          // 等速移動：使用者要舞台從頭到尾同一個速度滑過去，不要一開始慢、最後拖很久（動的是 cue 位置，機關最後再套）
           const t = cueMoveProgress(now - tw.startTs, tw.durationMs);
-          mesh.position.lerpVectors(tw.fromPos, tw.toPos, t);
-          mesh.quaternion.slerpQuaternions(tw.fromQuat, tw.toQuat, t);
+          base.pos.lerpVectors(tw.fromPos, tw.toPos, t);
+          base.quat.slerpQuaternions(tw.fromQuat, tw.toQuat, t);
           if (t >= 1) finished.push(id);
         }
         for (const id of finished) tweens.delete(id);
@@ -959,6 +1078,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           if (k >= 1) fades.delete(id);
         }
       }
+
+      // 機關：這一幀的值（影片時間軸 / 照機器速度走）→ 套到每個物件（整個畫面只在這裡寫 mesh 的位置）
+      commitPosesRef.current(nowTs, !!framePoses);
 
       // Animate NDI mock texture (cheap procedural — only updates in live mode)
       const ndiMock = ndiMockTextureRef.current;
@@ -1285,6 +1407,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         scene.remove(obj);
         disposeObject3D(obj);
         meshes.delete(id);
+        basePoseRef.current.delete(id);
         const lbl = labels.get(id);
         if (lbl) { layer.removeChild(lbl); labels.delete(id); }
       }
@@ -1348,42 +1471,31 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       obj.userData.locked = !!s.locked;
       obj.userData.objectId = s.objectId;
 
-      // 機關 offset：純視覺加總（公尺 → scene units），不寫回 cue。
-      // 對 led_panel 才套用 — 其他類別不該被機關 slider 動到。（跟影片時間軸共用同一個算法）
-      const p = scenePosition(s.effective.position, s.category, s.objectId, mechanismOffsets, scaleCorrection);
+      // cue 位置（場景單位）；機關的位移 / 旋轉在 render loop 最後 commitPoses 一起套（只有那裡寫 mesh）
+      const p = s.effective.position;
       const worldQuat = cueQuaternion(s.effective.rotation);
-      // Crossfade：如果開了，從 mesh 當前 transform tween 到目標
+      // Crossfade：如果開了，從現在的 cue 位置 tween 到目標
       // 前提：mesh 不在 multiPivot 下（pivot 模式表示用戶正在拖，不該 tween）
       const xfade = crossfadeRef.current;
       const inPivot = obj.parent && obj.parent !== scene;
       const running = tweensRef.current.get(s.objectId);
+      const base = basePoseRef.current.get(s.objectId);
       if (running && !statesChanged && !inPivot) {
-        // 移動中又因為別的原因（機關滑桿 / 校準）重算 → 改終點、繼續滑，不要瞬間跳到終點
+        // 移動中又因為別的原因（選取 / 校準）重算 → 改終點、繼續滑，不要瞬間跳到終點
         running.toPos.set(p.x, p.y, p.z);
         running.toQuat.copy(worldQuat);
-      } else if (xfade > 0 && smoothThisRun && !justCreated && !inPivot && (obj.position.distanceTo(new THREE.Vector3(p.x, p.y, p.z)) > 0.001 || !obj.quaternion.equals(worldQuat))) {
+      } else if (xfade > 0 && smoothThisRun && !justCreated && !inPivot && base && (base.pos.distanceTo(new THREE.Vector3(p.x, p.y, p.z)) > 0.001 || !base.quat.equals(worldQuat))) {
         tweensRef.current.set(s.objectId, {
-          fromPos: obj.position.clone(),
+          fromPos: base.pos.clone(),
           toPos: new THREE.Vector3(p.x, p.y, p.z),
-          fromQuat: obj.quaternion.clone(),
+          fromQuat: base.quat.clone(),
           toQuat: worldQuat.clone(),
           startTs: performance.now(),
           durationMs: xfade * 1000,
         });
       } else {
-        // 沒 crossfade：直接套（保留原本邏輯）
-        if (inPivot) {
-          const wp = new THREE.Vector3(p.x, p.y, p.z);
-          obj.parent!.updateMatrixWorld();
-          obj.parent!.worldToLocal(wp);
-          obj.position.copy(wp);
-          const parentQuat = new THREE.Quaternion();
-          obj.parent!.getWorldQuaternion(parentQuat);
-          obj.quaternion.copy(parentQuat.invert().multiply(worldQuat));
-        } else {
-          obj.position.set(p.x, p.y, p.z);
-          obj.quaternion.copy(worldQuat);
-        }
+        // 沒 crossfade：直接套（多選拖曳中的 pivot 物件也是改 cue 位置，commitPoses 會換算進 pivot）
+        setBasePose(s.objectId, p, worldQuat);
         // 跳過 tween → 確保 tweensRef 沒留 stale
         tweensRef.current.delete(s.objectId);
       }
@@ -1419,7 +1531,113 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         lbl.classList.toggle('has-override', !!s.override);
       }
     }
-  }, [states, selectedObjectIds, mechanismOffsets, scaleCorrection, modelVersion, readOnly]);
+    // 馬上套一次（縮圖 / 截圖不會晚一幀）
+    commitPosesRef.current(performance.now(), timelineActiveRef.current);
+  }, [states, selectedObjectIds, modelVersion, readOnly]);
+
+  // ── 機關目標：換 cue → 照機器速度走過去；同一個 cue 裡改值（滑桿 / 常用位置 / 打字）→ 直接跳 ──
+  const lastMechCueKeyRef = useRef<string | null | undefined | typeof UNSET_CUE>(UNSET_CUE);
+  useEffect(() => {
+    const prev = lastMechCueKeyRef.current;
+    const animate = mechanismMotion !== 'instant' && prev !== UNSET_CUE && cueKey !== prev;
+    const now = performance.now();
+    mechTweenerRef.current.retarget(rig.mechanisms, mechanismTargets || EMPTY_VALUES, now, {
+      animate, minSeconds: crossfadeSeconds,
+    });
+    lastMechCueKeyRef.current = cueKey;
+    commitPosesRef.current(now, timelineActiveRef.current);
+  }, [rig, mechanismTargets, cueKey, crossfadeSeconds, mechanismMotion]);
+
+  // ── 設定機關時問舞台：正面朝哪、一組物件的中心（cue 位置，沒加機關）──
+  useEffect(() => {
+    if (!sceneQueryRef) return;
+    const query: StageSceneQuery = {
+      stageFront: () => {
+        let leds = ledModelRoots(modelMeshMapRef.current);
+        if (leds.length === 0) {
+          const list: { id: string; category: string }[] = stageObjectsRef.current
+            ? stageObjectsRef.current.map(o => ({ id: o.id, category: o.category }))
+            : (statesRef.current || []).map(s => ({ id: s.objectId, category: s.category }));
+          const ids = new Set(list.filter(o => o.category === 'led_panel').map(o => o.id));
+          leds = [...meshesRef.current].filter(([id]) => ids.has(id)).map(([, m]) => m);
+        }
+        const f = stageFrontDirection(leds);
+        return { x: f.x, y: f.y, z: f.z };
+      },
+      groupCenter: (ids) => {
+        const box = baseBox(ids);
+        if (box.isEmpty()) return null;
+        const c = box.getCenter(new THREE.Vector3());
+        return { x: c.x, y: c.y, z: c.z };
+      },
+    };
+    sceneQueryRef.current = query;
+    return () => { if (sceneQueryRef.current === query) sceneQueryRef.current = null; };
+  }, [sceneQueryRef]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 這些物件在 cue 位置（沒加機關）時的外框 */
+  function baseBox(ids: string[]): THREE.Box3 {
+    const scene = sceneRef.current;
+    const box = new THREE.Box3();
+    const pt = new THREE.Vector3();
+    for (const id of ids) {
+      const mesh = meshesRef.current.get(id);
+      const base = basePoseRef.current.get(id);
+      if (!mesh || !base) continue;
+      if (mesh.parent !== scene) { box.expandByPoint(pt.copy(base.pos)); continue; }
+      const keepPos = mesh.position.clone(), keepQuat = mesh.quaternion.clone();
+      mesh.position.copy(base.pos);
+      mesh.quaternion.copy(base.quat);
+      mesh.updateMatrixWorld(true);
+      box.expandByObject(mesh);
+      mesh.position.copy(keepPos);
+      mesh.quaternion.copy(keepQuat);
+      mesh.updateMatrixWorld(true);
+    }
+    return box;
+  }
+
+  // ── 管理頁點到的機關：3D 畫面上畫出行程（直線 / 圓弧，常用位置、兩端有刻度）；外層機關動的時候跟著動 ──
+  const travelRef = useRef<{ group: THREE.Group; outer: RigMechanism[] } | null>(null);
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const m = focusedMechanismId ? rig.byId.get(focusedMechanismId) : undefined;
+    if (!m) return;
+    // 中心：直接帶的物件（沒有 → 裝在它上面的機關帶的物件）
+    let ids = [...rig.chains].filter(([, chain]) => chain[0] === m).map(([id]) => id);
+    if (ids.length === 0) ids = [...rig.chains].filter(([, chain]) => chain.includes(m)).map(([id]) => id);
+    const box = baseBox(ids);
+    const center = box.isEmpty() ? m.pivot.clone() : box.getCenter(new THREE.Vector3());
+    const size = box.isEmpty() ? 1 : Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 0.2);
+    const presets = (mechanisms || []).find(x => x.id === m.id)?.presets.map(p => p.value) || [];
+    const g = travelGeometry(m, center, size, presets);
+    const color = new THREE.Color(0xffaa44);
+    const lineMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
+    const tickMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false });
+    const group = new THREE.Group();
+    group.name = 'mechanism-travel';
+    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(g.path), lineMat);
+    const segs = [...g.ends, ...g.ticks].flat();
+    const ticks = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(segs), tickMat);
+    for (const o of [line, ticks]) { o.renderOrder = 999; o.frustumCulled = false; group.add(o); }
+    // 外層的機關（這個機關裝在哪個機關上）
+    const outer: RigMechanism[] = [];
+    for (let cur = m.parentId ? rig.byId.get(m.parentId) : undefined; cur && outer.length < 4 && !outer.includes(cur); cur = cur.parentId ? rig.byId.get(cur.parentId) : undefined) {
+      outer.push(cur);
+    }
+    scene.add(group);
+    travelRef.current = { group, outer };
+    applyChain(outer, displayedMechRef.current, ZERO_VEC, IDENTITY_QUAT, group.position, group.quaternion);
+    return () => {
+      scene.remove(group);
+      line.geometry.dispose();
+      ticks.geometry.dispose();
+      lineMat.dispose();
+      tickMat.dispose();
+      if (travelRef.current?.group === group) travelRef.current = null;
+    };
+  }, [focusedMechanismId, rig, mechanisms, states, modelVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Attach gizmo：單選 attach mesh、多選建 pivot 把 mesh reparent 進去 ──
   useEffect(() => {
