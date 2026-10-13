@@ -14,7 +14,7 @@ import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, scenePosition, type CuePoseMap } from '../lib/cueTimeline';
-import { endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade } from '../lib/stageLook/objectFade';
+import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
@@ -26,7 +26,7 @@ import { buildLedEmitters, type LedEmitter } from '../lib/stageLook/ledEmitters'
 import { LedLightRig, type LedLightProps } from '../lib/stageLook/ledLightRig';
 import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
-import { QUALITY, detectQualityProfile } from '../lib/stageLook/quality';
+import { AdaptiveQuality, QUALITY, detectQualityProfile, type QualityLevel } from '../lib/stageLook/quality';
 import { LED_SURFACE, NDI_PIXEL_DENSITY, applyLedSurface, updateLedSurface } from '../lib/stageLook/ledSurface';
 import { FloorReflection, applyFloorReflection, setFloorReflectionFor } from '../lib/stageLook/floorReflection';
 import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOverride, type MaterialOverrides, type ModelMaterialInfo } from '../lib/stageLook/materialOverrides';
@@ -240,11 +240,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const helpersRef = useRef<{ grid: THREE.GridHelper; axes: THREE.AxesHelper } | null>(null);
   // 舞台中心 / 大小（環境光 CubeCamera 放這裡）
   const stageBoundsRef = useRef<{ center: THREE.Vector3; radius: number }>({ center: new THREE.Vector3(0, 1, 0), radius: 10 });
-  const qualityRef = useRef(QUALITY[detectQualityProfile({
+  // 畫質：一開始依裝置選，之後看實際順不順自動升降（render loop 量每幀時間）
+  const [startQuality] = useState<QualityLevel>(() => detectQualityProfile({
     maxTouchPoints: navigator.maxTouchPoints || 0,
     hardwareConcurrency: navigator.hardwareConcurrency || 0,
     userAgent: navigator.userAgent,
-  })]);
+  }));
+  const qualityRef = useRef(QUALITY[startQuality]);
+  const [qualityLevel, setQualityLevel] = useState<QualityLevel>(startQuality);
+  const adaptiveQualityRef = useRef<AdaptiveQuality | null>(null);
+  // 淡入淡出用的半透明 shader 預先編好、複本留著（第一次換 cue 才不會卡一下）
+  const fadeWarmupRef = useRef<FadeWarmup | null>(null);
   const lookRef = useRef<LookSettings>(lookSettings);
   lookRef.current = lookSettings;
   const showLabelsRef = useRef(false);
@@ -458,6 +464,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     } catch (e) {
       console.warn('[StageScene] EffectComposer init failed:', e);
     }
+
+    // 自動畫質：剛打開前幾秒（載入、編 shader）不算
+    // （同一個元件重跑這段時沿用原本的，等級才會跟 qualityRef / 畫面上的提示一致）
+    const adaptiveQuality = adaptiveQualityRef.current ?? new AdaptiveQuality(startQuality);
+    adaptiveQuality.hold(performance.now(), 4000);
+    adaptiveQualityRef.current = adaptiveQuality;
+    // 分頁切回來：前 2 秒不算
+    const onVisibilityChange = () => {
+      if (!document.hidden) adaptiveQuality.hold(performance.now(), 2000);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
 
     // ── Lock pin layer（鎖住的物件永遠顯示 🔒，不受 L 切換影響）──
     {
@@ -734,6 +751,32 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     }
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
 
+    // 套目前的畫質檔：解析度 / bloom / 地板倒影 / 燈數（resize 和自動調畫質都走這裡；不用重載模型）
+    const applyQuality = () => {
+      const q = qualityRef.current;
+      ledRigRef.current?.setMaxLights(q.maxLights);
+      floorReflRef.current?.setEnabled(renderModeRef.current === 'live' && q.reflectionScale > 0);
+      if (bloomPassRef.current) bloomPassRef.current.enabled = q.bloomScale > 0;
+      if (renderer.xr.isPresenting) return;  // VR 中不能改尺寸
+      const w = container.clientWidth;
+      const h = container.clientHeight;
+      if (w === 0 || h === 0) return;
+      const pr = Math.min(window.devicePixelRatio, q.pixelRatioCap);
+      if (renderer.getPixelRatio() !== pr) renderer.setPixelRatio(pr);
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      // composer 也要同步尺寸 / 解析度
+      composerRef.current?.setPixelRatio(pr);
+      composerRef.current?.setSize(w, h);
+      // 低畫質檔 bloom 用比較低的解析度（0 = 不畫）
+      const bs = q.bloomScale;
+      if (bs > 0) bloomPassRef.current?.setSize(Math.round(w * bs), Math.round(h * bs));
+      // 地板倒影 RT（reflectionScale = 0 → 不畫）
+      const rs = q.reflectionScale;
+      if (rs > 0) floorReflRef.current?.setSize(w * rs, h * rs);
+    };
+
     // Render loop（用 setAnimationLoop 而非 rAF — 才能支援 WebXR）
     let stopped = false;
     let frameStart = performance.now();
@@ -743,8 +786,21 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const tick = () => {
       if (stopped) return;
       const nowTs = performance.now();
-      const deltaSec = Math.min((nowTs - lastTickTs) / 1000, 0.1);
+      const frameMs = nowTs - lastTickTs;
+      const deltaSec = Math.min(frameMs / 1000, 0.1);
       lastTickTs = nowTs;
+
+      // 自動畫質：一直卡 → 降一級；一直很順 → 升回去（VR 中不量）
+      if (renderer.xr.isPresenting) {
+        adaptiveQuality.hold(nowTs, 2000);
+      } else {
+        const nextQuality = adaptiveQuality.frame(nowTs, frameMs);
+        if (nextQuality) {
+          qualityRef.current = QUALITY[nextQuality];
+          applyQuality();
+          setQualityLevel(nextQuality);
+        }
+      }
 
       // Walk mode：用 keysRef 算速度向量（相對 camera local 軸）
       if (walkPointerLockRef.current) {
@@ -937,27 +993,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     renderer.setAnimationLoop(tick);
 
     // Resize
-    const ro = new ResizeObserver(() => {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      if (w === 0 || h === 0) return;
-      renderer.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      // composer 也要同步尺寸
-      composerRef.current?.setSize(w, h);
-      // iPad 等低畫質檔 bloom 用半解析度
-      const bs = qualityRef.current.bloomScale;
-      bloomPassRef.current?.setSize(Math.round(w * bs), Math.round(h * bs));
-      // 地板倒影 RT（低畫質檔 reflectionScale = 0 → 不畫）
-      const rs = qualityRef.current.reflectionScale;
-      if (rs > 0) floorReflRef.current?.setSize(w * rs, h * rs);
-    });
+    const ro = new ResizeObserver(applyQuality);
     ro.observe(container);
 
     return () => {
       stopped = true;
       ro.disconnect();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      try { fadeWarmupRef.current?.dispose(); } catch {}
+      fadeWarmupRef.current = null;
       try { renderer.setAnimationLoop(null); } catch {}
       if (vrBtn) try { container.removeChild(vrBtn); } catch {}
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
@@ -1097,6 +1141,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         meshesRef.current.clear();
         labelsRef.current.forEach((lbl) => lbl.remove());
         labelsRef.current.clear();
+        // 新模型要建 mesh、編 shader → 前幾秒卡是正常的，自動畫質先不量
+        adaptiveQualityRef.current?.hold(performance.now(), 4000);
         setModelLoading(false);
         setModelVersion((v) => v + 1);
       },
@@ -1443,6 +1489,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     floorReflRef.current?.setEnabled(live && qualityRef.current.reflectionScale > 0);
   }, [renderMode, lookSettings]);
 
+  // 切現場 / 快速：要畫的東西不一樣了 → 前 3 秒（編 shader）不算，之前判定太重的等級可以再試
+  useEffect(() => {
+    const adaptive = adaptiveQualityRef.current;
+    if (!adaptive) return;
+    adaptive.resetCeiling();
+    adaptive.hold(performance.now(), 3000);
+  }, [renderMode]);
+
   // ── 本地影片 / 圖片 → LED 貼圖（跟 NDI 貼圖同樣設定：flipY false、超出 0~1 繞回）──
   // 圖片跟影片用一模一樣的設定 → 同一張畫面放成圖片或影片，方向、顏色都一樣
   useEffect(() => {
@@ -1666,6 +1720,48 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
   }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage]);
+
+  // ── 淡入淡出的半透明 shader 先編好（不然第一次換 cue 淡入淡出會卡一下）──
+  // 模型載好 / 切模式 / 改材質 / 換 LED 畫面 / 畫質換了（燈數會變）→ 等畫面穩一點再編
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const renderer = rendererRef.current;
+      const scene = sceneRef.current;
+      const camera = cameraRef.current;
+      if (!renderer || !scene || !camera || renderer.xr.isPresenting || meshesRef.current.size === 0) return;
+      const warm = createFadeWarmup(meshesRef.current.values());
+      const live = renderModeRef.current === 'live';
+      const prevTarget = renderer.getRenderTarget();
+      try {
+        // 現場模式是畫進 composer 的 render target（不 tone map）→ 用同樣的設定編；快速模式直接畫到畫面
+        const composer = composerRef.current;
+        if (live && composer) renderer.setRenderTarget(composer.renderTarget1);
+        const all = new THREE.Scene();
+        warm.meshes.forEach((m) => all.add(m));
+        renderer.compile(all, camera, scene);
+        // LED 環境光的 CubeCamera 只拍 LED：沒有燈、沒有環境貼圖 → LED 的複本再編一份
+        if (live && ledEnvRef.current) {
+          const ledOnly = new THREE.Scene();
+          warm.meshes.forEach((m) => { if (m.layers.isEnabled(LED_LAYER)) ledOnly.add(m); });
+          if (ledOnly.children.length > 0) {
+            const ledCamera = camera.clone();
+            ledCamera.layers.set(LED_LAYER);
+            const prevEnv = scene.environment;
+            scene.environment = null;
+            try { renderer.compile(ledOnly, ledCamera, scene); } finally { scene.environment = prevEnv; }
+          }
+        }
+      } catch (e) {
+        console.warn('[StageScene] fade shader warm-up failed:', e);
+      } finally {
+        renderer.setRenderTarget(prevTarget);
+      }
+      // 新的編好才丟舊的（還在用的 shader 不會被刪掉又重編）
+      fadeWarmupRef.current?.dispose();
+      fadeWarmupRef.current = warm;
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [modelVersion, renderMode, materialOverrides, stageObjects, ledVideo, ledImage, ndiActive, qualityLevel]);
 
   // ── 地板倒影的反射平面 + 材質面板的材質清單（換模型 / 物件移動 / 改材質後重算）──
   useEffect(() => {
@@ -2322,6 +2418,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             </div>
           </div>
         </div>
+      )}
+      {/* 自動調低畫質時的小提示（不擋操作） */}
+      {qualityLevel !== 'high' && (
+        <div className="stage-scene__quality-note">畫質自動調低以保持順暢</div>
       )}
       {/* Help overlay */}
       <div className="stage-scene__help">

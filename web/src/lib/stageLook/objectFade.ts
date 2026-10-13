@@ -8,6 +8,7 @@
 //   getObjectOpacity  — 現在的透明度（沒在淡 → 看得到 1、藏起來 0）
 //   suspendObjectFade — 要改材質設定前先換回原本材質（下一次 setObjectOpacity 會讓複本跟上新設定）
 //   endObjectFade     — 物件要移除時：換回原本材質、複本丟掉
+//   createFadeWarmup  — 先把半透明複本的 shader 編好（第一次淡入淡出才不會卡一下）
 
 import * as THREE from 'three';
 
@@ -102,4 +103,49 @@ export function endObjectFade(obj: THREE.Object3D) {
     list(fade.copies).forEach((c) => c.dispose());
     meshFades.delete(mesh);
   });
+}
+
+export interface FadeWarmup {
+  /** 暫時的 mesh（共用原本的 geometry、掛半透明複本），不放進要畫的場景 */
+  meshes: THREE.Mesh[];
+  dispose(): void;
+}
+
+/**
+ * 淡入淡出預熱：每種材質（同一個材質 + 同一種 geometry 只做一次）做一份跟淡的時候一模一樣的半透明複本，
+ * 給 renderer.compile 先把 shader 編好。
+ * 複本要一直留著（換模型 / 換模式再換一份）：three 的 shader 沒有材質在用就會被刪掉，
+ * 淡完的複本一丟，下次淡又要重編。留著這份 → 每次淡入淡出都直接用編好的。
+ */
+export function createFadeWarmup(objects: Iterable<THREE.Object3D>): FadeWarmup {
+  const seen = new Set<string>();
+  const meshes: THREE.Mesh[] = [];
+  const copies: THREE.Material[] = [];
+  for (const obj of objects) {
+    forEachMesh(obj, (mesh) => {
+      if (!mesh.material) return;
+      // 正在淡 → 掛著的是複本，拿原本的材質
+      const fade = meshFades.get(mesh);
+      const originals = list(fade && mesh.material === fade.copies ? fade.originals : mesh.material);
+      const attrs = Object.keys(mesh.geometry.attributes).sort().join(',');
+      for (const original of originals) {
+        if (!original) continue;
+        const key = `${original.uuid}|${attrs}|${mesh.layers.mask}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const copy = makeCopy(original);
+        const warm = new THREE.Mesh(mesh.geometry, copy);
+        warm.layers.mask = mesh.layers.mask;
+        meshes.push(warm);
+        copies.push(copy);
+      }
+    });
+  }
+  return {
+    meshes,
+    dispose() {
+      for (const m of meshes) m.removeFromParent();
+      for (const c of copies) c.dispose();
+    },
+  };
 }

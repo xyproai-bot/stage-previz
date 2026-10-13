@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade } from './objectFade';
+import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade } from './objectFade';
 import { applyLedSurface, updateLedSurface, type LedSurfaceUniforms } from './ledSurface';
 
 // 兩個物件共用同一個 C4D 材質（模型 clone 出來就是這樣）
@@ -122,6 +122,56 @@ describe('endObjectFade', () => {
     copy.addEventListener('dispose', () => { disposed = true; });
     endObjectFade(a);
     expect(matOf(meshA)).toBe(shared);
+    expect(disposed).toBe(true);
+  });
+});
+
+describe('createFadeWarmup（先把淡入淡出的 shader 編好）', () => {
+  it('同一個材質 + 同一種 geometry 只做一份半透明複本；共用原本的 geometry；不動原本的物件', () => {
+    const { shared, a, meshA, b, meshB } = makePair();
+    const other = new THREE.MeshStandardMaterial({ color: 0xffffff });
+    const c = new THREE.Mesh(new THREE.BoxGeometry(), other);
+    const warm = createFadeWarmup([a, b, c]);
+    expect(warm.meshes.length).toBe(2);
+    const [w1, w2] = warm.meshes;
+    expect(w1.geometry).toBe(meshA.geometry);
+    expect(w2.material).not.toBe(other);
+    expect((w1.material as THREE.Material).transparent).toBe(true);
+    expect((w1.material as THREE.Material).name).toBe('C4D 材質');
+    expect(matOf(meshA)).toBe(shared);
+    expect(matOf(meshB)).toBe(shared);
+    expect(shared.transparent).toBe(false);
+    expect(a.children).toEqual([meshA]);
+  });
+
+  it('沿用原本材質的 shader 改寫（LED 像素格）→ 編出來的跟淡的時候一樣', () => {
+    const mat = new THREE.MeshStandardMaterial();
+    applyLedSurface(mat);
+    const led = new THREE.Mesh(new THREE.PlaneGeometry(), mat);
+    led.layers.enable(2);
+    const [w] = createFadeWarmup([led]).meshes;
+    const copy = w.material as THREE.MeshStandardMaterial;
+    expect(copy.onBeforeCompile).toBe(mat.onBeforeCompile);
+    expect(copy.customProgramCacheKey()).toBe(mat.customProgramCacheKey());
+    expect(copy.userData.ledSurface).toBe(mat.userData.ledSurface);
+    expect(w.layers.isEnabled(2)).toBe(true);
+  });
+
+  it('正在淡的物件：拿原本的材質做（不是淡的那份複本）', () => {
+    const { shared, a } = makePair();
+    setObjectOpacity(a, 0.5);
+    const [w] = createFadeWarmup([a]).meshes;
+    expect((w.material as THREE.MeshStandardMaterial).color.getHex()).toBe(shared.color.getHex());
+    expect(createFadeWarmup([a]).meshes.length).toBe(1);
+    endObjectFade(a);
+  });
+
+  it('dispose → 複本丟掉', () => {
+    const { a } = makePair();
+    const warm = createFadeWarmup([a]);
+    let disposed = false;
+    (warm.meshes[0].material as THREE.Material).addEventListener('dispose', () => { disposed = true; });
+    warm.dispose();
     expect(disposed).toBe(true);
   });
 });

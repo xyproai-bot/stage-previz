@@ -491,6 +491,22 @@
 @container stage-scene (max-width: 480px) {
   .stage-scene__help { display: none; }
 }
+/* 自動調低畫質的提示：左下、快捷鍵提示上面一行，淡淡的不搶眼 */
+.stage-scene__quality-note {
+  position: absolute;
+  bottom: 34px;
+  left: 12px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-muted);
+  opacity: 0.75;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 5;
+}
+@container stage-scene (max-width: 480px) {
+  .stage-scene__quality-note { bottom: 12px; }
+}
 .stage-scene__help kbd {
   background: var(--surface-2);
   border: 1px solid var(--border-strong);
