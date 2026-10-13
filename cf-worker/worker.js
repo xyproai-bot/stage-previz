@@ -511,6 +511,7 @@ const LOOK_SETTING_RANGES = {
   exposure: [0.2, 3],
   ledLightStrength: [0, 5],
   bloomStrength: [0, 3],
+  floorReflection: [0, 1],
   reflectionSharpness: [0, 1],
   ledViewFalloff: [0, 1],
 };

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectQualityProfile } from './quality';
+import { QUALITY, detectQualityProfile } from './quality';
 
 const WIN = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130 Safari/537.36';
 const MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15';
@@ -16,6 +16,10 @@ describe('detectQualityProfile', () => {
   });
   it('4 核心以下 → low', () => {
     expect(detectQualityProfile({ maxTouchPoints: 0, hardwareConcurrency: 4, userAgent: WIN })).toBe('low');
+  });
+  it('低畫質檔不畫地板倒影', () => {
+    expect(QUALITY.low.reflectionScale).toBe(0);
+    expect(QUALITY.high.reflectionScale).toBeGreaterThan(0);
   });
   it('真 Mac（沒觸控）→ high', () => {
     expect(detectQualityProfile({ maxTouchPoints: 0, hardwareConcurrency: 10, userAgent: MAC })).toBe('high');

@@ -11,11 +11,13 @@ export interface QualitySpec {
   pixelRatioCap: number;
   /** bloom 解析度比例 */
   bloomScale: number;
+  /** 地板倒影 render target 解析度比例（0 = 不畫倒影） */
+  reflectionScale: number;
 }
 
 export const QUALITY: Record<QualityProfile, QualitySpec> = {
-  high: { maxLights: 24, envIntervalMs: 200, pixelRatioCap: 1.5, bloomScale: 1 },
-  low: { maxLights: 8, envIntervalMs: 1000, pixelRatioCap: 1, bloomScale: 0.5 },
+  high: { maxLights: 24, envIntervalMs: 200, pixelRatioCap: 1.5, bloomScale: 1, reflectionScale: 0.5 },
+  low: { maxLights: 8, envIntervalMs: 1000, pixelRatioCap: 1, bloomScale: 0.5, reflectionScale: 0 },
 };
 
 export function detectQualityProfile(d: { maxTouchPoints: number; hardwareConcurrency: number; userAgent: string }): QualityProfile {

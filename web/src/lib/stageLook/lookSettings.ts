@@ -10,9 +10,11 @@ export interface LookSettings {
   ledLightStrength: number;
   /** 光暈：亮的 LED 周圍暈開多少 */
   bloomStrength: number;
-  /** 倒影清晰度（第三段用） */
+  /** 地板倒影：亮面地板映出 LED 的強度（0 = 關） */
+  floorReflection: number;
+  /** 倒影清晰度 */
   reflectionSharpness: number;
-  /** LED 側看變暗（第二段用） */
+  /** LED 側看變暗 */
   ledViewFalloff: number;
 }
 
@@ -21,6 +23,7 @@ export const LOOK_SETTING_RANGES: Record<keyof LookSettings, [number, number]> =
   exposure: [0.2, 3],
   ledLightStrength: [0, 5],
   bloomStrength: [0, 3],
+  floorReflection: [0, 1],
   reflectionSharpness: [0, 1],
   ledViewFalloff: [0, 1],
 };
@@ -30,6 +33,7 @@ export const DEFAULT_LOOK_SETTINGS: LookSettings = {
   exposure: 1,
   ledLightStrength: 1,
   bloomStrength: 0.6,
+  floorReflection: 0.5,
   reflectionSharpness: 0.6,
   ledViewFalloff: 0.3,
 };

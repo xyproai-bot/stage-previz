@@ -27,6 +27,11 @@ describe('normalizeLookSettings', () => {
     expect(s.ledViewFalloff).toBe(DEFAULT_LOOK_SETTINGS.ledViewFalloff);
   });
 
+  it('地板倒影預設 0.5、超出夾回 1', () => {
+    expect(normalizeLookSettings({}).floorReflection).toBe(0.5);
+    expect(normalizeLookSettings({ floorReflection: 7 }).floorReflection).toBe(1);
+  });
+
   it('數字字串也收', () => {
     expect(normalizeLookSettings({ exposure: '2' }).exposure).toBe(2);
   });

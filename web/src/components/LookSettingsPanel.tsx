@@ -12,6 +12,8 @@ const ROWS: { key: keyof LookSettings; label: string; hint: string; step: number
   { key: 'ledLightStrength', label: 'LED 照明', hint: 'LED 照到舞台的強度', step: 0.05 },
   { key: 'bloomStrength', label: '光暈', hint: '亮的 LED 周圍暈開多少', step: 0.05 },
   { key: 'ledViewFalloff', label: 'LED 側看變暗', hint: '從側邊看 LED 會暗多少（真的 LED 牆側看會變暗）', step: 0.05 },
+  { key: 'floorReflection', label: '地板倒影', hint: '亮面地板映出 LED 的強度（0 = 關）', step: 0.05 },
+  { key: 'reflectionSharpness', label: '倒影清晰度', hint: '倒影清楚還是模糊', step: 0.05 },
 ];
 
 /** 現場模式設定（admin 才看得到；改了全專案共用） */

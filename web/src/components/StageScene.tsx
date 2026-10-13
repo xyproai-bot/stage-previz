@@ -21,6 +21,8 @@ import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { QUALITY, detectQualityProfile } from '../lib/stageLook/quality';
 import { LED_SURFACE, NDI_PIXEL_DENSITY, applyLedSurface, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { FloorReflection, applyFloorReflection } from '../lib/stageLook/floorReflection';
+import { detectFloorPlane } from '../lib/stageLook/floorPlane';
 import './StageScene.css';
 
 // RectAreaLight 必須先 init uniforms（Three.js 內建）
@@ -160,6 +162,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // 現場模式：LED 燈組 / 只拍 LED 的環境光 / 取色器 / 每個 LED 物件的發光面
   const ledRigRef = useRef<LedLightRig | null>(null);
   const ledEnvRef = useRef<LedEnvironment | null>(null);
+  const floorReflRef = useRef<FloorReflection | null>(null);
   const colorReaderRef = useRef<TextureColorReader | null>(null);
   const emitterCacheRef = useRef<WeakMap<THREE.Object3D, LedEmitter[]>>(new WeakMap());
   // objectId → 目前 LED 用的貼圖（取色用）/ 燈的參數
@@ -360,6 +363,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     ledRigRef.current.setMaxLights(qualityRef.current.maxLights);
     try {
       ledEnvRef.current = new LedEnvironment(renderer);
+      floorReflRef.current = new FloorReflection(renderer);
     } catch (e) {
       console.warn('[StageScene] LED environment init failed:', e);
     }
@@ -761,6 +765,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         }
       }
 
+      // 地板倒影：主畫面之前先從鏡像相機畫一次
+      if (live && !inXR) floorReflRef.current?.render(scene, camera);
+
       if (live && composerRef.current && !inXR) {
         composerRef.current.render();
       } else {
@@ -804,6 +811,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // iPad 等低畫質檔 bloom 用半解析度
       const bs = qualityRef.current.bloomScale;
       bloomPassRef.current?.setSize(Math.round(w * bs), Math.round(h * bs));
+      // 地板倒影 RT（低畫質檔 reflectionScale = 0 → 不畫）
+      const rs = qualityRef.current.reflectionScale;
+      if (rs > 0) floorReflRef.current?.setSize(w * rs, h * rs);
     });
     ro.observe(container);
 
@@ -821,6 +831,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       try { ledRigRef.current?.dispose(); } catch {}
       ledRigRef.current = null;
       try { ledEnvRef.current?.dispose(); } catch {}
+      try { floorReflRef.current?.dispose(); } catch {}
+      floorReflRef.current = null;
       ledEnvRef.current = null;
       colorReaderRef.current = null;
       helpersRef.current = null;
@@ -1264,6 +1276,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     }
     ledRigRef.current?.setEnabled(live);
     if (!live) for (const mat of ledMaterialsRef.current) updateLedSurface(mat, { on: false });
+    floorReflRef.current?.setSettings(look.floorReflection, look.reflectionSharpness);
+    floorReflRef.current?.setEnabled(live && qualityRef.current.reflectionScale > 0);
   }, [renderMode, lookSettings]);
 
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
@@ -1402,6 +1416,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // 注意：有貼圖（GLB 原本的 texture）或是 LED 時，不要用 category 顏色蓋掉
           // 否則 LED 在 quick mode 會被染綠（品牌色 = 0x10c78a），喇叭等貼圖物件會被染對應色
           updateLedSurface(m, { on: false });
+          // 地板倒影：非 LED 材質都掛上（shader 只在「落在反射平面上、朝上」的地方才取樣倒影）
+          if (!isLed && floorReflRef.current) applyFloorReflection(m, floorReflRef.current.uniforms);
           const hasTexture = !!m.map;
           const baseColor = mat.color
             ? mat.color
@@ -1462,6 +1478,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
   }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion]);
+
+  // ── 地板倒影：找最大的朝上水平面當反射平面（換模型 / 物件移動後重算）──
+  useEffect(() => {
+    const refl = floorReflRef.current;
+    if (!refl) return;
+    const roots: THREE.Object3D[] = [];
+    meshesRef.current.forEach((obj, id) => {
+      if (stageObjMap.get(id)?.category !== 'led_panel') roots.push(obj);
+    });
+    const plane = detectFloorPlane(roots);
+    refl.setPlane(plane ? plane.y : null, Math.max(stageBoundsRef.current.radius * 0.002, 1e-4));
+  }, [states, modelVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   void RectAreaLightHelper; // keep import in case we want helper toggle later
 
