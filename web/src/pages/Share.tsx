@@ -157,7 +157,7 @@ export default function Share() {
       if (k && !k.startsWith('local:')) clearPlayer();
       else pausePlayer();
     }
-  }, [source, pausePlayer, reshowMedia, getSrcKey, clearPlayer, selectedSongId]);
+  }, [source, pausePlayer, reshowMedia, getSrcKey, clearPlayer]);
 
   // 影片播放網址過期 / 網路斷掉 → 拿新網址接著同一秒播
   const retryVersion = useCallback(async () => {
