@@ -817,6 +817,8 @@ export default function ProjectEditor() {
               mechanismOffsets={view.mechanismOffsets}
               scaleCorrection={view.scaleCorrection}
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+              lookSettings={view.lookSettings}
+              onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
             />
           )}
           {view.canEdit && (
@@ -1012,6 +1014,7 @@ export default function ProjectEditor() {
                 songName={selectedSong.name}
                 scaleCorrection={view.scaleCorrection}
                 mechanismOffsets={view.mechanismOffsets}
+                lookSettings={view.lookSettings}
               />
             </div>
           </div>

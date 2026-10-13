@@ -601,7 +601,7 @@ function SongDetail({
                 cueName={cueName}
                 modelUrl={modelUrl}
                 readOnly
-                defaultRenderMode="cinematic"
+                defaultRenderMode="live"
                 crossfadeSeconds={cues.find(c => c.id === selectedCueId)?.crossfadeSeconds ?? 0}
                 comments={comments}
                 onCommentPinClick={(c) => {
@@ -616,6 +616,8 @@ function SongDetail({
                 scaleCorrection={view.scaleCorrection}
                 onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                 mechanismOffsets={view.mechanismOffsets}
+                lookSettings={view.lookSettings}
+                onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
                 onAddAnchoredComment={(anchor) => {
                   // 上層存暫存的 anchor，留言區會接著用
                   pendingAnchorRef.current = anchor;

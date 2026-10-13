@@ -469,13 +469,15 @@ function StudioInner({ projectId }: { projectId: string }) {
                   cueName={selectedCue?.name}
                   modelUrl={modelUrl}
                   readOnly
-                  defaultRenderMode="realistic"
+                  defaultRenderMode="live"
                   enableNdi
                   crossfadeSeconds={selectedCue?.crossfadeSeconds ?? 0}
                   bookmarkScope={projectId}
                   scaleCorrection={view.scaleCorrection}
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                   mechanismOffsets={view.mechanismOffsets}
+                  lookSettings={view.lookSettings}
+                  onLookSettingsChange={view.canEdit ? view.setLookSettings : undefined}
                 />
               </div>
               {masterCues.length > 0 && (
