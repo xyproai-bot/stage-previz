@@ -100,6 +100,8 @@ interface Props {
   materialOverrides?: MaterialOverrides;
   /** 有傳才顯示「🎨 材質」面板 — 只有 admin；patch = null → 回到 C4D 原本 */
   onMaterialOverrideChange?: (name: string, patch: Partial<MaterialOverride> | null) => void;
+  /** 本地影片（分享頁拖進來的檔案）：有給就播在 LED 上，優先於 NDI */
+  ledVideo?: HTMLVideoElement | null;
 }
 
 // ⚡ quick：像素 1:1 對顏色；🎤 live：暗場 + LED 照明 + 光暈（取代舊的 realistic / cinematic）
@@ -107,7 +109,7 @@ type RenderMode = 'quick' | 'live';
 
 type Mode = 'translate' | 'rotate' | 'scale';
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, materialOverrides, onMaterialOverrideChange }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, materialOverrides, onMaterialOverrideChange, ledVideo }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
@@ -196,6 +198,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // NDI 真連線：connect 後拿到 frames 就 update CanvasTexture（替代 mock）
   const ndiLiveTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
   const ndiClientRef = useRef<NdiClient | null>(null);
+  // 本地影片 → VideoTexture（ledVideo prop 變了就重建）
+  const ledVideoTextureRef = useRef<THREE.VideoTexture | null>(null);
   const [ndiActive, setNdiActive] = useState(false);  // 有真 frames 進來嗎
   const [ndiStatus, setNdiStatus] = useState<NdiClientStatus>({ kind: 'idle' });
   const [ndiPopoverOpen, setNdiPopoverOpen] = useState(false);
@@ -755,11 +759,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           const mockTexture = ndiMockTextureRef.current?.texture;
           for (const mat of ledMaterialsRef.current) {
             const tex = mat.emissiveMap;
-            const img = tex?.image as { width?: number; height?: number } | undefined;
+            const img = tex?.image as { width?: number; height?: number; videoWidth?: number; videoHeight?: number } | undefined;
             const density = tex && tex === liveTexture ? NDI_PIXEL_DENSITY : 1;
+            const iw = img?.videoWidth || img?.width || 1;
+            const ih = img?.videoHeight || img?.height || 1;
             updateLedSurface(mat, {
               on: !!tex,
-              texels: [(img?.width || 1) * density, (img?.height || 1) * density],
+              texels: [iw * density, ih * density],
               gridStrength: tex && tex !== mockTexture ? 1 : 0,
               viewFalloff: lookRef.current.ledViewFalloff,
             });
@@ -1290,6 +1296,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     floorReflRef.current?.setEnabled(live && qualityRef.current.reflectionScale > 0);
   }, [renderMode, lookSettings]);
 
+  // ── 本地影片 → LED 貼圖（跟 NDI 貼圖同樣設定：flipY false、超出 0~1 繞回）──
+  useEffect(() => {
+    if (!ledVideo) { ledVideoTextureRef.current = null; return; }
+    const tex = new THREE.VideoTexture(ledVideo);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.minFilter = THREE.LinearFilter;
+    tex.magFilter = THREE.LinearFilter;
+    tex.flipY = false;
+    tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
+    ledVideoTextureRef.current = tex;
+    return () => {
+      if (ledVideoTextureRef.current === tex) ledVideoTextureRef.current = null;
+      tex.dispose();
+    };
+  }, [ledVideo]);
+
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
   useEffect(() => {
     const scene = sceneRef.current;
@@ -1312,8 +1334,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       // LED 貼圖 priority（不分 render mode，Quick 也要吃 NDI）：
       //   1. user imageUrl（admin 在物件設定的）
-      //   2. NDI 真連線（ndi-helper 推 frames 進來）
-      //   3. NDI mock（程序動態貼圖，等 helper 連上前的預覽）— 只在 isLit 開
+      //   2. 本地影片（分享頁拖進來的檔案，ledVideo prop）
+      //   3. NDI 真連線（ndi-helper 推 frames 進來）
+      //   4. NDI mock（程序動態貼圖，等 helper 連上前的預覽）— 只在 isLit 開
       const ledImageUrl = (isLed && so?.ledProps?.imageUrl) || null;
       let ledTexture: THREE.Texture | null = null;
       if (ledImageUrl) {
@@ -1329,6 +1352,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           cache.set(ledImageUrl, tex);
         }
         ledTexture = cache.get(ledImageUrl) || null;
+      } else if (isLed && ledVideoTextureRef.current) {
+        // 本地影片（分享頁拖進來的）→ 優先於 NDI
+        ledTexture = ledVideoTextureRef.current;
       } else if (isLed && ndiActive && ndiLiveTextureRef.current) {
         // NDI 連上了 → 用真實 NDI frame texture（Quick 模式也要）
         ledTexture = ndiLiveTextureRef.current.texture;
@@ -1482,7 +1508,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo]);
 
   // ── 地板倒影的反射平面 + 材質面板的材質清單（換模型 / 物件移動 / 改材質後重算）──
   useEffect(() => {
