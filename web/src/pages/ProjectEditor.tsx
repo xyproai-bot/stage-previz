@@ -100,12 +100,17 @@ export default function ProjectEditor() {
   const [diffOpen, setDiffOpen] = useState(false);
   const [importCuesOpen, setImportCuesOpen] = useState(false);
   const [projectMeta, setProjectMeta] = useState<api.ProjectFull | null>(null);
+  const [projectMetaFailed, setProjectMetaFailed] = useState(false);
   const refreshProjectMeta = useCallback(async () => {
     if (!projectId) return;
     try {
       const p = await api.getProjectFull(projectId);
       setProjectMeta(p);
-    } catch (e) { console.warn('load project meta failed', e); }
+      setProjectMetaFailed(!p); // 404 會回 null，也算載不到
+    } catch (e) {
+      console.warn('load project meta failed', e);
+      setProjectMetaFailed(true);
+    }
   }, [projectId]);
   useEffect(() => { refreshProjectMeta(); }, [refreshProjectMeta]);
 
@@ -629,7 +634,8 @@ export default function ProjectEditor() {
         <div className="editor-breadcrumb">
           <span className="muted">專案</span>
           <span className="sep">/</span>
-          <span className="strong">{projectId}</span>
+          {/* 顯示專案名稱；載入中顯示「…」，載不到才退回代號 */}
+          <span className="strong">{projectMeta ? (projectMeta.name || projectId) : (projectMetaFailed ? projectId : '…')}</span>
           {selectedSong && (<>
             <span className="sep">/</span>
             <span className="muted">{selectedSong.name}</span>
