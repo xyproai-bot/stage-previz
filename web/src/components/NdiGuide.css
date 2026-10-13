@@ -190,3 +190,13 @@
   font-size: 11.5px;
 }
 .ndi-popover__note a { color: var(--accent); }
+
+/* 「看圖文說明」：卡住那一格的說明最下面，小小一行（開新分頁到 /help 對應的段落） */
+.ndi-guide__help {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+}
+.ndi-guide__help:hover { text-decoration: underline; }

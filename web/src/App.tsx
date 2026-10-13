@@ -20,6 +20,8 @@ import { RequireAuth, useAuth } from './lib/auth';
 const Studio  = lazy(() => import('./pages/Studio'));
 const Preview = lazy(() => import('./pages/Preview'));
 const Share   = lazy(() => import('./pages/Share'));
+// 線上使用說明（公開，不用登入）
+const Help    = lazy(() => import('./pages/Help'));
 
 function PageLoading() {
   return <div className="empty-state"><h1>⏳</h1><p>載入頁面…</p></div>;
@@ -50,6 +52,7 @@ export default function App() {
             <Route path="/share/:token" element={<ErrorBoundary><Share /></ErrorBoundary>} />
             {/* 好讀分享網址（/s/jinma2026-k7p2），同一個分享頁 */}
             <Route path="/s/:slug" element={<ErrorBoundary><Share /></ErrorBoundary>} />
+            <Route path="/help" element={<ErrorBoundary><Help /></ErrorBoundary>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>

@@ -10,6 +10,7 @@ import { toast } from '../lib/toast';
 import { markSeen, songUnread } from '../lib/unreadComments';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { cueTransitionSeconds } from '../lib/cueTiming';
+import { helpUrl } from '../lib/helpLinks';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import './Studio.css';
 
@@ -402,6 +403,8 @@ function StudioInner({ projectId }: { projectId: string }) {
           ) : '…')}
         </span>
         <span className="grow" />
+        {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
+        <a className="studio-top__help" href={helpUrl()} target="_blank" rel="noopener">📖 使用說明</a>
         {user && (
           <span className="studio-top__user">
             <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name[0]}</span>

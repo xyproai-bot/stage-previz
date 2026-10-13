@@ -12,6 +12,7 @@ import { toast } from '../lib/toast';
 import { cueTransitionSeconds, videoCueSelection } from '../lib/cueTiming';
 import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
 import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
+import { helpUrl } from '../lib/helpLinks';
 import ShareSetlist from './ShareSetlist';
 import './Share.css';
 
@@ -324,6 +325,8 @@ export default function Share() {
         <span className="share-top__brand">🎬 STAGE PREVIZ</span>
         <span className="share-top__title">{data.project.name}</span>
         <span className="grow" />
+        {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
+        <a className="share-top__help" href={helpUrl()} target="_blank" rel="noopener">📖 使用說明</a>
         <span className="share-top__hint">公開預覽 · 唯讀</span>
       </header>
 

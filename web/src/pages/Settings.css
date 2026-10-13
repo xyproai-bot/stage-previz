@@ -139,3 +139,6 @@
 @media (max-width: 768px) {
   .settings-account__rows dt { width: 60px; }
 }
+
+/* 步驟後面的「看圖」：開新分頁到 /help 那一段 */
+.settings-help-link { margin-left: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; }

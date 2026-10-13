@@ -22,6 +22,7 @@ import { useNdiConnection } from '../lib/ndiConnection';
 import { ndiShortLabel, ndiStepMessage, showSourcePicker, sourcePickerInStep, type NdiGuide } from '../lib/ndiSteps';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
 import { NdiAutostartNote, NdiChecklist, NdiGuideCard, NdiSourcePicker, ndiCardKey, ndiCardVisible } from './NdiGuide';
+import { HELP_ANCHORS, helpUrl, ndiHelpAnchor } from '../lib/helpLinks';
 import LookSettingsPanel from './LookSettingsPanel';
 import { DEFAULT_LOOK_SETTINGS, type LookSettings } from '../lib/stageLook/lookSettings';
 import { buildLedEmitters, type LedEmitter } from '../lib/stageLook/ledEmitters';
@@ -2304,6 +2305,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                     target="_blank"
                     rel="noreferrer"
                   >NDI Tools ↗</a>
+                  <a
+                    className="btn btn--ghost btn--sm ndi-popover__help"
+                    href={helpUrl(ndiHelpAnchor(ndiGuideState.step) ?? HELP_ANCHORS.aeLive)}
+                    target="_blank"
+                    rel="noopener"
+                  >📖 圖文說明</a>
                 </div>
               </div>
             )}

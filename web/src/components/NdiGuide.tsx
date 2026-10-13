@@ -7,6 +7,7 @@ import {
 } from '../lib/ndiSteps';
 import type { NdiEnv } from '../lib/ndiConnection';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
+import { helpUrl, ndiHelpAnchor } from '../lib/helpLinks';
 import { toast } from '../lib/toast';
 import './NdiGuide.css';
 
@@ -76,6 +77,15 @@ function StepActions({ guide, env, onConnect }: Omit<GuideProps, 'onSelectSource
   }
 }
 
+/** 「看圖文說明」：開新分頁到說明頁對應的那一段（舞台不會不見）；這一步沒有說明 → 不顯示 */
+export function NdiHelpLink({ guide, label = '📖 看圖文說明' }: { guide: Guide; label?: string }) {
+  const anchor = ndiHelpAnchor(guide.step);
+  if (!anchor) return null;
+  return (
+    <a className="ndi-guide__help" href={helpUrl(anchor)} target="_blank" rel="noopener">{label}</a>
+  );
+}
+
 /**
  * 來源選單（不只一個來源、或這台電腦的 AE 沒在送但網路上有別台的才出現）：
  * AE 排前面、標出這台電腦 / 哪一台電腦；「自動」= null（只接這台電腦的）
@@ -127,6 +137,7 @@ export function NdiChecklist({ guide, env, onConnect, onSelectSource, showAutost
                 {msg.detail.map(d => <p key={d} className="ndi-guide__sub">{d}</p>)}
                 <StepActions guide={guide} env={env} onConnect={onConnect} />
                 {sourcePickerInStep(guide) && <NdiSourcePicker guide={guide} onSelectSource={onSelectSource} />}
+                <NdiHelpLink guide={guide} />
               </div>
             )}
           </li>

@@ -48,6 +48,9 @@ self.addEventListener('fetch', (e) => {
   if (url.pathname.startsWith('/api/')) return;
   // Drive stream → network-only（Range support）
   if (url.pathname.startsWith('/api/drive/stream/')) return;
+  // 使用說明的圖（/help/…）→ network-only：圖還沒放上去時拿到的是網站首頁，不能被存起來；
+  // 之後換了同名的圖也要馬上看到
+  if (url.pathname.startsWith('/help/')) return;
   // proxy.haimiaan.com 跨 origin → network-only
   if (url.origin !== self.location.origin) return;
 
