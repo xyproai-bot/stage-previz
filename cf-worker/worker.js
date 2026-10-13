@@ -84,8 +84,8 @@ function applyCorsToResponse(response, request) {
   if (!headers.has('Access-Control-Allow-Methods')) {
     headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS');
   }
-  // 一律覆蓋 Allow-Headers，確保包含 Authorization（讓前端可送 Bearer token）
-  headers.set('Access-Control-Allow-Headers', 'Range, Content-Type, Authorization');
+  // 一律覆蓋 Allow-Headers，確保包含 Authorization（讓前端可送 Bearer token）和分享連結的密碼 / 通行證
+  headers.set('Access-Control-Allow-Headers', CORS_ALLOW_HEADERS);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -2556,11 +2556,16 @@ async function handleDriveProxy(request, url) {
 // Helpers
 // ─────────────────────────────────────────────
 
+// 瀏覽器跨網站送出時允許帶的自訂 header：
+//   x-share-password — 分享連結的密碼（只在第一次解鎖時送）
+//   x-share-access   — 密碼對了以後拿到的短期通行證（之後的請求都用它）
+const CORS_ALLOW_HEADERS = 'Range, Content-Type, Authorization, X-Share-Password, X-Share-Access';
+
 function corsHeaders() {
   return {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS',
-    'Access-Control-Allow-Headers': 'Range, Content-Type, Authorization',
+    'Access-Control-Allow-Headers': CORS_ALLOW_HEADERS,
     'Access-Control-Expose-Headers': 'Content-Length, Content-Range, Accept-Ranges',
     'Access-Control-Max-Age': '86400'
   };
