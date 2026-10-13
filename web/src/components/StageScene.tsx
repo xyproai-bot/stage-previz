@@ -18,8 +18,10 @@ import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, su
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
 import { computeScaleFactor, findBestScope } from '../lib/parseGlb';
-import { NdiClient, type NdiClientStatus } from '../lib/ndiClient';
-import { NDI_TOOLS_URL } from '../lib/downloads';
+import { useNdiConnection } from '../lib/ndiConnection';
+import { ndiShortLabel, ndiStepMessage, showSourcePicker, type NdiGuide } from '../lib/ndiSteps';
+import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
+import { NdiChecklist, NdiGuideCard, NdiSourcePicker, ndiCardKey, ndiCardVisible } from './NdiGuide';
 import LookSettingsPanel from './LookSettingsPanel';
 import { DEFAULT_LOOK_SETTINGS, type LookSettings } from '../lib/stageLook/lookSettings';
 import { buildLedEmitters, type LedEmitter } from '../lib/stageLook/ledEmitters';
@@ -75,12 +77,19 @@ interface Props {
   readOnly?: boolean;
   /** 預設 render mode（沒給 = live；舊值 realistic / cinematic 當 live） */
   defaultRenderMode?: RenderMode | 'realistic' | 'cinematic';
-  /** NDI helper 連線：true 時連 ws://127.0.0.1:7777 把 frames 餵給 LED 面板 */
+  /**
+   * AE 即時（NDI 小程序 ws://127.0.0.1:7777）：true 時把 AE 畫面餵給 LED 面板。
+   * 第一次 true 才開始連（權限已允許才自動連，還沒問過要按「連接 AE 即時」）；之後變 false = 暫停收畫面、不斷線
+   */
   enableNdi?: boolean;
   /** NDI helper URL（預設 ws://127.0.0.1:7777） */
   ndiUrl?: string;
-  /** NDI 連線狀態回呼（給 UI 顯示「連線中 / 已連 / 錯誤」） */
-  onNdiStatus?: (status: NdiClientStatus) => void;
+  /** AE 即時現在卡在哪一步（給上層顯示狀態文字） */
+  onNdiStatus?: (guide: NdiGuide) => void;
+  /** AE 即時還沒接好時，在 3D 畫面上顯示檢查清單卡片（分享頁、動畫師工作站） */
+  ndiGuide?: boolean;
+  /** 卡片最下面的小字 */
+  ndiGuideHint?: string;
   /** Cue 切換時的 crossfade 秒數（0 = 硬切，>0 = 平滑插值） */
   crossfadeSeconds?: number;
   /** 目前 cue 的 id：有給的話，只有「換 cue」才平滑移動（編輯數值照舊即時）；沒給 = states 一換就滑 */
@@ -144,7 +153,7 @@ type Mode = 'translate' | 'rotate' | 'scale';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full' }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full' }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -269,13 +278,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const ndiMockTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
   // NDI 真連線：connect 後拿到 frames 就 update CanvasTexture（替代 mock）
   const ndiLiveTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
-  const ndiClientRef = useRef<NdiClient | null>(null);
   // 本地影片 / 圖片 → LED 貼圖（ledVideo / ledImage prop 變了就重建）
   const ledMediaTextureRef = useRef<THREE.Texture | null>(null);
-  const [ndiActive, setNdiActive] = useState(false);  // 有真 frames 進來嗎
-  const [ndiStatus, setNdiStatus] = useState<NdiClientStatus>({ kind: 'idle' });
   const [ndiPopoverOpen, setNdiPopoverOpen] = useState(false);
-  const [ndiSources, setNdiSources] = useState<string[]>([]);
+  // 按 × 收起引導卡片：記住是哪一步收的，換到別的問題會再出現
+  const [ndiCardHiddenFor, setNdiCardHiddenFor] = useState<string | null>(null);
   // Anchored-comment 加入模式：滑鼠變十字、下次點 mesh / world 觸發 onAddAnchoredComment
   const [addPinMode, setAddPinMode] = useState(false);
   const addPinModeRef = useRef(false);
@@ -1040,8 +1047,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       ndiMockTextureRef.current = null;
       try { ndiLiveTextureRef.current?.texture.dispose(); } catch {}
       ndiLiveTextureRef.current = null;
-      try { ndiClientRef.current?.destroy(); } catch {}
-      ndiClientRef.current = null;
       try {
         if (measureLineRef.current) {
           scene.remove(measureLineRef.current);
@@ -1438,53 +1443,35 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (lockLayer) lockLayer.style.display = showLabels && !readOnly ? '' : 'none';
   }, [showLabels, readOnly]);
 
-  // ── NDI client（連 ndi-helper.exe）──
+  // ── AE 即時（NDI 小程序）：連線、權限、重試、暫停都在 useNdiConnection ──
+  const ndi = useNdiConnection({
+    enabled: enableNdi,
+    url: ndiUrl,
+    onFrame: (bitmap) => {
+      const liveTex = ndiLiveTextureRef.current;
+      if (!liveTex) { bitmap.close?.(); return; }
+      // Adjust canvas size if first frame or size changed
+      if (liveTex.canvas.width !== bitmap.width || liveTex.canvas.height !== bitmap.height) {
+        liveTex.canvas.width = bitmap.width;
+        liveTex.canvas.height = bitmap.height;
+        // three.js 第一次上傳就把 GPU 貼圖大小固定（texStorage2D），之後只會覆蓋左上角。
+        // AE 切 Full ↔ Half / Third 時 frame 大小會變 → 一定要 dispose，下次使用才會用新尺寸重建，
+        // 不然畫面只更新左上角一塊、其他 LED 變黑或卡舊畫面。
+        liveTex.texture.dispose();
+      }
+      liveTex.ctx.drawImage(bitmap, 0, 0);
+      liveTex.texture.needsUpdate = true;
+      bitmap.close?.();
+    },
+  });
+  const ndiGuideState = ndi.guide;
+  // LED 用 AE 畫面：這條連線收過畫面就用（AE 停住時留在最後一格）
+  const ndiActive = enableNdi && ndiGuideState.hasFrame;
   useEffect(() => {
-    if (!enableNdi) {
-      // 斷線
-      try { ndiClientRef.current?.destroy(); } catch {}
-      ndiClientRef.current = null;
-      setNdiActive(false);
-      return;
-    }
-    const liveTex = ndiLiveTextureRef.current;
-    if (!liveTex) return;
-
-    const client = new NdiClient({
-      url: ndiUrl,
-      onFrame: (bitmap) => {
-        // Adjust canvas size if first frame or size changed
-        if (liveTex.canvas.width !== bitmap.width || liveTex.canvas.height !== bitmap.height) {
-          liveTex.canvas.width = bitmap.width;
-          liveTex.canvas.height = bitmap.height;
-          // three.js 第一次上傳就把 GPU 貼圖大小固定（texStorage2D），之後只會覆蓋左上角。
-          // AE 切 Full ↔ Half / Third 時 frame 大小會變 → 一定要 dispose，下次使用才會用新尺寸重建，
-          // 不然畫面只更新左上角一塊、其他 LED 變黑或卡舊畫面。
-          liveTex.texture.dispose();
-        }
-        liveTex.ctx.drawImage(bitmap, 0, 0);
-        liveTex.texture.needsUpdate = true;
-        bitmap.close?.();
-        if (!ndiActive) setNdiActive(true);
-      },
-      onStatus: (s) => {
-        if (s.kind !== 'connected' && ndiActive) setNdiActive(false);
-        setNdiStatus(s);
-        onNdiStatus?.(s);
-      },
-      onSources: (list) => setNdiSources(list),
-      reconnectIntervalMs: 3000,
-    });
-    ndiClientRef.current = client;
-    client.connect();
-
-    return () => {
-      try { client.destroy(); } catch {}
-      ndiClientRef.current = null;
-      setNdiActive(false);
-    };
-    // ndiActive intentionally excluded — 用它做 first-frame 判斷不重連
-  }, [enableNdi, ndiUrl, onNdiStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (enableNdi) onNdiStatus?.(ndiGuideState);
+  }, [enableNdi, ndiGuideState, onNdiStatus]);
+  const ndiCardShown = enableNdi && showNdiGuide && !ndiPopoverOpen
+    && ndiCardVisible(ndiGuideState) && ndiCardHiddenFor !== ndiCardKey(ndiGuideState);
 
   // ── Render mode（quick / live）+ 現場設定 ──
   useEffect(() => {
@@ -2104,7 +2091,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   return (
     <div className="stage-scene" ref={containerRef}>
-      <div className="stage-scene__toolbar">
+      <div className={'stage-scene__toolbar' + (viewer ? ' is-viewer' : '')}>
         {!readOnly && (
           <>
             <button
@@ -2268,54 +2255,47 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         {enableNdi && (
           <div className="ndi-wrap">
             <button
-              className={'ndi-pill ' + (ndiActive ? 'ndi-pill--live' : 'ndi-pill--idle')}
+              className={'ndi-pill ' + ndiPillClass(ndiGuideState)}
               onClick={() => setNdiPopoverOpen(o => !o)}
-              title="點擊看 NDI 連線詳情"
+              title={ndiGuideState.step === 'live' ? `AE 即時：${ndiStepMessage(ndiGuideState, ndi.env.browser).title}` : '點擊看 AE 即時連線狀態'}
             >
-              {ndiActive ? '● LIVE NDI' : '○ NDI 等待中'}
+              {ndiPillIcon(ndiGuideState)} {ndiShortLabel(ndiGuideState)}
             </button>
             {ndiPopoverOpen && (
               <div className="ndi-popover" onClick={e => e.stopPropagation()}>
                 <div className="ndi-popover__head">
-                  NDI Helper 狀態
+                  AE 即時（NDI 小程序）
                   <button className="ndi-popover__close" onClick={() => setNdiPopoverOpen(false)}>×</button>
                 </div>
                 <div className="ndi-popover__body">
-                  <NdiStatusRows status={ndiStatus} active={ndiActive} url={ndiUrl || 'ws://127.0.0.1:7777'} />
-                  {ndiSources.length > 0 && ndiStatus.kind === 'connected' && (
-                    <div className="ndi-popover__sources">
-                      <div className="ndi-popover__sources-title">可用的 NDI 來源</div>
-                      <ul>
-                        {ndiSources.map(src => {
-                          const isActive = ndiStatus.kind === 'connected' && ndiStatus.source === src;
-                          return (
-                            <li key={src}>
-                              <button
-                                className={'ndi-source-row' + (isActive ? ' is-active' : '')}
-                                onClick={() => {
-                                  ndiClientRef.current?.selectSource(src);
-                                  setTimeout(() => ndiClientRef.current?.requestStatus(), 800);
-                                }}
-                                disabled={isActive}
-                              >
-                                {isActive ? '● ' : '○ '}{src}
-                              </button>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    </div>
+                  {ndiGuideState.step === 'live' && (
+                    <div className="ndi-popover__live">● {ndiStepMessage(ndiGuideState, ndi.env.browser).title}</div>
+                  )}
+                  <NdiChecklist
+                    guide={ndiGuideState}
+                    env={ndi.env}
+                    onConnect={ndi.connect}
+                    onSelectSource={ndi.selectSource}
+                  />
+                  {ndiGuideState.step !== 'waiting_frames' && showSourcePicker(ndiGuideState) && (
+                    <NdiSourcePicker guide={ndiGuideState} onSelectSource={ndi.selectSource} />
+                  )}
+                  {ndiGuideState.outdated && ndiGuideState.step !== 'helper_outdated' && (
+                    <p className="ndi-popover__note">
+                      小程序有新版（你的是 {ndiGuideState.helperVersion}）：
+                      <a href={ndi.env.os === 'mac' ? NDI_HELPER_DOWNLOAD_URL_MAC : NDI_HELPER_DOWNLOAD_URL}>⬇ 下載更新</a>
+                    </p>
+                  )}
+                  {ndiGuideState.helperVersion && !ndiGuideState.outdated && (
+                    <p className="ndi-popover__note">小程序版本 {ndiGuideState.helperVersion}</p>
                   )}
                 </div>
                 <div className="ndi-popover__actions">
                   <button
                     className="btn btn--ghost btn--sm"
-                    onClick={() => { ndiClientRef.current?.disconnect(); ndiClientRef.current?.connect(); }}
-                  >🔄 立即重連</button>
-                  <button
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => ndiClientRef.current?.requestStatus()}
-                  >↻ 重掃 sources</button>
+                    onClick={ndi.retry}
+                    disabled={ndiGuideState.step === 'browser_unsupported'}
+                  >🔄 重新連線</button>
                   <a
                     className="btn btn--ghost btn--sm"
                     href={NDI_TOOLS_URL}
@@ -2323,22 +2303,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                     rel="noreferrer"
                   >NDI Tools ↗</a>
                 </div>
-                {!ndiActive && (
-                  <div className="ndi-popover__hint">
-                    <strong>沒收到 frames？</strong>
-                    <ol>
-                      <li>動畫師端是否有跑 stage-previz-ndi-helper.exe？</li>
-                      <li>AE 的 NDI Output 有開嗎？</li>
-                      <li>helper 系統列圖示是否顯示綠點 + source 名稱？</li>
-                    </ol>
-                  </div>
-                )}
               </div>
             )}
           </div>
         )}
         {cueName && <span className="cue-tag">當前 cue：<strong>{cueName}</strong></span>}
       </div>
+      {ndiCardShown && (
+        <NdiGuideCard
+          guide={ndiGuideState}
+          env={ndi.env}
+          onConnect={ndi.connect}
+          onSelectSource={ndi.selectSource}
+          onCollapse={() => setNdiCardHiddenFor(ndiCardKey(ndiGuideState))}
+          hint={ndiGuideHint}
+        />
+      )}
       {!viewer && lookPanelOpen && renderMode === 'live' && onLookSettingsChange && (
         <LookSettingsPanel
           settings={lookSettings}
@@ -2477,30 +2457,17 @@ function round(n: number): number {
   return Math.round(n * 1000) / 1000;
 }
 
-function NdiStatusRows({ status, active, url }: { status: NdiClientStatus; active: boolean; url: string }) {
-  let stateLabel: string;
-  let stateClass: string;
-  switch (status.kind) {
-    case 'idle':         stateLabel = '未啟用';   stateClass = 'idle'; break;
-    case 'connecting':   stateLabel = '連線中…';  stateClass = 'connecting'; break;
-    case 'connected':    stateLabel = active ? '已連線（接收中）' : '已連線（等首幀）'; stateClass = 'connected'; break;
-    case 'disconnected': stateLabel = '已斷線（自動重試）'; stateClass = 'disconnected'; break;
-    case 'error':        stateLabel = '錯誤'; stateClass = 'error'; break;
-  }
-  const helperVer = status.kind === 'connected' ? status.helperVersion : null;
-  const source = status.kind === 'connected' ? status.source : null;
-  const errMsg = status.kind === 'error' ? status.message : null;
-  return (
-    <table className="ndi-popover__table">
-      <tbody>
-        <tr><th>狀態</th><td><span className={'ndi-state ndi-state--' + stateClass}>{stateLabel}</span></td></tr>
-        <tr><th>WebSocket</th><td><code>{url}</code></td></tr>
-        {helperVer && <tr><th>Helper 版本</th><td>v{helperVer}</td></tr>}
-        {source && <tr><th>NDI 來源</th><td>{source}</td></tr>}
-        {errMsg && <tr><th>錯誤訊息</th><td className="ndi-state--error">{errMsg}</td></tr>}
-      </tbody>
-    </table>
-  );
+/** 工具列 NDI 標示：LIVE 綠、要處理的橘、其他灰 */
+function ndiPillClass(g: NdiGuide): string {
+  if (g.step === 'live') return 'ndi-pill--live';
+  if (g.step === 'connecting' || g.step === 'waiting_frames' || g.step === 'ready') return 'ndi-pill--idle';
+  return 'ndi-pill--warn';
+}
+
+function ndiPillIcon(g: NdiGuide): string {
+  if (g.step === 'live') return '●';
+  if (g.step === 'waiting_frames' && g.hadFrames) return '‖';
+  return '○';
 }
 
 function disposeObject3D(obj: THREE.Object3D) {

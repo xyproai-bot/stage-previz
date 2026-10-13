@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import { useAuth } from '../lib/auth';
 import type { UserRole } from '../lib/api';
-import { NdiClient } from '../lib/ndiClient';
-import { NDI_HELPER_DOWNLOAD_URL, NDI_TOOLS_URL } from '../lib/downloads';
+import { useNdiConnection } from '../lib/ndiConnection';
+import { ndiStepMessage, type NdiBrowser, type NdiGuide } from '../lib/ndiSteps';
+import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
 import { clearPersonalLooks, countPersonalLooks } from '../lib/localPrefs';
 import { toast } from '../lib/toast';
 import { version as APP_VERSION } from '../../package.json';
@@ -62,86 +63,22 @@ function AccountSection() {
 
 // ─── NDI 小程序 ───
 
-type NdiCheck =
-  | { kind: 'idle' }
-  | { kind: 'checking' }
-  | { kind: 'found'; helperVersion: string; source: string | null; sources: string[] }
-  | { kind: 'none' };
-
 /**
- * 試著連一次 NDI 小程序（ws://127.0.0.1:7777），連到就拿版本 / 來源名稱後馬上斷開。
- * 不自動重連；cancel() 之後 done 永遠不會 resolve（元件已經不在了）。
+ * 「檢查連線」：連 NDI 小程序看卡在哪一步（跟分享頁 / 工作站的卡片同一套說法），不收畫面。
+ * 按了才開始（瀏覽器還沒問過權限的話，按下去就會跳出詢問）；之後一直更新，裝好小程序會自己變。
  */
-function probeNdiHelper(timeoutMs = 4000): { done: Promise<NdiCheck>; cancel: () => void } {
-  let finished = false;
-  let resolveFn: (r: NdiCheck) => void = () => {};
-  const done = new Promise<NdiCheck>(res => { resolveFn = res; });
-  let hello: { helperVersion: string; source: string } | null = null;
-  let sources: string[] = [];
-  let settleTimer = 0;
-  let timeoutTimer = 0;
-  let client: NdiClient | null = null;
-
-  const finish = (r: NdiCheck | null) => {
-    if (finished) return;
-    finished = true;
-    window.clearTimeout(timeoutTimer);
-    window.clearTimeout(settleTimer);
-    try { client?.destroy(); } catch { /* ignore */ }
-    if (r) resolveFn(r);
-  };
-  const finishFound = () => {
-    if (!hello) return;
-    const src = hello.source && hello.source !== '(no source)' ? hello.source : null;
-    finish({ kind: 'found', helperVersion: hello.helperVersion, source: src, sources });
-  };
-
-  client = new NdiClient({
-    reconnectIntervalMs: 0,
-    onFrame: (bitmap) => { bitmap.close?.(); },
-    onStatus: (s) => {
-      if (finished) return;
-      if (s.kind === 'connected') {
-        const first = !hello;
-        hello = { helperVersion: s.helperVersion, source: s.source };
-        // 連上後 client 會問一次 status（來源名稱、找得到的來源），等一下下再收尾
-        if (first) settleTimer = window.setTimeout(finishFound, 800);
-      } else if (s.kind === 'error' || s.kind === 'disconnected') {
-        if (hello) finishFound();
-        else finish({ kind: 'none' });
-      }
-    },
-    onSources: (list) => {
-      sources = list;
-      // 同一則 status 訊息接著會更新來源名稱 → 下一輪再收尾
-      if (hello && !finished) window.setTimeout(finishFound, 0);
-    },
-  });
-  timeoutTimer = window.setTimeout(() => {
-    if (hello) finishFound();
-    else finish({ kind: 'none' });
-  }, timeoutMs);
-  client.connect();
-
-  return { done, cancel: () => finish(null) };
-}
-
 function NdiSection() {
-  const [check, setCheck] = useState<NdiCheck>({ kind: 'idle' });
-  const cancelRef = useRef<(() => void) | null>(null);
-
-  useEffect(() => () => { cancelRef.current?.(); }, []);
-
-  const runCheck = useCallback(() => {
-    cancelRef.current?.();
-    setCheck({ kind: 'checking' });
-    const probe = probeNdiHelper();
-    cancelRef.current = probe.cancel;
-    probe.done.then((r) => {
-      cancelRef.current = null;
-      setCheck(r);
-    });
-  }, []);
+  const [checking, setChecking] = useState(false);
+  const ndi = useNdiConnection({ enabled: checking, wantFrames: false, userInitiated: true });
+  const g = ndi.guide;
+  const busy = checking && (g.step === 'connecting' || (g.step === 'need_permission' && g.pending));
+  const mac = ndi.env.os === 'mac';
+  const winLink = (
+    <a key="win" className={'btn ' + (mac ? 'btn--ghost' : 'btn--primary')} href={NDI_HELPER_DOWNLOAD_URL}>⬇ 下載 NDI 小程序（Windows）</a>
+  );
+  const macLink = (
+    <a key="mac" className={'btn ' + (mac ? 'btn--primary' : 'btn--ghost')} href={NDI_HELPER_DOWNLOAD_URL_MAC}>⬇ 下載 NDI 小程序（Mac）</a>
+  );
 
   return (
     <section className="settings-card">
@@ -149,53 +86,42 @@ function NdiSection() {
       <p className="settings-desc">裝好打開後，AE 的畫面會即時播在 3D 舞台的 LED 上。</p>
 
       <div className="settings-ndi-check">
-        <button className="btn btn--ghost" onClick={runCheck} disabled={check.kind === 'checking'}>
-          {check.kind === 'checking' ? '檢查中…' : '檢查連線'}
+        <button
+          className="btn btn--ghost"
+          onClick={() => (checking ? ndi.retry() : setChecking(true))}
+          disabled={busy || (checking && g.step === 'browser_unsupported')}
+        >
+          {busy ? '檢查中…' : checking ? '再檢查一次' : '檢查連線'}
         </button>
-        <NdiCheckResult check={check} />
+        {checking && <NdiCheckResult guide={g} browser={ndi.env.browser} />}
       </div>
 
       <div className="settings-links">
-        <a className="btn btn--primary" href={NDI_HELPER_DOWNLOAD_URL}>⬇ 下載 NDI 小程序（Windows）</a>
+        {mac ? [macLink, winLink] : [winLink, macLink]}
         <a className="btn btn--ghost" href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">NDI Tools（官方免費）↗</a>
       </div>
 
       <ol className="settings-steps">
         <li>裝 NDI Tools</li>
-        <li>裝並打開 NDI 小程序</li>
-        <li>AE 的預覽輸出選 NDI（NDI Tools 裡的 Adobe 外掛）</li>
+        <li>裝並打開 NDI 小程序（之後開機會自動啟動）</li>
+        <li>AE：偏好設定 → 視訊預覽 → 勾 NDI；「在背景時停用視訊輸出」取消勾選</li>
+        <li>用 Chrome / Edge / Firefox 打開，瀏覽器問「允許存取這台裝置上的應用程式和服務」→ 按「允許」</li>
       </ol>
     </section>
   );
 }
 
-function NdiCheckResult({ check }: { check: NdiCheck }) {
-  switch (check.kind) {
-    case 'idle':
-      return null;
-    case 'checking':
-      return <span className="settings-status">正在找小程序…</span>;
-    case 'none':
-      return (
-        <span className="settings-status settings-status--warn">
-          沒有偵測到小程序 — 裝好後打開它，再按一次「檢查連線」
-        </span>
-      );
-    case 'found':
-      return (
-        <span className="settings-status settings-status--ok">
-          <span>
-            {check.source
-              ? <>已連上 · 正在收：<strong>{check.source}</strong></>
-              : '已連上，但還沒收到 AE 畫面（AE 輸出選 NDI 了嗎？）'}
-          </span>
-          {!check.source && check.sources.length > 0 && (
-            <span className="settings-status__sub">這台電腦找得到：{check.sources.join('、')}</span>
-          )}
-          <span className="settings-status__sub">小程序版本 {check.helperVersion}</span>
-        </span>
-      );
-  }
+function NdiCheckResult({ guide, browser }: { guide: NdiGuide; browser: NdiBrowser }) {
+  const msg = ndiStepMessage(guide, browser);
+  const ok = guide.step === 'ready' || guide.step === 'live';
+  const neutral = guide.step === 'connecting';
+  return (
+    <span className={'settings-status' + (ok ? ' settings-status--ok' : neutral ? '' : ' settings-status--warn')} role="status">
+      <span>{msg.title}</span>
+      {msg.detail.map(d => <span key={d} className="settings-status__sub">{d}</span>)}
+      {guide.helperVersion && <span className="settings-status__sub">小程序版本 {guide.helperVersion}</span>}
+    </span>
+  );
 }
 
 // ─── 這台電腦的設定 ───

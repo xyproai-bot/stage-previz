@@ -11,8 +11,7 @@ import { skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { toast } from '../lib/toast';
 import { cueTransitionSeconds, videoCueSelection } from '../lib/cueTiming';
 import { cuePoses, cueWindows, poseAtTime, type CuePoseMap, type CueWindow } from '../lib/cueTimeline';
-import type { NdiClientStatus } from '../lib/ndiClient';
-import { NDI_HELPER_DOWNLOAD_URL, NDI_TOOLS_URL } from '../lib/downloads';
+import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import ShareSetlist from './ShareSetlist';
 import './Share.css';
 
@@ -59,9 +58,8 @@ export default function Share() {
   const media = useLocalMedia();
   const local = media.player;
   const [source, setSource] = useState<LedSource>('ndi');
-  const [ndiStatus, setNdiStatus] = useState<NdiClientStatus>({ kind: 'idle' });
-  // 剛打開 / 剛切到 AE 時給一點時間連線，連不上才顯示安裝步驟
-  const [ndiGraceOver, setNdiGraceOver] = useState(false);
+  // AE 即時現在卡在哪一步（3D 畫面上的檢查清單卡片會帶著做；這裡只顯示一句狀態）
+  const [ndiGuide, setNdiGuide] = useState<NdiGuide | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const lastAutoCueRef = useRef<string | null>(null);
   // 這首歌每個 cue 的舞台位置先全部抓好 → 點 cue 馬上開始動，不用等網路
@@ -84,13 +82,6 @@ export default function Share() {
   useEffect(() => {
     if (source === 'ndi') local.video.pause();
   }, [source, local.video]);
-
-  useEffect(() => {
-    setNdiGraceOver(false);
-    if (source !== 'ndi') return;
-    const t = window.setTimeout(() => setNdiGraceOver(true), 3000);
-    return () => window.clearTimeout(t);
-  }, [source]);
 
   // 拖進來 / 選的檔案加進清單，第一個馬上放在 LED 上；不是影片或圖片的略過
   const addFiles = useCallback((files: FileList | null | undefined) => {
@@ -382,10 +373,10 @@ export default function Share() {
             </div>
             <span className="share-source__status">
               {source === 'ndi'
-                // 「已連上」= 小程序有回應；有沒有畫面進來看 3D 工具列的 NDI 標示（LIVE / 等待中）
-                ? (ndiStatus.kind === 'connected'
-                  ? `已連上 NDI 小程序${ndiStatus.source ? ` · 來源：${ndiStatus.source}` : '（還沒選來源）'}`
-                  : ndiStatus.kind === 'connecting' ? '連線 NDI 小程序中…' : '沒偵測到 NDI 小程序')
+                ? (!ndiGuide ? '連線中…'
+                  : ndiGuide.step === 'live'
+                  ? `● ${ndiGuide.source ?? 'AE'}${ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}`
+                  : ndiShortLabel(ndiGuide))
                 : media.active?.kind === 'video' ? `${local.playing ? '▶' : '⏸'} ${media.active.name}`
                 : media.active ? `🖼 ${media.active.name}`
                 : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
@@ -435,7 +426,9 @@ export default function Share() {
               materialOverrides={materialOverrides}
               homeView={homeView}
               enableNdi={source === 'ndi'}
-              onNdiStatus={setNdiStatus}
+              onNdiStatus={setNdiGuide}
+              ndiGuide
+              ndiGuideHint="沒有 AE？按上面「🎬 本地檔案」把影片或圖片拖進來"
               ledVideo={videoMode && local.ready ? local.video : null}
               ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
               poseAtFrame={poseAtFrame}
@@ -444,20 +437,9 @@ export default function Share() {
             <div className="share-empty">這個專案沒有可預覽的內容</div>
           )}
 
-          {/* 拖檔提示 / AE 安裝步驟 / 選影片提示 / 播放錯誤 */}
+          {/* 拖檔提示 / 選影片提示 / 播放錯誤（AE 即時的步驟在 3D 畫面上的卡片） */}
           {dragOver && (
             <div className="share-overlay share-overlay--drop">放開，影片 / 圖片會加進清單、放在 LED 上（只在這台電腦播，不會上傳）</div>
-          )}
-          {!dragOver && source === 'ndi' && ndiGraceOver && ndiStatus.kind !== 'connected' && (
-            <div className="share-overlay">
-              <strong>要在 LED 上看 AE 即時畫面</strong>
-              <ol>
-                <li>安裝 <a href={NDI_TOOLS_URL} target="_blank" rel="noreferrer">NDI Tools</a>（官方免費）</li>
-                <li>下載並打開 NDI 小程序：<a className="btn btn--sm" href={NDI_HELPER_DOWNLOAD_URL}>⬇ 下載安裝檔</a></li>
-                <li>AE 的「視訊預覽」輸出選 NDI（NDI Tools 裡的 Adobe 外掛）</li>
-              </ol>
-              <span className="share-overlay__hint">接上後這裡會自動變成 LIVE。沒有 AE？按上面「🎬 本地檔案」把影片或圖片拖進來。</span>
-            </div>
           )}
           {!dragOver && source === 'file' && media.items.length === 0 && (
             <div className="share-overlay">

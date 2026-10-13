@@ -489,6 +489,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   readOnly
                   defaultRenderMode="live"
                   enableNdi
+                  ndiGuide
                   cueKey={selectedCueId}
                   crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                   bookmarkScope={projectId}
