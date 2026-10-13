@@ -1876,6 +1876,7 @@ function ClientChapter() {
           <li>④ 小播放器按播放。舞台會跟著影片時間切 cue，升降台、轉台這些機關也會照真的速度動。</li>
           <li>⑤ 點下面的 cue，直接看那個舞台畫面（影片跳到那個 cue 的時間）。</li>
         </ol>
+        <p>還沒有影片的歌，上面會寫「<Ui>這首歌還沒有影片</Ui>」，LED 顯示測試圖；舞台和 cue 照樣可以看。</p>
         <p>3D 工具列最右邊的「<Ui><Icon icon={Ellipsis} /></Ui>」：LED 對位圖、LED 顯示測試圖，最下面的「<Ui>說明</Ui>」會打開這份使用說明。</p>
         <F k="shareMenu" />
         <p className="help-muted">「AE 即時」是給動畫師用的（在跑 AE 的電腦上看），看 <Go to={A.aeLive}>AE 即時預覽</Go>。</p>
