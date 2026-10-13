@@ -5,7 +5,7 @@ import {
   projectRoleOf, canEditProjectContent, canManageShareLinks,
   songStatusDecision, describeProjectRoute, roleMeetsNeed,
   commentSessionFor, parseCommentSession, commentAuthorRole, canModifyComment,
-  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow,
+  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow, canBrowseSharedAssets,
 } from './access.mjs';
 
 const segs = (path) => path.split('/').filter(Boolean);
@@ -118,6 +118,25 @@ test('路由：只有全站 admin 的', () => {
   assert.equal(route('DELETE', '/api/projects/p1').need, 'globalAdmin');
   assert.equal(route('POST', '/api/projects/p1/duplicate').need, 'globalAdmin');
   assert.deepEqual(route('POST', '/api/projects/p1/restore'), { kind: 'restore', need: 'globalAdmin', allowArchived: true });
+});
+
+test('路由：邀請連結只有全站 admin（等於幫專案加人）', () => {
+  assert.deepEqual(route('GET', '/api/projects/p1/invites'), { kind: 'invites.list', need: 'globalAdmin' });
+  assert.deepEqual(route('POST', '/api/projects/p1/invites'), { kind: 'invites.create', need: 'globalAdmin' });
+  assert.deepEqual(route('DELETE', '/api/projects/p1/invites/inv_1'), { kind: 'invites.revoke', need: 'globalAdmin', inviteId: 'inv_1' });
+  assert.equal(route('PATCH', '/api/projects/p1/invites').methodNotAllowed, true);
+  assert.equal(route('GET', '/api/projects/p1/invites/inv_1').methodNotAllowed, true);
+  assert.equal(route('DELETE', '/api/projects/p1/invites/inv_1/x'), null);
+  // 專案的 admin（不是全站 admin）、導演都不行
+  assert.equal(roleMeetsNeed('globalAdmin', { role: 'admin', globalRole: 'director' }), false);
+  assert.equal(roleMeetsNeed('globalAdmin', { role: 'director', globalRole: 'director' }), false);
+});
+
+test('共用模型庫清單：全站 admin 或某個專案的 admin 才看得到', () => {
+  assert.equal(canBrowseSharedAssets({ globalRole: 'admin', isProjectAdminSomewhere: false }), true);
+  assert.equal(canBrowseSharedAssets({ globalRole: 'director', isProjectAdminSomewhere: true }), true);
+  assert.equal(canBrowseSharedAssets({ globalRole: 'animator', isProjectAdminSomewhere: false }), false);
+  assert.equal(canBrowseSharedAssets({ globalRole: 'director', isProjectAdminSomewhere: false }), false);
 });
 
 test('路由：Drive 同步成員都可以（動畫師提交前要同步），手動歸類要 editor', () => {

@@ -18,7 +18,8 @@
 //   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
 //   只有全站 admin：建立 / 匯入 / 複製 / 封存 / 還原專案、Drive 帳號和資料夾綁定、
-//                   3D 檢視設定、專案狀態、Show 管理、用戶管理
+//                   3D 檢視設定、專案狀態、Show 管理、用戶管理、邀請連結（建立 / 清單 / 撤銷）
+//   共用模型庫（/api/assets）：看清單 = 全站 admin 或某個專案的 admin（canBrowseSharedAssets）；改 = 全站 admin
 
 export const ROLES = ['admin', 'animator', 'director'];
 export const SONG_STATUSES = ['todo', 'in_review', 'approved', 'needs_changes'];
@@ -191,6 +192,16 @@ export function describeProjectRoute(method, segs) {
       }
       return null;
 
+    case 'invites':
+      // 邀請連結（invites.mjs）：等於幫專案加人 → 跟用戶管理一樣只有全站 admin
+      if (!a) {
+        if (read) return r('invites.list', 'globalAdmin');
+        if (m === 'POST') return r('invites.create', 'globalAdmin');
+        return bad('invites');
+      }
+      if (!b && m === 'DELETE') return r('invites.revoke', 'globalAdmin', { inviteId: a });
+      return b ? null : bad('invites.item');
+
     case 'activity':
       return read ? r('activity', 'member') : bad('activity');
     case 'comments':
@@ -311,6 +322,14 @@ export function roleMeetsNeed(need, { role, globalRole }) {
     default:
       return false;
   }
+}
+
+/**
+ * 共用模型庫（/api/assets）的清單能不能看：全站 admin，或至少是一個（沒封存的）專案的 admin
+ * （舊版前端裡專案 admin 也能打開專案頁的「從模型庫選」；改模型庫一律只有全站 admin）
+ */
+export function canBrowseSharedAssets({ globalRole, isProjectAdminSomewhere }) {
+  return globalRole === 'admin' || !!isProjectAdminSomewhere;
 }
 
 /** 權限不夠時給使用者看的話 */

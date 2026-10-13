@@ -33,7 +33,7 @@ import {
   projectRoleOf, canEditProjectContent, songStatusDecision,
   describeProjectRoute, roleMeetsNeed, needDeniedMessage, PROJECT_GLOBAL_ADMIN_FIELDS, SONG_CONTENT_FIELDS,
   parseCommentSession, commentSessionFor, commentAuthorRole, canModifyComment,
-  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow,
+  scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow, canBrowseSharedAssets,
 } from './access.mjs';
 // 每個 cue 時物件在哪裡（管理頁和分享連結共用同一份計算）
 import { buildCueStates } from './cueStates.mjs';
@@ -57,6 +57,16 @@ import {
   classifyVideoLink, interpretProbe,
   signVideoPass, verifyVideoPass, parseRangeHeader,
 } from './videos.mjs';
+// 登入碼（產生、雜湊、明文 / 雜湊兩種存法）
+import {
+  generateLoginCode, normalizeLoginCode, hashLoginCode, legacyCustomCodeDecision, loginCodeStorageMode,
+  userLoginCodeView, LOGIN_CODE_STORAGE_KEY, CUSTOM_CODE_NOT_ALLOWED,
+} from './loginCodes.mjs';
+// 邀請連結（邀請碼、狀態、檢查）
+import {
+  generateInviteToken, isInviteTokenShape, hashInviteToken, newInviteId, parseInviteCreate,
+  inviteUserDecision, inviteState, inviteProblem, inviteLandingPath, inviteToApi,
+} from './invites.mjs';
 
 const MAX_COMMENTS_PER_SESSION = 500;
 const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -185,6 +195,11 @@ async function routeRequest(request, env) {
     return handleUsersRouter(request, env, url);
   }
 
+  // 邀請連結：清單（全站 admin）、打開前先看（peek）、用掉（redeem，不用登入）
+  if (url.pathname === '/api/invites' || url.pathname.startsWith('/api/invites/')) {
+    return handleInvitesRouter(request, env, url);
+  }
+
   if (url.pathname === '/api/assets' || url.pathname.startsWith('/api/assets/')) {
     return handleAssetsRouter(request, env, url);
   }
@@ -227,7 +242,7 @@ async function routeRequest(request, env) {
   }
 
   if (url.pathname === '/' || url.pathname === '') {
-    return handleDriveProxy(request, url);
+    return handleDriveProxy(request, env, url);
   }
 
   return jsonResp({ error: 'Not found' }, 404);
@@ -270,7 +285,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId, route.videoId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -375,6 +390,10 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'model.versions':        return listModelVersions(env, projectId);
     case 'model.activate':        return activateModelVersion(request, env, projectId);
     case 'model.deleteVersion':   return deleteModelVersion(request, env, projectId, segs[5]);
+
+    case 'invites.list':          return listOpenInvites(env, { projectId });
+    case 'invites.create':        return createInvite(request, env, ctx);
+    case 'invites.revoke':        return revokeInvite(env, ctx, route.inviteId);
 
     case 'activity':              return listActivity(env, projectId, url.searchParams.get('limit') || '50');
     case 'comments.summary':      return commentsSummary(env, ctx);
@@ -2784,9 +2803,19 @@ async function handleLegacyKvComments(request, env, url, session) {
 
 // ─────────────────────────────────────────────
 // GDrive Proxy（原本邏輯 + 友善 quota 錯誤訊息）
+//
+// 以前誰都能用（網址 /?id=<Drive 檔案>，任何公開的 Drive 檔都能透過我們轉）→ 等於幫全世界免費轉檔，
+// 用量一多，Cloudflare 每天的請求額度用完，整個後台（含登入）都會停。
+// 現在只給登入的人用（瀏覽器的登入 cookie 或 Authorization header）。
+// 新版 / 舊版（0d6df54）前端都不用這個網址：成員看影片走 /api/drive/stream/:id、/api/videos/:id/stream，
+// 分享連結走 /api/share/:token/...（都已經各自檢查成員 / 分享通行證）。只有最早的單頁工具（index.html）還在用。
 // ─────────────────────────────────────────────
 
-async function handleDriveProxy(request, url) {
+async function handleDriveProxy(request, env, url) {
+  const me = await getCurrentUser(request, env);
+  if (!me) {
+    return jsonResp({ error: '要先登入才能用這個網址播放 Drive 影片', code: 'LOGIN_REQUIRED' }, 401);
+  }
   const fileId = url.searchParams.get('id');
   if (!fileId || !/^[a-zA-Z0-9_-]+$/.test(fileId)) {
     return jsonResp({ error: 'Missing or invalid id parameter' }, 400);
@@ -2907,13 +2936,16 @@ function base64ToBytes(b64) {
   return bytes;
 }
 
-// 產生 8 位英數字 access code（去掉容易混的 0/O/1/I/l）
-function generateAccessCode() {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const bytes = crypto.getRandomValues(new Uint8Array(8));
-  let s = '';
-  for (const b of bytes) s += alphabet[b % alphabet.length];
-  return s;
+// 登入碼現在怎麼存（loginCodes.mjs）：app_settings 有 login_code_storage = 'hashed' → 雜湊；沒有 → 明文（跟以前一樣）
+// 還沒跑 0022 migration（沒有 app_settings 表）→ 明文；其他資料庫錯誤照樣丟出去（不要因為一時讀不到就當成明文，害大家登不進去）
+async function getLoginCodeMode(env) {
+  try {
+    const r = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = ? LIMIT 1`).bind(LOGIN_CODE_STORAGE_KEY).first();
+    return loginCodeStorageMode(r?.value);
+  } catch (e) {
+    if (/no such table/i.test(String(e?.message || e))) return 'plain';
+    throw e;
+  }
 }
 
 async function newSessionToken(secret, userId) {
@@ -3015,10 +3047,10 @@ async function authLogin(request, env) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
-  const code = (body?.accessCode || '').toString().trim().toUpperCase().replace(/\s+/g, '');
-  if (!code) return jsonResp({ error: '請輸入號碼' }, 400);
+  const code = normalizeLoginCode(body?.accessCode);
+  if (!code) return jsonResp({ error: '請輸入登入碼' }, 400);
 
-  // 防猜號碼：同一個 IP 15 分鐘內錯 10 次 → 鎖 15 分鐘（鎖定中就算號碼對也擋）
+  // 防猜登入碼：同一個 IP 15 分鐘內錯 10 次 → 鎖 15 分鐘（鎖定中就算登入碼對也擋，也不會算雜湊）
   // 順手清掉一天以前的紀錄
   const ipKey = loginClientKey(request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for'));
   const now = Date.now();
@@ -3036,15 +3068,38 @@ async function authLogin(request, env) {
     });
   }
 
-  const u = await env.DB.prepare(
-    `SELECT id, name, role, avatar_color, deactivated
-       FROM users WHERE access_code = ? LIMIT 1`
-  ).bind(code).first();
+  // 明文存法（現在）：跟以前一樣直接比對明文
+  // 雜湊存法（上線時切）：算一次雜湊（約 5ms）拿去查；還沒換掉的舊明文也認，對了就換成雜湊、明文清掉
+  const mode = await getLoginCodeMode(env);
+  let u, codeHash = null;
+  if (mode === 'hashed') {
+    codeHash = await hashLoginCode(code);
+    u = await env.DB.prepare(
+      `SELECT id, name, role, avatar_color, deactivated, access_code_hash
+         FROM users WHERE access_code_hash = ? OR access_code = ?
+        ORDER BY (access_code_hash = ?) DESC LIMIT 1`
+    ).bind(codeHash, code, codeHash).first();
+  } else {
+    u = await env.DB.prepare(
+      `SELECT id, name, role, avatar_color, deactivated
+         FROM users WHERE access_code = ? LIMIT 1`
+    ).bind(code).first();
+  }
   if (!u) {
     await env.DB.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(ipKey, now).run();
-    return jsonResp({ error: '號碼無效' }, 401);
+    return jsonResp({ error: '登入碼不對，請再確認一次' }, 401);
   }
-  if (u.deactivated) return jsonResp({ error: '此號碼已停用，請聯絡 admin' }, 403);
+  if (u.deactivated) return jsonResp({ error: '這個帳號已停用，請聯絡製作' }, 403);
+
+  if (mode === 'hashed' && u.access_code_hash !== codeHash) {
+    try {
+      await env.DB.prepare(
+        `UPDATE users SET access_code_hash = ?, access_code = NULL WHERE id = ? AND access_code = ?`
+      ).bind(codeHash, u.id, code).run();
+    } catch (e) {
+      console.warn('[login] 舊登入碼換成雜湊失敗', e?.message || e);
+    }
+  }
 
   await env.DB.batch([
     env.DB.prepare(`UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`).bind(u.id),
@@ -3107,8 +3162,10 @@ async function handleUsersRouter(request, env, url) {
 
 async function listUsers(env) {
   // 含每人的 project memberships
+  // 登入碼：明文存法才回（舊版前端的用戶頁要顯示）；雜湊存法只回「有沒有」（loginCodes.mjs userLoginCodeView）
+  const mode = await getLoginCodeMode(env);
   const users = await env.DB.prepare(
-    `SELECT id, name, role, avatar_color, access_code, deactivated, created_at, last_seen_at
+    `SELECT id, name, role, avatar_color, access_code, access_code_hash, deactivated, created_at, last_seen_at
        FROM users ORDER BY created_at`
   ).all();
   const memberships = await env.DB.prepare(`
@@ -3126,11 +3183,33 @@ async function listUsers(env) {
   return jsonResp({
     users: (users.results || []).map(u => ({
       id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color,
-      accessCode: u.access_code, deactivated: !!u.deactivated,
+      ...userLoginCodeView(u, mode), deactivated: !!u.deactivated,
       createdAt: u.created_at, lastSeenAt: u.last_seen_at,
       projects: byUser[u.id] || [],
     })),
+    // 'hashed' = 登入碼只在建立 / 重設時顯示一次
+    loginCodeStorage: mode,
   });
+}
+
+/**
+ * 建立 / 重設時要用的登入碼：
+ *   自訂（body.accessCode 有填）→ 只有明文存法收（舊版前端的「自訂」），雜湊存法擋掉
+ *   沒填 → 系統產生 10 個字（loginCodes.mjs）
+ * @returns {{ok: true, custom: string|null} | {ok: false, status: number, error: string}}
+ */
+function loginCodeRequest(body, mode) {
+  const raw = (body?.accessCode ?? '').toString().trim();
+  if (!raw) return { ok: true, custom: null };
+  if (mode === 'hashed') return { ok: false, status: 400, error: CUSTOM_CODE_NOT_ALLOWED };
+  const d = legacyCustomCodeDecision(raw);
+  return d.ok ? { ok: true, custom: d.code } : { ok: false, status: 400, error: d.error };
+}
+
+/** 要寫進資料庫的兩個欄位：明文存法 → access_code；雜湊存法 → access_code_hash（明文清掉） */
+async function loginCodeColumns(code, mode) {
+  if (mode === 'hashed') return { access_code: null, access_code_hash: await hashLoginCode(code) };
+  return { access_code: code, access_code_hash: null };
 }
 
 async function createUser(request, env) {
@@ -3139,25 +3218,37 @@ async function createUser(request, env) {
   const name = (body?.name || '').toString().trim().slice(0, 80);
   const role = ['admin', 'animator', 'director'].includes(body?.role) ? body.role : 'animator';
   const avatarColor = (body?.avatarColor || '#10c78a').toString().slice(0, 8);
-  let accessCode = (body?.accessCode || '').toString().trim().toUpperCase().replace(/\s+/g, '');
   if (!name) return jsonResp({ error: 'name 必填' }, 400);
-  if (accessCode && accessCode.length < 4) return jsonResp({ error: '自訂 access code 至少 4 個字' }, 400);
-  if (accessCode && accessCode.length > 32) return jsonResp({ error: 'access code 太長（最多 32 字）' }, 400);
+  const mode = await getLoginCodeMode(env);
+  const req = loginCodeRequest(body, mode);
+  if (!req.ok) return jsonResp({ error: req.error }, req.status);
 
-  // 沒給就自動產生
-  if (!accessCode) accessCode = generateAccessCode();
-
-  // 檢查 code 重複
-  const exists = await env.DB.prepare(`SELECT id FROM users WHERE access_code = ? LIMIT 1`).bind(accessCode).first();
-  if (exists) return jsonResp({ error: '這個 access code 已被使用，請改一個' }, 409);
+  // 自訂的（只有明文存法）：先檢查重複
+  if (req.custom) {
+    const exists = await env.DB.prepare(`SELECT id FROM users WHERE access_code = ? LIMIT 1`).bind(req.custom).first();
+    if (exists) return jsonResp({ error: '這個登入碼已被使用，請改一個' }, 409);
+  }
 
   const id = 'u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
   // email 必填（schema NOT NULL）→ 內部 placeholder
   const placeholderEmail = `${id}@auto.local`;
-  await env.DB.prepare(
-    `INSERT INTO users (id, email, name, role, avatar_color, access_code)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  ).bind(id, placeholderEmail, name, role, avatarColor, accessCode).run();
+  let accessCode = null;
+  for (let attempt = 0; ; attempt++) {
+    const code = req.custom || generateLoginCode();
+    const cols = await loginCodeColumns(code, mode);
+    try {
+      await env.DB.prepare(
+        `INSERT INTO users (id, email, name, role, avatar_color, access_code, access_code_hash)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, placeholderEmail, name, role, avatarColor, cols.access_code, cols.access_code_hash).run();
+      accessCode = code;
+      break;
+    } catch (e) {
+      if (!isUniqueError(e)) throw e;
+      if (req.custom) return jsonResp({ error: '這個登入碼已被使用，請改一個' }, 409);
+      if (attempt >= 3) throw e;  // 系統產生的剛好跟別人一樣 → 換一組再試
+    }
+  }
 
   // optional: 同時指派 project
   const projectIds = Array.isArray(body?.projectIds) ? body.projectIds : [];
@@ -3168,7 +3259,8 @@ async function createUser(request, env) {
     ).bind(pid, id, role).run();
   }
 
-  return jsonResp({ ok: true, id, accessCode }, 201);
+  // 雜湊存法時這是唯一一次看得到登入碼（shownOnce）
+  return jsonResp({ ok: true, id, accessCode, shownOnce: mode === 'hashed' }, 201);
 }
 
 async function updateUser(request, env, userId) {
@@ -3188,23 +3280,36 @@ async function updateUser(request, env, userId) {
   return jsonResp({ ok: true });
 }
 
+// 重設登入碼（也用來給「用邀請連結進來、還沒有登入碼」的人產生一組）：舊的登入碼馬上不能用
 async function setAccessCode(request, env, userId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
-  let code = (body?.accessCode || '').toString().trim().toUpperCase().replace(/\s+/g, '');
-  // 沒給就自動產生
-  if (!code) code = generateAccessCode();
-  if (code.length < 4) return jsonResp({ error: 'access code 至少 4 個字' }, 400);
-  if (code.length > 32) return jsonResp({ error: 'access code 太長' }, 400);
+  const mode = await getLoginCodeMode(env);
+  const req = loginCodeRequest(body, mode);
+  if (!req.ok) return jsonResp({ error: req.error }, req.status);
 
-  const exists = await env.DB.prepare(
-    `SELECT id FROM users WHERE access_code = ? AND id != ? LIMIT 1`
-  ).bind(code, userId).first();
-  if (exists) return jsonResp({ error: '這個 access code 已被別人使用' }, 409);
+  if (req.custom) {
+    const exists = await env.DB.prepare(
+      `SELECT id FROM users WHERE access_code = ? AND id != ? LIMIT 1`
+    ).bind(req.custom, userId).first();
+    if (exists) return jsonResp({ error: '這個登入碼已被別人使用' }, 409);
+  }
 
-  const r = await env.DB.prepare(`UPDATE users SET access_code = ? WHERE id = ?`).bind(code, userId).run();
-  if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
-  return jsonResp({ ok: true, accessCode: code });
+  for (let attempt = 0; ; attempt++) {
+    const code = req.custom || generateLoginCode();
+    const cols = await loginCodeColumns(code, mode);
+    try {
+      const r = await env.DB.prepare(
+        `UPDATE users SET access_code = ?, access_code_hash = ? WHERE id = ?`
+      ).bind(cols.access_code, cols.access_code_hash, userId).run();
+      if (!r.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+      return jsonResp({ ok: true, accessCode: code, shownOnce: mode === 'hashed' });
+    } catch (e) {
+      if (!isUniqueError(e)) throw e;
+      if (req.custom) return jsonResp({ error: '這個登入碼已被別人使用' }, 409);
+      if (attempt >= 3) throw e;
+    }
+  }
 }
 
 async function deleteUser(env, currentUserId, targetUserId) {
@@ -3266,6 +3371,202 @@ async function removeUserFromProject(request, env, userId) {
 }
 
 // ─────────────────────────────────────────────
+// 邀請連結（規則在 invites.mjs；表在 migrations/0022）
+//   GET    /api/projects/:id/invites              這個專案還能用的邀請         全站 admin（access.mjs）
+//   POST   /api/projects/:id/invites              建立 → 回 { invite, token }  全站 admin；token 只回這一次
+//   DELETE /api/projects/:id/invites/:inviteId    撤銷                         全站 admin
+//   GET    /api/invites                           所有專案還能用的邀請（用戶頁） 全站 admin
+//   POST   /api/invites/peek    { token }         打開前先看是誰、哪個專案（不會用掉）  不用登入
+//   POST   /api/invites/redeem  { token }         用掉：登入（新的人這時建帳號）+ 加進專案  不用登入
+// 邀請碼放在 body，不放在後台的網址上（不會出現在請求紀錄裡）
+// ─────────────────────────────────────────────
+
+const AVATAR_PALETTE = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];
+
+async function handleInvitesRouter(request, env, url) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const segs = url.pathname.split('/').filter(Boolean);  // [api, invites, sub?]
+  if (segs.length > 3) return jsonResp({ error: 'Not found' }, 404);
+  const sub = segs[2] || null;
+  try {
+    if (!sub) {
+      if (request.method !== 'GET') return jsonResp({ error: 'Method not allowed' }, 405);
+      const me = await getCurrentUser(request, env);
+      if (!me) return jsonResp({ error: '未登入' }, 401);
+      if (me.role !== 'admin') return jsonResp({ error: '只有 admin 可以做這件事' }, 403);
+      return await listOpenInvites(env, { projectId: null });
+    }
+    if (sub === 'peek' || sub === 'redeem') {
+      if (request.method !== 'POST') return jsonResp({ error: 'Method not allowed' }, 405);
+      let body;
+      try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+      return sub === 'peek' ? await peekInvite(env, body?.token) : await redeemInvite(env, body?.token);
+    }
+    return jsonResp({ error: 'Not found' }, 404);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
+}
+
+const INVITE_LIST_SELECT = `
+  SELECT i.id, i.project_id, i.role, i.user_id, i.new_user_name, i.created_at, i.expires_at,
+         i.max_uses, i.use_count, i.last_used_at,
+         p.name AS project_name, u.name AS user_name, c.name AS created_by_name
+    FROM invites i
+    JOIN projects p ON p.id = i.project_id
+    LEFT JOIN users u ON u.id = i.user_id
+    LEFT JOIN users c ON c.id = i.created_by_user_id`;
+
+// 還能用的（沒撤銷、沒過期、還有次數、專案沒封存）
+async function listOpenInvites(env, { projectId }) {
+  const now = Date.now();
+  const r = await env.DB.prepare(
+    `${INVITE_LIST_SELECT}
+      WHERE i.revoked_at IS NULL AND i.expires_at > ? AND i.use_count < i.max_uses AND p.status != 'archived'
+        ${projectId ? 'AND i.project_id = ?' : ''}
+      ORDER BY i.created_at DESC LIMIT 200`
+  ).bind(...(projectId ? [now, projectId] : [now])).all();
+  return jsonResp({ invites: (r.results || []).map(inviteToApi) });
+}
+
+async function createInvite(request, env, ctx) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const now = Date.now();
+  const p = parseInviteCreate(body, now);
+  if (!p.ok) return jsonResp({ error: p.error }, p.status);
+  const { role, userId, name, expiresAt, maxUses } = p.value;
+  if (userId) {
+    const u = await env.DB.prepare(`SELECT id, name, role, deactivated FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
+    const d = inviteUserDecision(u, 'create');
+    if (!d.ok) return jsonResp({ error: d.error }, d.status);
+  }
+  const token = generateInviteToken();
+  const id = newInviteId();
+  await env.DB.prepare(
+    `INSERT INTO invites (id, token_hash, project_id, role, user_id, new_user_name, created_by_user_id, created_at, expires_at, max_uses, use_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).bind(id, await hashInviteToken(token), ctx.projectId, role, userId, userId ? null : name, ctx.me.id, now, expiresAt, maxUses).run();
+  const row = await env.DB.prepare(`${INVITE_LIST_SELECT} WHERE i.id = ? LIMIT 1`).bind(id).first();
+  // token 只有這一次拿得到（資料庫只存雜湊）→ 前端組成 https://<網站>/invite/<token>
+  return jsonResp({ invite: inviteToApi(row), token }, 201);
+}
+
+async function revokeInvite(env, ctx, inviteId) {
+  const r = await env.DB.prepare(
+    `UPDATE invites SET revoked_at = ?, revoked_by_user_id = ? WHERE id = ? AND project_id = ? AND revoked_at IS NULL`
+  ).bind(Date.now(), ctx.me.id, inviteId, ctx.projectId).run();
+  if (!r.meta.changes) return jsonResp({ error: '找不到這個邀請（可能已經撤銷了）' }, 404);
+  return jsonResp({ ok: true });
+}
+
+async function loadInviteByToken(env, token) {
+  if (!isInviteTokenShape(token)) return null;
+  return env.DB.prepare(
+    `SELECT i.*, p.name AS project_name, p.status AS project_status,
+            u.name AS user_name, u.role AS user_role, u.deactivated AS user_deactivated
+       FROM invites i
+       JOIN projects p ON p.id = i.project_id
+       LEFT JOIN users u ON u.id = i.user_id
+      WHERE i.token_hash = ? LIMIT 1`
+  ).bind(await hashInviteToken(token)).first();
+}
+
+const inviteUserOf = (inv) => (inv.user_role ? { role: inv.user_role, deactivated: inv.user_deactivated } : null);
+
+/** 這條邀請現在不能用的話，回要給對方看的錯誤；能用回 null */
+function inviteProblemResp(inv, now) {
+  const state = inviteState(inv, now);
+  if (state !== 'ok') {
+    const p = inviteProblem(state);
+    return jsonResp({ error: p.error, reason: p.reason }, p.status);
+  }
+  if (inv.user_id) {
+    const d = inviteUserDecision(inviteUserOf(inv), 'redeem');
+    if (!d.ok) return jsonResp({ error: d.error, reason: d.reason }, d.status);
+  }
+  return null;
+}
+
+async function peekInvite(env, token) {
+  const inv = await loadInviteByToken(env, token);
+  const bad = inviteProblemResp(inv, Date.now());
+  if (bad) return bad;
+  return jsonResp({
+    invite: {
+      projectName: inv.project_name,
+      role: inv.role,
+      personName: inv.user_name || inv.new_user_name || '',
+      expiresAt: new Date(Number(inv.expires_at)).toISOString(),
+    },
+  });
+}
+
+async function redeemInvite(env, token) {
+  const now = Date.now();
+  const inv = await loadInviteByToken(env, token);
+  const bad = inviteProblemResp(inv, now);
+  if (bad) return bad;
+
+  // 先佔一次使用：同時有兩個人按，只能用一次的邀請也只有一個會成功
+  const claim = await env.DB.prepare(
+    `UPDATE invites SET use_count = use_count + 1, last_used_at = ?
+      WHERE id = ? AND revoked_at IS NULL AND expires_at > ? AND use_count < max_uses`
+  ).bind(now, inv.id, now).run();
+  if (!claim.meta?.changes) {
+    const again = await loadInviteByToken(env, token);
+    const state = inviteState(again, now);
+    const p = inviteProblem(state === 'ok' ? 'used' : state);
+    return jsonResp({ error: p.error, reason: p.reason }, p.status);
+  }
+
+  let userId = inv.user_id;
+  if (!userId) {
+    // 新的人：第一次打開才建帳號（角色 = 邀請的角色；沒有登入碼，之後要的話製作在用戶頁產生）
+    // 可以用好幾次的邀請：之後打開的都是同一個人。兩個請求同時建 → 只有一個會綁上去
+    const newId = 'u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    const color = AVATAR_PALETTE[crypto.getRandomValues(new Uint8Array(1))[0] % AVATAR_PALETTE.length];
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO users (id, email, name, role, avatar_color)
+         SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM invites WHERE id = ? AND user_id IS NULL)`
+      ).bind(newId, `${newId}@auto.local`, inv.new_user_name || '新成員', inv.role, color, inv.id),
+      env.DB.prepare(
+        `UPDATE invites SET user_id = ? WHERE id = ? AND user_id IS NULL AND EXISTS (SELECT 1 FROM users WHERE id = ?)`
+      ).bind(newId, inv.id, newId),
+    ]);
+    const bound = await env.DB.prepare(`SELECT user_id FROM invites WHERE id = ? LIMIT 1`).bind(inv.id).first();
+    userId = bound?.user_id || null;
+    if (!userId) return jsonResp({ error: '建立帳號失敗，請再試一次' }, 500);
+  }
+
+  const u = await env.DB.prepare(
+    `SELECT id, name, role, avatar_color, deactivated FROM users WHERE id = ? LIMIT 1`
+  ).bind(userId).first();
+  const d = inviteUserDecision(u, 'redeem');
+  if (!d.ok) return jsonResp({ error: d.error, reason: d.reason }, d.status);
+
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)
+       ON CONFLICT (project_id, user_id) DO UPDATE SET role = excluded.role`
+    ).bind(inv.project_id, u.id, inv.role),
+    env.DB.prepare(`UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`).bind(u.id),
+    env.DB.prepare(`UPDATE invites SET used_by_user_id = ? WHERE id = ?`).bind(u.id, inv.id),
+  ]);
+
+  // 跟一般登入一樣：90 天的登入狀態（cookie + 給前端存的 token）
+  const sessionToken = await newSessionToken(getAuthSecret(env), u.id);
+  return jsonRespWithCookie({
+    user: { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color },
+    token: sessionToken,
+    projectId: inv.project_id,
+    projectRole: inv.role,
+    landingPath: inviteLandingPath(inv.role, inv.project_id),
+  }, setSessionCookie(sessionToken));
+}
+
+// ─────────────────────────────────────────────
 // Shared Assets（admin Tier 1 #10）— 跨專案共用的 model 庫
 // GET    /api/assets                       → 列所有 active asset
 // POST   /api/assets    body json{name,description}  → 建 metadata，回 id + r2_key（前端再 PUT binary）
@@ -3288,6 +3589,17 @@ async function handleAssetsRouter(request, env, url) {
   const action = segs[3] || null;
 
   try {
+    // 看模型庫：全站 admin，或至少是一個專案的 admin（舊版前端專案頁的「從模型庫選」）；
+    // 以前任何登入的人都能列出所有模型（名稱、誰傳的、檔案網址）
+    if (me.role !== 'admin') {
+      const pa = await env.DB.prepare(
+        `SELECT 1 AS ok FROM project_members pm JOIN projects p ON p.id = pm.project_id
+          WHERE pm.user_id = ? AND pm.role = 'admin' AND p.status != 'archived' LIMIT 1`
+      ).bind(me.id).first();
+      if (!canBrowseSharedAssets({ globalRole: me.role, isProjectAdminSomewhere: !!pa })) {
+        return jsonResp({ error: '只有製作可以看模型庫' }, 403);
+      }
+    }
     if (!assetId) {
       if (request.method === 'GET') return listAssets(env);
       if (request.method === 'POST') {
