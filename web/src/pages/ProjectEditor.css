@@ -1410,3 +1410,9 @@
   .editor-breadcrumb__sub { display: none; }
   .editor-topbar__right { gap: 6px; }
 }
+
+/* 歌單比較窄時（iPad 橫放）：「影片 V2」「還沒有影片」不要斷成直的，「＋加影片」放不下就換到下一行 */
+.song-item__video { flex-wrap: wrap; row-gap: 3px; }
+.song-item__video-label,
+.song-item__video-none,
+.song-item__video-add { white-space: nowrap; flex-shrink: 0; }
