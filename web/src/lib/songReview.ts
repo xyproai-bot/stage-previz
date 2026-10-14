@@ -2,8 +2,10 @@
 //
 // 規則跟後台 cf-worker/access.mjs 的 songStatusDecision 一樣（後台才是最後把關；這裡只決定按鈕出不出現）：
 //   動畫師（指派給自己、或還沒指派的歌）：待製作 / 需修改 → 審查中（提交）；審查中 → 待製作（撤回，只有還在審查中才能撤回）
-//   導演：審查中 → 已通過 / 需修改；已通過 → 審查中（撤回通過）
+//   導演、製作（導演頁）：這首歌有可以播的版本 → 不管現在是什麼狀態都可以「通過 V2」「需修改 V2」（綁看的那一版）；
+//         已通過 → 需修改（改主意）、需修改 → 通過都可以；還沒有影片 → 按鈕按不下去（decisionBarState）
 //   admin：什麼都可以（動畫師頁給動畫師那組按鈕、導演頁給導演那組；其他改法在管理頁的狀態選單）
+//   （後台還收舊版前端的「撤回通過」：已通過 → 審查中；新版畫面改成直接按「需修改」）
 // 角色一律看「這個專案」裡的角色（Project.myRole），不是帳號的預設角色。
 
 import type { Song, SongComment } from './api';
@@ -18,7 +20,7 @@ export const SONG_STATUS_LABEL: Record<SongStatus, string> = {
   needs_changes: '需修改',
 };
 
-export type SongActionKind = 'submit' | 'resubmit' | 'withdraw' | 'approve' | 'needs_changes' | 'unapprove';
+export type SongActionKind = 'submit' | 'resubmit' | 'withdraw' | 'approve' | 'needs_changes';
 
 export interface SongAction {
   kind: SongActionKind;
@@ -34,7 +36,6 @@ const ACTIONS: Record<SongActionKind, Omit<SongAction, 'kind'>> = {
   withdraw:      { to: 'todo',          label: '撤回（改回待製作）',   primary: false },
   approve:       { to: 'approved',      label: '通過',                 primary: true },
   needs_changes: { to: 'needs_changes', label: '需修改',               primary: false },
-  unapprove:     { to: 'in_review',     label: '撤回通過',             primary: false },
 };
 
 /** 哪個頁面：動畫師工作站（提交 / 撤回）或導演頁（通過 / 需修改） */
@@ -46,9 +47,12 @@ const FLOW: Record<ReviewFlow, Partial<Record<SongStatus, SongActionKind[]>>> = 
     needs_changes: ['resubmit'],
     in_review: ['withdraw'],
   },
+  // 導演隨時可以決定（有沒有影片看 decisionBarState）
   director: {
+    todo: ['approve', 'needs_changes'],
     in_review: ['approve', 'needs_changes'],
-    approved: ['unapprove'],
+    needs_changes: ['approve', 'needs_changes'],
+    approved: ['approve', 'needs_changes'],
   },
 };
 
@@ -86,9 +90,66 @@ export function songActionsHint({ role, userId, song, flow }: ActionInput): stri
     if (song.status === 'approved') return '這首歌已通過';
     return null;
   }
-  if (song.status === 'todo') return '動畫師還沒提交審查';
-  if (song.status === 'needs_changes') return '等動畫師修改後重新提交';
+  // 導演頁的說明在決定列（decisionBarState）
   return null;
+}
+
+export const NO_VIDEO_HINT = '還沒有影片，等動畫師交了再決定';
+
+/** 決定列上的一顆按鈕：「通過 V2」「需修改 V2」 */
+export interface DecisionButton extends SongAction {
+  /** 按鈕上的字（有版本就帶版本：「通過 V2」） */
+  text: string;
+  /** 按不下去的原因（null = 可以按） */
+  disabledReason: string | null;
+}
+
+export interface DecisionBarState {
+  buttons: DecisionButton[];
+  /** 一行說明（null = 不用說） */
+  hint: string | null;
+}
+
+interface DecisionInput {
+  role: ProjectRole | null | undefined;
+  userId: string | null | undefined;
+  song: Pick<Song, 'status' | 'animatorUserId'> & { lastReview?: { status: SongStatus; videoId: string | null } | null };
+  /** 要決定的那一版（正在看的那一版；這首歌沒有可以播的版本 = null） */
+  judged: { videoId: string; label: string } | null;
+}
+
+/**
+ * 導演頁的決定列：導演、製作看得到（動畫師 = null）。
+ *   還沒有影片 → 兩顆都按不下去，寫「還沒有影片，等動畫師交了再決定」
+ *   已經是「已通過 V2」又在看 V2 → 「通過 V2」按不下去（已經是了）；看 V3 就可以再通過一次
+ *   還沒送審（待製作 / 需修改）→ 一行說明：你也可以直接決定
+ */
+export function decisionBarState({ role, userId, song, judged }: DecisionInput): DecisionBarState | null {
+  if (!role) return { buttons: [], hint: '你不是這個專案的成員，只能看' };
+  if (role !== 'director' && role !== 'admin') return null;
+  const actions = songStatusActions({ role, userId, song, flow: 'director' });
+  const last = song.lastReview ?? null;
+  const buttons = actions.map((a): DecisionButton => {
+    const text = judged ? `${a.label} ${judged.label}` : a.label;
+    let disabledReason: string | null = null;
+    if (!judged) disabledReason = NO_VIDEO_HINT;
+    else if (song.status === a.to && last && last.status === a.to && last.videoId === judged.videoId) {
+      disabledReason = `已經是「${SONG_STATUS_LABEL[a.to]} ${judged.label}」了`;
+    }
+    return { ...a, text, disabledReason };
+  });
+  let hint: string | null = null;
+  if (!judged) hint = NO_VIDEO_HINT;
+  else if (song.status === 'todo') hint = '動畫師還沒送審，你也可以直接決定';
+  else if (song.status === 'needs_changes') hint = '動畫師還在改（還沒重新送審），你也可以直接決定';
+  else if (song.status === 'approved') hint = '已通過；改變主意也可以再決定一次';
+  return { buttons, hint };
+}
+
+/** 總覽卡片上的一行：待製作但已經有影片 →「有影片 V1 · 還沒送審」（導演知道可以點進去直接決定） */
+export function unsubmittedVideoLabel(song: Pick<Song, 'status' | 'latestVideoVersion'>): string | null {
+  if (song.status !== 'todo' || song.latestVideoVersion == null) return null;
+  return `有影片 V${song.latestVideoVersion} · 還沒送審`;
 }
 
 /**

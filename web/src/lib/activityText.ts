@@ -50,6 +50,10 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
       const base = `把歌曲${quoted(name)}從「${SONG_STATUS_LABEL[from] ?? from}」改成「${SONG_STATUS_LABEL[to] ?? to}」`;
       return p.auto ? `${base}（交了新版${str(p.label) ? ` ${str(p.label)}` : ''}，自動改的）` : base;
     }
+    // 同一個狀態再決定一次（已通過 V1 → 通過 V2）
+    if (from && to && from === to && (to === 'approved' || to === 'needs_changes')) {
+      return `把歌曲${quoted(name)}再標一次「${SONG_STATUS_LABEL[to]}」`;
+    }
   }
   // 影片版本
   if (type === 'song_video') {

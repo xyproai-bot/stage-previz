@@ -69,19 +69,69 @@ test('指派給別的動畫師的歌不能動；沒指派 / 指派給自己可�
   ok(songStatusDecision({ role: 'animator', userId: 'u1', song: song('todo', null), to: 'in_review' }));
 });
 
-test('導演：審查中 → 通過 / 需修改；已通過 → 撤回通過', () => {
+test('導演（舊規則，舊版前端只送這些）：審查中 → 通過 / 需修改（沒影片也可以）；已通過 → 撤回通過', () => {
   ok(songStatusDecision({ role: 'director', userId: 'u3', song: song('in_review'), to: 'approved' }));
   ok(songStatusDecision({ role: 'director', userId: 'u3', song: song('in_review'), to: 'needs_changes' }));
   ok(songStatusDecision({ role: 'director', userId: 'u3', song: song('approved'), to: 'in_review' }));
 });
 
-test('導演不能改回待製作（403）；還沒提交的歌不能直接通過（409）', () => {
-  no(songStatusDecision({ role: 'director', userId: 'u3', song: song('in_review'), to: 'todo' }), 403);
+test('導演隨時可以決定：有可以播的版本 → 待製作 / 需修改 / 已通過都可以改成通過或需修改', () => {
+  const v = { role: 'director', userId: 'u3', hasReadyVideo: true };
+  for (const from of ['todo', 'in_review', 'needs_changes', 'approved']) {
+    for (const to of ['approved', 'needs_changes']) {
+      if (from === to) continue;
+      const d = songStatusDecision({ ...v, song: song(from), to });
+      ok(d); assert.notEqual(d.noop, true, `${from} → ${to}`);
+    }
+  }
+  // 改主意：已通過 → 需修改、需修改 → 已通過
+  ok(songStatusDecision({ ...v, song: song('approved'), to: 'needs_changes', expected: 'approved' }));
+  ok(songStatusDecision({ ...v, song: song('needs_changes'), to: 'approved', expected: 'needs_changes' }));
+});
+
+test('導演：還沒有影片 → 待製作 / 需修改 / 已通過不能直接決定（409，說還沒有影片）', () => {
+  for (const [from, to] of [['todo', 'approved'], ['todo', 'needs_changes'], ['needs_changes', 'approved'], ['approved', 'needs_changes']]) {
+    const d = songStatusDecision({ role: 'director', userId: 'u3', song: song(from), to, hasReadyVideo: false });
+    no(d, 409);
+    assert.equal(d.noVideo, true);
+    assert.equal(d.currentStatus, from);
+    assert.match(d.error, /還沒有影片/);
+  }
+  // 沒說有沒有影片 = 當作沒有
   no(songStatusDecision({ role: 'director', userId: 'u3', song: song('todo'), to: 'approved' }), 409);
+});
+
+test('同一個狀態再決定一次（已通過 V1 → 通過 V2）：要有帶看的版本 + 有影片，不然照舊沒事', () => {
+  const d = songStatusDecision({ role: 'director', userId: 'u3', song: song('approved'), to: 'approved', hasReadyVideo: true, redecide: true });
+  ok(d); assert.equal(d.redecide, true);
+  ok(songStatusDecision({ role: 'admin', userId: 'u0', song: song('needs_changes'), to: 'needs_changes', hasReadyVideo: true, redecide: true }));
+  assert.equal(songStatusDecision({ role: 'admin', userId: 'u0', song: song('needs_changes'), to: 'needs_changes', hasReadyVideo: true, redecide: true }).redecide, true);
+  // 舊版前端（沒帶看的版本）→ noop
+  assert.equal(songStatusDecision({ role: 'director', userId: 'u3', song: song('approved'), to: 'approved', hasReadyVideo: true }).noop, true);
+  // 沒有影片 → noop
+  assert.equal(songStatusDecision({ role: 'director', userId: 'u3', song: song('approved'), to: 'approved', redecide: true }).noop, true);
+  // 動畫師不行
+  no(songStatusDecision({ role: 'animator', userId: 'u1', song: song('approved'), to: 'approved', hasReadyVideo: true, redecide: true }), 403);
+});
+
+test('導演不能改回待製作（403）；不能把需修改改回審查中（409）', () => {
+  no(songStatusDecision({ role: 'director', userId: 'u3', song: song('in_review'), to: 'todo', hasReadyVideo: true }), 403);
+  no(songStatusDecision({ role: 'director', userId: 'u3', song: song('needs_changes'), to: 'in_review', hasReadyVideo: true }), 409);
+  no(songStatusDecision({ role: 'director', userId: 'u3', song: song('todo'), to: 'in_review', hasReadyVideo: true }), 409);
+});
+
+test('動畫師有影片也不能通過 / 需修改（403）；導演決定時以為的狀態不一樣 → 409', () => {
+  for (const from of ['todo', 'in_review', 'needs_changes', 'approved']) {
+    no(songStatusDecision({ role: 'animator', userId: 'u1', song: song(from, 'u1'), to: 'approved', hasReadyVideo: true }), 403);
+  }
+  const d = songStatusDecision({ role: 'director', userId: 'u3', song: song('needs_changes'), to: 'approved', expected: 'todo', hasReadyVideo: true });
+  no(d, 409);
+  assert.equal(d.currentStatus, 'needs_changes');
 });
 
 test('admin 什麼都可以；不是成員 403；狀態值亂填 400；沒變 = noop', () => {
   ok(songStatusDecision({ role: 'admin', userId: 'u0', song: song('approved'), to: 'todo' }));
+  ok(songStatusDecision({ role: 'admin', userId: 'u0', song: song('todo'), to: 'approved' }));
   no(songStatusDecision({ role: null, userId: 'u9', song: song('todo'), to: 'in_review' }), 403);
   no(songStatusDecision({ role: 'admin', userId: 'u0', song: song('todo'), to: 'done' }), 400);
   const d = songStatusDecision({ role: 'director', userId: 'u3', song: song('approved'), to: 'approved' });

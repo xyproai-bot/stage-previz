@@ -75,6 +75,26 @@ async function latestReadyVideo(db, songId) {
   ).bind(songId).first();
 }
 
+/** 這首歌有沒有可以播的版本（導演隨時決定要有影片才行） */
+export async function songHasReadyVideo(db, songId) {
+  return !!(await latestReadyVideo(db, songId));
+}
+
+/**
+ * 同一個狀態再決定一次時（已通過 V1 → 通過 V2）：上一筆審片紀錄已經是「這個狀態 + 這一版」→ 一樣的，不用再記
+ * （連按兩下、兩個分頁同時按）。讀不到紀錄（舊資料庫）→ 當作不一樣。
+ */
+export async function isRepeatDecision(db, { songId, to, videoId }) {
+  try {
+    const last = await db.prepare(
+      `SELECT status, video_id FROM song_reviews WHERE song_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1`
+    ).bind(songId).first();
+    return !!last && last.status === to && (last.video_id ?? null) === (videoId ?? null);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 收得到這個專案通知的人（沒停用的）：專案成員 + 全站 admin（每個專案都看得到）
  * @returns {Promise<Array<{user_id: string, role: string, global_role: string}>>}

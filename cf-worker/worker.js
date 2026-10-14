@@ -1568,7 +1568,7 @@ async function getSong(env, projectId, songId) {
 }
 
 // 改歌：
-//   只改狀態 → 照 songStatusDecision 的規則（動畫師提交 / 撤回、導演通過 / 需修改、admin 都可以）
+//   只改狀態 → 照 songStatusDecision 的規則（動畫師提交 / 撤回、導演隨時通過 / 需修改（要有影片）、admin 都可以）
 //     前端可以帶 expectedStatus（它以為的目前狀態）；跟資料庫不一樣就回 409，不會蓋掉別人剛做的決定
 //   改歌名 / 順序 / 指派 / Drive 資料夾 → 專案 admin
 async function updateSong(request, env, ctx, songId) {
@@ -1631,19 +1631,33 @@ async function updateSong(request, env, ctx, songId) {
   let statusChange = null;
   let prepared = null;
   if ('status' in body) {
+    // 通過 / 需修改：導演 / 製作隨時可以決定，但這首歌要有可以播的版本（舊規則「審查中 → 通過 / 需修改」不用）
+    const isDecision = reviews.REVIEW_STATUSES.includes(body.status);
     const d = songStatusDecision({
       role, userId: me.id, song: before, to: body.status,
       expected: 'expectedStatus' in body ? body.expectedStatus : undefined,
+      hasReadyVideo: isDecision ? await reviews.songHasReadyVideo(env.DB, before.id) : false,
+      // 有帶看的版本 = 新版前端的決定列：同一個狀態可以再決定一次（已通過 V1 → 通過 V2）
+      redecide: isDecision && 'reviewVideoId' in body,
     });
     if (!d.ok) {
-      return jsonResp({ error: d.error, ...(d.currentStatus ? { currentStatus: d.currentStatus } : {}) }, d.status);
+      return jsonResp({
+        error: d.error,
+        ...(d.currentStatus ? { currentStatus: d.currentStatus } : {}),
+        ...(d.noVideo ? { noVideo: true } : {}),
+      }, d.status);
     }
     if (!d.noop) {
       // 通過 / 需修改：需修改要寫原因（reason）、看的是哪一版（reviewVideoId，沒帶 = 最新一版）→ reviews.mjs
       prepared = await reviews.prepareStatusChange(env.DB, { song: before, body, to: body.status });
       if (!prepared.ok) return jsonResp({ error: prepared.error }, prepared.status);
-      sets.push('status = ?'); values.push(body.status);
-      statusChange = { from: before.status, to: body.status };
+      const repeat = d.redecide && (!prepared.decision?.video || await reviews.isRepeatDecision(env.DB, {
+        songId: before.id, to: body.status, videoId: prepared.decision.video.id,
+      }));
+      if (!repeat) {
+        sets.push('status = ?'); values.push(body.status);
+        statusChange = { from: before.status, to: body.status };
+      }
     }
   }
 

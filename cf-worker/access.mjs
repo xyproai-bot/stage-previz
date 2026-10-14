@@ -80,24 +80,25 @@ export function guestCommentDecision(link) {
 // 歌曲狀態
 // ─────────────────────────────────────────────
 
-// 非 admin 可以做的狀態變化：{ 角色: { 目前狀態: [可以改成] } }
-// admin 什麼都可以改。
-const SONG_TRANSITIONS = {
-  animator: {
-    todo: ['in_review'],           // 提交審查
-    needs_changes: ['in_review'],  // 改好重新提交
-    in_review: ['todo'],           // 撤回（只有還在審查中才能撤回）
-  },
-  director: {
-    in_review: ['approved', 'needs_changes'],  // 通過 / 需修改
-    approved: ['in_review'],                   // 撤回通過（改回審查中）
-  },
+// 歌曲狀態規則（2026-10-15 起：導演 / 製作隨時可以決定）
+//   動畫師（自己的歌或還沒指派的歌）：待製作 / 需修改 → 審查中（提交）；審查中 → 待製作（撤回）
+//   導演：這首歌有可以播的版本 → 不管現在是什麼狀態都可以「通過」或「需修改」（綁看的那一版；
+//         已通過 → 需修改 = 改主意、需修改 → 通過、已通過 V1 → 通過 V2 = 同一個狀態再決定一次）
+//         另外照舊可以：審查中 → 通過 / 需修改（沒影片也可以）、已通過 → 審查中（舊版前端的「撤回通過」）
+//   admin：什麼都可以
+// 舊版前端（正式站）只會送舊的那幾種改法，全部照舊可以 → 放寬後舊版照樣能用。
+const ANIMATOR_TRANSITIONS = {
+  todo: ['in_review'],           // 提交審查
+  needs_changes: ['in_review'],  // 改好重新提交
+  in_review: ['todo'],           // 撤回（只有還在審查中才能撤回）
 };
-
-function roleCanEverSet(role, to) {
-  const t = SONG_TRANSITIONS[role];
-  return !!t && Object.values(t).some(list => list.includes(to));
-}
+// 導演不用看有沒有影片就能做的（舊規則）
+const DIRECTOR_LEGACY = {
+  in_review: ['approved', 'needs_changes'],
+  approved: ['in_review'],
+};
+export const DECISION_STATUSES = ['approved', 'needs_changes'];
+export const NO_VIDEO_MESSAGE = '還沒有影片，等動畫師交了再決定';
 
 const label = (s) => SONG_STATUS_LABEL[s] || s;
 
@@ -110,9 +111,12 @@ const label = (s) => SONG_STATUS_LABEL[s] || s;
  * @param {{status: string, animator_user_id?: string|null}} p.song  目前資料庫裡的歌
  * @param {string} p.to               想改成的狀態
  * @param {string|null|undefined} p.expected  前端以為的目前狀態（有給就要一致，不然回 409）
- * @returns {{ok: true, noop?: boolean} | {ok: false, status: number, error: string, currentStatus?: string}}
+ * @param {boolean} [p.hasReadyVideo] 這首歌有沒有可以播的版本（worker 查好帶進來；沒給 = 當作沒有）
+ * @param {boolean} [p.redecide]      前端有帶看的版本（reviewVideoId）→ 同一個狀態可以再決定一次（例：已通過 V1 → 通過 V2）
+ * @returns {{ok: true, noop?: boolean, redecide?: boolean} | {ok: false, status: number, error: string, currentStatus?: string, noVideo?: boolean}}
+ *   redecide = 狀態不變，但要記一筆新的審片紀錄（worker 再看是不是跟上一筆一模一樣）
  */
-export function songStatusDecision({ role, userId, song, to, expected }) {
+export function songStatusDecision({ role, userId, song, to, expected, hasReadyVideo = false, redecide = false }) {
   if (!SONG_STATUSES.includes(to)) {
     return { ok: false, status: 400, error: '歌曲狀態不正確' };
   }
@@ -127,24 +131,33 @@ export function songStatusDecision({ role, userId, song, to, expected }) {
       };
     }
   }
-  if (role === 'admin') return from === to ? { ok: true, noop: true } : { ok: true };
+  const isDecision = DECISION_STATUSES.includes(to);
+  const sameAgain = () => (isDecision && redecide && hasReadyVideo ? { ok: true, redecide: true } : { ok: true, noop: true });
 
-  if (!roleCanEverSet(role, to)) {
-    if (role === 'animator') {
+  if (role === 'admin') return from === to ? sameAgain() : { ok: true };
+
+  if (role === 'animator') {
+    if (!Object.values(ANIMATOR_TRANSITIONS).some(list => list.includes(to))) {
       return { ok: false, status: 403, error: '動畫師只能提交審查，或撤回還在審查中的歌；「已通過」「需修改」由導演決定' };
     }
-    if (role === 'director') {
-      return { ok: false, status: 403, error: '導演可以把審查中的歌標成「已通過」或「需修改」；其他狀態請由動畫師或製作變更' };
+    if (song?.animator_user_id && song.animator_user_id !== userId) {
+      return { ok: false, status: 403, error: '這首歌指派給其他動畫師，只有他可以提交或撤回' };
     }
+    if (from === to) return { ok: true, noop: true };
+    if (ANIMATOR_TRANSITIONS[from]?.includes(to)) return { ok: true };
+  } else if (role === 'director') {
+    if (to === 'todo') {
+      return { ok: false, status: 403, error: '導演可以按「通過」或「需修改」；改回「待製作」請由動畫師撤回或製作變更' };
+    }
+    if (from === to) return sameAgain();
+    if (DIRECTOR_LEGACY[from]?.includes(to)) return { ok: true };
+    if (isDecision) {
+      if (!hasReadyVideo) return { ok: false, status: 409, currentStatus: from, noVideo: true, error: NO_VIDEO_MESSAGE };
+      return { ok: true };
+    }
+  } else {
     return { ok: false, status: 403, error: '沒有權限改這首歌的狀態' };
   }
-
-  if (role === 'animator' && song?.animator_user_id && song.animator_user_id !== userId) {
-    return { ok: false, status: 403, error: '這首歌指派給其他動畫師，只有他可以提交或撤回' };
-  }
-
-  if (from === to) return { ok: true, noop: true };
-  if (SONG_TRANSITIONS[role]?.[from]?.includes(to)) return { ok: true };
 
   return {
     ok: false, status: 409, currentStatus: from,

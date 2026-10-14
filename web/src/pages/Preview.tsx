@@ -20,6 +20,7 @@ import NotificationBell from '../components/NotificationBell';
 import OverflowMenu from '../components/OverflowMenu';
 import EmptyState from '../components/EmptyState';
 import DecisionDialog from '../components/DecisionDialog';
+import DecisionBar from '../components/DecisionBar';
 import ReviewHistory from '../components/ReviewHistory';
 import HelpModal from '../components/HelpModal';
 import CommentThreadList from '../components/CommentThreadList';
@@ -46,12 +47,10 @@ import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { STOP_LIVE_REFRESH, liveRefreshWanted, useLiveRefresh } from '../lib/liveRefresh';
 import { extractMentions, mentionCandidates } from '../lib/mentions';
 import {
-  SONG_STATUS_LABEL as STATUS_LABEL, songStatusActions, songActionsHint, staleStatusMessage,
+  SONG_STATUS_LABEL as STATUS_LABEL, decisionBarState, unsubmittedVideoLabel, staleStatusMessage,
   friendlyError, projectGoneMessage, canModifyComment, isOwnComment, sameSongs, sameComments,
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
-import HelpLink from '../components/HelpLink';
-import { HELP_ANCHORS } from '../lib/helpLinks';
 import {
   ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin, Pause, Play,
   Plus, RefreshCw, Square, X,
@@ -614,13 +613,13 @@ function StatusBoard({
             {songsByStatus[col.key].length === 0 ? (
               col.key === 'in_review' ? (
                 projectRole === 'director' ? (
-                  <EmptyState icon={Inbox} title="目前沒有等你審的歌" size="compact">
-                    動畫師按「提交審查」後會出現在這裡，你也會收到通知（右上角的小鈴鐺）。
+                  <EmptyState icon={Inbox} title="目前沒有送審的歌" size="compact">
+                    動畫師按「提交審查」後會出現在這裡，你會收到通知（右上角的小鈴鐺）。其他欄有影片的歌，也可以點進去直接決定。
                   </EmptyState>
                 ) : (
                   // 「新版等你審」的通知只發給導演（製作不會收到）→ 不能說「你也會收到通知」
                   <EmptyState icon={Inbox} title="目前沒有在審查中的歌" size="compact">
-                    動畫師按「提交審查」後會出現在這裡，導演會收到通知。
+                    動畫師按「提交審查」後會出現在這裡，導演會收到通知。其他欄有影片的歌，也可以點進去直接決定。
                   </EmptyState>
                 )
               ) : (
@@ -628,11 +627,12 @@ function StatusBoard({
               )
             ) : (
               songsByStatus[col.key].map(s => {
-                // 總覽只放審查中的快速按鈕（通過 / 需修改）；撤回通過請點進歌曲
-                const actions = col.key === 'in_review'
-                  ? songStatusActions({ role: projectRole, userId, song: s, flow: 'director' })
-                  : [];
+                // 總覽只放審查中的快速按鈕（通過 / 需修改，記在最新一版）；其他欄點進歌曲也可以直接決定
+                const latest = s.latestVideoId && s.latestVideoVersion != null ? { videoId: s.latestVideoId, label: `V${s.latestVideoVersion}` } : null;
+                const bar = col.key === 'in_review' ? decisionBarState({ role: projectRole, userId, song: s, judged: latest }) : null;
+                const actions = bar?.buttons ?? [];
                 const newer = newVersionLabel(s);
+                const unsubmitted = unsubmittedVideoLabel(s);
                 return (
                   <div key={s.id} className="status-card">
                     <button
@@ -649,6 +649,11 @@ function StatusBoard({
                         {/* 提案（proposal）只有製作在編輯頁看得到：還沒有「接受」的流程 */}
                         {projectRole === 'admin' && s.proposalCount > 0 && ` · ${s.proposalCount} 提案`}
                       </div>
+                      {unsubmitted && (
+                        <div className="status-card__unsubmitted" title="動畫師還沒按「提交審查」；點進去也可以直接決定">
+                          <Icon icon={Film} size="xs" /> {unsubmitted}
+                        </div>
+                      )}
                       {newer && (
                         <div className="status-card__newer" title={`導演上次看的是 V${s.reviewedVersion ?? s.lastReview?.version ?? ''}`}>
                           <Icon icon={Film} size="xs" /> 有新版 {newer}
@@ -667,8 +672,8 @@ function StatusBoard({
                             key={a.kind}
                             className={'btn btn--sm ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
                             onClick={() => onChangeStatus(s.id, a.to)}
-                            {...ro()}
-                          >{a.label}</button>
+                            {...(a.disabledReason ? { disabled: true, title: a.disabledReason } : ro())}
+                          >{a.text}</button>
                         ))}
                       </div>
                     )}
@@ -720,8 +725,6 @@ function SongDetail({
   live: boolean;
 }) {
   const va = useViewAs();
-  const actions = songStatusActions({ role: projectRole, userId: user?.id, song, flow: 'director' });
-  const actionsHint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user?.id, song, flow: 'director' }) : null;
   // 校準倍率、現場設定、LED 畫布大小（製作在管理頁設的，導演這邊只看）
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
@@ -825,8 +828,14 @@ function SongDetail({
     scope: song.id, loaded: versions.loadedSongId === song.id, items: versions.items,
     currentKey: selected?.key ?? null, select: versions.select, player,
   });
-  const viewedReview = selected?.kind === 'version' ? { videoId: selected.id, label: selected.label } : { videoId: null, label: '' };
   const latestVersionItem = versions.items.find(it => it.kind === 'version' && it.version != null) ?? null;
+  // 決定的是哪一版：正在看的那一版；看的不是版本（舊的 Drive 檔）→ 最新一版；這首歌沒有可以播的版本 = null
+  const judged = selected?.kind === 'version' ? { videoId: selected.id, label: selected.label }
+    : latestVersionItem ? { videoId: latestVersionItem.id, label: latestVersionItem.label }
+    : song.latestVideoId && song.latestVideoVersion != null ? { videoId: song.latestVideoId, label: `V${song.latestVideoVersion}` }
+    : null;
+  // 導演、製作：決定列（隨時可以通過 / 需修改；lib/songReview.ts）
+  const decision = decisionBarState({ role: projectRole, userId: user?.id, song, judged });
 
   // ── 通知點進來：選那一版、捲到那則留言 ──
   const [focusComment, setFocusComment] = useState<{ id: string; nonce: number } | null>(null);
@@ -999,26 +1008,21 @@ function SongDetail({
           </span>
           {next && <button className="link-btn song-detail__step" onClick={() => onPickSong(next.id)} title={`下一首：${next.name}`} aria-label={`下一首：${next.name}`}><span className="song-detail__step-name">{next.name}</span><Icon icon={ChevronRight} /></button>}
         </span>
-        <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>
+        {!decision && <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>}
         <span className="grow" />
-        {actions.length > 0 && (
-          <div className="song-detail__approve">
-            {actions.map(a => (
-              <button
-                key={a.kind}
-                className={'btn btn--sm ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
-                onClick={() => onChangeStatus(song.id, a.to, viewedReview)}
-                {...va.ro((a.to === 'approved' || a.to === 'needs_changes') && viewedReview.label ? `${a.label}（記在 ${viewedReview.label}）` : undefined)}
-              >{a.label}{(a.to === 'approved' || a.to === 'needs_changes') && viewedReview.label ? ` ${viewedReview.label}` : ''}</button>
-            ))}
-          </div>
-        )}
-        {actionsHint && <span className="muted small song-detail__hint">{actionsHint}</span>}
-        <HelpLink anchor={HELP_ANCHORS.dirDecide} />
       </div>
 
       <div className="song-detail__body">
         <main className="song-detail__main">
+          {/* 決定列：現在的狀態、決定的是哪一版、通過 / 需修改（永遠在版本列正上方） */}
+          {decision && (
+            <DecisionBar
+              status={song.status}
+              state={decision}
+              judgedLabel={judged?.label ?? null}
+              onDecide={(to) => onChangeStatus(song.id, to, judged ?? { videoId: null, label: '' })}
+            />
+          )}
           {/* 影片版本：V3、V2、V1…（誰交的、什麼時候、說明）；選哪一版 LED 就放哪一版 */}
           <SongVersionBar
             status={versions.status}

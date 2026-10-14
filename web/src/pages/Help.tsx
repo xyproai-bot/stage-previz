@@ -881,10 +881,10 @@ function StartChapter() {
           <table className="help-table">
             <caption>每首歌都有一個狀態</caption>
             <tbody>
-              <tr><td><Dot s="todo" />待製作</td><td>還沒交給導演看</td></tr>
+              <tr><td><Dot s="todo" />待製作</td><td>動畫師還沒送審（有影片的話，導演也可以直接決定）</td></tr>
               <tr><td><Dot s="review" />審查中</td><td>動畫師提交了，等導演看</td></tr>
-              <tr><td><Dot s="changes" />需修改</td><td>導演要改，原因寫在留言裡</td></tr>
-              <tr><td><Dot s="approved" />已通過</td><td>導演通過了</td></tr>
+              <tr><td><Dot s="changes" />需修改</td><td>導演要改，原因寫在留言裡（導演改主意也可以再改成通過）</td></tr>
+              <tr><td><Dot s="approved" />已通過</td><td>導演通過了（導演改主意也可以再改成需修改）</td></tr>
             </tbody>
           </table>
         </div>
@@ -1569,6 +1569,7 @@ function AnimatorChapter() {
           <li>還沒交影片就提交，會先問你（導演看到的會是空的）。</li>
           <li>「<Ui>撤回（改回待製作）</Ui>」：還在審查中才能撤回。</li>
           <li>導演按了需修改：交新版（加影片）就會自動回到審查中；或改好後按「<Ui>修改完成，重新提交</Ui>」。</li>
+          <li>導演不一定等你送審：歌裡有影片，導演隨時可以直接按「通過」或「需修改」（例：還在待製作就被標需修改、已通過又改成需修改），你一樣會收到通知。</li>
           <li>指派給別的動畫師的歌，你只能看。</li>
         </ul>
       </Section>
@@ -1943,12 +1944,12 @@ function DirectorChapter() {
       <Section id={A.dirBoard} title="總覽和狀態">
         <F k="board" />
         <ul className="help-list">
-          <li>① 四欄：<Dot s="todo" />待製作、<Dot s="review" />審查中、<Dot s="changes" />需修改、<Dot s="approved" />已通過。等你看的歌在「<strong>審查中</strong>」。</li>
+          <li>① 四欄：<Dot s="todo" />待製作、<Dot s="review" />審查中、<Dot s="changes" />需修改、<Dot s="approved" />已通過。動畫師送審的歌在「<strong>審查中</strong>」；待製作的歌寫「<Ui>有影片 V1 · 還沒送審</Ui>」= 已經有影片、動畫師還沒送審，點進去也可以直接決定。</li>
           <li>② 「<Ui>有新版 V2</Ui>」：動畫師交了你還沒審過的新版本。</li>
           <li>③ 審查中的歌可以直接按「<Ui>通過</Ui>」「<Ui>需修改</Ui>」（記在最新一版）。想先看再決定，點卡片進去。</li>
           <li>④ 上面的進度：已通過幾首 / 全部。</li>
           <li>「<Ui>整場串播</Ui>」：從目前這首開始依序自動播放，每個 cue 停幾秒可以選。</li>
-          <li>頁面每 25 秒自動更新，動畫師提交時你也會收到通知（小鈴鐺）。</li>
+          <li>頁面每 25 秒自動更新，動畫師提交時你會收到通知（小鈴鐺）。</li>
         </ul>
         <F k="boardPhone" />
       </Section>
@@ -2044,11 +2045,14 @@ function DirectorChapter() {
       </Section>
 
       <Section id={A.dirDecide} title="通過 / 需修改">
-        <p>歌在「審查中」時，上方有「<Ui>通過 V2</Ui>」「<Ui>需修改 V2</Ui>」：會記下你看的是<strong>哪一版</strong>。旁邊的「<Icon icon={CircleHelp} />」打開這一段說明。</p>
+        <p>打開一首歌，版本列正上方是<strong>決定列</strong>：現在的狀態、「<Ui>決定的是 V2</Ui>」和「<Ui>通過 V2</Ui>」「<Ui>需修改 V2</Ui>」。會記下你看的是<strong>哪一版</strong>（點版本列換一版，按鈕跟著換）。旁邊的「<Icon icon={CircleHelp} />」打開這一段說明。</p>
         <ul className="help-list">
+          <li><strong>隨時可以決定</strong>：只要這首歌有影片，不管是待製作、審查中、需修改還是已通過，都可以按。動畫師還沒送審時，決定列會寫「<Ui>動畫師還沒送審，你也可以直接決定</Ui>」。</li>
           <li><strong>需修改</strong>：一定要寫原因（例：第二段 LED 太亮；0:42 的轉場慢半拍）→「<Ui>送出「需修改」</Ui>」。原因會變成一則留言（綁在那一版），動畫師收到通知。動畫師交新版後，歌會自動回到「審查中」，並出現「有新版 V3」。</li>
-          <li><strong>通過</strong>：歌變成「已通過」，動畫師收到通知。按錯了按「<Ui>撤回通過</Ui>」。</li>
-          <li>待製作、需修改的歌沒有這兩個按鈕（等動畫師提交）。</li>
+          <li><strong>通過</strong>：歌變成「已通過」，動畫師收到通知。</li>
+          <li><strong>改主意</strong>：已通過的歌直接按「<Ui>需修改</Ui>」，需修改的歌直接按「<Ui>通過</Ui>」；已通過 V2 之後看 V3 也可以再按「<Ui>通過 V3</Ui>」。已經是「已通過 V2」又在看 V2 時，「<Ui>通過 V2</Ui>」按不下去（已經是了）。</li>
+          <li>還沒有影片：兩顆按鈕按不下去，寫「<Ui>還沒有影片，等動畫師交了再決定</Ui>」。</li>
+          <li>製作在導演頁也看得到同一條決定列，審片紀錄寫「製作」。</li>
           <li>剛好有人同時改了狀態：畫面會說現在是什麼狀態，並自動更新，不會蓋掉別人的決定。</li>
         </ul>
         <F k="needsChanges" />

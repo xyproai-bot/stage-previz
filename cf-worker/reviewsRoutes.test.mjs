@@ -213,3 +213,74 @@ test('通知要登入（分享連結的訪客沒有）；指派動畫師會通�
   assert.equal((await call('u_dir', 'POST', commentsPath, newComment({ text: 'x' }))).status, 404);
   assert.equal((await call('u_admin', 'POST', commentsPath, newComment({ text: 'x' }))).status, 409);
 });
+
+test('導演隨時決定：製作交 V1（還沒送審）→ 導演直接需修改 → 動畫師交 V2 回審查中 → 通過 V2 → 改主意需修改 → 再通過；權限和 409 照舊', async () => {
+  const { call, upload } = await setup();
+  // 還沒有影片：導演不能直接決定（409，說還沒有影片）
+  let r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'approved', expectedStatus: 'todo', reason: '', reviewVideoId: null });
+  assert.equal(r.status, 409);
+  assert.equal(r.data.noVideo, true);
+  assert.equal(r.data.currentStatus, 'todo');
+
+  const v1 = await upload('u_admin', 's1', '製作交的');
+  r = await call('u_dir', 'GET', '/api/projects/p1/songs');
+  assert.equal(r.data.songs.find(s => s.id === 's1').status, 'todo', '製作交的不會自動送審');
+
+  // 動畫師有影片也不能通過（403）
+  r = await call('u_a1', 'PATCH', '/api/projects/p1/songs/s1', { status: 'approved', expectedStatus: 'todo', reason: '', reviewVideoId: v1.id });
+  assert.equal(r.status, 403);
+  // 以為的狀態不一樣 → 409
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'needs_changes', expectedStatus: 'in_review', reason: '太亮', reviewVideoId: v1.id });
+  assert.equal(r.status, 409);
+  assert.equal(r.data.currentStatus, 'todo');
+  // 需修改還是要原因
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'needs_changes', expectedStatus: 'todo', reason: '', reviewVideoId: v1.id });
+  assert.equal(r.status, 400);
+  // 待製作 → 需修改 V1
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'needs_changes', expectedStatus: 'todo', reason: '主牆太亮', reviewVideoId: v1.id });
+  assert.equal(r.status, 200, r.data?.error);
+  r = await call('u_a1', 'GET', '/api/notifications');
+  assert.equal(r.data.items[0].kind, 'needs_changes');
+  assert.equal(r.data.items[0].versionLabel, 'V1');
+
+  // 動畫師交 V2 → 自動回審查中
+  const v2 = await upload('u_a1', 's1', '調暗');
+  r = await call('u_dir', 'GET', '/api/projects/p1/songs');
+  assert.equal(r.data.songs.find(s => s.id === 's1').status, 'in_review');
+
+  // 通過 V2 → 改主意需修改 V2 → 製作再通過 V2
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'approved', expectedStatus: 'in_review', reason: '', reviewVideoId: v2.id });
+  assert.equal(r.status, 200, r.data?.error);
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'needs_changes', expectedStatus: 'approved', reason: '結尾再短一點', reviewVideoId: v2.id });
+  assert.equal(r.status, 200, r.data?.error);
+  r = await call('u_admin', 'PATCH', '/api/projects/p1/songs/s1', { status: 'approved', expectedStatus: 'needs_changes', reason: '', reviewVideoId: v2.id });
+  assert.equal(r.status, 200, r.data?.error);
+  r = await call('u_a1', 'GET', '/api/notifications');
+  assert.deepEqual(r.data.items.slice(0, 3).map(i => `${i.kind} ${i.versionLabel}`), ['approved V2', 'needs_changes V2', 'approved V2']);
+
+  // 同一個狀態再按一次同一版 → 不多記；已通過 V2 → 通過 V1（看舊的那一版）→ 記一筆
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'approved', expectedStatus: 'approved', reason: '', reviewVideoId: v2.id });
+  assert.equal(r.status, 200);
+  assert.equal(r.data.unchanged, true);
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'approved', expectedStatus: 'approved', reason: '', reviewVideoId: v1.id });
+  assert.equal(r.status, 200, r.data?.error);
+  assert.ok(r.data.reviewId);
+
+  r = await call('u_a1', 'GET', '/api/projects/p1/songs/s1/reviews');
+  assert.deepEqual(r.data.reviews.map(x => `${x.versionLabel} ${x.statusLabel} ${x.by.role} ${x.fromStatus}`), [
+    'V1 已通過 director approved',
+    'V2 已通過 admin needs_changes',
+    'V2 需修改 director approved',
+    'V2 已通過 director in_review',
+    'V1 需修改 director todo',
+  ]);
+
+  // 舊版前端：撤回通過（已通過 → 審查中）照舊可以；同一個狀態沒帶版本 = 沒事
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'approved', expectedStatus: 'approved' });
+  assert.equal(r.data.unchanged, true);
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'in_review', expectedStatus: 'approved' });
+  assert.equal(r.status, 200, r.data?.error);
+  // 導演不能改回待製作
+  r = await call('u_dir', 'PATCH', '/api/projects/p1/songs/s1', { status: 'todo', expectedStatus: 'in_review' });
+  assert.equal(r.status, 403);
+});

@@ -1,0 +1,43 @@
+/* 導演頁的決定列：版本列正上方，一整條，按鈕在右邊 */
+.decision-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  font-size: 13px;
+  min-width: 0;
+}
+.decision-bar__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.decision-bar__ver { color: var(--text-dim); white-space: nowrap; }
+.decision-bar__ver strong { color: var(--text); }
+.decision-bar__ver.is-empty { color: var(--text-muted); }
+.decision-bar__hint { color: var(--text-muted); min-width: 0; }
+.decision-bar__grow { flex: 1; }
+.decision-bar__btns { display: inline-flex; gap: 8px; }
+.decision-bar__btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.decision-bar__btn--changes {
+  background: transparent;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+}
+.decision-bar__btn--changes:hover:not(:disabled) { background: var(--warn-dim); }
+.decision-bar__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* 手機：說明換到下一行，按鈕一樣大、佔滿 */
+@media (max-width: 640px) {
+  .decision-bar { padding: 8px 12px; }
+  .decision-bar__hint { order: 10; flex: 1 1 100%; }
+  .decision-bar__grow { display: none; }
+  .decision-bar__btns { order: 11; flex: 1 1 100%; }
+  .decision-bar__btns .btn { flex: 1; justify-content: center; }
+}

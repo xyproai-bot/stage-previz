@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { Song, SongComment } from './api';
 import {
-  songStatusActions, songActionsHint, staleStatusMessage, friendlyError, projectGoneMessage,
+  songStatusActions, songActionsHint, staleStatusMessage, decisionBarState, unsubmittedVideoLabel, NO_VIDEO_HINT, friendlyError, projectGoneMessage,
   canModifyComment, isOwnComment, sameSongs, sameComments, newCommentsFromOthers,
 } from './songReview';
 
@@ -24,18 +24,18 @@ describe('songStatusActions（跟後台 access.mjs 規則一樣）', () => {
     expect(songActionsHint({ ...base, song: song('todo', 'u_b') })).toContain('其他動畫師');
   });
 
-  it('導演：審查中 → 通過 / 需修改；已通過 → 撤回通過；待製作 / 需修改 → 沒按鈕', () => {
+  it('導演：每個狀態都有通過 / 需修改（隨時可以決定）', () => {
     const base = { role: 'director' as const, userId: 'u_d', flow: 'director' as const };
-    expect(kinds({ ...base, song: song('in_review') })).toEqual(['approve->approved', 'needs_changes->needs_changes']);
-    expect(kinds({ ...base, song: song('approved') })).toEqual(['unapprove->in_review']);
-    expect(kinds({ ...base, song: song('todo') })).toEqual([]);
-    expect(kinds({ ...base, song: song('needs_changes') })).toEqual([]);
-    expect(songActionsHint({ ...base, song: song('todo') })).toBe('動畫師還沒提交審查');
+    for (const st of ['todo', 'in_review', 'needs_changes', 'approved'] as const) {
+      expect(kinds({ ...base, song: song(st) })).toEqual(['approve->approved', 'needs_changes->needs_changes']);
+    }
+    expect(songActionsHint({ ...base, song: song('todo') })).toBeNull();
   });
 
   it('角色跟頁面對不上 → 沒按鈕（導演開動畫師頁、動畫師開導演頁）', () => {
     expect(kinds({ role: 'director', userId: 'u_d', song: song('todo'), flow: 'animator' })).toEqual([]);
     expect(kinds({ role: 'animator', userId: 'u_a', song: song('in_review'), flow: 'director' })).toEqual([]);
+    expect(kinds({ role: 'animator', userId: 'u_a', song: song('in_review', 'u_a'), flow: 'director' })).toEqual([]);
   });
 
   it('admin：照頁面給那組按鈕，不管指派給誰', () => {
@@ -46,6 +46,50 @@ describe('songStatusActions（跟後台 access.mjs 規則一樣）', () => {
   it('不是成員 → 沒按鈕', () => {
     expect(kinds({ role: null, userId: 'u_a', song: song('todo'), flow: 'animator' })).toEqual([]);
     expect(songActionsHint({ role: null, userId: 'u_a', song: song('todo'), flow: 'animator' })).toContain('不是這個專案的成員');
+  });
+});
+
+describe('decisionBarState（導演頁的決定列）', () => {
+  const v2 = { videoId: 'v2', label: 'V2' };
+  const st = (status: Song['status'], lastReview: { status: 'approved' | 'needs_changes'; videoId: string | null } | null = null) => ({ status, animatorUserId: 'u_a', lastReview });
+  const texts = (b: ReturnType<typeof decisionBarState>) => b?.buttons.map(x => `${x.text}${x.disabledReason ? '（不能按）' : ''}`);
+
+  it('導演和製作都看得到；動畫師沒有決定列', () => {
+    expect(texts(decisionBarState({ role: 'director', userId: 'u_d', song: st('in_review'), judged: v2 }))).toEqual(['通過 V2', '需修改 V2']);
+    expect(texts(decisionBarState({ role: 'admin', userId: 'u_x', song: st('in_review'), judged: v2 }))).toEqual(['通過 V2', '需修改 V2']);
+    expect(decisionBarState({ role: 'animator', userId: 'u_a', song: st('in_review'), judged: v2 })).toBeNull();
+    expect(decisionBarState({ role: null, userId: 'u_a', song: st('in_review'), judged: v2 })?.hint).toContain('不是這個專案的成員');
+  });
+
+  it('還沒送審（待製作）也可以決定，說明寫你也可以直接決定', () => {
+    const b = decisionBarState({ role: 'director', userId: 'u_d', song: st('todo'), judged: { videoId: 'v1', label: 'V1' } });
+    expect(texts(b)).toEqual(['通過 V1', '需修改 V1']);
+    expect(b?.hint).toBe('動畫師還沒送審，你也可以直接決定');
+    expect(decisionBarState({ role: 'director', userId: 'u_d', song: st('needs_changes'), judged: v2 })?.hint).toContain('你也可以直接決定');
+    expect(decisionBarState({ role: 'director', userId: 'u_d', song: st('in_review'), judged: v2 })?.hint).toBeNull();
+  });
+
+  it('沒有影片 → 兩顆都按不下去，寫還沒有影片', () => {
+    const b = decisionBarState({ role: 'director', userId: 'u_d', song: st('todo'), judged: null });
+    expect(texts(b)).toEqual(['通過（不能按）', '需修改（不能按）']);
+    expect(b?.buttons.every(x => x.disabledReason === NO_VIDEO_HINT)).toBe(true);
+    expect(b?.hint).toBe('還沒有影片，等動畫師交了再決定');
+  });
+
+  it('已通過 V2 又在看 V2：通過按不下去、需修改可以（改主意）；看別一版就可以再通過', () => {
+    const b = decisionBarState({ role: 'director', userId: 'u_d', song: st('approved', { status: 'approved', videoId: 'v2' }), judged: v2 });
+    expect(texts(b)).toEqual(['通過 V2（不能按）', '需修改 V2']);
+    expect(b?.buttons[0].disabledReason).toBe('已經是「已通過 V2」了');
+    const b3 = decisionBarState({ role: 'director', userId: 'u_d', song: st('approved', { status: 'approved', videoId: 'v2' }), judged: { videoId: 'v3', label: 'V3' } });
+    expect(texts(b3)).toEqual(['通過 V3', '需修改 V3']);
+    // 需修改 V2 → 通過 V2 可以
+    expect(texts(decisionBarState({ role: 'director', userId: 'u_d', song: st('needs_changes', { status: 'needs_changes', videoId: 'v2' }), judged: v2 }))).toEqual(['通過 V2', '需修改 V2（不能按）']);
+  });
+
+  it('總覽：待製作已經有影片 →「有影片 V1 · 還沒送審」', () => {
+    expect(unsubmittedVideoLabel({ status: 'todo', latestVideoVersion: 1 })).toBe('有影片 V1 · 還沒送審');
+    expect(unsubmittedVideoLabel({ status: 'todo', latestVideoVersion: null })).toBeNull();
+    expect(unsubmittedVideoLabel({ status: 'in_review', latestVideoVersion: 2 })).toBeNull();
   });
 });
 
