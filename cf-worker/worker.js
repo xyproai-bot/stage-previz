@@ -44,7 +44,9 @@ import {
 } from './sharePassword.mjs';
 // 留言（D1 一則一列）
 // （發 / 改 / 刪在 reviews.mjs；這裡只剩讀清單和舊版 KV 留言串）
-import { sanitizeComment, rowToComment, COMMENT_ID_RE } from './comments.mjs';
+import { sanitizeComment, rowToComment, COMMENT_ID_RE, thumbKeyFromPath } from './comments.mjs';
+// 分享連結的訪客留言（0026，預設關）：名字、內容整理、防亂發、看得到哪些
+import * as guest from './guestComments.mjs';
 // 審片 v2：留言綁版本 / 回覆 / 已改好、通過・需修改的審片紀錄、站內通知（直接用 D1，回傳 { status, body }）
 import * as reviews from './reviews.mjs';
 // 歌曲影片版本（純判斷：代號對歌、版本號、連結、權限、播放通行證）
@@ -174,6 +176,9 @@ async function routeRequest(request, env) {
 
   if (url.pathname === '/api/comments') {
     return handleComments(request, env, url);
+  }
+  if (url.pathname.startsWith('/api/comment-thumbs/')) {
+    return handleCommentThumb(request, env, url);
   }
   // 站內通知（只看自己的；要登入）
   if (url.pathname === '/api/notifications' || url.pathname.startsWith('/api/notifications/')) {
@@ -2741,14 +2746,15 @@ async function handleComments(request, env, url) {
     }
     // 發 / 回覆 / 改 / 刪：規則和寫入在 reviews.mjs（權限在 access.mjs）
     if (request.method === 'POST' || request.method === 'PATCH') {
-      let body;
-      try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+      // 留言 + 縮圖（約 480 px 的 JPEG）+ 畫記 → 最多 400 KB
+      const body = await readJsonLimited(request, guest.GUEST_BODY_MAX_BYTES);
+      if (body.error) return jsonResp({ error: body.error }, body.status);
       return await reviewsResp(request.method === 'POST'
-        ? reviews.postComment(env.DB, { me, thread, body })
-        : reviews.patchComment(env.DB, { me, thread, body }));
+        ? reviews.postComment(env.DB, { me, thread, body: body.value, r2: env.MODELS || null })
+        : reviews.patchComment(env.DB, { me, thread, body: body.value }));
     }
     if (request.method === 'DELETE') {
-      return await reviewsResp(reviews.deleteComment(env.DB, { me, thread, id: url.searchParams.get('id') }));
+      return await reviewsResp(reviews.deleteComment(env.DB, { me, thread, id: url.searchParams.get('id'), r2: env.MODELS || null }));
     }
     return jsonResp({ error: 'Method not allowed' }, 405);
   } catch (e) {
@@ -2814,6 +2820,32 @@ async function listThreadComments(env, songId) {
 async function reviewsResp(promise) {
   const r = await promise;
   return jsonResp(r.body, r.status);
+}
+
+// 讀 JSON body，太大就擋（留言含縮圖最多幾百 KB）
+async function readJsonLimited(request, maxBytes) {
+  const len = Number(request.headers.get('content-length') || 0);
+  if (len > maxBytes) return { status: 413, error: '送出的內容太大了' };
+  let text;
+  try { text = await request.text(); } catch { return { status: 400, error: 'Invalid JSON' }; }
+  if (text.length > maxBytes) return { status: 413, error: '送出的內容太大了' };
+  try { return { value: JSON.parse(text) }; } catch { return { status: 400, error: 'Invalid JSON' }; }
+}
+
+// GET /api/comment-thumbs/<專案>/<留言>-<隨機碼>.jpg — 留言縮圖（R2；網址有 128 bits 隨機碼，跟模型檔一樣不用登入）
+async function handleCommentThumb(request, env, url) {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return jsonResp({ error: 'Method not allowed' }, 405);
+  if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
+  const key = thumbKeyFromPath(url.pathname);
+  if (!key) return jsonResp({ error: 'Not found' }, 404);
+  const obj = await env.MODELS.get(key, { onlyIf: request.headers });
+  if (!obj) return jsonResp({ error: 'Not found' }, 404);
+  const headers = new Headers(corsHeaders());
+  headers.set('Content-Type', 'image/jpeg');
+  headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+  if (obj.httpEtag) headers.set('ETag', obj.httpEtag);
+  if (!('body' in obj) || !obj.body) return new Response(null, { status: 304, headers });
+  return new Response(request.method === 'HEAD' ? null : obj.body, { status: 200, headers });
 }
 
 // ─────────────────────────────────────────────
@@ -5545,10 +5577,11 @@ async function handleProjectShareLinks(request, env, ctx, token) {
   if (!token) {
     if (request.method === 'GET') {
       const r = await env.DB.prepare(
-        `SELECT token, slug, project_id, song_id,
-                (password_hash IS NOT NULL OR password IS NOT NULL) AS has_password,
-                expires_at, view_count, last_viewed_at, created_at
-           FROM share_links WHERE project_id = ? ORDER BY created_at DESC`
+        `SELECT l.token, l.slug, l.project_id, l.song_id,
+                (l.password_hash IS NOT NULL OR l.password IS NOT NULL) AS has_password,
+                l.expires_at, l.view_count, l.last_viewed_at, l.created_at, l.allow_comments, l.label,
+                (SELECT COUNT(*) FROM comments c WHERE c.share_token = l.token) AS guest_comments
+           FROM share_links l WHERE l.project_id = ? ORDER BY l.created_at DESC`
       ).bind(projectId).all();
       return jsonResp({
         links: (r.results || []).map(l => ({
@@ -5561,6 +5594,10 @@ async function handleProjectShareLinks(request, env, ctx, token) {
           viewCount: l.view_count,
           lastViewedAt: l.last_viewed_at,
           createdAt: l.created_at,
+          // 0026：允許看的人留言（預設關）、連結名稱、訪客留了幾則
+          allowComments: !!l.allow_comments,
+          label: l.label || null,
+          guestCommentCount: Number(l.guest_comments) || 0,
         })),
       });
     }
@@ -5579,20 +5616,28 @@ async function handleProjectShareLinks(request, env, ctx, token) {
       const expiresInDays = typeof body?.expiresInDays === 'number' && body.expiresInDays > 0 ? Math.min(body.expiresInDays, 365) : null;
       const parsed = parseSlugInput(body?.slug);
       if (parsed.error) return jsonResp({ error: parsed.error }, 400);
+      // 允許看的人留言（只有製作能打開）、連結名稱
+      const extra = guest.shareLinkCommentFields(body, ctx.role);
+      if (!extra.ok) return jsonResp({ error: extra.error }, extra.status);
       const tk = randHex(16);
       const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400_000).toISOString() : null;
       // 密碼只存加鹽雜湊，不存明文
       const hashed = password ? await hashSharePassword(password) : null;
       try {
         await env.DB.prepare(`
-          INSERT INTO share_links (token, project_id, song_id, password, password_hash, password_salt, expires_at, created_by_user_id, slug)
-          VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?)
-        `).bind(tk, projectId, songId, hashed?.hash ?? null, hashed?.salt ?? null, expiresAt, me.id, parsed.slug).run();
+          INSERT INTO share_links (token, project_id, song_id, password, password_hash, password_salt, expires_at, created_by_user_id, slug,
+                                   allow_comments, label)
+          VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(tk, projectId, songId, hashed?.hash ?? null, hashed?.salt ?? null, expiresAt, me.id, parsed.slug,
+          extra.fields.allow_comments ?? 0, extra.fields.label ?? null).run();
       } catch (e) {
         if (isSlugTakenError(e)) return jsonResp({ error: SLUG_TAKEN_MESSAGE, slugTaken: true }, 409);
         throw e;
       }
-      return jsonResp({ token: tk, slug: parsed.slug, expiresAt }, 201);
+      return jsonResp({
+        token: tk, slug: parsed.slug, expiresAt,
+        allowComments: !!extra.fields.allow_comments, label: extra.fields.label ?? null,
+      }, 201);
     }
     return jsonResp({ error: 'Method not allowed' }, 405);
   }
@@ -5605,23 +5650,35 @@ async function handleProjectShareLinks(request, env, ctx, token) {
   }
   if (request.method === 'PATCH') {
     // 設定 / 換 / 拿掉好讀網址。換掉之後舊的網址名稱馬上失效（舊式 /share/<連結碼> 照樣能用）
+    // 可以改：好讀網址（slug）、允許看的人留言（allowComments，打開只有製作）、連結名稱（label）；舊版前端只送 slug
     let body = {};
     try { body = await request.json(); } catch {}
-    if (!body || !('slug' in body)) return jsonResp({ error: '缺少 slug' }, 400);
-    const parsed = parseSlugInput(body.slug);
-    if (parsed.error) return jsonResp({ error: parsed.error }, 400);
+    const hasSlug = !!body && 'slug' in body;
+    const extra = guest.shareLinkCommentFields(body, ctx.role);
+    if (!extra.ok) return jsonResp({ error: extra.error }, extra.status);
+    if (!hasSlug && Object.keys(extra.fields).length === 0) return jsonResp({ error: '缺少 slug' }, 400);
+    const sets = [];
+    const vals = [];
+    let parsed = null;
+    if (hasSlug) {
+      parsed = parseSlugInput(body.slug);
+      if (parsed.error) return jsonResp({ error: parsed.error }, 400);
+      sets.push('slug = ?'); vals.push(parsed.slug);
+    }
+    for (const [k, v] of Object.entries(extra.fields)) { sets.push(`${k} = ?`); vals.push(v); }
     let changes = 0;
     try {
       const r = await env.DB.prepare(
-        `UPDATE share_links SET slug = ? WHERE token = ? AND project_id = ?`
-      ).bind(parsed.slug, token, projectId).run();
+        `UPDATE share_links SET ${sets.join(', ')} WHERE token = ? AND project_id = ?`
+      ).bind(...vals, token, projectId).run();
       changes = r.meta?.changes ?? 0;
     } catch (e) {
       if (isSlugTakenError(e)) return jsonResp({ error: SLUG_TAKEN_MESSAGE, slugTaken: true }, 409);
       throw e;
     }
     if (!changes) return jsonResp({ error: '找不到這個分享連結' }, 404);
-    return jsonResp({ ok: true, token, slug: parsed.slug });
+    const cur = await env.DB.prepare(`SELECT slug, allow_comments, label FROM share_links WHERE token = ? LIMIT 1`).bind(token).first();
+    return jsonResp({ ok: true, token, slug: cur?.slug ?? null, allowComments: !!cur?.allow_comments, label: cur?.label ?? null });
   }
   return jsonResp({ error: 'Method not allowed' }, 405);
 }
@@ -5671,7 +5728,7 @@ async function handleShareRouter(request, env, url, ref) {
   ).bind(k, now - LOGIN_LOOKBACK_MS);
   const linkStmt = env.DB.prepare(
     `SELECT l.token, l.project_id, l.song_id, l.password, l.password_hash, l.password_salt, l.expires_at,
-            p.status AS project_status
+            l.slug, l.allow_comments, l.label, p.status AS project_status
        FROM share_links l
        JOIN projects p ON p.id = l.project_id
       WHERE l.${bySlug ? 'slug' : 'token'} = ? LIMIT 1`
@@ -5826,7 +5883,24 @@ async function handleShareRouter(request, env, url, ref) {
       ledCanvas: proj.led_canvas ? sanitizeLedCanvas(proj.led_canvas) : null,
       // 有密碼的連結：之後的請求帶這張通行證（X-Share-Access header），不用再送密碼
       access,
+      // 0026：製作有沒有打開「允許看的人留言」（連結名稱是團隊內部用的，不給訪客）
+      allowComments: !!link.allow_comments,
     });
+  }
+
+  // 訪客留言（0026；連結有打開「允許看的人留言」才行）：GET 看得到的留言串、POST 留言 / 回覆
+  if (sub === 'songs' && segs[5] === 'comments' && !segs[6]) {
+    if (request.method === 'GET') {
+      return await reviewsResp(guest.listGuestComments(env.DB, { link, songId: segs[4] }));
+    }
+    if (request.method === 'POST') {
+      const body = await readJsonLimited(request, guest.GUEST_BODY_MAX_BYTES);
+      if (body.error) return jsonResp({ error: body.error }, body.status);
+      return await reviewsResp(guest.postGuestComment(env.DB, {
+        link, songId: segs[4], body: body.value, ipKey, accessToken: access?.token ?? null, now: new Date(now), r2: env.MODELS || null,
+      }));
+    }
+    return jsonResp({ error: 'Method not allowed' }, 405);
   }
 
   if (sub === 'songs' && request.method === 'GET') {

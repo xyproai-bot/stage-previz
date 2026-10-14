@@ -9,6 +9,7 @@
 
 import {
   sanitizeComment, commentToRow, rowToComment, commentPatch, MAX_COMMENTS_PER_SONG, COMMENT_ID_RE,
+  commentExtrasInput, decodeThumbnail, commentThumbKey,
 } from './comments.mjs';
 import {
   commentPostDecision, commentResolveDecision, commentReopenDecision, canModifyComment, commentAuthorRole,
@@ -21,7 +22,8 @@ export const NOTIFICATION_KEEP_DAYS = 60;
 export const NOTIFICATION_LIST_MAX = 50;
 const EXCERPT_MAX = 140;
 
-export const NOTIFICATION_KINDS = ['mention', 'needs_changes', 'new_version', 'assigned', 'approved', 'reply'];
+// guest_comment = 分享連結的訪客留言了（0026）
+export const NOTIFICATION_KINDS = ['mention', 'needs_changes', 'new_version', 'assigned', 'approved', 'reply', 'guest_comment'];
 export const REVIEW_STATUSES = ['approved', 'needs_changes'];
 
 const ok = (body, status = 200) => ({ status, body });
@@ -94,6 +96,40 @@ export async function listSongComments(db, songId) {
   const r = await db.prepare(`SELECT * FROM comments WHERE song_id = ? ORDER BY rowid ASC`).bind(songId).all();
   return (r.results || []).map(rowToComment);
 }
+
+// ─────────────────────────────────────────────
+// 留言縮圖（R2；留言當下抓一次 3D 畫面 + 畫記）
+// ─────────────────────────────────────────────
+
+/** 存縮圖；存不進去 → null（留言照樣送出，只是沒有縮圖） */
+export async function putCommentThumb(r2, projectId, commentId, bytes) {
+  if (!r2 || !bytes || !bytes.length) return null;
+  const key = commentThumbKey(projectId, commentId, randHex(16));
+  try {
+    await r2.put(key, bytes, {
+      httpMetadata: { contentType: 'image/jpeg', cacheControl: 'public, max-age=31536000, immutable' },
+    });
+    return key;
+  } catch (e) {
+    console.error('[comment thumb]', e?.message || e);
+    return null;
+  }
+}
+
+/** 刪留言時一起清掉縮圖（失敗只記 log） */
+export async function deleteCommentThumbs(r2, keys) {
+  const list = (keys || []).filter(k => typeof k === 'string' && k.startsWith('comment-thumbs/'));
+  if (!r2 || !list.length) return 0;
+  try { await r2.delete(list); return list.length; } catch (e) { console.warn('[comment thumb delete]', e?.message || e); return 0; }
+}
+
+/** 專案成員（收通知用；guestComments.mjs 也用） */
+export async function projectMemberIds(db, projectId) {
+  const members = await projectMembers(db, projectId);
+  return { members, memberIds: new Set(members.map(m => m.user_id)) };
+}
+
+export { insertNotifications };
 
 // ─────────────────────────────────────────────
 // 通知
@@ -224,7 +260,7 @@ export async function pruneNotifications(db, now = new Date(), days = NOTIFICATI
  *   videoId   留言時看的那一版 → 記下版本號（不是這首歌可以播的版本就當沒帶）
  *   parentId  回覆哪一則（只有一層：回覆的回覆會掛在最上面那則）；沒帶 videoId 就跟著那則的版本
  */
-export async function postComment(db, { me, thread, body, now = new Date() }) {
+export async function postComment(db, { me, thread, body, now = new Date(), r2 = null }) {
   const raw = body?.comment;
   if (!raw || typeof raw !== 'object') return fail(400, 'Invalid comment');
   const song = await loadSong(db, thread.songId);
@@ -243,6 +279,12 @@ export async function postComment(db, { me, thread, body, now = new Date() }) {
     resolvedAt: undefined,
   });
   if (!c) return fail(400, 'Invalid comment');
+  // 0026：區段、3D 視角、cue、畫記、縮圖（舊版前端不帶 → 跟以前一樣）
+  const ex = commentExtrasInput(raw);
+  if (!ex.ok) return fail(400, ex.error);
+  Object.assign(c, ex.extras);
+  const thumb = decodeThumbnail(raw.thumbnail);
+  if (!thumb.ok) return fail(thumb.status, thumb.error);
 
   // 回覆：只有一層
   let parent = null;
@@ -277,10 +319,11 @@ export async function postComment(db, { me, thread, body, now = new Date() }) {
     return fail(429, `這首歌的留言已經太多了（上限 ${MAX_COMMENTS_PER_SONG} 則）`);
   }
 
+  const thumbKey = thumb.bytes ? await putCommentThumb(r2, thread.projectId, c.id, thumb.bytes) : null;
   await insertCommentRow(db, {
     c, projectId: thread.projectId, songId: song.id,
     videoId: video?.id ?? null, videoVersion: video?.version ?? null,
-    parentId: parent?.id ?? null, kind: null,
+    parentId: parent?.id ?? null, kind: null, thumbKey,
   });
 
   // 通知：@到的人；回覆 → 按回覆的那一則的作者、最上面那則的作者
@@ -300,19 +343,25 @@ export async function postComment(db, { me, thread, body, now = new Date() }) {
   return ok({ ok: true, id: c.id, comments: await listSongComments(db, song.id) });
 }
 
-async function insertCommentRow(db, { c, projectId, songId, videoId, videoVersion, parentId, kind }) {
+/**
+ * 寫一則留言（團隊的、訪客的都走這裡）。guest = { name, shareToken, shareLabel }（訪客才有）
+ */
+export async function insertCommentRow(db, { c, projectId, songId, videoId, videoVersion, parentId, kind, thumbKey = null, guest = null }) {
   const row = commentToRow(c);
   await db.prepare(`
     INSERT INTO comments (id, project_id, song_id, time_in_video, anchor_type, anchor_screen_xy, anchor_world_xyz,
       anchor_mesh_name, anchor_offset_xyz, text, mentions, status, resolved_by, resolved_at,
       author_user_id, author_name, author_role, author_email, created_at,
-      video_id, video_version, reply_to_comment_id, kind)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      video_id, video_version, reply_to_comment_id, kind,
+      time_end, view_json, cue_id, annotation_json, thumb_key, guest_name, share_token, share_label)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     row.id, projectId, songId, row.time_in_video, row.anchor_type, row.anchor_screen_xy, row.anchor_world_xyz,
     row.anchor_mesh_name, row.anchor_offset_xyz, row.text, row.mentions, row.status, row.resolved_by, row.resolved_at,
     row.author_user_id, row.author_name, row.author_role, row.author_email, row.created_at,
     videoId, videoVersion, parentId, kind,
+    row.time_end, row.view_json, row.cue_id, row.annotation_json, thumbKey,
+    guest?.name ?? null, guest?.shareToken ?? null, guest?.shareLabel ?? null,
   ).run();
 }
 
@@ -365,17 +414,21 @@ export async function patchComment(db, { me, thread, body, now = new Date() }) {
 }
 
 /** 刪留言（留言的人或 admin）；底下的回覆一起刪 */
-export async function deleteComment(db, { me, thread, id }) {
+export async function deleteComment(db, { me, thread, id, r2 = null }) {
   if (!id || !COMMENT_ID_RE.test(id)) return fail(400, 'Missing or invalid id');
   const row = await db.prepare(`SELECT * FROM comments WHERE id = ? AND song_id = ? LIMIT 1`).bind(id, thread.songId).first();
   if (row) {
     if (!canModifyComment(rowToComment(row), me.id, thread.role)) {
       return fail(403, '只有留言的人或製作可以刪除這則留言');
     }
+    const thumbs = (await db.prepare(
+      `SELECT thumb_key FROM comments WHERE (id = ?1 OR reply_to_comment_id = ?1) AND song_id = ?2 AND thumb_key IS NOT NULL`
+    ).bind(id, thread.songId).all()).results || [];
     await db.batch([
       db.prepare(`DELETE FROM comments WHERE reply_to_comment_id = ? AND song_id = ?`).bind(id, thread.songId),
       db.prepare(`DELETE FROM comments WHERE id = ? AND song_id = ?`).bind(id, thread.songId),
     ]);
+    await deleteCommentThumbs(r2, thumbs.map(t => t.thumb_key));
   }
   return ok({ ok: true, comments: await listSongComments(db, thread.songId) });
 }

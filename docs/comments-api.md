@@ -75,7 +75,48 @@
 
 - `GET /api/notifications?limit=30` → `{ items: [...], unreadCount, generatedAt }`（一個請求；最新的在前）。只列現在還是成員的專案（全站 admin 都看得到），封存的專案非 admin 不列。
   每則：`{ id, kind, projectId, projectName, projectRole, songId, songName, songCode, videoId, version, versionLabel, commentId, actorName, excerpt, createdAt, read }`。
-  `kind`：`mention` / `reply` / `needs_changes` / `approved` / `new_version` / `assigned`。
+  `kind`：`mention` / `reply` / `needs_changes` / `approved` / `new_version` / `assigned` / `guest_comment`（0026：分享連結的訪客留言）。
 - `POST /api/notifications/read` body `{ ids: [...] }` 或 `{ all: true }` → `{ ok, unreadCount }`（只能標自己的）。
 - 排程每 5 分鐘清掉 60 天以前的通知。
 - 前端：小鈴鐺每 25 秒 + 切回分頁更新；點一則開 `/preview/:p?song=&video=&comment=`（動畫師開 `/studio/...`）。
+
+---
+
+# 審片像 Frame.io（0026：畫記、3D 視角、區段、縮圖、訪客留言）
+
+後台：`cf-worker/comments.mjs`（整理 / 檢查，純函式）、`reviews.mjs`（團隊留言寫入、縮圖）、`guestComments.mjs`（訪客）；
+權限：`access.mjs`（`canToggleShareComments`、`guestCommentDecision`）；資料表：`migrations/0026_framelike_review.sql`（只有加欄位）。
+測試：`comments.test.mjs`、`guestComments.test.mjs`、`framelikeRoutes.test.mjs`。前端：`web/src/lib/annotations.ts`、`reviewApi.ts`、`guestComments.ts`。
+
+## 留言多的欄位（團隊 `/api/comments`、訪客分享連結都一樣；舊版前端不帶 → 跟以前一樣）
+
+| 欄位 | 說明 | 不對的時候 |
+|---|---|---|
+| `time` + `timeEnd` | 區段留言 0:12–0:18（`timeEnd` 沒有 = 一個時間點） | 結束 ≤ 開始、超過 1 小時 → 400（中文說明） |
+| `view` | 留言當下的攝影機 `{ position: [x,y,z], target: [x,y,z], fov, aspect }` | 壞掉的當沒帶（不擋留言） |
+| `cueId` | 留言當下的 cue | 格式不對當沒帶 |
+| `annotation` | 畫記 `{ v: 1, aspect, shapes: [{ t: 'pen'\|'arrow'\|'rect'\|'ellipse', c, w, p: [x0,y0,x1,y1,…] }] }`；座標 0~1（相對 3D 畫面，`aspect` = 畫的時候畫面的寬 / 高）；顏色只收 `#ff3b30 #ffcc00 #34c759 #0a84ff #ffffff`；最多 60 筆、一筆 400 點、全部 4000 點 | 400 |
+| `thumbnail`（只有送） | `data:image/jpeg;base64,…`，留言當下抓一次 3D 畫面 + 畫記（約 480 px 寬），最多 150 KB | 不是 JPEG 400、太大 413 |
+| `thumbUrl`（只有讀） | `/api/comment-thumbs/<專案>/<留言>-<隨機碼>.jpg`（前面接 API 網址） | |
+
+- 縮圖不用登入就能看（網址有 128 bits 隨機碼，跟模型檔一樣）；`Cache-Control: immutable`。刪留言（含底下的回覆）縮圖一起刪。
+- 一次送來的 JSON 最多 400 KB（413）。
+
+## 訪客留言（分享連結，每條連結預設關）
+
+- 製作在分享連結對話框勾「允許看的人留言」：`POST /api/projects/:p/share-links` 或 `PATCH .../share-links/:token` 帶 `{ allowComments: true }`。
+  **打開只有製作**（導演 403）；關掉製作、導演都可以。也可以帶 `label`（連結名稱，例：給經紀人；最多 40 字、不收 HTML）。
+  舊版前端只送 `{ slug }` 照樣能改。清單每條多 `allowComments`、`label`、`guestCommentCount`。
+- 分享頁 `GET <分享>/data` 多 `allowComments`（連結名稱不給訪客）。
+- `GET <分享>/songs/:s/comments` → `{ comments }`：**只有這條連結留的留言串 + 團隊在那些串底下的回覆**（團隊自己的留言、別條連結的都看不到）；
+  不給 email、帳號 id、@ 誰、誰標的已改好。沒開 → 403 `{ commentsDisabled: true }`。
+- `POST <分享>/songs/:s/comments` body `{ guestName, comment: { id, text, time, timeEnd?, view?, cueId?, annotation?, thumbnail?, parentId?, videoId? } }`
+  - 名字一定要（最多 30 字）；內容最多 1000 字；名字、內容的 HTML 拿掉。作者、身分、狀態由後台填（送來冒充的一律不算）。
+  - `parentId`：只能回覆這條連結裡的串（回覆的回覆掛在最上面那則），不然 404。
+  - 綁版本：送來的 `videoId` 是這首歌可以播的就用它，不然最新一版。
+  - 防亂發：同一條連結 + 同一個 IP 10 分鐘 10 則、同一張通行證（有密碼的連結）1 小時 30 則、一條連結一天 200 則 → 429（`retryAfterSec`）。同一個 `id` 重送不算新的。
+  - 密碼 / 通行證、有效期、封存、限定單首歌：跟分享頁其他請求一樣。
+  - 回 `{ ok, id, comments }`（訪客看得到的整串）。
+- 團隊看到：`author` = 「訪客：小李（給經紀人）」、`role: 'guest'`、`guest: { name, linkName }`；在訪客的串底下回覆，訪客也看得到。
+- 小鈴鐺：專案成員（和全站製作）都收到 `guest_comment`，`actorName` = 「訪客：小李（給經紀人）」。
+- 訪客不能改、刪、標已改好。
