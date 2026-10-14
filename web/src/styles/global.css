@@ -32,6 +32,7 @@
 
   /* 下拉選單右邊的箭頭（線條圖示 chevron-down，顏色 = --text）。以後要做淺色主題就換這一個 */
   --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8eaed' stroke-opacity='0.8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  --select-arrow-muted: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8eaed' stroke-opacity='0.35' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* 整個網站是深色：告訴瀏覽器用深色畫原生的東西（下拉選單打開的清單、勾選框、
      數字欄位的上下箭頭、日期選擇器、捲軸）。沒寫的話 Windows 的 Chrome / Edge
@@ -99,8 +100,8 @@ select {
   padding-right: calc(var(--select-arrow-inset, 8px) + 18px) !important;
 }
 /* 一次攤開好幾行的清單不用箭頭 */
-select[multiple],
-select[size]:not([size='1']) {
+:root select[multiple],
+:root select[size]:not([size='1']) {
   background-image: none !important;
   padding-right: 8px !important;
 }
@@ -114,9 +115,13 @@ select:focus:not(:disabled) {
 select:focus-visible {
   box-shadow: 0 0 0 3px var(--accent-dim);
 }
-select:disabled {
-  opacity: 0.5;
+/* 停用：字和箭頭變淡、外框變細。用 :root 開頭，比各頁面自己寫的下拉樣式優先（不用 opacity，
+   不然本來就寫了淡色字的地方會淡兩次，例如歌單上的「專案裡還沒有動畫師」會看不清楚） */
+:root select:disabled {
+  color: var(--text-muted);
+  border-color: var(--border);
   cursor: not-allowed;
+  background-image: var(--select-arrow-muted) !important;
 }
 /* 打開後的選項清單：Windows 的 Chrome / Edge、Firefox 會照這裡畫；Mac 用系統選單，跟著 color-scheme 變深色 */
 select option,
