@@ -140,9 +140,9 @@ fn hello_message(shared: &Shared) -> String {
 }
 
 pub fn status_message(shared: &Shared, frames_paused: bool) -> String {
-    let (preferred, max_fps) = {
+    let (preferred, max_fps, jpeg_quality) = {
         let c = shared.cfg();
-        (c.source_name.clone(), c.max_fps)
+        (c.source_name.clone(), c.max_fps, c.jpeg_quality)
     };
     let clients = shared.clients();
     let want_frames = shared.frame_clients() > 0;
@@ -176,6 +176,8 @@ pub fn status_message(shared: &Shared, frames_paused: bool) -> String {
         "height": s.height,
         "outWidth": s.out_width,
         "outHeight": s.out_height,
+        "downscale": s.downscale,
+        "jpegQuality": jpeg_quality,
         "frameCount": s.frame_count,
         "clients": clients,
         "framesPaused": frames_paused,

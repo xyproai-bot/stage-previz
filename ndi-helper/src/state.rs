@@ -80,6 +80,8 @@ pub struct HelperState {
     /// 送給瀏覽器的 JPEG 尺寸
     pub out_width: u32,
     pub out_height: u32,
+    /// 縮成幾分之一（1 = 原樣送；還沒收到畫面 = 0）
+    pub downscale: u32,
     /// 每秒送出的 JPEG 張數（已套 max_fps 上限）
     pub fps: f32,
     /// 每秒從 NDI 收到的張數（未限速）
@@ -107,6 +109,7 @@ impl Default for HelperState {
             height: 0,
             out_width: 0,
             out_height: 0,
+            downscale: 0,
             fps: 0.0,
             ndi_fps: 0.0,
             encode_ms: 0.0,

@@ -111,7 +111,9 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
   "maxFps": 30,
   "encodeMs": 4.2,
   "width": 1920, "height": 1080,
-  "outWidth": 960, "outHeight": 540,
+  "outWidth": 1920, "outHeight": 1080,
+  "downscale": 1,
+  "jpegQuality": 90,
   "frameCount": 1234,
   "clients": 1,
   "framesPaused": false,
@@ -133,8 +135,10 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 | `connected` | helper 有沒有連著 NDI 來源（沒人要畫面時會斷開省資源） |
 | `receiving` | 最近 2 秒內有收到 NDI 畫面 |
 | `fps` | 每秒送出幾張 JPEG（已套 `maxFps` 上限）；`ndiFps` = 每秒從 NDI 收到幾張（未限速） |
-| `encodeMs` | 每張平均處理時間（縮小 + JPEG 編碼，毫秒） |
-| `width`/`height` | NDI 原始尺寸；`outWidth`/`outHeight` = 送出的 JPEG 尺寸（預設縮一半）。還沒收到畫面時是 0 |
+| `encodeMs` | 每張平均處理時間（縮小 + JPEG 編碼，毫秒；兩張可以同時編，所以 30 fps 不用小於 33） |
+| `width`/`height` | NDI 原始尺寸；`outWidth`/`outHeight` = 送出的 JPEG 尺寸（太大才縮，見「畫質」）。還沒收到畫面時是 0 |
+| `downscale` | 0.1.13 起：縮成幾分之一（`1` = 原樣送、`2` = 寬高各一半…；還沒收到畫面時是 0）。舊版沒有這欄（固定縮一半 = 2） |
+| `jpegQuality` | 0.1.13 起：JPEG 品質（預設 90，色度不降取樣 4:4:4） |
 | `clients` | 目前連著的網頁數 |
 | `framesPaused` | **這條連線**有沒有暫停收畫面 |
 | `autostart` | 0.1.10 起：開機自動啟動的實際狀況。`wanted` = 設定要開；`registered` = 真的有登記、而且指到目前這個執行檔（Windows Run 機碼 / macOS LaunchAgent）；`error` = 上次登記失敗的原因（中文，成功是 `null`） |
@@ -196,17 +200,24 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
   "port": 7777,
   "source_name": null,
   "downsample": true,
-  "jpeg_quality": 75,
+  "max_output_pixels": 4500000,
+  "jpeg_quality": 90,
   "limited_to_full": true,
   "autostart": true,
   "max_fps": 30,
-  "config_version": 2
+  "config_version": 3
 }
 ```
 
 - `source_name`：手動選的來源（網頁選來源時自動寫入）；`null` = 自動
-- `downsample`：寬高各縮一半再編 JPEG（省 CPU / 頻寬；預設開）
+- `downsample`：畫面**太大才縮**（預設開）：縮成整數分之一（1/2、1/3…），剛好不超過 `max_output_pixels`；
+  本來就不大的畫面原樣送。`false` = 永遠不縮（原尺寸送，很吃 CPU）
+- `max_output_pixels`：送出去的畫面最多幾個像素（預設 450 萬，見「畫質」）
+- `jpeg_quality`：JPEG 品質 1–100（預設 90；本機傳輸，頻寬不重要，只花 CPU）
 - `max_fps`：送給網頁的最高 fps（AE 送 60 也只編 30 張）
+- 改了 `config.json` 要重開小程序（右鍵 → 離開，再從開始選單打開）
+- 升級：0.1.12 以前裝的（`config_version` 2 以下）第一次打開 0.1.13 會自動改成新預設：`jpeg_quality` 還是舊預設 75 → 90；
+  `downsample` 開著的意思從「固定縮一半」變成「太大才縮」。自己改過的值（例如品質 60、`downsample: false`）不動
 - `autostart`：開機自動啟動（預設開；右鍵選單切換）。從 0.1.8 以前升級上來會自動打開一次
 - 開機自動啟動的實作：Windows = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\StagePrevizNdiHelper`；
   macOS = `~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist`（0.1.12 起直接執行 App 裡的執行檔並標明
@@ -229,6 +240,29 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 | `STAGE_PREVIZ_NDI_HEADLESS=1` | 不開系統列圖示 |
 | `STAGE_PREVIZ_NDI_LIB=…` | 直接指定 NDI 函式庫檔案（設成不存在的路徑可以測「沒裝 NDI」） |
 
+## 畫質（0.1.13）
+
+0.1.12 以前**固定**把畫面寬高各縮一半、JPEG 品質 75：AE 用 Third 送 8800×2024 的畫布（2933×675）
+到網頁只剩 1466×337，LED 看起來糊、有方塊。0.1.13 起：
+
+- **太大才縮**：送出去最多 450 萬像素（`max_output_pixels`），超過才縮成整數分之一（每 f×f 個像素平均成一個，四捨五入）。
+  例：1920×1080、AE Quarter / Third / Half 的 8800×2024 畫布（2200×506 / 2933×675 / 4400×1012）→ **原樣送**；
+  整張 8800×2024（1780 萬）、3840×2160 → 1/2；10496×5120 → 1/4（Half 5248×2560、Third 3499×1707 → 1/2）
+- **JPEG 品質 90、4:4:4**（色度不降取樣：LED 內容的彩色硬邊不會糊掉顏色）
+- **兩個編碼工人輪流編**（JPEG 編碼只能單執行緒）：大畫面一張 20–35 ms，兩個輪流 → 還是能 30 fps；兩個都在忙就跳過那一張，不排隊
+
+量測（Intel Core Ultra 9 285K，`cargo test --release -- --ignored --nocapture encode_benchmark`，像 LED 內容的測試畫面，每張中位數）：
+
+| 畫面 | q75 4:2:0 | q75 4:4:4 | q90 4:2:0 | q90 4:4:4 |
+|---|---|---|---|---|
+| 2933×675（200 萬） | 4.7 ms | 6.4 ms | 5.6 ms | 8.9 ms |
+| 2667×1500（400 萬） | 8.9 ms | 12.6 ms | 9.2 ms | 15.6 ms |
+| 4400×1012（450 萬） | 9.9 ms | 13.3 ms | 11.3 ms | 17.9 ms |
+
+整條（縮小 + JPEG q90 4:4:4）：AE Half 的 4400×1012 原樣送 22 ms；整張 8800×2024 → 4400×1012 34 ms
+（0.1.12 同樣大小 q75：27 ms）。每秒最多編：4400×1012 一個工人 36 張、兩個 64 張。
+中階筆電單核大約慢 1.6–1.8 倍 → 450 萬像素兩個工人輪流約 35 張/秒，夠 30 fps。
+
 ## 編譯
 
 ```bash
@@ -242,7 +276,7 @@ cargo build --release
 
 - Windows：Visual Studio C++ Build Tools（含 CMake）、NASM；安裝檔：`cargo install cargo-wix` → `cargo wix --no-build`
   （範本在 `wix/main.wxs`，已客製：開始選單捷徑、裝完自動啟動、升級前自動關掉舊版、不用 Restart Manager 也不建系統還原點（更新幾秒就好）、移除時清掉開機啟動。**不要**再跑 `cargo wix init --force`）
-- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.12 dist`
+- macOS：`brew install cmake nasm`；包 App：`bash macos/make-app.sh target/release/stage-previz-ndi-helper 0.1.13 dist`
   （ad-hoc 簽章，使用者第一次打開會被擋；要發給別人用一定要再做下面的公證）
 - macOS 公證（要在鑰匙圈裡有 Developer ID Application 憑證的 Mac 上做）：
   `bash macos/notarize.sh <make-app 做的 .app 或 Release 上的 zip> <輸出資料夾>` →
@@ -277,7 +311,7 @@ gh release upload ndi-helper-vX.Y.Z /tmp/ndi-mac/notarized/stage-previz-ndi-help
 AE NDI Output
    ↓  NDI 函式庫（runtime 動態載入：Processing.NDI.Lib.x64.dll / libndi.dylib；找不到 → 回報 ndi_missing，每 5 秒再找）
 ndi.rs   finder 常駐（每秒更新來源清單）→ 挑來源 → 有網頁要畫面才建 receiver
-         → 限速 max_fps → 2x 縮小 + limited→full → turbojpeg
+         → 限速 max_fps → 太大才縮小（整數分之一）→ turbojpeg（兩個編碼工人輪流）
    ↓  broadcast
 ws_server.rs  ws://127.0.0.1:7777（Origin 檢查）→ hello / status / JPEG
 tray.rs  系統列圖示（主執行緒；macOS 規定）

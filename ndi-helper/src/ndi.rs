@@ -11,7 +11,8 @@
 //     → 挑來源：手動指定（config.source_name，可以是別台）> 本機 AE > 本機其他；
 //       自動模式「絕不」接別台電腦（不會自動顯示同事的畫面）→ 這台沒有就等（no_local_source）
 //     → 只有在至少一個網頁要畫面時才建 receiver（沒人看就斷開，不解碼、不編碼）
-//     → 每幀：限速 max_fps（預設 30）→ 2x 縮小 + limited→full → turbojpeg → 廣播給網頁
+//     → 每幀：限速 max_fps（預設 30）→ 太大才縮小（整數分之一，不超過 max_output_pixels）
+//       →（設定開著才）limited→full → turbojpeg（品質 90、4:4:4）→ 廣播給網頁
 
 use crate::config::Config;
 use crate::state::{HelperError, NdiRuntime, Shared, SourceInfo};
@@ -21,7 +22,7 @@ use rayon::prelude::*;
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::net::IpAddr;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -568,7 +569,7 @@ pub fn run_forever(shared: Arc<Shared>) {
     }
 }
 
-fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
+fn run_session(lib: &NdiLib, shared: &Arc<Shared>) -> Result<(), NdiError> {
     if !unsafe { (lib.initialize)() } {
         return Err(NdiError::InitFailed);
     }
@@ -578,9 +579,16 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
     }
     let finder = Finder { lib, ptr: finder_ptr };
 
-    let mut compressor =
-        turbojpeg::Compressor::new().map_err(|e| NdiError::EncoderFailed(e.to_string()))?;
-    let mut quality: i32 = -1;
+    // JPEG 品質讀一次（config.json 改了要重開小程序）
+    let quality: u8 = shared.cfg().jpeg_quality;
+    let out = shared.clone();
+    let pool = EncoderPool::new(ENCODER_THREADS, quality, move |jpeg| {
+        let _ = out.frames.send(Arc::new(jpeg));
+    })
+    .map_err(NdiError::EncoderFailed)?;
+    let mut seq: u64 = 0;
+    // 上一次記到 log 的尺寸（變了才記：AE 切 Full / Half / Third、換合成）
+    let mut logged_size: Option<(usize, usize, usize, usize)> = None;
 
     shared.update(|s| {
         s.ndi = NdiRuntime::Ready;
@@ -600,12 +608,9 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
     let mut retry_connect_at: Option<Instant> = None;
     let mut pacer = Pacer { next_due: None };
 
-    // 統計
-    let mut frame_count: u64 = 0;
+    // 統計（送出幾張、花多久在編碼工人那邊算：pool.stats）
     let mut sec_start = Instant::now();
     let mut sec_ndi = 0u32;
-    let mut sec_sent = 0u32;
-    let mut sec_encode = Duration::ZERO;
     let mut last_frame_at: Option<Instant> = None;
 
     loop {
@@ -655,7 +660,7 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
                     s.receiving = false;
                     s.fps = 0.0;
                     s.ndi_fps = 0.0;
-                    (s.width, s.height, s.out_width, s.out_height) = (0, 0, 0, 0);
+                    (s.width, s.height, s.out_width, s.out_height, s.downscale) = (0, 0, 0, 0, 0);
                     true
                 });
             }
@@ -732,7 +737,7 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
                             s.connected = true;
                             s.receiving = false;
                             // 新來源的尺寸等第一幀進來再填
-                            (s.width, s.height, s.out_width, s.out_height) = (0, 0, 0, 0);
+                            (s.width, s.height, s.out_width, s.out_height, s.downscale) = (0, 0, 0, 0, 0);
                             if s.error.as_ref().map(|e| e.code == "recv_failed").unwrap_or(false) {
                                 s.error = None;
                             }
@@ -775,29 +780,38 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
             let stride = vf.line_stride_in_bytes as usize;
             let interval = Duration::from_secs_f64(1.0 / cfg.max_fps.clamp(1, 120) as f64);
 
-            if pacer.ready(now, interval) && shared.frame_clients() > 0 && stride >= w * 4 {
-                if quality != cfg.jpeg_quality as i32 {
-                    quality = cfg.jpeg_quality.clamp(1, 100) as i32;
-                    let _ = compressor.set_quality(quality);
-                }
-                // SAFETY: NDI 保證 p_data 有 stride * yres bytes，直到 free_video
-                let raw = unsafe { std::slice::from_raw_parts(vf.p_data, stride * h) };
-                let t_enc = Instant::now();
-                let encoded = encode_frame(raw, w, h, stride, &cfg, &mut compressor);
-                sec_encode += t_enc.elapsed();
-                if let Some((jpeg, ow, oh)) = encoded {
-                    let _ = shared.frames.send(Arc::new(jpeg));
-                    frame_count += 1;
-                    sec_sent += 1;
-                    shared.update(|s| {
-                        let size = (w as u32, h as u32, ow as u32, oh as u32);
-                        if (s.width, s.height, s.out_width, s.out_height) != size {
-                            (s.width, s.height, s.out_width, s.out_height) = size;
-                            true
-                        } else {
-                            false
+            // 編碼工人都在忙 → 這張跳過（不排隊）；有空才看限速
+            let wanted = shared.frame_clients() > 0 && stride >= w * 4;
+            if wanted && pool.try_reserve() {
+                if !pacer.ready(now, interval) {
+                    pool.release();
+                } else {
+                    // SAFETY: NDI 保證 p_data 有 stride * yres bytes，直到 free_video
+                    let raw = unsafe { std::slice::from_raw_parts(vf.p_data, stride * h) };
+                    let t0 = Instant::now();
+                    let factor = downscale_factor(w, h, cfg.downsample, cfg.max_output_pixels as u64);
+                    let lut = if cfg.limited_to_full { Some(limited_lut()) } else { None };
+                    let (rgb, ow, oh) = shrink_to_rgb(raw, w, h, stride, factor, lut);
+                    pool.stats.work_ns.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                    if ow == 0 || oh == 0 {
+                        pool.release();
+                    } else {
+                        seq += 1;
+                        pool.submit(EncodeJob { seq, rgb, w: ow, h: oh });
+                        if logged_size != Some((w, h, ow, oh)) {
+                            logged_size = Some((w, h, ow, oh));
+                            info!("NDI frame {w}×{h} → JPEG {ow}×{oh}（縮小 1/{factor}，品質 {quality}）");
                         }
-                    });
+                        shared.update(|s| {
+                            let size = (w as u32, h as u32, ow as u32, oh as u32, factor as u32);
+                            if (s.width, s.height, s.out_width, s.out_height, s.downscale) != size {
+                                (s.width, s.height, s.out_width, s.out_height, s.downscale) = size;
+                                true
+                            } else {
+                                false
+                            }
+                        });
+                    }
                 }
             }
             unsafe { (lib.recv_free_video)(r.ptr, &mut vf) };
@@ -811,12 +825,13 @@ fn run_session(lib: &NdiLib, shared: &Shared) -> Result<(), NdiError> {
         let elapsed = now.duration_since(sec_start);
         if elapsed >= Duration::from_secs(1) {
             let secs = elapsed.as_secs_f32();
+            let sec_sent = pool.stats.sec_sent.swap(0, Ordering::Relaxed);
+            let work_ns = pool.stats.work_ns.swap(0, Ordering::Relaxed);
             let (fps, ndi_fps) = (sec_sent as f32 / secs, sec_ndi as f32 / secs);
-            let encode_ms = if sec_sent > 0 { sec_encode.as_secs_f32() * 1000.0 / sec_sent as f32 } else { 0.0 };
+            let encode_ms = if sec_sent > 0 { work_ns as f32 / 1e6 / sec_sent as f32 } else { 0.0 };
+            let frame_count = pool.stats.sent.load(Ordering::Relaxed);
             sec_start = now;
             sec_ndi = 0;
-            sec_sent = 0;
-            sec_encode = Duration::ZERO;
             shared.update(|s| {
                 s.fps = fps;
                 s.ndi_fps = ndi_fps;
@@ -867,7 +882,220 @@ fn refresh_sources(lib: &NdiLib, finder: &Finder, identity: &LocalIdentity, out:
     *out = next;
 }
 
-/// RGBA → (2x box 縮小) → limited→full → RGB → JPEG。回傳 (jpeg, 輸出寬, 輸出高)
+/// 縮小倍數上限（再大也只縮到 1/16）
+const MAX_DOWNSCALE: usize = 16;
+
+/// 送出去的畫面要縮成幾分之一（整數 1、2、3…）：
+///   - downsample 關掉 → 1（永遠不縮）
+///   - 開著 → 最小的 f，讓 (w/f)×(h/f) ≤ max_pixels；畫面本來就不大 → 1（原樣送，不會變糊）
+/// 例（450 萬上限）：1920×1080、AE Third 的 2933×675、AE Half 的 4400×1012 → 1；
+///   整張 8800×2024（1780 萬）→ 2；3840×2160（830 萬）→ 2；10496×5120（5370 萬）→ 4
+pub fn downscale_factor(w: usize, h: usize, downsample: bool, max_pixels: u64) -> usize {
+    if !downsample || w == 0 || h == 0 {
+        return 1;
+    }
+    let max = max_pixels.max(1);
+    let limit = MAX_DOWNSCALE.min(w).min(h);
+    let mut f = 1;
+    while f < limit && ((w / f) as u64) * ((h / f) as u64) > max {
+        f += 1;
+    }
+    f
+}
+
+/// NDI 的 RGBA → 每 f×f 個像素平均成一個（f = 1 原樣）→（limited_to_full 才）拉色域 → RGB。
+/// 輸出 (w/f)×(h/f)；除不盡的最右 / 最下幾個像素（最多 f-1）不要。
+/// rayon：每個輸出 row 一個 task，跨核心同時跑。
+pub fn shrink_to_rgb(
+    raw: &[u8],
+    w: usize,
+    h: usize,
+    stride: usize,
+    f: usize,
+    lut: Option<&[u8; 256]>,
+) -> (Vec<u8>, usize, usize) {
+    let f = f.clamp(1, w.min(h).max(1));
+    let (ow, oh) = (w / f, h / f);
+    let mut buf = vec![0u8; ow * oh * 3];
+    if ow == 0 || oh == 0 {
+        return (buf, ow, oh);
+    }
+    let map = |v: u8| match lut {
+        Some(t) => t[v as usize],
+        None => v,
+    };
+    if f == 1 {
+        buf.par_chunks_exact_mut(ow * 3).enumerate().for_each(|(y, row)| {
+            let src = &raw[y * stride..y * stride + w * 4];
+            for (dst, px) in row.chunks_exact_mut(3).zip(src.chunks_exact(4)) {
+                dst[0] = map(px[0]);
+                dst[1] = map(px[1]);
+                dst[2] = map(px[2]);
+            }
+        });
+        return (buf, ow, oh);
+    }
+    let n = (f * f) as u32;
+    let half = n / 2;
+    buf.par_chunks_exact_mut(ow * 3).enumerate().for_each(|(y, row)| {
+        // 先把 f 條來源 row 一條一條橫向加總到 acc（記憶體照順序讀，快取友善）
+        let mut acc = vec![0u32; ow * 3];
+        for sy in y * f..y * f + f {
+            let src = &raw[sy * stride..sy * stride + ow * f * 4];
+            for (a, block) in acc.chunks_exact_mut(3).zip(src.chunks_exact(f * 4)) {
+                let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
+                for px in block.chunks_exact(4) {
+                    r += px[0] as u32;
+                    g += px[1] as u32;
+                    b += px[2] as u32;
+                }
+                a[0] += r;
+                a[1] += g;
+                a[2] += b;
+            }
+        }
+        for (dst, a) in row.iter_mut().zip(acc.iter()) {
+            // 四捨五入（以前是無條件捨去，整張會偏暗一點點）
+            *dst = map(((a + half) / n) as u8);
+        }
+    });
+    (buf, ow, oh)
+}
+
+/// JPEG 編碼器：品質照 config；色度不降取樣（4:4:4）— LED 內容常有銳利的彩色邊，4:2:0 會糊掉顏色
+fn new_compressor(quality: u8) -> Result<turbojpeg::Compressor, String> {
+    let mut c = turbojpeg::Compressor::new().map_err(|e| e.to_string())?;
+    c.set_quality(quality.clamp(1, 100) as i32).map_err(|e| e.to_string())?;
+    c.set_subsamp(turbojpeg::Subsamp::None).map_err(|e| e.to_string())?;
+    Ok(c)
+}
+
+/// 一張編好的畫面（encode_frame 的結果）
+#[cfg(test)]
+struct Encoded {
+    jpeg: Vec<u8>,
+    out_w: usize,
+    out_h: usize,
+    factor: usize,
+}
+
+/// 同時編幾張 JPEG：大畫面（450 萬像素）一張 20–40 ms（JPEG 編碼只能單執行緒），
+/// 兩個輪流編 → 中階筆電也能 30 fps；畫面小的時候一樣只用到一個
+const ENCODER_THREADS: usize = 2;
+
+/// 一張要編的畫面（已經縮小成 RGB）
+struct EncodeJob {
+    seq: u64,
+    rgb: Vec<u8>,
+    w: usize,
+    h: usize,
+}
+
+#[derive(Default)]
+struct EncodeStats {
+    /// 送出幾張（累計）
+    sent: AtomicU64,
+    /// 縮小 + 編碼花的時間（奈秒，NDI 執行緒每秒拿走歸零）
+    work_ns: AtomicU64,
+    /// 這一秒送出幾張（NDI 執行緒每秒拿走歸零）
+    sec_sent: AtomicU64,
+    /// 最後送出的那張的編號（比它舊的編好也不送，畫面不會倒退）
+    last_seq: AtomicU64,
+}
+
+/// JPEG 編碼工人：每個有自己的 turbojpeg；NDI 執行緒縮小完丟進來，編好直接送出去（output）。
+/// 全部都在忙 → try_reserve 回 false → 這一張跳過（不排隊，延遲不會越積越多）
+struct EncoderPool {
+    tx: Option<std::sync::mpsc::Sender<EncodeJob>>,
+    in_flight: Arc<AtomicUsize>,
+    workers: usize,
+    stats: Arc<EncodeStats>,
+    threads: Vec<std::thread::JoinHandle<()>>,
+}
+
+impl EncoderPool {
+    fn new(workers: usize, quality: u8, output: impl Fn(Vec<u8>) + Send + Sync + 'static) -> Result<Self, String> {
+        let workers = workers.max(1);
+        let (tx, rx) = std::sync::mpsc::channel::<EncodeJob>();
+        let rx = Arc::new(std::sync::Mutex::new(rx));
+        let output = Arc::new(output);
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let stats = Arc::new(EncodeStats::default());
+        let mut threads = Vec::with_capacity(workers);
+        for i in 0..workers {
+            let mut compressor = new_compressor(quality)?;
+            let (rx, output, in_flight, stats) = (rx.clone(), output.clone(), in_flight.clone(), stats.clone());
+            let t = std::thread::Builder::new()
+                .name(format!("jpeg-{i}"))
+                .spawn(move || loop {
+                    let job = match rx.lock().unwrap_or_else(|e| e.into_inner()).recv() {
+                        Ok(j) => j,
+                        Err(_) => break, // pool 收掉了
+                    };
+                    let t0 = Instant::now();
+                    let img = turbojpeg::Image {
+                        pixels: job.rgb.as_slice(),
+                        width: job.w,
+                        pitch: job.w * 3,
+                        height: job.h,
+                        format: turbojpeg::PixelFormat::RGB,
+                    };
+                    match compressor.compress_to_vec(img) {
+                        Ok(jpeg) => {
+                            stats.work_ns.fetch_add(t0.elapsed().as_nanos() as u64, Ordering::Relaxed);
+                            // 另一個工人已經送了更新的 → 這張不送（不倒退）
+                            if stats.last_seq.fetch_max(job.seq, Ordering::AcqRel) < job.seq {
+                                output(jpeg);
+                                stats.sent.fetch_add(1, Ordering::Relaxed);
+                                stats.sec_sent.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                        Err(e) => warn!("turbojpeg encode error: {e}"),
+                    }
+                    in_flight.fetch_sub(1, Ordering::AcqRel);
+                })
+                .map_err(|e| e.to_string())?;
+            threads.push(t);
+        }
+        Ok(Self { tx: Some(tx), in_flight, workers, stats, threads })
+    }
+
+    /// 有空的工人 → 佔一個（之後一定要 submit 或 release）
+    fn try_reserve(&self) -> bool {
+        let mut cur = self.in_flight.load(Ordering::Acquire);
+        while cur < self.workers {
+            match self.in_flight.compare_exchange(cur, cur + 1, Ordering::AcqRel, Ordering::Acquire) {
+                Ok(_) => return true,
+                Err(now) => cur = now,
+            }
+        }
+        false
+    }
+
+    fn release(&self) {
+        self.in_flight.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    fn submit(&self, job: EncodeJob) {
+        match &self.tx {
+            Some(tx) if tx.send(job).is_ok() => {}
+            _ => self.release(),
+        }
+    }
+}
+
+impl Drop for EncoderPool {
+    fn drop(&mut self) {
+        self.tx.take(); // 工人收到 Err 就結束
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
+    }
+}
+
+/// RGBA → 縮小（太大才縮）→ limited→full（設定開著才做）→ RGB → JPEG（單張，測試 / 量測用；
+/// 正式流程是 shrink_to_rgb 在 NDI 執行緒做、JPEG 交給 EncoderPool）
+#[cfg(test)]
 fn encode_frame(
     raw: &[u8],
     w: usize,
@@ -875,64 +1103,13 @@ fn encode_frame(
     stride: usize,
     cfg: &Config,
     compressor: &mut turbojpeg::Compressor,
-) -> Option<(Vec<u8>, usize, usize)> {
-    // rayon：每個輸出 row 一個 task，跨核心同時跑。
-    // 大張 LED canvas（10912×2024）約 22M pixel；單執行緒 200-400ms，8 核 30-60ms。
-    let lut = limited_lut();
-    let do_limited = cfg.limited_to_full;
-
-    let (out_buf, out_w, out_h) = if cfg.downsample && w >= 2 && h >= 2 {
-        let dw = w / 2;
-        let dh = h / 2;
-        let mut buf = vec![0u8; dw * dh * 3];
-        buf.par_chunks_exact_mut(dw * 3).enumerate().for_each(|(y, row)| {
-            let sy = y * 2;
-            for x in 0..dw {
-                let sx = x * 2;
-                let (mut r, mut g, mut b) = (0u32, 0u32, 0u32);
-                for dy in 0..2 {
-                    let row_off = (sy + dy) * stride;
-                    for dx in 0..2 {
-                        let off = row_off + (sx + dx) * 4;
-                        r += raw[off] as u32;
-                        g += raw[off + 1] as u32;
-                        b += raw[off + 2] as u32;
-                    }
-                }
-                let (mut rr, mut gg, mut bb) = ((r >> 2) as u8, (g >> 2) as u8, (b >> 2) as u8);
-                if do_limited {
-                    rr = lut[rr as usize];
-                    gg = lut[gg as usize];
-                    bb = lut[bb as usize];
-                }
-                let dst = x * 3;
-                row[dst] = rr;
-                row[dst + 1] = gg;
-                row[dst + 2] = bb;
-            }
-        });
-        (buf, dw, dh)
-    } else {
-        let mut buf = vec![0u8; w * h * 3];
-        buf.par_chunks_exact_mut(w * 3).enumerate().for_each(|(y, row)| {
-            let row_off = y * stride;
-            for x in 0..w {
-                let off = row_off + x * 4;
-                let (mut r, mut g, mut b) = (raw[off], raw[off + 1], raw[off + 2]);
-                if do_limited {
-                    r = lut[r as usize];
-                    g = lut[g as usize];
-                    b = lut[b as usize];
-                }
-                let dst = x * 3;
-                row[dst] = r;
-                row[dst + 1] = g;
-                row[dst + 2] = b;
-            }
-        });
-        (buf, w, h)
-    };
-
+) -> Option<Encoded> {
+    let factor = downscale_factor(w, h, cfg.downsample, cfg.max_output_pixels as u64);
+    let lut = if cfg.limited_to_full { Some(limited_lut()) } else { None };
+    let (out_buf, out_w, out_h) = shrink_to_rgb(raw, w, h, stride, factor, lut);
+    if out_w == 0 || out_h == 0 {
+        return None;
+    }
     let img = turbojpeg::Image {
         pixels: out_buf.as_slice(),
         width: out_w,
@@ -941,7 +1118,7 @@ fn encode_frame(
         format: turbojpeg::PixelFormat::RGB,
     };
     match compressor.compress_to_vec(img) {
-        Ok(bytes) => Some((bytes, out_w, out_h)),
+        Ok(jpeg) => Some(Encoded { jpeg, out_w, out_h, factor }),
         Err(e) => {
             warn!("turbojpeg encode error: {e}");
             None
@@ -1084,6 +1261,359 @@ mod tests {
             }
         }
         assert!((59..=61).contains(&sent), "sent {sent}");
+    }
+
+    // ── 縮小 / JPEG ──
+
+    const BUDGET: u64 = crate::config::DEFAULT_MAX_OUTPUT_PIXELS as u64;
+
+    #[test]
+    fn small_frames_pass_through_untouched() {
+        // 本來就不大 → 原樣送（不會變糊）
+        assert_eq!(downscale_factor(1920, 1080, true, BUDGET), 1);
+        assert_eq!(downscale_factor(2933, 675, true, BUDGET), 1, "8800×2024 用 AE Third");
+        assert_eq!(downscale_factor(4400, 1012, true, BUDGET), 1, "8800×2024 用 AE Half");
+        assert_eq!(downscale_factor(2200, 506, true, BUDGET), 1, "8800×2024 用 AE Quarter");
+        assert_eq!(downscale_factor(1, 1, true, BUDGET), 1);
+    }
+
+    #[test]
+    fn big_frames_get_smallest_integer_factor() {
+        assert_eq!(downscale_factor(8800, 2024, true, BUDGET), 2, "整張 8800×2024 → 4400×1012");
+        assert_eq!(downscale_factor(3840, 2160, true, BUDGET), 2);
+        assert_eq!(downscale_factor(5248, 2560, true, BUDGET), 2, "10496×5120 用 AE Half");
+        assert_eq!(downscale_factor(3499, 1707, true, BUDGET), 2, "10496×5120 用 AE Third（600 萬）");
+        assert_eq!(downscale_factor(10496, 5120, true, BUDGET), 4);
+        // 上限 400 萬時（README 的例子）：整張 8800×2024 → 1/3
+        assert_eq!(downscale_factor(8800, 2024, true, 4_000_000), 3);
+        assert_eq!(downscale_factor(2933, 675, true, 4_000_000), 1);
+        // 每個 f 都是「剛好不超過」：f-1 會超過
+        for (w, h) in [(8800, 2024), (10496, 5120), (7680, 4320), (32768, 1080)] {
+            let f = downscale_factor(w, h, true, BUDGET);
+            assert!(((w / f) * (h / f)) as u64 <= BUDGET, "{w}×{h} ÷{f}");
+            if f > 1 {
+                assert!(((w / (f - 1)) * (h / (f - 1))) as u64 > BUDGET, "{w}×{h} ÷{f} 不是最小");
+            }
+        }
+    }
+
+    #[test]
+    fn downsample_off_never_shrinks() {
+        assert_eq!(downscale_factor(8800, 2024, false, BUDGET), 1);
+        assert_eq!(downscale_factor(32768, 32768, false, 1), 1);
+    }
+
+    #[test]
+    fn factor_never_makes_empty_frames() {
+        // 很細長的畫面：寬高都至少 1
+        let f = downscale_factor(30000, 3, true, 10);
+        assert!(f <= 3);
+        assert_eq!(downscale_factor(100_000, 1, true, 10), 1);
+        assert!(downscale_factor(1 << 20, 1 << 20, true, 1) <= MAX_DOWNSCALE);
+    }
+
+    /// RGBA 測試畫面（stride 可以比 w*4 大，跟 NDI 一樣）
+    fn rgba(w: usize, h: usize, stride: usize, f: impl Fn(usize, usize) -> [u8; 3]) -> Vec<u8> {
+        let mut v = vec![0u8; stride * h];
+        for y in 0..h {
+            for x in 0..w {
+                let [r, g, b] = f(x, y);
+                let o = y * stride + x * 4;
+                v[o..o + 4].copy_from_slice(&[r, g, b, 255]);
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn shrink_factor_1_is_exact_copy() {
+        let (w, h, stride) = (7, 3, 7 * 4 + 12);
+        let raw = rgba(w, h, stride, |x, y| [(x * 30) as u8, (y * 80) as u8, 200]);
+        let (out, ow, oh) = shrink_to_rgb(&raw, w, h, stride, 1, None);
+        assert_eq!((ow, oh), (7, 3));
+        for y in 0..h {
+            for x in 0..w {
+                let o = (y * w + x) * 3;
+                assert_eq!(&out[o..o + 3], &[(x * 30) as u8, (y * 80) as u8, 200]);
+            }
+        }
+    }
+
+    #[test]
+    fn shrink_box_filter_averages_and_rounds() {
+        // 3×3 方塊平均：一格裡 0..8 → 平均 4；一黑一白交錯 → 四捨五入（不是無條件捨去）
+        let (w, h) = (7, 6); // 除以 3 → 2×2，最右邊一行不要
+        let raw = rgba(w, h, w * 4, |x, y| {
+            let i = ((y % 3) * 3 + (x % 3)) as u8;
+            [i * 10, if (x + y) % 2 == 0 { 255 } else { 0 }, 128]
+        });
+        let (out, ow, oh) = shrink_to_rgb(&raw, w, h, w * 4, 3, None);
+        assert_eq!((ow, oh), (2, 2));
+        for px in out.chunks_exact(3) {
+            assert_eq!(px[0], 40); // (0+10+…+80)/9
+            assert!(px[1] == 142 || px[1] == 113, "{}", px[1]); // 5×255/9 = 141.7 → 142；4×255/9 = 113.3 → 113
+            assert_eq!(px[2], 128);
+        }
+        // 2x：(255+255+0+0)/4 = 127.5 → 128（以前 >>2 = 127）
+        let raw = rgba(2, 2, 8, |_, y| if y == 0 { [255; 3] } else { [0; 3] });
+        let (out, _, _) = shrink_to_rgb(&raw, 2, 2, 8, 2, None);
+        assert_eq!(out, vec![128, 128, 128]);
+    }
+
+    #[test]
+    fn shrink_applies_lut_only_when_given() {
+        let raw = rgba(2, 1, 8, |_, _| [16, 235, 128]);
+        let (out, _, _) = shrink_to_rgb(&raw, 2, 1, 8, 1, None);
+        assert_eq!(out, vec![16, 235, 128, 16, 235, 128]);
+        let (out, _, _) = shrink_to_rgb(&raw, 2, 1, 8, 1, Some(limited_lut()));
+        assert_eq!(&out[..3], &[0, 255, limited_to_full(128)]);
+    }
+
+    /// 從 JPEG 讀出：每個色版的取樣（4:4:4 = 全部 0x11）、第一張量化表的 DC 值
+    fn jpeg_info(jpeg: &[u8]) -> (Vec<u8>, u8) {
+        let (mut sampling, mut dc) = (Vec::new(), 0u8);
+        let mut i = 2;
+        while i + 4 <= jpeg.len() {
+            assert_eq!(jpeg[i], 0xFF, "marker");
+            let m = jpeg[i + 1];
+            let len = ((jpeg[i + 2] as usize) << 8) | jpeg[i + 3] as usize;
+            let seg = &jpeg[i + 4..i + 2 + len];
+            match m {
+                0xDB if dc == 0 => dc = seg[1], // Pq/Tq, 然後 64 個值（第一個是 DC）
+                0xC0 | 0xC1 | 0xC2 => {
+                    let n = seg[5] as usize;
+                    sampling = (0..n).map(|c| seg[6 + c * 3 + 1]).collect();
+                }
+                0xDA => break,
+                _ => {}
+            }
+            i += 2 + len;
+        }
+        (sampling, dc)
+    }
+
+    #[test]
+    fn jpeg_is_quality_90_and_444() {
+        let cfg = Config::default();
+        let (w, h) = (64, 32);
+        let raw = rgba(w, h, w * 4, |x, y| if (x / 8 + y / 8) % 2 == 0 { [255, 0, 0] } else { [0, 0, 255] });
+        let mut c = new_compressor(cfg.jpeg_quality).unwrap();
+        let enc = encode_frame(&raw, w, h, w * 4, &cfg, &mut c).unwrap();
+        assert_eq!((enc.out_w, enc.out_h, enc.factor), (64, 32, 1));
+        let (sampling, dc) = jpeg_info(&enc.jpeg);
+        assert_eq!(sampling, vec![0x11, 0x11, 0x11], "4:4:4（色度不降取樣）");
+        // libjpeg 的品質縮放：q90 → 亮度 DC 16×(200-180)/100 = 3.2 → 3；q75 → 8
+        assert_eq!(dc, 3);
+        let mut c75 = new_compressor(75).unwrap();
+        let enc75 = encode_frame(&raw, w, h, w * 4, &cfg, &mut c75).unwrap();
+        assert_eq!(jpeg_info(&enc75.jpeg).1, 8);
+        // 解回來的尺寸對
+        let header = turbojpeg::read_header(&enc.jpeg).unwrap();
+        assert_eq!((header.width, header.height), (64, 32));
+    }
+
+    #[test]
+    fn encode_reports_factor_and_size() {
+        let cfg = Config { max_output_pixels: 100, ..Config::default() };
+        let (w, h) = (40, 21);
+        let raw = rgba(w, h, w * 4 + 16, |x, _| [x as u8 * 6, 0, 0]);
+        let mut c = new_compressor(90).unwrap();
+        let enc = encode_frame(&raw, w, h, w * 4 + 16, &cfg, &mut c).unwrap();
+        // 40×21 = 840 > 100 → ÷3 = 13×7 = 91
+        assert_eq!((enc.factor, enc.out_w, enc.out_h), (3, 13, 7));
+        let header = turbojpeg::read_header(&enc.jpeg).unwrap();
+        assert_eq!((header.width, header.height), (13, 7));
+        let off = Config { downsample: false, ..cfg };
+        let enc = encode_frame(&raw, w, h, w * 4 + 16, &off, &mut c).unwrap();
+        assert_eq!((enc.factor, enc.out_w, enc.out_h), (1, 40, 21));
+    }
+
+    fn wait_idle(pool: &EncoderPool) {
+        let t = Instant::now();
+        while pool.in_flight.load(Ordering::Acquire) > 0 {
+            assert!(t.elapsed() < Duration::from_secs(10), "編碼工人卡住");
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    #[test]
+    fn encoder_pool_limits_in_flight_and_never_goes_backwards() {
+        let got = Arc::new(std::sync::Mutex::new(Vec::<(usize, usize)>::new()));
+        let g = got.clone();
+        let pool = EncoderPool::new(2, 90, move |jpeg| {
+            let h = turbojpeg::read_header(&jpeg).unwrap();
+            g.lock().unwrap().push((h.width, h.height));
+        })
+        .unwrap();
+        // 兩個工人：最多佔兩個，第三個不排隊
+        assert!(pool.try_reserve());
+        assert!(pool.try_reserve());
+        assert!(!pool.try_reserve(), "兩個都在忙 → 跳過這張");
+        pool.release();
+        pool.release();
+        let job = |seq: u64, w: usize| EncodeJob { seq, rgb: vec![128; w * 8 * 3], w, h: 8 };
+        assert!(pool.try_reserve());
+        pool.submit(job(1, 16));
+        wait_idle(&pool);
+        assert!(pool.try_reserve());
+        pool.submit(job(3, 24));
+        wait_idle(&pool);
+        // 比已經送出的舊（另一個工人比較慢才編好）→ 不送，畫面不倒退
+        assert!(pool.try_reserve());
+        pool.submit(job(2, 32));
+        wait_idle(&pool);
+        assert_eq!(*got.lock().unwrap(), vec![(16, 8), (24, 8)]);
+        assert_eq!(pool.stats.sent.load(Ordering::Relaxed), 2);
+        assert!(pool.stats.work_ns.load(Ordering::Relaxed) > 0);
+    }
+
+    #[test]
+    fn encoder_pool_shuts_down_cleanly() {
+        let pool = EncoderPool::new(2, 90, |_| {}).unwrap();
+        assert!(pool.try_reserve());
+        pool.submit(EncodeJob { seq: 1, rgb: vec![0; 8 * 8 * 3], w: 8, h: 8 });
+        drop(pool); // join 工人，不會卡住
+    }
+
+    /// 像 LED 內容的測試畫面：漸層 + 彩色硬邊 + 細線 + 一點雜訊（雜訊會讓 JPEG 變慢，比較保守）
+    fn led_like(w: usize, h: usize) -> Vec<u8> {
+        let mut seed = 0x1234_5678u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            ((seed >> 24) as i32 % 13) - 6
+        };
+        let mut v = vec![0u8; w * h * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let bar = (x * 8 / w.max(1)) as u8;
+                let mut px = [
+                    (x * 255 / w.max(1)) as i32,
+                    (y * 255 / h.max(1)) as i32,
+                    if bar % 2 == 0 { 230 } else { 20 },
+                ];
+                if (x / 37 + y / 23) % 5 == 0 {
+                    px = [255, 40, 200]; // 彩色方塊
+                }
+                if x % 97 < 2 || y % 61 < 2 {
+                    px = [255, 255, 255]; // 細線
+                }
+                let o = (y * w + x) * 4;
+                for c in 0..3 {
+                    v[o + c] = (px[c] + noise()).clamp(0, 255) as u8;
+                }
+                v[o + 3] = 255;
+            }
+        }
+        v
+    }
+
+    fn median_ms(mut f: impl FnMut(), runs: usize) -> f64 {
+        f(); // 暖機
+        let mut t: Vec<f64> = (0..runs)
+            .map(|_| {
+                let s = Instant::now();
+                f();
+                s.elapsed().as_secs_f64() * 1000.0
+            })
+            .collect();
+        t.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        t[t.len() / 2]
+    }
+
+    /// 量測（不是一般測試）：cargo test --release -- --ignored --nocapture encode_benchmark
+    #[test]
+    #[ignore]
+    fn encode_benchmark() {
+        println!("\n— JPEG 編碼（單執行緒，turbojpeg）每張毫秒 / KB —");
+        for (w, h) in [(1920usize, 1080usize), (2933, 675), (2667, 1500), (4400, 1012)] {
+            let raw = led_like(w, h);
+            let (rgb, _, _) = shrink_to_rgb(&raw, w, h, w * 4, 1, None);
+            for (q, sub, label) in [
+                (75, turbojpeg::Subsamp::Sub2x2, "q75 4:2:0"),
+                (75, turbojpeg::Subsamp::None, "q75 4:4:4"),
+                (90, turbojpeg::Subsamp::Sub2x2, "q90 4:2:0"),
+                (90, turbojpeg::Subsamp::None, "q90 4:4:4"),
+            ] {
+                let mut c = turbojpeg::Compressor::new().unwrap();
+                c.set_quality(q).unwrap();
+                c.set_subsamp(sub).unwrap();
+                let mut size = 0;
+                let ms = median_ms(
+                    || {
+                        let img = turbojpeg::Image { pixels: rgb.as_slice(), width: w, pitch: w * 3, height: h, format: turbojpeg::PixelFormat::RGB };
+                        size = c.compress_to_vec(img).unwrap().len();
+                    },
+                    15,
+                );
+                println!("{w}×{h} ({:.1} MP) {label}: {ms:.1} ms, {} KB", (w * h) as f64 / 1e6, size / 1024);
+            }
+        }
+        println!("\n— 整條（縮小 + 色彩 + JPEG q90 4:4:4）—");
+        let cfg = Config::default();
+        for (w, h, budget) in [
+            (2933usize, 675usize, BUDGET),
+            (4400, 1012, BUDGET),
+            (8800, 2024, BUDGET),
+            (8800, 2024, 4_000_000),
+            (3840, 2160, BUDGET),
+        ] {
+            let raw = led_like(w, h);
+            let cfg = Config { max_output_pixels: budget as u32, ..cfg.clone() };
+            let mut c = new_compressor(90).unwrap();
+            let mut out = (0, 0, 0);
+            let ms = median_ms(
+                || {
+                    let e = encode_frame(&raw, w, h, w * 4, &cfg, &mut c).unwrap();
+                    out = (e.out_w, e.out_h, e.factor);
+                },
+                11,
+            );
+            let shrink = median_ms(
+                || {
+                    let f = downscale_factor(w, h, true, budget);
+                    std::hint::black_box(shrink_to_rgb(&raw, w, h, w * 4, f, None));
+                },
+                11,
+            );
+            println!(
+                "{w}×{h} 上限 {:.1} MP → {}×{} (÷{}): {ms:.1} ms（其中縮小 {shrink:.1} ms）",
+                budget as f64 / 1e6, out.0, out.1, out.2
+            );
+        }
+        println!("（舊版：8800×2024 固定縮一半 q75 4:4:4 + limited→full）");
+        let raw = led_like(8800, 2024);
+        let mut c = new_compressor(75).unwrap();
+        let ms = median_ms(
+            || {
+                let (rgb, ow, oh) = shrink_to_rgb(&raw, 8800, 2024, 8800 * 4, 2, Some(limited_lut()));
+                let img = turbojpeg::Image { pixels: rgb.as_slice(), width: ow, pitch: ow * 3, height: oh, format: turbojpeg::PixelFormat::RGB };
+                std::hint::black_box(c.compress_to_vec(img).unwrap());
+            },
+            11,
+        );
+        println!("8800×2024 → 4400×1012 q75: {ms:.1} ms");
+
+        println!("\n— 每秒最多編幾張（q90 4:4:4，一直丟畫面進去 2 秒）—");
+        for (w, h) in [(2933usize, 675usize), (4400, 1012)] {
+            let raw = led_like(w, h);
+            let (rgb, _, _) = shrink_to_rgb(&raw, w, h, w * 4, 1, None);
+            for workers in [1usize, 2] {
+                let pool = EncoderPool::new(workers, 90, |_| {}).unwrap();
+                let t0 = Instant::now();
+                let mut seq = 0;
+                while t0.elapsed() < Duration::from_secs(2) {
+                    if pool.try_reserve() {
+                        seq += 1;
+                        pool.submit(EncodeJob { seq, rgb: rgb.clone(), w, h });
+                    } else {
+                        std::thread::sleep(Duration::from_micros(200));
+                    }
+                }
+                wait_idle(&pool);
+                let fps = pool.stats.sent.load(Ordering::Relaxed) as f64 / t0.elapsed().as_secs_f64();
+                println!("{w}×{h}，{workers} 個編碼工人：{fps:.0} 張/秒");
+            }
+        }
     }
 
     #[test]

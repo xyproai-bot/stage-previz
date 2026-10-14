@@ -5,7 +5,7 @@
 //
 // 架構：
 //   AE NDI Output → NDI 函式庫（runtime 動態載入）
-//        → ndi.rs：挑來源（本機 AE 優先）、限速 30fps、2x 縮小、turbojpeg 編碼
+//        → ndi.rs：挑來源（本機 AE 優先）、限速 30fps、太大才縮小（整數分之一）、turbojpeg 編碼（兩個工人輪流）
 //        → state.rs：broadcast 給每個網頁連線
 //        → ws_server.rs：hello / status / JPEG frames；收 select_source / pause / resume
 //   tray.rs：系統列圖示（主執行緒；macOS 規定）
