@@ -722,7 +722,7 @@ function SongDetail({
   const va = useViewAs();
   const actions = songStatusActions({ role: projectRole, userId: user?.id, song, flow: 'director' });
   const actionsHint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user?.id, song, flow: 'director' }) : null;
-  // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，導演這邊只看）
+  // 校準倍率、現場設定、LED 畫布大小（製作在管理頁設的，導演這邊只看）
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
@@ -1069,7 +1069,6 @@ function SongDetail({
                 bookmarkScope={projectId}
                 scaleCorrection={view.scaleCorrection}
                 onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
-                mechanismOffsets={view.mechanismOffsets}
                 {...mech.sceneProps}
                 lookSettings={personalLook.effective}
                 onLookSettingsChange={personalLook.set}

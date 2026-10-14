@@ -15,7 +15,7 @@ import { fitFov } from '../lib/review/annotations';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
-import { legacyOffsetsToMechanisms, legacyRowToMechanism, type Mechanism, type MechanismValues, type MechVec3 } from '../lib/mechanisms/model';
+import type { Mechanism, MechanismValues, MechVec3 } from '../lib/mechanisms/model';
 import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type RigMechanism } from '../lib/mechanisms/pose';
 import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
 import { stageFrontDirection } from '../lib/stageCamera';
@@ -144,12 +144,7 @@ interface Props {
   onAddAnchoredComment?: (anchor: import('../lib/api').CommentAnchor) => void;
   /** Camera bookmarks 儲存範圍 — 用 projectId 當 localStorage key 前綴；不傳則停用功能 */
   bookmarkScope?: string;
-  /**
-   * 舊的「全專案機關滑桿」位移（per-objectId X/Y，公尺）。有給 mechanisms 就不用；
-   * 還沒換成機關的頁面照舊給，會自動換算成機關（畫面一樣）。新網站上線後拿掉
-   */
-  mechanismOffsets?: Record<string, { x: number; y: number }>;
-  /** 機關定義（每個專案設定一次）；沒給 = 沒有機關（還有給 mechanismOffsets 的舊頁面會自動換算） */
+  /** 機關定義（每個專案設定一次）；沒給 / 還在讀 = 沒有機關 */
   mechanisms?: Mechanism[] | null;
   /** 目前這個 cue 的機關位置（已經沿用 / 夾在行程內）；換 cue 時照機器速度走過去，同一個 cue 裡改值直接跳 */
   mechanismTargets?: MechanismValues;
@@ -257,7 +252,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -342,18 +337,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (cur) { cur.pos.set(pos.x, pos.y, pos.z); cur.quat.copy(quat); }
     else basePoseRef.current.set(id, { pos: new THREE.Vector3(pos.x, pos.y, pos.z), quat: quat.clone() });
   };
-  // 機關定義 → 每個物件的機關鏈（定義或校準倍率變了才重算）；舊頁面給的 mechanismOffsets 自動換算
-  const legacyLedKey = mechanisms == null && mechanismOffsets
-    ? states.filter(s => s.category === 'led_panel').map(s => s.objectId).join(',')
-    : '';
-  const rig = useMemo(() => {
-    if (mechanisms) return compileRig(mechanisms, scaleCorrection);
-    if (mechanismOffsets && Object.keys(mechanismOffsets).length > 0) {
-      const objs = states.map(s => ({ id: s.objectId, category: s.category, order: s.order, displayName: s.displayName, meshName: s.meshName }));
-      return compileRig(legacyOffsetsToMechanisms(mechanismOffsets, objs).map(legacyRowToMechanism), scaleCorrection);
-    }
-    return EMPTY_RIG;
-  }, [mechanisms, mechanismOffsets, scaleCorrection, legacyLedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 機關定義 → 每個物件的機關鏈（定義或校準倍率變了才重算）
+  const rig = useMemo(
+    () => (mechanisms ? compileRig(mechanisms, scaleCorrection) : EMPTY_RIG),
+    [mechanisms, scaleCorrection],
+  );
   const rigRef = useRef(rig);
   rigRef.current = rig;
   const mechTweenerRef = useRef(new MechanismTweener());
@@ -1560,7 +1548,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const targetOpacity = s.effective.visible ? 1 : 0;
       const fading = fadesRef.current.has(s.objectId);
       if (fading && !statesChanged) {
-        // 淡到一半因為別的原因（選取 / 機關滑桿）重算 → 繼續淡
+        // 淡到一半因為別的原因（選取 / 機關）重算 → 繼續淡
       } else if (xfade > 0 && smoothThisRun && !justCreated && !inPivot && getObjectOpacity(obj) !== targetOpacity) {
         fadesRef.current.set(s.objectId, {
           from: getObjectOpacity(obj),

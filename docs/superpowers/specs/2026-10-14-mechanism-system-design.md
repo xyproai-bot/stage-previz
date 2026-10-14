@@ -787,7 +787,7 @@ Plain-words version for the owner: 「你現在的專案裡，升降台 / 轉台
 
 ## 15. Implementation notes and deviations (2026-10-14)
 
-Everything in sections 1–12 is built except Task 21 (cleanup after master), which waits for the production release. These are the places where the build differs from the text above, and why.
+Everything in sections 1–12 is built, including Task 21 (cleanup after master, done 2026-10-14 once the new frontend was on master; see the end of this section). These are the places where the build differs from the text above, and why.
 
 **Validation (4.3)**
 - Names longer than 40 characters, preset names longer than 20 and console labels longer than 40 are shortened instead of rejected (the inputs have `maxLength`, so this only affects API callers). Travel limits outside ±1000 m / ±36000° are clamped to the limit.
@@ -822,4 +822,10 @@ Everything in sections 1–12 is built except Task 21 (cleanup after master), wh
 - The travel line (13b) is drawn at the first object of the mechanism (the lift / revolve itself), not the centre of all objects, which can be far apart.
 - 「從目前 3D 狀態建立 cue」 sends `snapshotMechanisms` with the selected cue's resolved values through a small `withMechanismSnapshot` helper, because `api.ts`'s `createCue` type is not touched until cleanup.
 - The setup form scrolls itself into view when it opens.
+
+**Task 21 cleanup (2026-10-14)**
+- Removed: `MechanismPanel.tsx`, `mechanismOffset.ts` and its test, `cueTimeline.scenePosition` (and its test), the mechanism parts of `projectViewSettings.ts` (state, setters, the one-time localStorage migration of `mechanism-offsets:<projectId>`), `MechanismOffsets` and `SharePublicData.mechanismOffsets` in `api.ts`, `legacyRowToMechanism`, and the StageScene `mechanismOffsets` prop with its legacy fallback. No page passed `mechanismOffsets` any more before the fallback was deleted. While mechanisms are loading (`mechanisms === null`) the scene now shows base poses.
+- The legacy parity tests in `pose.test.ts` now compare against the old slider formula written out inline (`legacyOffsetsToMechanisms` stays in `model.ts`, because the 0023 migration test uses it as the oracle).
+- Worker: `PATCH /api/projects/:p` with `mechanism_offsets` or `mechanismOffsets` returns 400 「機關改版了，請重新整理頁面」 and changes nothing; `syncLegacyMechanismOffsets` and `sanitizeMechanismOffsets` are gone; duplicate no longer copies the column. The column is kept and still read (project row, share bundle) for frontends that have not reloaded. Test: `cf-worker/legacyMechanismOffsets.test.mjs`.
+- The production frontend at the time (750e401) only ever sent `mechanismOffsets` from the one-time localStorage migration in `projectViewSettings.ts` (an admin browser that still had a pre-2026-10 `mechanism-offsets:<projectId>` key while the project had no offsets). That request now gets a 400, which the old code catches silently and retries next load; nothing else in that frontend writes the column (the slider panel was no longer mounted).
 

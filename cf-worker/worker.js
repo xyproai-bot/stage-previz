@@ -663,7 +663,13 @@ async function updateProject(request, env, ctx) {
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'mechanism_offsets', 'look_settings', 'material_overrides', 'home_view', 'led_canvas'];
+  // 舊的「全專案機關滑桿」（projects.mechanism_offsets）已經換成機關分頁：欄位留著（舊資料、0023 轉過的來源），但不再收修改。
+  // 還開著舊頁面的人一存就會看到這句，重新整理就是新版
+  if ('mechanism_offsets' in body || 'mechanismOffsets' in body) {
+    return jsonResp({ error: '機關改版了，請重新整理頁面' }, 400);
+  }
+
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'look_settings', 'material_overrides', 'home_view', 'led_canvas'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
   // tags 是 array → 存成 JSON string
@@ -671,16 +677,15 @@ async function updateProject(request, env, ctx) {
     body.tags = JSON.stringify(body.tags.filter(t => typeof t === 'string').slice(0, 20));
   }
 
-  // 3D 檢視設定（校準倍率 / 機關滑桿 / 現場設定）— 全專案共用，只有 admin 能改
+  // 3D 檢視設定（校準倍率 / 現場設定 / 材質 / 重置視角 / LED 畫布大小）— 全專案共用，只有 admin 能改
   if ('scaleCorrection' in body && !('scale_correction' in body)) body.scale_correction = body.scaleCorrection;
-  if ('mechanismOffsets' in body && !('mechanism_offsets' in body)) body.mechanism_offsets = body.mechanismOffsets;
   if ('lookSettings' in body && !('look_settings' in body)) body.look_settings = body.lookSettings;
   if ('materialOverrides' in body && !('material_overrides' in body)) body.material_overrides = body.materialOverrides;
   if ('homeView' in body && !('home_view' in body)) body.home_view = body.homeView;
   if ('ledCanvas' in body && !('led_canvas' in body)) body.led_canvas = body.ledCanvas;
-  const touchesViewSettings = 'scale_correction' in body || 'mechanism_offsets' in body || 'look_settings' in body || 'material_overrides' in body || 'home_view' in body || 'led_canvas' in body;
+  const touchesViewSettings = 'scale_correction' in body || 'look_settings' in body || 'material_overrides' in body || 'home_view' in body || 'led_canvas' in body;
   if (touchesViewSettings && me?.role !== 'admin') {
-    return jsonResp({ error: '只有製作能改 3D 檢視設定（校準 / 機關滑桿 / 現場設定 / 材質 / 重置視角 / AE 畫布尺寸）' }, 403);
+    return jsonResp({ error: '只有製作能改 3D 檢視設定（校準 / 現場設定 / 材質 / 重置視角 / LED 畫布大小）' }, 403);
   }
   // Drive 綁定（用哪個 Google 帳號、哪個資料夾）和專案狀態 — 只有全站 admin
   // （不然專案成員可以把專案指到 admin 的 Google 帳號，讀到別的資料夾）
@@ -734,11 +739,6 @@ async function updateProject(request, env, ctx) {
     if (!isFinite(n) || n <= 0.0001 || n >= 10000) return jsonResp({ error: 'scale_correction 不合法' }, 400);
     body.scale_correction = n;
   }
-  if ('mechanism_offsets' in body) {
-    const clean = sanitizeMechanismOffsets(body.mechanism_offsets);
-    if (!clean) return jsonResp({ error: 'mechanism_offsets 不合法' }, 400);
-    body.mechanism_offsets = JSON.stringify(clean);
-  }
   if ('look_settings' in body) {
     const clean = sanitizeLookSettings(body.look_settings);
     if (!clean) return jsonResp({ error: 'look_settings 不合法' }, 400);
@@ -775,7 +775,7 @@ async function updateProject(request, env, ctx) {
   }
   if (!sets.length) return jsonResp({ error: 'no updatable fields' }, 400);
 
-  const before = await env.DB.prepare(`SELECT name, mechanism_offsets FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+  const before = await env.DB.prepare(`SELECT name FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
 
   values.push(projectId);
   const result = await env.DB.prepare(
@@ -783,40 +783,13 @@ async function updateProject(request, env, ctx) {
   ).bind(...values).run();
 
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
-  // 舊網站還在用「全專案機關滑桿」→ 同步到新的機關（在新介面改過的就不再同步）。新網站上線後拿掉
-  if ('mechanism_offsets' in body) {
-    try {
-      await mech.syncLegacyMechanismOffsets(env, projectId, safeJson(before?.mechanism_offsets) || {}, JSON.parse(body.mechanism_offsets));
-    } catch (e) {
-      console.warn('[mechanisms] legacy sync failed', e?.message || e);
-    }
-  }
-  // 滑桿 / 現場設定拖動會一直存，不寫 activity（不然 audit log 會被洗版）
+  // 現場設定 / 材質拖滑桿會一直存，不寫 activity（不然 audit log 會被洗版）
   const onlyLiveTweaks = sets.length > 0 && Object.keys(body).every(k =>
-    ['mechanism_offsets', 'mechanismOffsets', 'look_settings', 'lookSettings', 'material_overrides', 'materialOverrides', 'home_view', 'homeView', 'led_canvas', 'ledCanvas'].includes(k));
+    ['look_settings', 'lookSettings', 'material_overrides', 'materialOverrides', 'home_view', 'homeView', 'led_canvas', 'ledCanvas'].includes(k));
   if (!onlyLiveTweaks) {
     await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
   }
   return jsonResp({ ok: true });
-}
-
-// 機關滑桿 offsets：{ [stageObjectId]: { x, y } }（公尺），不合法回 null
-function sanitizeMechanismOffsets(raw) {
-  let obj = raw;
-  if (typeof obj === 'string') { try { obj = JSON.parse(obj); } catch { return null; } }
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-  const entries = Object.entries(obj);
-  if (entries.length > 500) return null;
-  const clamp = (v) => Math.max(-100, Math.min(100, v));
-  const out = {};
-  for (const [id, v] of entries) {
-    if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id) || !v || typeof v !== 'object') return null;
-    const x = Number(v.x ?? 0), y = Number(v.y ?? 0);
-    if (!isFinite(x) || !isFinite(y)) return null;
-    if (x === 0 && y === 0) continue; // 0 不用存
-    out[id] = { x: clamp(x), y: clamp(y) };
-  }
-  return out;
 }
 
 // 現場模式設定：範圍要跟 web/src/lib/stageLook/lookSettings.ts 的 LOOK_SETTING_RANGES 一致
@@ -920,7 +893,7 @@ async function duplicateProject(request, env, projectId) {
 
   // 抓原 project
   const src = await env.DB.prepare(
-    `SELECT id, name, description, model_r2_key, show_id, scale_correction, mechanism_offsets FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+    `SELECT id, name, description, model_r2_key, show_id, scale_correction FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
   ).bind(projectId).first();
   if (!src) return jsonResp({ error: 'Source project not found' }, 404);
 
@@ -1018,13 +991,7 @@ async function duplicateProject(request, env, projectId) {
   }
   if (stateStmts.length > 0) await env.DB.batch(stateStmts);
 
-  // 7. 機關（定義、帶的物件、每個 cue 的位置）；舊網站的機關滑桿數值也換成新物件的 id 一起帶過去
-  const oldOffsets = safeJson(src.mechanism_offsets) || {};
-  const newOffsets = {};
-  for (const [oid, v] of Object.entries(oldOffsets)) if (objIdMap.has(oid)) newOffsets[objIdMap.get(oid)] = v;
-  if (Object.keys(newOffsets).length) {
-    await env.DB.prepare(`UPDATE projects SET mechanism_offsets = ? WHERE id = ?`).bind(JSON.stringify(newOffsets), newId).run();
-  }
+  // 7. 機關（定義、帶的物件、每個 cue 的位置）。舊的機關滑桿欄位（mechanism_offsets）不再寫：0023 已經轉成機關、跟著上面一起複製
   const mechCopy = await mech.copyMechanismsToProject(env, projectId, newId, objIdMap, cueIdMap);
 
   await logActivity(request, env, newId, 'create', 'project', newId, {
@@ -5879,6 +5846,7 @@ async function handleShareRouter(request, env, url, ref) {
       stageObjects,
       restrictedToSongId: link.song_id,
       scaleCorrection: proj.scale_correction ?? 1,
+      // 舊的全專案機關滑桿：新前端不讀了；正式站還在跑的舊版前端讀機關時會先用它（只讀，後台不再收修改）
       mechanismOffsets: safeJsonObj(proj.mechanism_offsets, {}),
       // 機關（定義）；每個 cue 的位置：GET songs/:songId/mechanism-positions
       mechanisms: await mech.loadMechanisms(env, link.project_id).catch(() => []),

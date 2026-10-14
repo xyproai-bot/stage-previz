@@ -1152,7 +1152,6 @@ export default function ProjectEditor() {
               modelUrl={modelUrl}
               enableNdi
               bookmarkScope={projectId}
-              mechanismOffsets={view.mechanismOffsets}
               {...mech.sceneProps}
               scaleCorrection={view.scaleCorrection}
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
@@ -1435,7 +1434,6 @@ export default function ProjectEditor() {
                 projectName={projectMeta?.name}
                 songName={selectedSong.name}
                 scaleCorrection={view.scaleCorrection}
-                mechanismOffsets={view.mechanismOffsets}
                 mechanisms={mech.sceneProps.mechanisms}
                 mechanismTargetsFor={(cueId) => valuesOf(mech.resolved.get(cueId))}
                 lookSettings={personalLook.effective}

@@ -413,7 +413,7 @@ export function needDeniedMessage(need) {
 export const PROJECT_GLOBAL_ADMIN_FIELDS = [
   'status',
   'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id',
-  'scale_correction', 'mechanism_offsets', 'look_settings', 'material_overrides', 'home_view', 'led_canvas',
+  'scale_correction', 'look_settings', 'material_overrides', 'home_view', 'led_canvas',
 ];
 
 /**

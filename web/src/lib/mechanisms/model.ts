@@ -504,7 +504,8 @@ export function snapToPreset(value: number, m: Pick<Mechanism, 'presets' | 'trav
 
 // ─────────────────────────────────────────────
 // 舊的「全專案機關滑桿」（projects.mechanism_offsets）→ 機關
-// 跟 cf-worker/migrations/0023_mechanisms.sql 的轉換結果一模一樣（mechanisms.test.mjs 有比對）
+// 跟 cf-worker/migrations/0023_mechanisms.sql 的轉換結果一模一樣（mechanisms.test.mjs 拿它比對 migration）。
+// 舊滑桿已經拿掉（後台不收 mechanism_offsets），這裡只留下來說明 0023 怎麼轉、給測試用。
 // ─────────────────────────────────────────────
 
 export type LegacyOffsets = Record<string, { x?: unknown; y?: unknown } | null | undefined>;
@@ -585,14 +586,4 @@ export function legacyOffsetsToMechanisms(offsets: LegacyOffsets | null | undefi
     if (my) out.push(my);
   }
   return out;
-}
-
-/** 轉出來的 → 畫面用的 Mechanism（StageScene 收到舊的 mechanismOffsets 時用） */
-export function legacyRowToMechanism(row: LegacyMechanismRow): Mechanism {
-  return {
-    id: row.id, name: row.name, kind: row.kind, axis: row.axis, pivot: null,
-    travelMin: row.travelMin, travelMax: row.travelMax, defaultValue: row.defaultValue, maxSpeed: null,
-    presets: [], parentId: row.parentId, objectIds: row.objectIds, consoleLabel: null, order: row.order,
-    metadata: null, cueCount: 0, updatedAt: '',
-  };
 }

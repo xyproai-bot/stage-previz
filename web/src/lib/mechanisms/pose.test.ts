@@ -1,9 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import { compileRig, applyChain, basePoseFromScene, rigValue, travelGeometry } from './pose';
-import { legacyOffsetsToMechanisms, legacyRowToMechanism, type Mechanism } from './model';
-import { scenePosition } from '../cueTimeline';
-import { cuePositionFromScene } from '../mechanismOffset';
+import { legacyOffsetsToMechanisms, type LegacyMechanismRow, type Mechanism } from './model';
 
 const mech = (over: Partial<Mechanism> & Pick<Mechanism, 'id'>): Mechanism => ({
   name: over.id, kind: 'linear', axis: { x: 0, y: 1, z: 0 }, pivot: null, travelMin: -100, travelMax: 100,
@@ -32,21 +30,30 @@ const expectQuat = (a: THREE.Quaternion, b: THREE.Quaternion) => {
   expect(Math.abs(a.dot(b))).toBeCloseTo(1, 9);
 };
 
-describe('跟舊的機關滑桿一模一樣（舊資料轉過來畫面不變）', () => {
+// 0023 把舊的全專案機關滑桿轉成的機關（mechanisms 表裡的 mlx_ / mly_）→ 畫面用的 Mechanism
+const fromLegacyRow = (row: LegacyMechanismRow): Mechanism => mech({
+  id: row.id, name: row.name, axis: row.axis, travelMin: row.travelMin, travelMax: row.travelMax,
+  defaultValue: row.defaultValue, parentId: row.parentId, objectIds: row.objectIds, order: row.order,
+});
+// 舊滑桿的畫法（已經拿掉）：LED 面板的位置 + 位移（公尺 ÷ 校準倍率），其他類別不動
+const oldSliderPos = (p: { x: number; y: number; z: number }, off: { x: number; y: number }, sc: number) =>
+  ({ x: p.x + off.x / sc, y: p.y + off.y / sc, z: p.z });
+
+describe('0023 從舊機關滑桿轉過來的機關：畫面跟以前一模一樣', () => {
   const offsets = { led: { x: 2, y: 1 } };
   const objects = [{ id: 'led', category: 'led_panel', order: 0, displayName: 'LED', meshName: 'LED' }];
-  const legacy = legacyOffsetsToMechanisms(offsets, objects).map(legacyRowToMechanism);
+  const legacy = legacyOffsetsToMechanisms(offsets, objects).map(fromLegacyRow);
 
   for (const sc of [1, 1.6, 2]) {
-    it(`校準倍率 ×${sc}：畫面位置 = scenePosition、存回去 = cuePositionFromScene`, () => {
+    it(`校準倍率 ×${sc}：畫面位置 = 舊滑桿的位置；拖完存回去、重畫還在放手的地方`, () => {
       const rig = compileRig(legacy, sc);
       for (const cue of [{ x: 1, y: 1, z: 3 }, { x: -4.25, y: 0.5, z: 7 }, { x: 0, y: 0, z: 0 }]) {
         const shown = scene(rig, 'led', {}, v3(cue.x, cue.y, cue.z));
-        expectVec(shown.pos, scenePosition(cue, 'led_panel', 'led', offsets, sc));
+        expectVec(shown.pos, oldSliderPos(cue, offsets.led, sc));
         // 往右拖 1 → 放手
         const dropped = { x: shown.pos.x + 1, y: shown.pos.y, z: shown.pos.z };
         const saved = base(rig, 'led', {}, v3(dropped.x, dropped.y, dropped.z));
-        expectVec(saved.pos, cuePositionFromScene(dropped, 'led_panel', 'led', offsets, sc));
+        expectVec(saved.pos, { x: cue.x + 1, y: cue.y, z: cue.z });
         // 存完重畫：還是在放手的位置
         expectVec(scene(rig, 'led', {}, saved.pos).pos, dropped);
       }
@@ -56,8 +63,8 @@ describe('跟舊的機關滑桿一模一樣（舊資料轉過來畫面不變）'
   it('只有一個方向 / 不是 LED / 沒位移：跟舊的一樣', () => {
     const objs = [...objects, { id: 'lift', category: 'mechanism', order: 1, meshName: 'LIFT' }];
     const offs = { led: { x: 0, y: 1 }, lift: { x: 3, y: 3 } };
-    const rig = compileRig(legacyOffsetsToMechanisms(offs, objs).map(legacyRowToMechanism), 2);
-    expectVec(scene(rig, 'led', {}, v3(1, 1, 1)).pos, scenePosition({ x: 1, y: 1, z: 1 }, 'led_panel', 'led', offs, 2));
+    const rig = compileRig(legacyOffsetsToMechanisms(offs, objs).map(fromLegacyRow), 2);
+    expectVec(scene(rig, 'led', {}, v3(1, 1, 1)).pos, oldSliderPos({ x: 1, y: 1, z: 1 }, offs.led, 2));
     expectVec(scene(rig, 'lift', {}, v3(1, 1, 1)).pos, { x: 1, y: 1, z: 1 });
   });
 });

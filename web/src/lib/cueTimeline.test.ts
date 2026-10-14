@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
 import type { CueState } from './api';
 import {
-  cueWindows, timelineAt, cuePoses, blendCuePoses, poseAtTime, cueQuaternion, scenePosition,
+  cueWindows, timelineAt, cuePoses, blendCuePoses, poseAtTime, cueQuaternion,
   fadeOpacity, lerpOpacity, type CuePoseMap,
 } from './cueTimeline';
 import { DEFAULT_CUE_TRANSITION_SECONDS } from './cueTiming';
@@ -165,15 +165,7 @@ describe('fadeOpacity / lerpOpacity', () => {
   });
 });
 
-describe('scenePosition / cueQuaternion（管理頁、分享頁共用的算法）', () => {
-  it('LED 面板加上機關位移（公尺 → 場景單位）', () => {
-    const offsets = { led: { x: 2, y: 1 } };
-    expect(scenePosition({ x: 1, y: 1, z: 3 }, 'led_panel', 'led', offsets, 2)).toEqual({ x: 2, y: 1.5, z: 3 });
-  });
-  it('不是 LED 面板 → 不加機關位移', () => {
-    const offsets = { mech: { x: 2, y: 1 } };
-    expect(scenePosition({ x: 1, y: 1, z: 3 }, 'mechanism', 'mech', offsets, 2)).toEqual({ x: 1, y: 1, z: 3 });
-  });
+describe('cueQuaternion（管理頁、分享頁共用的算法）', () => {
   it('角度（度）→ 四元數，跟 three.js 的 XYZ 順序一樣', () => {
     const q = cueQuaternion({ pitch: 10, yaw: 20, roll: 30 });
     const ref = new THREE.Quaternion().setFromEuler(new THREE.Euler(

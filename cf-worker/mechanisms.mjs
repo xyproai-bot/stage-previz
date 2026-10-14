@@ -1,5 +1,6 @@
 // 機關（升降台、轉台、滑軌…）的後台：定義的新增 / 修改 / 刪除 / 排序、每個 cue 的機關位置、機關總表資料、
-// 分享連結看的資料、複製專案 / 匯出匯入 / 複製 cue / 常用擺位 / 重置 cue 時一起處理、舊的機關滑桿同步過來。
+// 分享連結看的資料、複製專案 / 匯出匯入 / 複製 cue / 常用擺位 / 重置 cue 時一起處理。
+// （舊的全專案機關滑桿 projects.mechanism_offsets：0023 轉成機關之後就不再同步，後台也不收修改了）
 // 設計：docs/superpowers/specs/2026-10-14-mechanism-system-design.md；API：docs/mechanisms-api.md
 //
 // 檢查規則跟前端共用 web/src/lib/mechanisms/model.ts（純判斷，wrangler 打包時會一起編進來）。
@@ -9,7 +10,7 @@
 // 回應：handler 回傳 { status, body }（worker.js 包成 JSON 回應），不直接 new Response → 這裡不用知道 CORS。
 
 import {
-  normalizeMechanismInput, mechanismToInput, parseCueValue, legacyOffsetsToMechanisms, clampValue,
+  normalizeMechanismInput, mechanismToInput, parseCueValue, clampValue,
 } from '../web/src/lib/mechanisms/model.ts';
 import { planCueConversion } from '../web/src/lib/mechanisms/convert.ts';
 
@@ -526,80 +527,6 @@ export async function countMechanismObjects(env, projectId) {
     `SELECT COUNT(*) AS n FROM mechanism_objects mo JOIN mechanisms m ON m.id = mo.mechanism_id WHERE m.project_id = ?`
   ).bind(projectId).first();
   return Number(r?.n) || 0;
-}
-
-// ─────────────────────────────────────────────
-// 舊的全專案機關滑桿（舊網站還在用的 projects.mechanism_offsets）→ 同步到機關
-// ─────────────────────────────────────────────
-
-/**
- * 舊網站改了機關滑桿 → 對應的機關跟著改（只改「在新介面沒改過」的：mlx_ / mly_ 兩個都沒有 edited_at）。
- * 只處理這次有變的 LED（之前 / 之後不一樣）：新介面刪掉的機關，舊滑桿沒再動就不會跑回來。
- * 結果跟 0023 migration 對新資料轉出來的一樣：0 = 沒有那個方向的機關；預設位置 = 位移；行程放寬到包含它。
- * @param {object} before  改之前的 mechanism_offsets（已經 parse 過）
- * @param {object} after   改之後的（sanitize 過）
- */
-export async function syncLegacyMechanismOffsets(env, projectId, before, after) {
-  const prev = before && typeof before === 'object' ? before : {};
-  const next = after && typeof after === 'object' ? after : {};
-  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
-  const changed = [...new Set([...Object.keys(prev), ...Object.keys(next)])].filter(id => {
-    const a = prev[id] || {}, b = next[id] || {};
-    return ID_RE.test(id) && (num(a.x) !== num(b.x) || num(a.y) !== num(b.y));
-  });
-  if (!changed.length) return { synced: 0, skipped: 0 };
-
-  const objs = (await env.DB.prepare(
-    `SELECT id, category, "order", display_name, mesh_name FROM stage_objects WHERE project_id = ?`
-  ).bind(projectId).all()).results || [];
-  const objById = new Map(objs.map(o => [o.id, o]));
-  const legacy = (await env.DB.prepare(
-    `SELECT id, legacy_object_id, edited_at, travel_min, travel_max FROM mechanisms WHERE project_id = ? AND legacy_object_id IS NOT NULL`
-  ).bind(projectId).all()).results || [];
-  const legacyById = new Map(legacy.map(m => [m.id, m]));
-
-  const stmts = [];
-  let synced = 0, skipped = 0;
-  for (const objectId of changed) {
-    const ids = { x: 'mlx_' + objectId, y: 'mly_' + objectId };
-    const rows = [legacyById.get(ids.x), legacyById.get(ids.y)].filter(Boolean);
-    if (rows.some(r => r.edited_at)) { skipped++; continue; }
-    const o = objById.get(objectId);
-    const want = o
-      ? legacyOffsetsToMechanisms({ [objectId]: next[objectId] }, [{
-        id: o.id, category: o.category, order: Number(o.order) || 0, displayName: o.display_name, meshName: o.mesh_name,
-      }])
-      : [];
-    const wantIds = new Set(want.map(w => w.id));
-    // 這次變成 0 的方向：拿掉（沒在新介面改過 → 沒有任何 cue 的位置，刪掉不會少東西）
-    for (const r of rows) {
-      if (!wantIds.has(r.id)) stmts.push(env.DB.prepare(`DELETE FROM mechanisms WHERE id = ? AND project_id = ? AND edited_at IS NULL`).bind(r.id, projectId));
-    }
-    for (const w of want) {
-      stmts.push(env.DB.prepare(
-        `INSERT INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed, presets,
-                                 parent_id, "order", legacy_object_id, legacy_axis)
-         VALUES (?, ?, ?, 'linear', ?, NULL, ?, ?, ?, NULL, '[]', ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           default_value = excluded.default_value,
-           travel_min = MIN(mechanisms.travel_min, excluded.travel_min),
-           travel_max = MAX(mechanisms.travel_max, excluded.travel_max),
-           parent_id = excluded.parent_id,
-           updated_at = datetime('now')
-         WHERE mechanisms.edited_at IS NULL AND mechanisms.project_id = excluded.project_id`
-      ).bind(w.id, projectId, w.name, JSON.stringify(w.axis), w.travelMin, w.travelMax, w.defaultValue, w.parentId, w.order,
-        w.legacyObjectId, w.legacyAxis));
-    }
-    // 這片 LED 放在哪個機關：有上下就放上下，沒有就放左右（被放進別的機關的不搶：INSERT OR IGNORE）
-    stmts.push(env.DB.prepare(`DELETE FROM mechanism_objects WHERE stage_object_id = ? AND mechanism_id IN (?, ?)`).bind(objectId, ids.x, ids.y));
-    const holder = want.find(w => w.objectIds.length);
-    if (holder) {
-      stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO mechanism_objects (mechanism_id, stage_object_id) VALUES (?, ?)`).bind(holder.id, objectId));
-    }
-    synced++;
-  }
-  if (stmts.length) await env.DB.batch(stmts);
-  return { synced, skipped };
 }
 
 // ─────────────────────────────────────────────

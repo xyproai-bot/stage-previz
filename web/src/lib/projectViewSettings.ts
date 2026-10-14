@@ -1,24 +1,23 @@
-// 專案共用的 3D 檢視設定：測距校準倍率 + 機關滑桿位移 + 現場模式設定
+// 專案共用的 3D 檢視設定：測距校準倍率 + 現場模式設定 + 材質 + 重置視角 + LED 畫布大小
 //
 // 用法（每個顯示 StageScene 的頁面）：
 //   const view = useProjectViewSettings(projectId, user?.role === 'admin');
 //   <StageScene scaleCorrection={view.scaleCorrection}
 //               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
-//               mechanismOffsets={view.mechanismOffsets}
 //               lookSettings={personalLook.effective}       // usePersonalLook(projectId, view.lookSettings)
 //               onLookSettingsChange={personalLook.set}     // 每個人調自己的，存在自己電腦
 //               onLookSaveAsDefault={view.canEdit ? () => view.setLookSettings(personalLook.effective) : undefined}
 //               materialOverrides={view.materialOverrides}  // admin 調的，存在專案上
 //               onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined} />
 //
-// 之前校準 / 滑桿存在各自瀏覽器的 localStorage → 導演 / 動畫師 / 換電腦都看不到。
+// 之前校準存在各自瀏覽器的 localStorage → 導演 / 動畫師 / 換電腦都看不到。
 // 現在存在 project 上（worker 只允許 admin 改）；admin 第一次打開時會把舊瀏覽器裡的值搬上去。
+// 機關在「機關」分頁設（lib/mechanisms/*，每個 cue 自己的位置），不在這裡；舊的全專案機關滑桿已經拿掉。
 // 材質 / 重置視角一律以專案上存的為準：以前在自己電腦留的暫存（會把舊值補存回專案、蓋掉別台電腦的修改）
 // 已經拿掉，打開時順便清掉（legacyViewCache.ts）。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from './api';
-import type { MechanismOffsets } from './api';
 import { toast } from './toast';
 import { DEFAULT_LOOK_SETTINGS, normalizeLookSettings, type LookSettings } from './stageLook/lookSettings';
 import { normalizeMaterialOverrides, type MaterialOverride, type MaterialOverrides } from './stageLook/materialOverrides';
@@ -30,35 +29,21 @@ const SAVE_DELAY_MS = 500;  // 滑桿停手多久才存
 
 // 2026-10 前存在瀏覽器的 key
 const legacyScaleKey = (projectId: string) => `scale-correction:${projectId}`;
-const legacyMechanismKey = (projectId: string) => `mechanism-offsets:${projectId}`;
 
-function readLegacy(projectId: string): { scale: number | null; offsets: MechanismOffsets | null } {
-  let scale: number | null = null;
-  let offsets: MechanismOffsets | null = null;
+function readLegacyScale(projectId: string): number | null {
   try {
     const s = parseFloat(localStorage.getItem(legacyScaleKey(projectId)) || '');
-    if (isFinite(s) && s > 0) scale = s;
-    const raw = localStorage.getItem(legacyMechanismKey(projectId));
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) offsets = parsed;
-    }
+    if (isFinite(s) && s > 0) return s;
   } catch { /* private mode / 壞資料 → 當沒有 */ }
-  return { scale, offsets };
+  return null;
 }
 
-function clearLegacy(projectId: string) {
-  try {
-    localStorage.removeItem(legacyScaleKey(projectId));
-    localStorage.removeItem(legacyMechanismKey(projectId));
-  } catch { /* ignore */ }
+function clearLegacyScale(projectId: string) {
+  try { localStorage.removeItem(legacyScaleKey(projectId)); } catch { /* ignore */ }
 }
-
-const hasNonZero = (o: MechanismOffsets) => Object.values(o).some(v => v && (v.x || v.y));
 
 export interface ProjectViewSettingsState {
   scaleCorrection: number;
-  mechanismOffsets: MechanismOffsets;
   lookSettings: LookSettings;
   materialOverrides: MaterialOverrides;
   /** 🎥 重置攝影機的畫面（null = 自動正面全景） */
@@ -69,8 +54,6 @@ export interface ProjectViewSettingsState {
   /** 專案設定讀完了沒（讀失敗也算完，用預設值）；還沒讀完時校準倍率還是預設的 1 */
   loaded: boolean;
   setScaleCorrection: (n: number) => void;
-  updateMechanismOffset: (objId: string, axis: 'x' | 'y', value: number) => void;
-  resetAllMechanismOffsets: () => void;
   setLookSettings: (patch: Partial<LookSettings>) => void;
   /** patch = null → 這個材質回到 C4D 原本 */
   setMaterialOverride: (name: string, patch: Partial<MaterialOverride> | null) => void;
@@ -82,7 +65,6 @@ export interface ProjectViewSettingsState {
 
 export function useProjectViewSettings(projectId: string | undefined, canEdit: boolean): ProjectViewSettingsState {
   const [scaleCorrection, setScale] = useState(1);
-  const [mechanismOffsets, setOffsets] = useState<MechanismOffsets>({});
   const [lookSettings, setLook] = useState<LookSettings>(DEFAULT_LOOK_SETTINGS);
   const [materialOverrides, setMaterials] = useState<MaterialOverrides>({});
   const [homeView, setHomeViewState] = useState<HomeView | null>(null);
@@ -90,16 +72,14 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   const [loaded, setLoaded] = useState(false);
   // ref 跟 state 同步：存檔 / 失敗回滾要拿「目前值」，不想把 callback 綁在 state 上
   const scaleRef = useRef(1);
-  const offsetsRef = useRef<MechanismOffsets>({});
   const lookRef = useRef<LookSettings>(DEFAULT_LOOK_SETTINGS);
   const materialsRef = useRef<MaterialOverrides>({});
-  // 還沒送出的修改（滑桿 / 現場設定），停手 SAVE_DELAY_MS 後合併成一次存
+  // 還沒送出的修改（現場設定 / 材質 / 重置視角），停手 SAVE_DELAY_MS 後合併成一次存
   const pendingRef = useRef<{ timer: number; projectId: string; patch: Partial<api.ProjectViewSettings> } | null>(null);
   // 存檔失敗的提示一個頁面只跳一次（拖滑桿時不要一直跳）
   const saveErrorShownRef = useRef(false);
 
   const applyScale = (n: number) => { scaleRef.current = n; setScale(n); };
-  const applyOffsets = (o: MechanismOffsets) => { offsetsRef.current = o; setOffsets(o); };
   const applyLook = (s: LookSettings) => { lookRef.current = s; setLook(s); };
   const applyMaterials = (m: MaterialOverrides) => { materialsRef.current = m; setMaterials(m); };
 
@@ -122,7 +102,6 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     if (!projectId) return;
     let cancelled = false;
     applyScale(1);
-    applyOffsets({});
     applyLook(DEFAULT_LOOK_SETTINGS);
     applyMaterials({});
     setHomeViewState(null);
@@ -135,38 +114,30 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       try {
         settings = await api.getProjectViewSettings(projectId);
       } catch {
-        // 讀不到就維持預設（未校準 / 沒位移 / 預設現場設定 / 沒調材質 / 自動視角）
+        // 讀不到就維持預設（未校準 / 預設現場設定 / 沒調材質 / 自動視角）
         if (!cancelled) setLoaded(true);
         return;
       }
       if (cancelled) return;
 
       if (canEdit) {
-        const legacy = readLegacy(projectId);
-        const patch: Partial<api.ProjectViewSettings> = {};
         // 只有專案上還沒有值時才搬，不蓋掉別人已經存的
-        if (settings.scaleCorrection === 1 && legacy.scale !== null && legacy.scale !== 1) {
-          patch.scaleCorrection = legacy.scale;
-        }
-        if (!hasNonZero(settings.mechanismOffsets) && legacy.offsets && hasNonZero(legacy.offsets)) {
-          patch.mechanismOffsets = legacy.offsets;
-        }
+        const legacyScale = readLegacyScale(projectId);
         let migrated = true;
-        if (Object.keys(patch).length > 0) {
+        if (settings.scaleCorrection === 1 && legacyScale !== null && legacyScale !== 1) {
           try {
-            await api.updateProjectViewSettings(projectId, patch);
-            settings = { ...settings, ...patch };
-            toast.info('已把這台電腦上的校準 / 機關滑桿數值存到專案，所有人都看得到了');
+            await api.updateProjectViewSettings(projectId, { scaleCorrection: legacyScale });
+            settings = { ...settings, scaleCorrection: legacyScale };
+            toast.info('已把這台電腦上的校準數值存到專案，所有人都看得到了');
           } catch {
             migrated = false;  // 下次再試，先別清
           }
         }
-        if (migrated) clearLegacy(projectId);
+        if (migrated) clearLegacyScale(projectId);
         if (cancelled) return;
       }
 
       applyScale(settings.scaleCorrection);
-      applyOffsets(settings.mechanismOffsets);
       applyLook(settings.lookSettings);
       setLedCanvasState(settings.ledCanvas);
       applyMaterials(settings.materialOverrides);
@@ -208,21 +179,6 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     };
   }, [projectId, flushPending]);
 
-  const updateMechanismOffset = useCallback((objId: string, axis: 'x' | 'y', value: number) => {
-    if (!canEdit) return;
-    const cur = offsetsRef.current;
-    const next = { ...cur, [objId]: { ...(cur[objId] || { x: 0, y: 0 }), [axis]: value } };
-    applyOffsets(next);
-    scheduleSave({ mechanismOffsets: next });
-  }, [canEdit, scheduleSave]);
-
-  const resetAllMechanismOffsets = useCallback(() => {
-    if (!canEdit) return;
-    applyOffsets({});
-    scheduleSave({ mechanismOffsets: {} });
-    flushPending();
-  }, [canEdit, scheduleSave, flushPending]);
-
   const setLookSettings = useCallback((patch: Partial<LookSettings>) => {
     if (!canEdit) return;
     const next = normalizeLookSettings({ ...lookRef.current, ...patch });
@@ -247,7 +203,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     scheduleSave({ homeView: view });
   }, [canEdit, scheduleSave]);
 
-  // AE 畫布尺寸：admin 在管理頁填一次（按 Enter / 離開欄位才存），不用像滑桿那樣等停手，直接送出
+  // AE 畫布尺寸：admin 在管理頁填一次（按 Enter / 離開欄位才存），不用像現場設定的滑桿那樣等停手，直接送出
   const setLedCanvas = useCallback((v: LedCanvas | null) => {
     if (!canEdit) return;
     const next = normalizeLedCanvas(v);
@@ -257,8 +213,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   }, [canEdit, scheduleSave, flushPending]);
 
   return {
-    scaleCorrection, mechanismOffsets, lookSettings, materialOverrides, homeView, ledCanvas, canEdit, loaded,
-    setScaleCorrection, updateMechanismOffset, resetAllMechanismOffsets, setLookSettings, setMaterialOverride, setHomeView,
-    setLedCanvas,
+    scaleCorrection, lookSettings, materialOverrides, homeView, ledCanvas, canEdit, loaded,
+    setScaleCorrection, setLookSettings, setMaterialOverride, setHomeView, setLedCanvas,
   };
 }

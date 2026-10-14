@@ -1,7 +1,7 @@
 // 跑法：cd cf-worker && npm test
 // 用 Node 內建的 node:sqlite 做一個跟 D1 一樣的資料庫：把 migrations 全部跑一次，
 // 檢查 0023 把舊的機關滑桿轉成機關的結果 = 前端 legacyOffsetsToMechanisms、重跑不會多、刪物件 / 刪 cue 會一起清掉；
-// 再測後台的機關 API（新增 / 修改 / 刪除、每個 cue 的位置、舊滑桿同步、轉換）。
+// 再測後台的機關 API（新增 / 修改 / 刪除、每個 cue 的位置、轉換）。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
@@ -12,7 +12,7 @@ import { legacyOffsetsToMechanisms } from '../web/src/lib/mechanisms/model.ts';
 import {
   rowToMechanism, findObjectConflicts, conflictMessage, inputToColumns,
   loadMechanisms, createMechanism, updateMechanism, deleteMechanism, reorderMechanisms,
-  putCuePosition, deleteCuePosition, loadSongPositions, mechanismSheet, syncLegacyMechanismOffsets,
+  putCuePosition, deleteCuePosition, loadSongPositions, mechanismSheet,
   copyMechanismsToProject, exportMechanisms, importMechanisms, cloneCuePositions, snapshotCuePositions, templateMechanismPositions,
   applyNamedPositions, clearCuePositions, countMechanismObjects, convertCuePositions,
 } from './mechanisms.mjs';
@@ -261,40 +261,6 @@ test('API：每個 cue 的位置（夾進行程、回到沿用、算改過）、
   assert.equal((await deleteMechanism(req({}), env, ctx, lift.id, log)).status, 404);
 });
 
-test('舊網站改機關滑桿 → 同步到機關（沒在新介面改過的才同步，改過就不再動）', async () => {
-  const { db, env, req, ctx, log } = apiEnv();
-  // 一開始沒有位移
-  await syncLegacyMechanismOffsets(env, 'p1', {}, { led: { x: 2, y: 0 } });
-  let rows = legacyRowsFromDb(db, 'p1');
-  assert.deepEqual(rows.map(r => [r.id, r.defaultValue, r.objectIds]), [['mlx_led', 2, ['led']]]);
-  // 再加上下 → 上下帶 LED、裝在左右上
-  await syncLegacyMechanismOffsets(env, 'p1', { led: { x: 2, y: 0 } }, { led: { x: 2, y: 11 } });
-  rows = legacyRowsFromDb(db, 'p1');
-  assert.deepEqual(rows.map(r => [r.id, r.defaultValue, r.parentId, r.objectIds, r.travelMax]), [
-    ['mlx_led', 2, null, [], 10],
-    ['mly_led', 11, 'mlx_led', ['led'], 11],
-  ]);
-  // 結果跟 migration 從頭轉的一樣
-  const objects = [{ id: 'led', category: 'led_panel', order: 1, displayName: 'LED', meshName: 'LED' }];
-  assert.deepEqual(rows, legacyOffsetsToMechanisms({ led: { x: 2, y: 11 } }, objects).sort((a, b) => a.id.localeCompare(b.id)));
-  // 左右歸零 → 左右的機關拿掉，上下不再裝在左右上
-  await syncLegacyMechanismOffsets(env, 'p1', { led: { x: 2, y: 11 } }, { led: { x: 0, y: 11 } });
-  assert.deepEqual(legacyRowsFromDb(db, 'p1').map(r => [r.id, r.parentId, r.objectIds]), [['mly_led', null, ['led']]]);
-  // 沒變的 LED 不動
-  assert.deepEqual(await syncLegacyMechanismOffsets(env, 'p1', { led: { y: 11 } }, { led: { y: 11 } }), { synced: 0, skipped: 0 });
-  // 不是 LED 的不轉
-  await syncLegacyMechanismOffsets(env, 'p1', {}, { lift: { x: 1 } });
-  assert.equal(db.prepare(`SELECT COUNT(*) AS n FROM mechanisms WHERE legacy_object_id = 'lift'`).get().n, 0);
-
-  // 在新介面改過（例：設了某個 cue 的位置）→ 舊滑桿不再蓋過去
-  ctx.mechanism = { id: 'mly_led', kind: 'linear', travel_min: -10, travel_max: 11 };
-  await putCuePosition(req({ value: 3 }), env, ctx, 'c2');
-  const r = await syncLegacyMechanismOffsets(env, 'p1', { led: { y: 11 } }, { led: { y: 5 } });
-  assert.deepEqual(r, { synced: 0, skipped: 1 });
-  assert.equal(db.prepare(`SELECT default_value FROM mechanisms WHERE id = 'mly_led'`).get().default_value, 11);
-  void log;
-});
-
 test('複製專案 / 匯出：機關、帶的物件、每個 cue 的位置都跟著（新 id、parent 換成新的）', async () => {
   const { db, env, ctx, log, req } = apiEnv();
   const { body: { mechanism: rev } } = await createMechanism(req({ name: '轉台', kind: 'rotary', travelMin: -180, travelMax: 180, objectIds: ['deck'] }), env, ctx, log);
@@ -320,8 +286,9 @@ test('複製專案 / 匯出：機關、帶的物件、每個 cue 的位置都跟
   assert.deepEqual((await loadSongPositions(env, 's9')).map(p => [p.cueId, p.mechanismId, p.value]), [['c9', cl.id, 2]]);
   const exp = await exportMechanisms(env, 'p1');
   assert.equal(exp.mechanisms.length, 2);
-  // 從舊滑桿轉來、沒改過的機關：換成新物件的 mlx_ id，舊網站同步照樣找得到
-  await syncLegacyMechanismOffsets(env, 'p1', {}, { led: { x: 1 } });
+  // 0023 從舊滑桿轉來、沒改過的機關：換成新物件的 mlx_ id（id 跟著物件，複製出來的專案也認得是哪片 LED 的）
+  db.prepare(`INSERT INTO mechanisms (id, project_id, name, kind, axis, travel_min, travel_max, default_value, "order", legacy_object_id, legacy_axis)
+              VALUES ('mlx_led', 'p1', 'LED 左右', 'linear', '{"x":1,"y":0,"z":0}', -10, 10, 1, 2, 'led', 'x')`).run();
   seedProject(db, 'p8');
   seedObject(db, 'led8', 'p8', 'led_panel', 1, null, 'LED8');
   const exp2 = await exportMechanisms(env, 'p1');

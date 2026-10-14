@@ -6,7 +6,7 @@
 //   timelineAt   — 影片某一秒：停在哪個 cue，或正在從哪個 cue 走到哪個 cue、走了幾成
 //   cuePoses / blendCuePoses / poseAtTime — 物件位置（位置直線走、旋轉走近路、出現/消失等速淡入淡出）
 //   fadeOpacity / lerpOpacity — 出現 / 消失的透明度
-//   cueQuaternion / scenePosition — cue 存的角度 / 位置 → 3D 場景用的（管理頁、分享頁共用）
+//   cueQuaternion — cue 存的角度 → 3D 場景用的（管理頁、分享頁共用；機關另外在 StageScene 最後套上，lib/mechanisms/pose.ts）
 
 import * as THREE from 'three';
 import type { CueState, Euler, StageObjectCategory, Vec3 } from './api';
@@ -101,19 +101,6 @@ export function cueQuaternion(r: Euler): THREE.Quaternion {
     THREE.MathUtils.degToRad(r.yaw),
     THREE.MathUtils.degToRad(r.roll),
   ));
-}
-
-/** cue 存的位置 → 場景位置：LED 面板加上機關位移（公尺 → 場景單位），其他類別不受機關影響 */
-export function scenePosition(
-  p: Vec3,
-  category: StageObjectCategory,
-  objectId: string,
-  mechanismOffsets: Record<string, { x: number; y: number }> | undefined,
-  scaleCorrection: number,
-): Vec3 {
-  const moff = category === 'led_panel' ? mechanismOffsets?.[objectId] : undefined;
-  if (!moff) return { x: p.x, y: p.y, z: p.z };
-  return { x: p.x + moff.x / scaleCorrection, y: p.y + moff.y / scaleCorrection, z: p.z };
 }
 
 /** 一個 cue 的所有物件位置（先算好，每幀直接拿） */

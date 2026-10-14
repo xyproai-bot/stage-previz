@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeMechanismInput, blankMechanismInput, parentCheck, parseCueValue,
   linearDirectionVector, rotaryAxisVector, matchLinearDirection, matchRotaryAxis, directionWord, audienceRight,
-  standardPresets, presetAt, snapToPreset, legacyOffsetsToMechanisms, legacyRowToMechanism, clampValue,
+  standardPresets, presetAt, snapToPreset, legacyOffsetsToMechanisms, clampValue,
   MECH_MESSAGES, type MechanismInput, type MechVec3,
 } from './model';
 
@@ -252,12 +252,5 @@ describe('舊的全專案機關滑桿 → 機關', () => {
     const [r2] = legacyOffsetsToMechanisms({ led1: { x: -14 } }, objs);
     expect([r2.travelMin, r2.travelMax]).toEqual([-14, 10]);
     expect(legacyOffsetsToMechanisms(null, objs)).toEqual([]);
-  });
-
-  it('轉成畫面用的機關', () => {
-    const m = legacyRowToMechanism(legacyOffsetsToMechanisms({ led1: { x: 2 } }, objs)[0]);
-    expect(m.objectIds).toEqual(['led1']);
-    expect(m.defaultValue).toBe(2);
-    expect(m.cueCount).toBe(0);
   });
 });

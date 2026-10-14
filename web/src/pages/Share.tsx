@@ -546,7 +546,6 @@ export default function Share() {
                 cueKey={selectedCueId}
                 crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                 scaleCorrection={data.scaleCorrection ?? 1}
-                mechanismOffsets={data.mechanismOffsets}
                 {...mech.sceneProps}
                 lookSettings={projectLook}
                 materialOverrides={materialOverrides}

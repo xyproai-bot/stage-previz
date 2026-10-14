@@ -92,7 +92,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   // 製作用「動畫師畫面」預覽時：user / 角色換成那個動畫師，寫入的按鈕按不下去（lib/viewAsContext.tsx）
   const user = useViewAsUser();
   const va = useViewAs();
-  // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，動畫師這邊只看）
+  // 校準倍率、現場設定、LED 畫布大小（製作在管理頁設的，動畫師這邊只看）
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
@@ -1058,7 +1058,6 @@ function StudioInner({ projectId }: { projectId: string }) {
                   bookmarkScope={projectId}
                   scaleCorrection={view.scaleCorrection}
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
-                  mechanismOffsets={view.mechanismOffsets}
                   {...mech.sceneProps}
                   toolbarMode={isAnimatorViewer ? 'viewer' : 'full'}
                   lookSettings={isAnimatorViewer ? view.lookSettings : personalLook.effective}

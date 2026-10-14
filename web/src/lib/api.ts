@@ -265,14 +265,12 @@ export async function updateProject(id: string, patch: Partial<{ name: string; d
   });
 }
 
-// ─── 專案共用 3D 檢視設定（測距校準倍率 + 機關滑桿）──────
+// ─── 專案共用 3D 檢視設定（測距校準倍率、現場設定、材質、重置視角、LED 畫布大小）──────
 // 之前存各自瀏覽器 localStorage；現在存在 project 上，所有人共用，只有 admin 能改
-
-export type MechanismOffsets = Record<string, { x: number; y: number }>;
+// （機關在 lib/mechanisms/*；舊的全專案機關滑桿 mechanism_offsets 後台已經不收）
 
 export interface ProjectViewSettings {
   scaleCorrection: number;
-  mechanismOffsets: MechanismOffsets;
   lookSettings: LookSettings;
   materialOverrides: MaterialOverrides;
   /** 🎥 重置攝影機的畫面；null = 自動正面全景 */
@@ -283,24 +281,18 @@ export interface ProjectViewSettings {
 
 export async function getProjectViewSettings(projectId: string): Promise<ProjectViewSettings> {
   const data = await http<{ project: {
-    scale_correction?: number; mechanism_offsets?: string; look_settings?: string; material_overrides?: string; home_view?: string | null;
+    scale_correction?: number; look_settings?: string; material_overrides?: string; home_view?: string | null;
     led_canvas?: string | null;
   } }>(
     `/api/projects/${encodeURIComponent(projectId)}`
   );
   const n = Number(data.project?.scale_correction);
-  let offsets: MechanismOffsets = {};
-  try {
-    const parsed = JSON.parse(data.project?.mechanism_offsets || '{}');
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) offsets = parsed;
-  } catch { /* 壞資料當沒有 */ }
   let look: unknown = {};
   try { look = JSON.parse(data.project?.look_settings || '{}'); } catch { /* 壞資料當沒有 */ }
   let materials: unknown = {};
   try { materials = JSON.parse(data.project?.material_overrides || '{}'); } catch { /* 壞資料當沒有 */ }
   return {
     scaleCorrection: isFinite(n) && n > 0 ? n : 1,
-    mechanismOffsets: offsets,
     lookSettings: normalizeLookSettings(look),
     materialOverrides: normalizeMaterialOverrides(materials),
     homeView: normalizeHomeView(data.project?.home_view ?? null),
@@ -1301,9 +1293,8 @@ export interface SharePublicData {
   songs: ({ id: string; name: string; order: number; status: string } & Partial<ShareSongVideoFields>)[];
   stageObjects: StageObject[];
   restrictedToSongId: string | null;
-  /** 舊版 worker 沒有這兩個欄位 → undefined */
+  /** 舊版 worker 沒有 → undefined */
   scaleCorrection?: number;
-  mechanismOffsets?: MechanismOffsets;
   lookSettings?: Partial<LookSettings>;
   materialOverrides?: MaterialOverrides;
   homeView?: unknown;
