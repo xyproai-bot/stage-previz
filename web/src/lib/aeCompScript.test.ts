@@ -311,7 +311,9 @@ describe('用假的 AE 跑整支腳本', () => {
 
   it('夾帶的對位圖：解開寫成檔案（跟原本的 bytes 一樣）、放在最下面、濾色', () => {
     const bytes = Uint8Array.from({ length: 30001 }, (_, i) => (i * 37 + (i >> 3)) & 255);
-    const base64 = Buffer.from(bytes).toString('base64');
+    let binary = '';
+    for (const b of bytes) binary += String.fromCharCode(b);
+    const base64 = btoa(binary);
     const r = runInFakeAe(buildAeCompScript(input({ map: { fileName: 'LED對位圖.png', width: 1920, height: 1080, base64 } })), { answers: ['3:00'] });
     const path = 'C:/Users/me/Downloads/LED對位圖.png';
     expect(r.files.has(path)).toBe(true);
