@@ -1,0 +1,23 @@
+# Cloudflare Pages 的回應標頭（vite build 會原樣複製到 dist/_headers）。
+# 原本 Vercel 的 vercel.json 沒有設任何自訂標頭，所以這裡只加快取規則。
+# 注意：Pages 的規則是「疊加」，同一個網址符合多條規則時同名標頭會被合併成一串，
+# 所以這裡不用 /* 全域規則，每個網址只落在一條規則裡。
+# 沒列到的網址（包含深層網址回的 index.html、/help/ 的圖）走 Pages 預設：每次向伺服器確認有沒有更新。
+
+# 入口頁與會自己更新的檔案：每次都要確認是不是最新版（部署新版後使用者才拿得到）
+/
+  Cache-Control: no-cache
+/index.html
+  Cache-Control: no-cache
+/sw.js
+  Cache-Control: no-cache
+/manifest.webmanifest
+  Cache-Control: no-cache
+
+# Vite 打包出來的檔名都帶雜湊（內容變了檔名就變）：快取一年、不用再問
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+# Draco 模型解壓縮器（wasm 的 Content-Type 由 Pages 自動給 application/wasm）：檔名固定，快取一天
+/draco/*
+  Cache-Control: public, max-age=86400

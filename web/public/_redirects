@@ -1,0 +1,9 @@
+# Cloudflare Pages：單頁應用（SPA）的深層網址（/admin/projects/xyz、/s/show-k7p2、/invite/xxx，按 F5 也一樣）
+# 對應原本 Vercel 的 rewrites：/(.*) -> /index.html
+#
+# 這裡故意不寫 "/*  /index.html  200"：
+#   Pages 在「專案裡沒有 404.html」時，會自動把所有對不到檔案的網址回 index.html（SPA 模式），效果就是上面那條；
+#   而且 Pages 會把 "/*  /index.html  200" 判成無限迴圈、整條忽略，只會在建置紀錄多一個警告。
+#   本機用 wrangler pages dev 實測：深層網址回 200 + index.html，/draco、/assets、/help 的真檔案照常給。
+#
+# 所以請不要在 web/public/ 放 404.html（放了會關掉 SPA 模式，深層網址就變 404）。
