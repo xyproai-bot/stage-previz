@@ -10,6 +10,7 @@ import type { CameraView, CommentExtras, SongComment } from '../api';
 import type { LocalVideoState } from '../localVideo';
 import type { StageViewApi } from '../../components/StageScene';
 import { versionKey } from '../songVersions';
+import { commentOpenPlan } from '../playbackPolicy';
 import { toast } from '../toast';
 import { nextShuttle, reviewActionFor, type Shuttle } from './reviewShortcuts';
 import { estimateFps, fpsFromFrameCount, stepFrameTime } from './timecode';
@@ -301,14 +302,11 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     const opts = optsRef.current;
     setSelectedId(c.id);
     setShowing(null);
-    const hasRange = c.timeEnd != null && c.timeEnd > c.time;
     const ann = parseAnnotation(c.annotation);
-    // 停在哪一格：有畫記 → 畫的那一格（區段留言常常是先標 I / O 再畫，畫的不是區段開頭）；沒有 → 留言的時間
-    const at = ann?.t != null && (!hasRange || (ann.t >= c.time - 0.5 && ann.t <= (c.timeEnd as number) + 0.5)) ? ann.t : c.time;
-    const hasTime = at > 0 || hasRange;
-    setLoop(hasRange ? { start: c.time, end: c.timeEnd as number } : null);
-    // 有區段、沒有畫記 → 直接開始循環；有畫記 → 先停在那一格給你看
-    const autoplay = hasRange && !ann;
+    // 停在哪一格、要不要循環、要不要播（lib/playbackPolicy.ts）：點了區段留言（沒有畫記）→ 直接開始循環；
+    // 其他 → 停在那一格給你看（有畫記的停在畫的那一格）
+    const { at, hasTime, loop: loopRange, play: autoplay } = commentOpenPlan(c, ann);
+    setLoop(loopRange);
 
     // 換到留言的那一版（先換網址再記住選了哪一版：頁面載入影片的 effect 看到同一個 key 就不會從頭載）
     let switched = false;

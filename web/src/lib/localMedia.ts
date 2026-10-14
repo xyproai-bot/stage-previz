@@ -280,15 +280,11 @@ export function useLocalMedia(player: LocalVideoState): LocalMediaState {
     setList(next);
   }, []);
 
-  // 換成正在放的檔案：影片 → 載入（新的從頭播、同一支接著播）；圖片 / 沒有 → 影片暫停
-  // （切去圖片時影片只暫停、不卸掉，切回來接著播）
+  // 換成正在放的檔案：影片 → 載入（停在第一格，按播放才開始；同一支就停在原本那一格）；圖片 / 沒有 → 影片暫停
+  // （切去圖片時影片只暫停、不卸掉，切回來還在那一格）
   const show = useCallback((item: LocalMediaItem | null) => {
     if (!item || item.kind !== 'video') { video.pause(); return; }
-    if (getSrcKey() !== localMediaKey(item.id)) {
-      loadVideo(item.file, localMediaKey(item.id));
-    } else {
-      video.play().catch(() => { /* 自動播放被擋就等使用者按播放 */ });
-    }
+    if (getSrcKey() !== localMediaKey(item.id)) loadVideo(item.file, localMediaKey(item.id));
   }, [video, loadVideo, getSrcKey]);
 
   // 縮圖：排隊一次做一個（不跟 LED 正在播的影片搶解碼），做好填回清單；已經拿掉的就跳過

@@ -1947,6 +1947,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (image.complete) tex.needsUpdate = true;
       else image.addEventListener('load', () => { tex.needsUpdate = true; }, { once: true });
     }
+    // 影片停著（換歌、換版本都停在第一格）：瀏覽器不會送「新的一格」→ 讀好那一格、拉時間軸之後自己傳一次，LED 才不會黑
+    const pushFrame = () => { if (ledVideo && ledVideo.readyState >= ledVideo.HAVE_CURRENT_DATA) tex.needsUpdate = true; };
+    const frameEvents = ledVideo ? ['loadeddata', 'seeked'] : [];
+    pushFrame();
+    frameEvents.forEach(ev => ledVideo?.addEventListener(ev, pushFrame));
     // 記下畫面大小（製作還沒設定畫布大小時，LED 對位圖用這個）
     const readSize = () => {
       const w = ledVideo ? ledVideo.videoWidth : image?.naturalWidth || 0;
@@ -1960,6 +1965,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     ledMediaTextureRef.current = tex;
     return () => {
       sizeEvents.forEach(ev => sizeTarget?.removeEventListener(ev, readSize));
+      frameEvents.forEach(ev => ledVideo?.removeEventListener(ev, pushFrame));
       if (ledMediaTextureRef.current === tex) ledMediaTextureRef.current = null;
       tex.dispose();
     };

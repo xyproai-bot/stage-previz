@@ -938,11 +938,11 @@ function SongDetail({
   const reloadVersions = versions.reload;
   const selectVersionRef = useRef(versions.select);
   selectVersionRef.current = versions.select;
-  // 交的影片好了 → 這首歌選到新的一版開始播（在別首歌的話，回去那首就是新的一版）
+  // 交的影片好了 → 這首歌選到新的一版、停在第一格（按播放才開始；在別首歌的話，回去那首就是新的一版）
   const onJobDone = useCallback((job: VideoJob) => {
     if (job.projectId !== projectId) return;
     const here = job.songId === song.id;
-    toast.success(`${job.songLabel}：${job.result?.label || '新的一版'} 好了${here ? '，正在播' : ''}`);
+    toast.success(`${job.songLabel}：${job.result?.label || '新的一版'} 好了${here ? '，已經換成這一版，按播放開始看' : ''}`);
     if (here) {
       // 選到新的那一版（正在看的版本平常會固定住，自己交的要換過去）
       void reloadVersions().then(() => { if (job.result) selectVersionRef.current(versionKey(job.result.id)); });

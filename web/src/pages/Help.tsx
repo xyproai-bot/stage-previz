@@ -1094,7 +1094,7 @@ function ProducerChapter() {
           <F k="songVideos" />
           <ul className="help-list">
             <li>每一版都列出來，<strong>新的在前</strong>：號碼、誰交的、什麼時候、說明、狀態（可以播 / 這台電腦播不了；還沒好的寫上傳中、複製中幾 %、失敗）。</li>
-            <li>「<Ui>到導演頁播放</Ui>」：在新分頁打開導演頁，直接放這一版。</li>
+            <li>「<Ui>到導演頁播放</Ui>」：在新分頁打開導演頁，直接選到這一版（停在第一格，按播放開始）。</li>
             <li>「<Ui>刪除 V2</Ui>」：所有人的清單上都看不到這一版，沒辦法從畫面上救回來。<strong>號碼不會再用</strong>：有 V1～V3 時刪掉 V2，下一版是 V4，不會補回 V2。</li>
             <li>沒交成功或卡住的：貼連結的可以「<Ui>重試</Ui>」，上傳停住的可以「<Ui>繼續上傳</Ui>」（選同一個檔案），不要了按「<Ui>取消</Ui>」或「<Ui>拿掉</Ui>」，號碼不會被佔走。</li>
             <li>下面的「<Ui>加影片</Ui>」跟歌單上的「<Ui>＋ 加影片</Ui>」一樣。還沒有影片的歌，歌單上寫「還沒有影片」。</li>
@@ -1456,7 +1456,7 @@ function AnimatorChapter() {
       <Section id={A.animSource} title="LED 畫面來源：影片 / AE 即時 / 本地檔案">
         <F k="sourceSwitch" />
         <ul className="help-list">
-          <li>① <strong>影片</strong>（例：影片 V2）：放這首歌交上來的影片，預設最新一版。舞台跟著影片時間切 cue。</li>
+          <li>① <strong>影片</strong>（例：影片 V2）：放這首歌交上來的影片，預設最新一版，停在第一格，按播放才開始。舞台跟著影片時間切 cue。</li>
           <li>② <strong>AE 即時</strong>：LED 直接顯示你 After Effects 裡的畫面，AE 一動 LED 就跟著動。要先裝 NDI 小程序，看 <Go to={A.aeLive}>AE 即時預覽</Go> 那一章。</li>
           <li>③ <strong>本地檔案</strong>：選這台電腦裡的影片或圖片放到 LED 上。<strong>不會上傳、別人看不到</strong>，關掉頁面就沒了。要給導演看請用「加影片」。</li>
         </ul>
@@ -1471,7 +1471,7 @@ function AnimatorChapter() {
           <F k="localFiles" />
         </FigRow>
         <ul className="help-list">
-          <li>本地檔案可以一次放好幾個，點清單裡的哪個 LED 就放哪個，拖曳可以排順序。直接把檔案拖進頁面也可以。</li>
+          <li>本地檔案可以一次放好幾個，點清單裡的哪個 LED 就放哪個（影片停在第一格，按播放才開始），拖曳可以排順序。直接把檔案拖進頁面也可以。</li>
           <li>畫面要是跟 AE 合成一樣的<strong>整張畫布</strong>，才會對到每一片 LED。</li>
         </ul>
       </Section>
@@ -1485,7 +1485,7 @@ function AnimatorChapter() {
           <li>「說明」寫一句話（選填），例：修了第二段的轉場。</li>
           <li>把影片拖到框裡，或點框選檔案。MP4 / MOV / WebM，最大 4 GB。</li>
           <li>會先在你的電腦<strong>試播一下</strong>（幾秒鐘，檔案還沒傳出去）：沒問題就直接開始傳；瀏覽器播不了的（例如 ProRes、HAP）會擋下來，不會白傳好幾 GB。看 <Go to={A.animAeExport}>AE 輸出設定</Go>。</li>
-          <li>進度條跑完會寫「<Ui>完成，變成 V3</Ui>」，LED 自動開始播新的一版。</li>
+          <li>進度條跑完會寫「<Ui>完成，變成 V3</Ui>」，LED 換成新的一版、停在第一格，按播放才開始。</li>
         </ol>
         <F k="uploading" />
         <ul className="help-list">
@@ -1957,6 +1957,7 @@ function DirectorChapter() {
         <F k="songDetail" />
         <ul className="help-list">
           <li>③ <strong>版本</strong>：點 V2、V1…，LED 就放那一版。預設是最新一版。</li>
+          <li>影片<strong>不會自己播</strong>：進歌、換歌、換版本、從通知點進來，都停在第一格（LED 上看得到那一格），按小播放器的播放鍵或空白鍵才開始。</li>
           <li>舞台跟著影片時間切 cue，機關照真的速度動。點 ⑤ cue 列的某個 cue，影片跳到那個 cue 的時間。</li>
           <li>④ <strong>小播放器</strong>：播放 / 暫停、往前 / 往後一格、時間（點一下換成時間碼）、速度、循環、聲音。時間軸上的小圓點是留言的時間點、上面那一條是區段留言，點一下打開那則留言。按住上面那條可以拖到別的地方，右上角可以收起來。快捷鍵看 <Go to={A.dirPlayer}>播放器和快捷鍵</Go>。</li>
           <li>① 上一首 / 下一首；左上角「<Ui>回總覽</Ui>」。</li>
@@ -2145,7 +2146,7 @@ function ClientChapter() {
         <ol className="help-steps">
           <li>上面選「<Ui><Icon icon={FolderOpen} /> 本地檔案</Ui>」。</li>
           <li>按「<Ui>＋ 加入影片 / 圖片…</Ui>」，或直接把檔案拖進頁面。可以放好幾個。</li>
-          <li>點清單裡的哪個，LED 就放哪個；拖曳可以排順序。</li>
+          <li>點清單裡的哪個，LED 就放哪個；拖曳可以排順序。影片停在第一格，按播放才開始。</li>
         </ol>
         <ul className="help-list">
           <li>只在這台電腦播，<strong>不會上傳</strong>，別人看不到；關掉頁面就沒了。</li>

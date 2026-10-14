@@ -2,10 +2,12 @@
 //   本地檔案（拖進來的，只在這台電腦播，不上傳）或網址（歌曲影片版本 / 舊的 Drive 影片）
 //   isVideoFile / formatClock — 純函式
 //   useLocalVideo — 管這個 <video>（object URL、播放狀態、時間、循環、靜音、分頁在背景時暫停）
+//   載入新的影片不會自己播：停在第一格，使用者按播放才開始（規則在 playbackPolicy.ts）
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CANNOT_PLAY_TEXT, LOCAL_CANNOT_PLAY_TEXT } from './videoCheck';
 import { recordPlayCheck, versionIdFromKey } from './versionPlayCheck';
+import { playsAfterLoad } from './playbackPolicy';
 
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|ogv)$/i;
 
@@ -43,7 +45,7 @@ export interface LoadUrlOptions {
   key: string;
   /** 版本網址（帶通行證）→ 'anonymous'；舊的 Drive 直播要登入 cookie → 'use-credentials' */
   crossOrigin?: 'anonymous' | 'use-credentials';
-  /** 載好了要不要自己開始播（預設要） */
+  /** 載好了要不要自己開始播。loadUrl 預設不要（停在第一格 / startAt，等使用者按播放）；replaceUrl 預設照換之前 */
   autoplay?: boolean;
   /** 載好了先跳到這一秒（打開留言：停在留言的那一格） */
   startAt?: number;
@@ -90,6 +92,8 @@ export function useLocalVideo(): LocalVideoState {
   const urlRef = useRef<string | null>(null);
   const srcKeyRef = useRef<string | null>(null);
   const kindRef = useRef<'file' | 'url' | null>(null);
+  /** 分頁在背景時暫停的 → 切回來接著播；中間換了影片就不接（新的停在第一格） */
+  const resumeOnShowRef = useRef(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [srcKey, setSrcKey] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
@@ -165,12 +169,11 @@ export function useLocalVideo(): LocalVideoState {
     video.addEventListener('error', onError);
 
     // 分頁在背景 → 先暫停（不解碼、不佔電腦），切回來接著播
-    let resumeOnShow = false;
     const onVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        if (!video.paused) { resumeOnShow = true; video.pause(); }
-      } else if (resumeOnShow) {
-        resumeOnShow = false;
+        if (!video.paused) { resumeOnShowRef.current = true; video.pause(); }
+      } else if (resumeOnShowRef.current) {
+        resumeOnShowRef.current = false;
         video.play().catch(() => { /* 被擋就等使用者按播放 */ });
       }
     };
@@ -202,6 +205,7 @@ export function useLocalVideo(): LocalVideoState {
   }, []);
 
   const resetState = useCallback(() => {
+    resumeOnShowRef.current = false;  // 背景時換了影片（例：交的影片好了）→ 切回來不要自己播
     setError(null);
     setReady(false);
     setTime(0);
@@ -214,6 +218,7 @@ export function useLocalVideo(): LocalVideoState {
   }, []);
 
   const clear = useCallback(() => {
+    resumeOnShowRef.current = false;
     video.pause();
     video.removeAttribute('src');
     video.load();
@@ -239,9 +244,10 @@ export function useLocalVideo(): LocalVideoState {
     setFileName(file.name);
     kindRef.current = 'file';
     setKey(key ?? `file:${file.name}:${file.size}:${file.lastModified}`);
+    // 換檔案不會自己播：停在第一格等使用者按播放（先暫停：正在播的換 src 時瀏覽器不會通知「暫停了」）
+    video.pause();
     video.removeAttribute('crossorigin');
     video.src = urlRef.current;
-    video.play().catch(() => { /* 自動播放被擋就等使用者按播放 */ });
     return true;
   }, [video, revokeObjectUrl, resetState, setKey]);
 
@@ -252,6 +258,8 @@ export function useLocalVideo(): LocalVideoState {
     setFileName(opts.name);
     kindRef.current = 'url';
     setKey(opts.key);
+    // 先暫停：正在播的換 src 時瀏覽器不會通知「暫停了」，播放鍵會一直顯示在播
+    video.pause();
     // crossOrigin 一定要在 src 之前設：LED 貼圖要讀畫面，沒有就會被瀏覽器擋
     video.crossOrigin = opts.crossOrigin ?? 'anonymous';
     video.src = url;
@@ -261,7 +269,8 @@ export function useLocalVideo(): LocalVideoState {
         try { video.currentTime = Math.min(at, video.duration || at); } catch { /* 跳不過去就從頭 */ }
       }, { once: true });
     }
-    if (opts.autoplay !== false) video.play().catch(() => { /* 自動播放被擋就等使用者按播放 */ });
+    // 預設停在第一格（或 startAt 那一秒）等使用者按播放；明講要播的（點了區段留言）才播
+    if (playsAfterLoad({ autoplay: opts.autoplay })) video.play().catch(() => { /* 被擋就等使用者按播放 */ });
   }, [video, revokeObjectUrl, resetState, setKey]);
 
   const replaceUrl = useCallback((url: string, opts: LoadUrlOptions) => {
@@ -276,7 +285,8 @@ export function useLocalVideo(): LocalVideoState {
     video.crossOrigin = opts.crossOrigin ?? 'anonymous';
     video.src = url;
     const to = opts.startAt != null ? opts.startAt : at;
-    const play = opts.autoplay ?? wasPlaying;
+    // 接著同一秒：播放 / 暫停照換之前（比較 A/B、有新版 · 切換、網址過期）
+    const play = playsAfterLoad({ autoplay: opts.autoplay, sameSecond: true, wasPlaying });
     video.addEventListener('loadedmetadata', () => {
       try { video.currentTime = Math.min(to, video.duration || to); } catch { /* 跳不過去就從頭 */ }
       if (play) video.play().catch(() => {});
@@ -288,7 +298,7 @@ export function useLocalVideo(): LocalVideoState {
     else video.pause();
   }, [video]);
   const play = useCallback(() => { video.play().catch(() => {}); }, [video]);
-  const pause = useCallback(() => { video.pause(); }, [video]);
+  const pause = useCallback(() => { resumeOnShowRef.current = false; video.pause(); }, [video]);
 
   const seek = useCallback((t: number) => {
     if (!Number.isFinite(t)) return;

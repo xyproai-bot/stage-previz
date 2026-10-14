@@ -45,7 +45,7 @@ type FileCheck =
  *              太大、位元率太高、跟 LED 畫布不一樣大 → 提醒、可以照交；沒問題直接分段上傳（可以續傳），好了變成新的 V 號碼
  *   貼連結   —— Google Drive 單檔 / Dropbox / OneDrive / 直接網址，後台複製一份
  *   本地檔案 —— 只在這台電腦放到 LED 上，不上傳、別人看不到
- * 上傳中可以關掉這個視窗、切到別首歌，上傳會繼續；好了會自動選到新的一版開始播。
+ * 上傳中可以關掉這個視窗、切到別首歌，上傳會繼續；好了會自動選到新的一版（停在第一格，按播放才開始）。
  */
 export default function AddVideoDialog({ open, onClose, projectId, song, jobs, canUpload, canLink, onLocalFiles, ledCanvas }: Props) {
   const linkAllowed = canUpload || !!canLink;
@@ -95,7 +95,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
     return () => window.removeEventListener('keydown', onKey);
   }, [open, onClose]);
 
-  // 這首歌交的影片好了、沒有別的還在做 → 關掉視窗（頁面會選到新的一版開始播）
+  // 這首歌交的影片好了、沒有別的還在做 → 關掉視窗（頁面會選到新的一版，停在第一格）
   const jobsRef = useRef(jobs);
   jobsRef.current = jobs;
   const onDone = useCallback((job: VideoJob) => {
