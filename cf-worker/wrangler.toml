@@ -37,7 +37,7 @@ crons = ["*/5 * * * *"]
 [vars]
 VIDEO_MAX_BYTES = "4294967296"
 # 刪掉超過 30 天的版本要不要真的清 R2 的檔案："on" = 清；其他（"dry-run"）= 只記錄會清哪些，不刪（storage.mjs）
-VIDEO_PURGE = "dry-run"
+VIDEO_PURGE = "on"
 
 # ─────────────────────────────────────────────────────────────
 # 必要 secrets（用 wrangler secret put 設，不放 toml）：

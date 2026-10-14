@@ -182,6 +182,6 @@ Cloudflare 一個請求做完後最多再跑 30 秒、免費方案一次最多 5
 | `VIDEO_MAX_BYTES` | `4294967296`（4 GB） | 單一影片上限 |
 | `VIDEO_COPY_PART_BYTES` | 32 MiB | 後台複製每段多大（5 MiB～95 MiB） |
 | `VIDEO_COPY_STEP_FETCHES` | 10 | 請求裡每輪最多抓幾段（測試用） |
-| `VIDEO_PURGE` | `"dry-run"` | `"on"` = 刪掉超過 30 天的版本真的清 R2 的檔案；其他 = 只記錄 |
+| `VIDEO_PURGE` | `"on"`（沒設 = 只記錄） | `"on"` = 刪掉超過 30 天的版本真的清 R2 的檔案；其他 = 只記錄 |
 
 R2 位置：`videos/<專案>/<歌>/<影片 id>.<mp4|mov|webm>`（bucket `stage-previz-models`，binding `MODELS`）。刪歌時那首歌的影片檔一起清掉（不等 30 天）。
