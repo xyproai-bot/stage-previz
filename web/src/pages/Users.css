@@ -206,6 +206,13 @@
 }
 .user-project-picker__item:hover { background: var(--surface-2); }
 .user-project-picker__row { cursor: default; }
+/* 指派專案對話框底下：儲存中… / 已儲存（靠左，完成按鈕靠右） */
+.user-assign__status {
+  margin-right: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .user-project-picker select {
   background: var(--surface-1);
   border: 1px solid var(--border);

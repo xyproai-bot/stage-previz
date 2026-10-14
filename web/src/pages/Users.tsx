@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import AdminLayout from '../components/AdminLayout';
 import * as api from '../lib/api';
 import type { UserAdmin, UserRole } from '../lib/api';
@@ -14,7 +14,7 @@ import Icon from '../components/Icon';
 import InviteDialog from '../components/InviteDialog';
 import OpenInvitesList from '../components/OpenInvitesList';
 import LoginCodeDialog from '../components/LoginCodeDialog';
-import { Copy, FolderPlus, KeyRound, Link, LoaderCircle, RefreshCw, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
+import { Check, Copy, FolderPlus, KeyRound, Link, LoaderCircle, RefreshCw, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
 import './Users.css';
 import { useEscapeClose } from '../lib/useEscapeClose';
 
@@ -44,24 +44,42 @@ export default function Users() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingUser, setEditingUser] = useState<UserAdmin | null>(null);
+  // 「指派專案」對話框只記是誰（id），人的資料每次都從最新的清單拿：
+  // 以前記的是打開當下的那一份，存好後清單更新了、對話框還是舊的，勾選框和角色會跳回去
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
+  const editingUser = editingUserId ? users.find(u => u.id === editingUserId) ?? null : null;
   const [shownCode, setShownCode] = useState<ShownCode | null>(null);
   // 邀請連結對話框：null = 關著；userId = 先選好的人（某個人旁邊的「邀請連結」）
   const [invite, setInvite] = useState<{ userId?: string } | null>(null);
   const [invitesReload, setInvitesReload] = useState(0);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [u, p] = await Promise.all([api.listUsers(), api.listProjects()]);
-      setUsers(u);
-      setAllProjects(p);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
+  // 重新抓清單。quiet = 背景更新（清單不換成「載入中…」，失敗跳通知、清單留著）。
+  // 同時有好幾次在抓時只用最後一次的結果；回傳的 Promise 等到最新的那次放上畫面才結束
+  const loadSeq = useRef(0);
+  const loadRun = useRef<Promise<void>>(Promise.resolve());
+  const refresh = useCallback((opts?: { quiet?: boolean }): Promise<void> => {
+    const seq = ++loadSeq.current;
+    const run = (async () => {
+      if (!opts?.quiet) { setLoading(true); setError(null); }
+      try {
+        const [u, p] = await Promise.all([api.listUsers(), api.listProjects()]);
+        if (seq !== loadSeq.current) return;
+        setUsers(u);
+        setAllProjects(p);
+      } catch (e) {
+        if (seq !== loadSeq.current) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        if (opts?.quiet) toast.error('沒有拿到最新的用戶清單：' + msg);
+        else setError(msg);
+      } finally {
+        if (seq === loadSeq.current) setLoading(false);
+      }
+    })();
+    loadRun.current = run;
+    return run.then(async () => {
+      let latest: Promise<void>;
+      do { latest = loadRun.current; await latest; } while (latest !== loadRun.current);
+    });
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -160,7 +178,7 @@ export default function Users() {
           <div className="empty-card">
             <div className="empty-card__icon"><Icon icon={TriangleAlert} size="xl" /></div>
             <p>{error}</p>
-            <button className="btn btn--ghost" onClick={refresh} style={{ marginTop: 12 }}>重試</button>
+            <button className="btn btn--ghost" onClick={() => refresh()} style={{ marginTop: 12 }}>重試</button>
           </div>
         ) : (
           <div className="users-list">
@@ -207,7 +225,7 @@ export default function Users() {
                 </div>
 
                 <div className="user-row__actions">
-                  <button onClick={() => setEditingUser(u)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
+                  <button onClick={() => setEditingUserId(u.id)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
                   {u.role !== 'admin' && !u.deactivated && (
                     <button onClick={() => setInvite({ userId: u.id })} title="傳一個邀請連結給他（例如換了手機、忘記登入碼）">
                       <Icon icon={Link} /> 邀請連結
@@ -257,10 +275,11 @@ export default function Users() {
 
       {editingUser && (
         <ProjectAssignDialog
+          key={editingUser.id}
           user={editingUser}
           allProjects={allProjects}
-          onClose={() => setEditingUser(null)}
-          onChanged={async () => { await refresh(); }}
+          onClose={() => setEditingUserId(null)}
+          onChanged={() => refresh({ quiet: true })}
         />
       )}
     </AdminLayout>
@@ -336,7 +355,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
           </div>
           {role !== 'admin' && (
             <div className="form-row">
-              <label>指派到哪些專案（這個 user 只看得到勾選的）</label>
+              <label>指派到哪些專案（這個人只看得到勾選的專案）</label>
               <div className="user-project-picker">
                 {allProjects.length === 0 ? (
                   <small className="muted">還沒有專案。先去「專案」頁建一個再回來指派。</small>
@@ -385,42 +404,41 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
   user: UserAdmin;
   allProjects: Project[];
   onClose: () => void;
-  onChanged: () => void;
+  /** 存好後重新抓清單；等到最新的清單放上畫面才結束 */
+  onChanged: () => Promise<void>;
 }) {
-  const [busy, setBusy] = useState(false);
   useEscapeClose(true, onClose);
+  // 按下去馬上照新的樣子顯示（還在存、或存好了還沒拿到新清單）：專案 id → 角色，null = 移出
+  const [pending, setPending] = useState<Record<string, UserRole | null>>({});
+  // 正在存的專案（那一列先不能再按，免得連按兩下打架）
+  const [saving, setSaving] = useState<string[]>([]);
+  const [savedOnce, setSavedOnce] = useState(false);
 
-  async function toggle(pid: string, currentRole: UserRole | null) {
-    setBusy(true);
+  // 後台的狀態（user 每次都是最新清單裡的那一份）
+  const serverRole: Record<string, UserRole> = {};
+  for (const m of user.projects) serverRole[m.projectId] = m.role;
+  const roleOf = (pid: string): UserRole | null => (pid in pending ? pending[pid] : serverRole[pid] ?? null);
+
+  async function save(pid: string, next: UserRole | null) {
+    const before = roleOf(pid);
+    if (before === next) return;
+    setPending(p => ({ ...p, [pid]: next }));
+    setSaving(s => [...s, pid]);
     try {
-      if (currentRole) {
-        await api.removeUserFromProject(user.id, pid);
-      } else {
-        await api.addUserToProject(user.id, pid, user.role);
-      }
+      if (next === null) await api.removeUserFromProject(user.id, pid);
+      else await api.addUserToProject(user.id, pid, next);
       await onChanged();
+      setSavedOnce(true);
     } catch (e) {
-      toast.error((currentRole ? '沒有移出專案：' : '沒有加進專案：') + (e instanceof Error ? e.message : String(e)));
+      // 沒存成：拿掉剛剛的改動 = 回到後台的樣子
+      setSavedOnce(false);
+      const msg = e instanceof Error ? e.message : String(e);
+      toast.error((next === null ? '沒有移出專案：' : before === null ? '沒有加進專案：' : '專案角色沒有改成：') + msg);
     } finally {
-      setBusy(false);
+      setPending(p => { const n = { ...p }; delete n[pid]; return n; });
+      setSaving(s => s.filter(x => x !== pid));
     }
   }
-
-  async function changeRole(pid: string, newRole: UserRole) {
-    setBusy(true);
-    try {
-      await api.addUserToProject(user.id, pid, newRole);
-      await onChanged();
-    } catch (e) {
-      toast.error('專案角色沒有改成：' + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // 取最新 user.projects
-  const assignedById: Record<string, UserRole> = {};
-  for (const m of user.projects) assignedById[m.projectId] = m.role;
 
   return (
     <div className="dialog-overlay" onClick={onClose}>
@@ -435,21 +453,24 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
           ) : (
             <ul className="user-project-picker">
               {allProjects.map(p => {
-                const role = assignedById[p.id] || null;
+                const role = roleOf(p.id);
+                const busy = saving.includes(p.id);
                 return (
-                  <li key={p.id} className="user-project-picker__item user-project-picker__row">
+                  <li key={p.id} className="user-project-picker__item user-project-picker__row" data-project-id={p.id}>
                     <input
                       type="checkbox"
                       checked={!!role}
                       disabled={busy}
-                      onChange={() => toggle(p.id, role)}
+                      aria-label={p.name}
+                      onChange={() => save(p.id, role ? null : user.role)}
                     />
                     <span style={{ flex: 1 }}>{p.name}</span>
                     {role && (
                       <select
                         value={role}
-                        onChange={(e) => changeRole(p.id, e.target.value as UserRole)}
+                        onChange={(e) => save(p.id, e.target.value as UserRole)}
                         disabled={busy}
+                        aria-label={`在「${p.name}」的角色`}
                       >
                         <option value="animator">{ROLE_LABEL.animator}</option>
                         <option value="director">{ROLE_LABEL.director}</option>
@@ -462,6 +483,11 @@ function ProjectAssignDialog({ user, allProjects, onClose, onChanged }: {
             </ul>
           )}
           <footer className="dialog__footer">
+            <span className="muted small user-assign__status" role="status" aria-live="polite">
+              {saving.length > 0
+                ? <><Icon icon={LoaderCircle} spin /> 儲存中…</>
+                : savedOnce ? <><Icon icon={Check} /> 已儲存</> : null}
+            </span>
             <button className="btn btn--primary" onClick={onClose}>完成</button>
           </footer>
         </div>
