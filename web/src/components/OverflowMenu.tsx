@@ -105,6 +105,14 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
   }, [open, pos]);
 
   function onButtonKey(e: React.KeyboardEvent) {
+    // 用滑鼠打開時焦點還在按鈕上：Esc 一樣只關選單（不要讓外面的對話框也跟著關）
+    if (open && e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation();
+      close(true);
+      return;
+    }
     if (open && e.key === 'ArrowDown') {
       e.preventDefault();
       menuItems(menuRef.current)[0]?.focus();

@@ -390,10 +390,11 @@ export async function listSongs(projectId: string): Promise<Song[]> {
   return data.songs;
 }
 
-export async function createSong(projectId: string, name: string): Promise<{ id: string; order: number }> {
+/** 新增一首歌；code = 歌曲代號（不給 = 後台接著排 S01…；被別首歌用掉 → 409，error.data.codeTaken） */
+export async function createSong(projectId: string, name: string, code?: string | null): Promise<{ id: string; order: number; code?: string | null }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/songs`, {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(code ? { name, code } : { name }),
   });
 }
 

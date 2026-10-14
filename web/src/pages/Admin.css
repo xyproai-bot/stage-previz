@@ -131,6 +131,36 @@
   font-size: 12px;
 }
 
+/* 新專案精靈關掉時還沒設定完：「繼續設定」 */
+.admin-resume {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+.admin-resume > .ui-icon {
+  color: var(--accent);
+  flex: none;
+}
+.admin-resume__text {
+  flex: 1 1 220px;
+  min-width: 0;
+  line-height: 1.5;
+}
+@media (hover: none) and (pointer: coarse) {
+  .admin-resume .btn--sm {
+    min-height: 40px;
+    padding: 8px 14px;
+  }
+}
+
 .empty-card {
   background: var(--surface-1);
   border: 1px dashed var(--border-strong);

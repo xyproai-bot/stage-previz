@@ -1,5 +1,12 @@
 /* 邀請連結 / 登入碼的對話框和清單（InviteDialog、OpenInvitesList、LoginCodeDialog 共用） */
 
+/* 對話框裡那一塊（新專案精靈也直接放這一塊） */
+.invite-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
 .acct-dialog {
   max-width: 560px;
   max-height: calc(100vh - 40px);

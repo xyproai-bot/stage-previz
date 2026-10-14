@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import ProjectCard from '../components/ProjectCard';
-import NewProjectDialog from '../components/NewProjectDialog';
+import NewProjectWizard from '../components/NewProjectWizard';
 import RecentProjectsBar from '../components/RecentProjectsBar';
 import OverflowMenu from '../components/OverflowMenu';
 import * as api from '../lib/api';
@@ -11,7 +11,11 @@ import type { Project } from '../lib/mockData';
 import Icon from '../components/Icon';
 import { confirmDialog, promptDialog, toast } from '../components/dialogs';
 import {
-  Archive, ArrowRight, Clapperboard, Construction, Folder, Import, LoaderCircle, Music, Plus, Search, Shapes, TriangleAlert, Upload,
+  needsResume, readWizardProgress, resumeStep, stepFromParam, stepLabel, unfinishedSteps, writeWizardProgress,
+  type WizardProgress, type WizardStep,
+} from '../lib/newProjectWizard';
+import {
+  Archive, ArrowRight, Clapperboard, Construction, Folder, Import, ListChecks, LoaderCircle, Music, Plus, Search, Shapes, TriangleAlert, Upload,
 } from 'lucide-react';
 import './Admin.css';
 
@@ -51,9 +55,47 @@ function ProjectsTab() {
 
   useEffect(() => { try { localStorage.setItem('sp_admin_search', search); } catch {} }, [search]);
   useEffect(() => { try { localStorage.setItem('sp_admin_filter', filter); } catch {} }, [filter]);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
   const [duplicating, setDuplicating] = useState<string | null>(null);
+
+  // ── 新專案精靈：步驟放在網址上（?new=<步驟>&project=<id>）→ 瀏覽器 / 手機的上一頁 = 上一步 ──
+  // wizardDepth = 打開精靈之後在瀏覽器裡往前走了幾頁（關掉時一次退回打開前那一頁，按上一頁不會又跑回精靈）
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
+  const wizardProjectId = searchParams.get('project');
+  const wizardStep = stepFromParam(searchParams.get('new'), !!wizardProjectId);
+  const wizardDepth = Math.max(0, Number((location.state as { wizardDepth?: unknown } | null)?.wizardDepth) || 0);
+  const goWizard = useCallback((step: WizardStep, projectId: string | null, opts: { replace?: boolean } = {}) => {
+    const q = new URLSearchParams({ new: step });
+    if (projectId) q.set('project', projectId);
+    navigate({ search: '?' + q.toString() }, { replace: !!opts.replace, state: { wizardDepth: opts.replace ? Math.max(1, wizardDepth) : wizardDepth + 1 } });
+  }, [navigate, wizardDepth]);
+  const backWizard = useCallback((step: WizardStep, projectId: string | null) => {
+    // 前一頁就是上一步（照順序走過來的）→ 用瀏覽器的上一頁；從「繼續設定」直接跳進來的 → 換過去
+    if (wizardDepth > 1) navigate(-1);
+    else goWizard(step, projectId, { replace: true });
+  }, [navigate, goWizard, wizardDepth]);
+  const closeWizard = useCallback(() => {
+    if (wizardProjectId) {
+      const p = readWizardProgress(safeLocalStorage());
+      if (p && p.projectId === wizardProjectId && needsResume(p)) {
+        toast.info(`「${p.projectName || '新專案'}」已經建好了，沒做完的可以之後在編輯頁設定，或在專案總覽按「繼續設定」`);
+      }
+    }
+    if (wizardDepth > 0) navigate(-wizardDepth);
+    else navigate({ search: '' }, { replace: true });
+  }, [navigate, wizardDepth, wizardProjectId]);
+  // 精靈關掉 → 重新整理專案卡片、看要不要提醒「繼續設定」
+  const [resume, setResume] = useState<WizardProgress | null>(() => readWizardProgress(safeLocalStorage()));
+  const wasWizardOpen = useRef(wizardStep !== null);
+  useEffect(() => {
+    const open = wizardStep !== null;
+    if (wasWizardOpen.current && !open) {
+      setResume(readWizardProgress(safeLocalStorage()));
+      void refresh();
+    }
+    wasWizardOpen.current = open;
+  }, [wizardStep]); // eslint-disable-line react-hooks/exhaustive-deps
+  const resumeProject = resume && needsResume(resume) ? projects.find(p => p.id === resume.projectId) ?? null : null;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   function toggleSelect(p: Project) {
@@ -120,21 +162,6 @@ function ProjectsTab() {
     in_review: projects.filter(p => p.status === 'in_review').length,
     mine: projects.filter(isMine).length,
   }), [projects, myId]);
-
-  async function handleCreate(data: { name: string; description: string; showId?: string | null }) {
-    try {
-      setCreating(true);
-      const res = await api.createProject(data);
-      setDialogOpen(false);
-      // 建好直接進編輯器（新手流程：上傳模型 → 物件 → 歌 → cue 都在那邊）
-      if (res?.id) navigate(`/admin/projects/${encodeURIComponent(res.id)}`);
-      else await refresh();
-    } catch (e) {
-      toast.error('專案沒有建立：' + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setCreating(false);
-    }
-  }
 
   async function handleDuplicate(p: Project) {
     if (duplicating) return;
@@ -302,13 +329,29 @@ function ProjectsTab() {
             className="ovf-only-narrow"
             items={[{ key: 'import', label: '匯入專案備份（.json）', icon: Upload, onSelect: triggerImport }]}
           />
-          <button className="btn btn--primary" onClick={() => setDialogOpen(true)}>
+          <button className="btn btn--primary" onClick={() => goWizard('name', null)}>
             <Icon icon={Plus} /> 新增專案
           </button>
         </div>
       </header>
 
       <div className="admin-content">
+        {resumeProject && resume && wizardStep === null && (
+          <div className="admin-resume" role="status">
+            <Icon icon={ListChecks} size="md" />
+            <span className="admin-resume__text">
+              「{resumeProject.name}」還沒設定完：{unfinishedSteps(resume).map(stepLabel).join('、')}
+            </span>
+            <button className="btn btn--primary btn--sm" onClick={() => goWizard(resumeStep(resume), resume.projectId)}>繼續設定</button>
+            <button
+              className="btn btn--ghost btn--sm"
+              onClick={() => { writeWizardProgress(safeLocalStorage(), null); setResume(null); }}
+              title="不用再提醒（之後在編輯頁慢慢設定也可以）"
+            >
+              不用了
+            </button>
+          </div>
+        )}
         <div className="filter-chips">
           {([
             ['all', '全部'],
@@ -332,7 +375,7 @@ function ProjectsTab() {
           <ErrorState message={error} onRetry={refresh} />
         ) : filtered.length === 0 ? (
           <EmptyState
-            onCreate={() => setDialogOpen(true)}
+            onCreate={() => goWizard('name', null)}
             onClearFilter={() => { setSearch(''); setFilter('all'); }}
             hasFilter={search.length > 0 || filter !== 'all'}
             hasAnyProjects={projects.length > 0}
@@ -367,14 +410,23 @@ function ProjectsTab() {
         )}
       </div>
 
-      <NewProjectDialog
-        open={dialogOpen}
-        onClose={() => !creating && setDialogOpen(false)}
-        onCreate={handleCreate}
-        submitting={creating}
-      />
+      {wizardStep && (
+        <NewProjectWizard
+          step={wizardStep}
+          projectId={wizardProjectId}
+          onGo={goWizard}
+          onBack={backWizard}
+          onClose={closeWizard}
+          onOpenEditor={(id) => navigate(`/admin/projects/${encodeURIComponent(id)}`)}
+          onProjectCreated={() => { void refresh(); }}
+        />
+      )}
     </>
   );
+}
+
+function safeLocalStorage(): Storage | null {
+  try { return window.localStorage; } catch { return null; }
 }
 
 function EmptyState({ onCreate, onClearFilter, hasFilter, hasAnyProjects }: {
@@ -409,7 +461,7 @@ function OnboardingWizard({ onStart }: { onStart: () => void }) {
       <div className="onboarding__head">
         <div className="onboarding__hello">歡迎</div>
         <h2>5 個步驟建立你的第一個 LED 舞臺預覽</h2>
-        <p className="onboarding__sub">第 1 步在這裡，後面 4 步建好專案會自動帶你進編輯器繼續</p>
+        <p className="onboarding__sub">按「建立專案」會一步一步帶你：名稱、3D 模型、LED 畫布大小、歌單、邀請人（每一步都可以先跳過）</p>
       </div>
       <ol className="onboarding__steps">
         {steps.map((s, i) => (
