@@ -76,7 +76,7 @@ export async function compressGlb(input: Uint8Array, io: PlatformIO, onPhase?: (
   }
 
   if (output.byteLength > before * MIN_SIZE_RATIO) {
-    return { ...skip(`壓縮後沒有變小多少（${before} → ${output.byteLength} bytes）`), afterBytes: output.byteLength };
+    return { ...skip(`壓縮後沒有變小多少（${before} → ${output.byteLength} 位元組）`), afterBytes: output.byteLength };
   }
 
   try {

@@ -78,7 +78,7 @@ export default function NewShowDialog({ open, onClose, onCreate, submitting = fa
             <label>底下的場次</label>
             <div className="upload-placeholder">
               <span>建好後再加專案進來</span>
-              <small>每場次（每天）建一個 project，歸屬到這個 Show</small>
+              <small>每場次（每天）建一個專案，歸到這個 Show</small>
             </div>
           </div>
 

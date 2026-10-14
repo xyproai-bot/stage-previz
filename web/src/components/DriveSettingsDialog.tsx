@@ -148,7 +148,7 @@ export default function DriveSettingsDialog({
         <div className="dlg__body">
           {!accountsConfigured && (
             <div className="drive-dlg__warn">
-              <Icon icon={TriangleAlert} /> 平台尚未設定 Google OAuth secrets。請先到 Cloudflare Workers 設定，才能連接 Drive 帳號。
+              <Icon icon={TriangleAlert} /> 平台還沒設定 Google 登入用的金鑰（OAuth）。請先到 Cloudflare Workers 設定，才能連接 Drive 帳號。
             </div>
           )}
 
@@ -164,7 +164,7 @@ export default function DriveSettingsDialog({
               <div className="drive-dlg__hint">載入中…</div>
             ) : accountsArr.length === 0 ? (
               <div className="drive-dlg__hint">
-                還沒連接任何 Google 帳號。請先到 <Link to="/admin/drive-sources">/admin/drive-sources</Link> 連接。
+                還沒連接任何 Google 帳號。請先到「<Link to="/admin/drive-sources">Drive 來源</Link>」頁連接。
               </div>
             ) : (
               <select
@@ -189,10 +189,10 @@ export default function DriveSettingsDialog({
               className="drive-dlg__input"
               value={folderInput}
               onChange={e => setFolderInput(e.target.value)}
-              placeholder="貼上 Drive 資料夾連結，或直接貼 folder ID"
+              placeholder="貼上 Drive 資料夾連結，或直接貼資料夾 ID"
             />
             {folderInput && !folderId && (
-              <div className="drive-dlg__err">無法解析 folder ID，請檢查連結格式</div>
+              <div className="drive-dlg__err">看不懂這個資料夾連結，請確認是 Drive 資料夾的連結或資料夾 ID</div>
             )}
             {folderId && (
               <div className="drive-dlg__hint">解析到：<code>{folderId}</code></div>

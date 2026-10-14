@@ -92,7 +92,7 @@ export function analyzeGltfScene(scene: THREE.Object3D): ParseResult {
   bestScope.children.forEach((child) => {
     const name = (child.name || '').trim();
     if (!name) {
-      warnings.push('發現一個無命名的 top-level 節點，已跳過');
+      warnings.push('有一個最上層的物件沒有名字，已跳過');
       return;
     }
     if (seen.has(name)) {

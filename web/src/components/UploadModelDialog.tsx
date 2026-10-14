@@ -181,7 +181,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       setUrlInput('');
       await handleFile(file);
     } catch (e) {
-      setError('從 URL 載入失敗：' + (e instanceof Error ? e.message : String(e)) + '\n（檢查 URL 是否公開、CORS 是否允許）');
+      setError('從網址載入失敗：' + (e instanceof Error ? e.message : String(e)) + '\n（請確認網址是公開的，而且對方允許別的網站下載（CORS））');
       setStage('error');
     } finally {
       setFetchingUrl(false);
@@ -431,7 +431,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
               <div className="upload-unit-hint">
                 <strong><Icon icon={Ruler} /> 尺寸看起來不對</strong>
                 <p>
-                  GLB 標準是 1 unit = 1 公尺，舞臺對角通常 5-50 m 之間。
+                  GLB 標準是 1 單位 = 1 公尺，舞臺對角通常 5-50 m 之間。
                   你的模型對角是 <strong>{sceneSize.toFixed(2)} m</strong>，看起來
                   {unitGuess === 'too_big' ? ' 過大' : ' 過小'}。
                 </p>

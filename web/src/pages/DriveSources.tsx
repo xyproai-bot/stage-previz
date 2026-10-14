@@ -67,7 +67,7 @@ export default function DriveSources() {
         {!configured && (
           <div className="drive-sources__warn">
             <strong><Icon icon={TriangleAlert} /> 平台尚未設定 Google OAuth</strong>
-            <p>需要先在 Cloudflare Workers 的 secret 設定：</p>
+            <p>需要先在 Cloudflare Workers 設定這三個金鑰（在 Cloudflare 叫 secret）：</p>
             <ul>
               <li><code>GOOGLE_CLIENT_ID</code></li>
               <li><code>GOOGLE_CLIENT_SECRET</code></li>
@@ -97,7 +97,7 @@ export default function DriveSources() {
             <div className="drive-sources__empty">載入中…</div>
           ) : accounts.length === 0 ? (
             <div className="drive-sources__empty">
-              還沒連接任何 Google 帳號。{configured ? '點上方「+ 連接 Google」開始。' : '先設定 OAuth secrets。'}
+              還沒連接任何 Google 帳號。{configured ? '點上方「+ 連接 Google」開始。' : '先設定 Google 登入用的金鑰（OAuth）。'}
             </div>
           ) : (
             <ul className="drive-accounts">
