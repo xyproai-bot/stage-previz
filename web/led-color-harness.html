@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LED 顏色量測（開發用）</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: #000; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <!-- 只在 npm run dev 時用（web/scripts/led-color-accuracy.mjs 會打開這頁）；正式網站不會打包這頁 -->
+    <div id="root"></div>
+    <script type="module" src="/src/dev/ledColorHarness.tsx"></script>
+  </body>
+</html>
