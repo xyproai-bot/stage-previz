@@ -29,6 +29,16 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 12px;
+
+  /* 下拉選單右邊的箭頭（線條圖示 chevron-down，顏色 = --text）。以後要做淺色主題就換這一個 */
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23e8eaed' stroke-opacity='0.8' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* 整個網站是深色：告訴瀏覽器用深色畫原生的東西（下拉選單打開的清單、勾選框、
+     數字欄位的上下箭頭、日期選擇器、捲軸）。沒寫的話 Windows 的 Chrome / Edge
+     會畫成白底，配上我們的淺色字就看不清楚。 */
+  color-scheme: dark;
+  /* 勾選框、單選、滑桿預設用品牌綠（個別地方要別的顏色自己蓋掉） */
+  accent-color: var(--accent);
 }
 
 * {
@@ -64,6 +74,58 @@ a:hover {
 input, textarea, select {
   font: inherit;
   color: inherit;
+}
+
+/* ── 下拉選單（<select>）：全站同一套深色樣子 ──
+   - 沒有自己寫樣式的下拉也是深底淺字，不會變成白框
+   - 箭頭自己畫（每個瀏覽器長得一樣）。箭頭和留給箭頭的空間用 !important：
+     各頁面自己的 background / padding 簡寫、或寫在元素上的 style 都蓋不掉箭頭
+   - 箭頭離右邊多遠可以用 --select-arrow-inset 調（大的欄位用 12px） */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  background-color: rgba(0, 0, 0, 0.3);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: border-color 0.12s, box-shadow 0.12s;
+  background-image: var(--select-arrow) !important;
+  background-repeat: no-repeat !important;
+  background-position: right var(--select-arrow-inset, 8px) center !important;
+  background-size: 12px 12px !important;
+  padding-right: calc(var(--select-arrow-inset, 8px) + 18px) !important;
+}
+/* 一次攤開好幾行的清單不用箭頭 */
+select[multiple],
+select[size]:not([size='1']) {
+  background-image: none !important;
+  padding-right: 8px !important;
+}
+select:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.32);
+}
+select:focus:not(:disabled) {
+  outline: none;
+  border-color: var(--accent);
+}
+select:focus-visible {
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+/* 打開後的選項清單：Windows 的 Chrome / Edge、Firefox 會照這裡畫；Mac 用系統選單，跟著 color-scheme 變深色 */
+select option,
+select optgroup {
+  background-color: var(--surface-1);
+  color: var(--text);
+}
+select option:disabled {
+  color: var(--text-muted);
 }
 
 /* Empty state shared layout */

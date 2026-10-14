@@ -47,12 +47,15 @@
   font-size: 12.5px;
   white-space: nowrap;
 }
-.viewas-banner__who { max-width: 180px; padding-right: 6px; }
+.viewas-banner__who { max-width: 180px; }
 .viewas-banner__who option { color: var(--text); background: var(--surface-1); }
 .viewas-banner__btn:hover,
-.viewas-banner__who:hover { border-color: var(--warn); color: #fff; }
+.viewas-banner__who:hover:not(:disabled) { border-color: var(--warn); color: #fff; }
 .viewas-banner__btn:focus-visible,
 .viewas-banner__who:focus-visible { outline: 2px solid var(--warn); outline-offset: 1px; }
+/* 橫幅是橘色的：下拉聚焦也用橘色（全站的下拉聚焦是綠色） */
+select.viewas-banner__who:focus:not(:disabled) { border-color: var(--warn); }
+select.viewas-banner__who:focus-visible { outline: 2px solid var(--warn); outline-offset: 1px; box-shadow: none; }
 .viewas-banner__btn--primary { background: var(--warn); border-color: var(--warn); color: #1a1205; font-weight: 600; }
 .viewas-banner__btn--primary:hover { background: #ffbb66; color: #1a1205; }
 

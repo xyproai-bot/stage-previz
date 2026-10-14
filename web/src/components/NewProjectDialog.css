@@ -82,8 +82,9 @@
   letter-spacing: 0.02em;
 }
 .form-row input,
-.form-row textarea {
-  background: rgba(0, 0, 0, 0.3);
+.form-row textarea,
+.form-row select {
+  background-color: rgba(0, 0, 0, 0.3);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   color: var(--text);
@@ -94,8 +95,14 @@
   font-family: inherit;
   transition: border-color 0.12s;
 }
+/* 跟旁邊的文字欄位一樣大，箭頭離右邊遠一點 */
+.form-row select {
+  --select-arrow-inset: 12px;
+  resize: none;
+}
 .form-row input:focus,
-.form-row textarea:focus {
+.form-row textarea:focus,
+.form-row select:focus {
   border-color: var(--accent);
 }
 .form-hint {
