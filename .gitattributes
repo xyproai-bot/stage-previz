@@ -1,0 +1,2 @@
+# Draco 解壓縮器（three 附的原檔）：不要轉換換行，要跟 node_modules/three 裡的一模一樣（web/src/lib/modelCompress/decoders.test.ts 會比）
+web/public/draco/** -text

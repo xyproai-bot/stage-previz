@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import * as api from '../lib/api';
 import type { ModelVersion } from '../lib/api';
 import { parseServerTime } from '../lib/serverTime';
-import { Box, RotateCcw, Trash2, TriangleAlert, X } from 'lucide-react';
+import { useViewAsUser } from '../lib/viewAsContext';
+import { COMPRESS_PHASE_TEXT, compressModelForUpload, sizeChangeText, type ModelCompressPhase } from '../lib/modelCompress/compressText';
+import { Box, CircleCheck, LoaderCircle, RotateCcw, Shrink, Trash2, TriangleAlert, X } from 'lucide-react';
 import Icon from './Icon';
 import { confirmDialog, toast } from './dialogs';
 import './ModelVersionsDialog.css';
@@ -29,6 +31,14 @@ function formatTime(iso: string | null) {
   return d.toLocaleDateString('zh-TW') + ' ' + d.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
 }
 
+/** 「壓縮這個模型」做到哪了 */
+type CompressJob =
+  | { stage: 'download' }
+  | { stage: 'compress'; phase: ModelCompressPhase }
+  | { stage: 'upload'; pct: number; sizes: string }
+  | { stage: 'done'; sizes: string }
+  | { stage: 'skipped' | 'failed'; message: string };
+
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -40,6 +50,11 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  // 壓縮只給製作（admin）用
+  const viewer = useViewAsUser();
+  const isAdmin = viewer?.role === 'admin';
+  const [compressJob, setCompressJob] = useState<CompressJob | null>(null);
+  const compressing = !!compressJob && (compressJob.stage === 'download' || compressJob.stage === 'compress' || compressJob.stage === 'upload');
 
   async function refresh() {
     setLoading(true);
@@ -54,14 +69,15 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
     }
   }
 
-  useEffect(() => { if (open) refresh(); /* eslint-disable-next-line */ }, [open, projectId]);
+  useEffect(() => { if (open) { refresh(); setCompressJob(null); } /* eslint-disable-next-line */ }, [open, projectId]);
 
   useEffect(() => {
     if (!open) return;
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose(); }
+    // 壓縮途中不關（下載、壓縮、上傳要做完）
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape' && !compressing) onClose(); }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [open, onClose]);
+  }, [open, onClose, compressing]);
 
   if (!open) return null;
 
@@ -81,6 +97,41 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
       toast.error('沒有換成：' + (e instanceof Error ? e.message : String(e)));
     } finally {
       setBusyKey(null);
+    }
+  }
+
+  /**
+   * 壓縮現在用的這一版：下載 → 壓縮 + 兩關比對 → 用一般「上傳模型」的路上傳成新的一版（會換成新的那版）。
+   * 只上傳模型檔，不動物件清單：物件、每個 cue 的位置都留著（不會「清除現有物件」）；舊的那一版留在清單裡，可以切回。
+   */
+  async function handleCompress(v: ModelVersion) {
+    if (!v.isActive || compressing) return;
+    if (!(await confirmDialog({
+      title: '壓縮這個模型？',
+      message: `${formatSize(v.size)}\n會做一個壓縮過的新版本，並換成那一版：只壓縮形狀資料，物件名稱、位置、旋轉、縮放、UV 都不變，各個 cue 的位置都會留著。\n現在這一版會留在清單裡，隨時可以切回。`,
+      confirmLabel: '壓縮',
+    }))) return;
+    setCompressJob({ stage: 'download' });
+    try {
+      const resp = await fetch(api.modelDownloadUrl(v.key));
+      if (!resp.ok) throw new Error(`下載模型失敗（HTTP ${resp.status}）`);
+      const blob = await resp.blob();
+      setCompressJob({ stage: 'compress', phase: 'start' });
+      const outcome = await compressModelForUpload(blob, { onPhase: (phase) => setCompressJob({ stage: 'compress', phase }) });
+      if (outcome.status !== 'compressed') {
+        setCompressJob({ stage: outcome.status === 'skipped' ? 'skipped' : 'failed', message: outcome.reason || '沒有壓縮' });
+        return;
+      }
+      const sizes = sizeChangeText(outcome);
+      setCompressJob({ stage: 'upload', pct: 0, sizes });
+      await api.uploadModel(projectId, outcome.blob, (loaded, total) => {
+        if (total > 0) setCompressJob({ stage: 'upload', pct: Math.min(100, Math.round((loaded / total) * 100)), sizes });
+      });
+      setCompressJob({ stage: 'done', sizes });
+      onChanged();
+      await refresh();
+    } catch (e) {
+      setCompressJob({ stage: 'failed', message: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -104,7 +155,7 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
   }
 
   return (
-    <div className="versions-overlay" onClick={onClose}>
+    <div className="versions-overlay" onClick={() => { if (!compressing) onClose(); }}>
       <div className="versions-dialog" onClick={(e) => e.stopPropagation()}>
         <header className="versions-dialog__header">
           <div>
@@ -113,10 +164,27 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
               每次上傳都會留一份。可以隨時切回舊版、或刪掉用不到的版本。
             </p>
           </div>
-          <button className="versions-dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
+          <button className="versions-dialog__close" onClick={onClose} disabled={compressing} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
 
         <div className="versions-dialog__body">
+          {compressJob && (
+            <div
+              className={'versions-compress' + (compressJob.stage === 'done' ? ' is-ok' : compressJob.stage === 'failed' || compressJob.stage === 'skipped' ? ' is-muted' : '')}
+              role="status"
+              data-testid="versions-compress-status"
+            >
+              {compressJob.stage === 'download' && <><Icon icon={LoaderCircle} spin /> 下載模型中…</>}
+              {compressJob.stage === 'compress' && <><Icon icon={LoaderCircle} spin /> 壓縮模型中：{COMPRESS_PHASE_TEXT[compressJob.phase]}</>}
+              {compressJob.stage === 'upload' && <><Icon icon={LoaderCircle} spin /> 上傳壓縮後的模型 {compressJob.pct}%（{compressJob.sizes}）</>}
+              {compressJob.stage === 'done' && (
+                <><Icon icon={CircleCheck} /> 壓縮好了：{compressJob.sizes}。已經換成壓縮過的新版本，原本那一版留在下面，隨時可以切回。</>
+              )}
+              {(compressJob.stage === 'skipped' || compressJob.stage === 'failed') && (
+                <><Icon icon={compressJob.stage === 'failed' ? TriangleAlert : Shrink} /> 沒有壓縮：{compressJob.message}。模型沒有改。</>
+              )}
+            </div>
+          )}
           {loading ? (
             <div className="versions-empty muted">載入中…</div>
           ) : error ? (
@@ -151,11 +219,21 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
                     </div>
                   </div>
                   <div className="version-row__actions">
+                    {isAdmin && v.isActive && (
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        onClick={() => handleCompress(v)}
+                        disabled={compressing || busyKey !== null}
+                        title="做一個壓縮過的新版本：檔案變小、載入變快，物件和 cue 的位置都不變"
+                      >
+                        {compressing ? <><Icon icon={LoaderCircle} spin /> 壓縮中…</> : <><Icon icon={Shrink} /> 壓縮這個模型</>}
+                      </button>
+                    )}
                     {!v.isActive && (
                       <button
                         className="btn btn--primary btn--sm"
                         onClick={() => handleActivate(v)}
-                        disabled={busyKey === v.key}
+                        disabled={busyKey === v.key || compressing}
                       >
                         {busyKey === v.key ? '切換中…' : <><Icon icon={RotateCcw} /> 切回此版</>}
                       </button>
@@ -164,7 +242,7 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
                       <button
                         className="btn btn--ghost btn--sm version-row__delete"
                         onClick={() => handleDelete(v)}
-                        disabled={busyKey === v.key}
+                        disabled={busyKey === v.key || compressing}
                         title="刪除這個舊版本（不可復原）"
                         aria-label="刪除這個舊版本"
                       >
@@ -180,7 +258,7 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
 
         <footer className="versions-dialog__footer">
           <span className="muted small">共 {versions.length} 個版本</span>
-          <button className="btn btn--ghost" onClick={onClose}>關閉</button>
+          <button className="btn btn--ghost" onClick={onClose} disabled={compressing}>關閉</button>
         </footer>
       </div>
     </div>

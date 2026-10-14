@@ -9,9 +9,9 @@
 //   WALK_<NN>_<desc>     → walk_point
 //   其他                 → other（admin 手動指派）
 
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import * as THREE from 'three';
 import type { StageObjectCategory, Vec3, Euler } from './api';
+import { parseModel } from './modelLoader';
 
 export interface ParsedMesh {
   meshName: string;
@@ -67,13 +67,14 @@ export function prettifyName(name: string, prefix: string | null): string {
 
 export async function parseGlbFile(file: File): Promise<ParseResult> {
   const buf = await file.arrayBuffer();
-  const loader = new GLTFLoader();
-  const gltf = await new Promise<any>((resolve, reject) => {
-    loader.parse(buf, '', resolve, reject);
-  });
+  // 壓縮過的模型（Draco / meshopt）也能讀：modelLoader 會先準備解壓縮器
+  const gltf = await parseModel(buf);
+  return analyzeGltfScene(gltf.scene);
+}
 
+/** 從讀好的模型場景算出物件清單（上傳解析、壓縮前後比對共用同一套算法） */
+export function analyzeGltfScene(scene: THREE.Object3D): ParseResult {
   const warnings: string[] = [];
-  const scene = gltf.scene as THREE.Group;
   const meshes: ParsedMesh[] = [];
   const seen = new Set<string>();
 

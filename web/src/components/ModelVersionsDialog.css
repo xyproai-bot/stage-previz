@@ -168,3 +168,26 @@
   align-items: center;
 }
 .versions-empty__icon { color: var(--text-muted); }
+
+/* 「壓縮這個模型」的進度 / 結果 */
+.versions-compress {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text);
+}
+.versions-compress .ui-icon { flex-shrink: 0; margin-top: 2px; }
+.versions-compress.is-ok {
+  border-color: rgba(16, 199, 138, 0.4);
+  background: var(--accent-dim);
+}
+.versions-compress.is-ok .ui-icon { color: var(--accent); }
+.versions-compress.is-muted { color: var(--text-dim); }
+.version-row__actions { flex-wrap: wrap; justify-content: flex-end; }

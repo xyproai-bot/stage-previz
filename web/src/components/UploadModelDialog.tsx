@@ -3,7 +3,8 @@ import * as api from '../lib/api';
 import type { StageObjectCategory } from '../lib/api';
 import { parseGlbFile, classifyMeshName, prettifyName, type ParsedMesh } from '../lib/parseGlb';
 import { friendlyError } from '../lib/songReview';
-import { CircleCheck, FileText, Ruler, Scaling, TriangleAlert, Upload, X } from 'lucide-react';
+import { COMPRESS_PHASE_TEXT, compressModelForUpload, formatModelSize, sizeChangeText, type ModelCompressOutcome, type ModelCompressPhase } from '../lib/modelCompress/compressText';
+import { CircleCheck, FileText, LoaderCircle, Ruler, Scaling, Shrink, TriangleAlert, Upload, X } from 'lucide-react';
 import Icon from './Icon';
 import { STAGE_CATEGORY, STAGE_CATEGORY_ORDER } from './stageCategories';
 import './UploadModelDialog.css';
@@ -22,6 +23,12 @@ interface Props {
 }
 
 type Stage = 'pick' | 'parsing' | 'review' | 'confirmReplace' | 'importing' | 'done' | 'error';
+
+/** 上傳前壓縮模型（lib/modelCompress）的狀態：解析完就在背景開始壓，按匯入時還沒好就等它 */
+type CompressState =
+  | { kind: 'idle' }
+  | { kind: 'running'; phase: ModelCompressPhase; beforeBytes: number }
+  | { kind: 'done'; outcome: ModelCompressOutcome };
 
 /** 「清除現有物件」會刪掉的東西（後台算的） */
 interface WillDelete { stageObjects: number; cueStates: number; cuesAffected: number }
@@ -52,9 +59,27 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   // 勾了「清除現有物件」：後台先回會刪掉多少，給使用者在這個視窗裡確認
   const [replaceInfo, setReplaceInfo] = useState<{ message: string; willDelete: WillDelete } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const [compress, setCompress] = useState<CompressState>({ kind: 'idle' });
+  // 背景壓縮的工作（換檔案 / 關掉視窗就取消）
+  const compressJobRef = useRef<{ promise: Promise<ModelCompressOutcome>; abort: AbortController } | null>(null);
+  // 按了匯入、還在等壓縮做完
+  const [waitingCompress, setWaitingCompress] = useState(false);
+
+  function cancelCompression() {
+    compressJobRef.current?.abort.abort();
+    compressJobRef.current = null;
+  }
+
+  // 關掉視窗 / 離開頁面 → 停掉還在跑的壓縮
+  useEffect(() => {
+    if (!open) cancelCompression();
+    return () => cancelCompression();
+  }, [open]);
 
   useEffect(() => {
     if (open) {
+      setCompress({ kind: 'idle' });
+      setWaitingCompress(false);
       setStage('pick');
       setError(null);
       setMeshes([]);
@@ -88,6 +113,8 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
     setPickedFile(file);
     setStage('parsing');
     setError(null);
+    cancelCompression();
+    setCompress({ kind: 'idle' });
     try {
       const { meshes, warnings, sceneSizeMeters, unitGuess: ug } = await parseGlbFile(file);
       setMeshes(meshes);
@@ -96,6 +123,8 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       setUnitGuess(ug);
       setStage(meshes.length > 0 ? 'review' : 'error');
       if (meshes.length === 0) setError('檔案裡讀不到任何物件：請確認 C4D 匯出時物件是分開的（不要全部合併成一個）');
+      // 解析得出來 → 背景開始壓縮（使用者看物件清單的時候就在壓了）
+      if (meshes.length > 0) startCompression(file);
 
       // 比對既有 stage_objects 的 mesh_name → 找出在新模型裡消失的（影響 3D pin 留言）
       try {
@@ -110,6 +139,25 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
       setError(e instanceof Error ? e.message : String(e));
       setStage('error');
     }
+  }
+
+  /** 背景壓縮：壓好、兩關比對都過才用壓縮檔；不然就用原檔（原因寫在 console 和畫面上） */
+  function startCompression(file: File) {
+    cancelCompression();
+    const abort = new AbortController();
+    setCompress({ kind: 'running', phase: 'start', beforeBytes: file.size });
+    const promise = compressModelForUpload(file, {
+      signal: abort.signal,
+      onPhase: (phase) => { if (!abort.signal.aborted) setCompress({ kind: 'running', phase, beforeBytes: file.size }); },
+    }).catch((e): ModelCompressOutcome => {
+      const reason = e instanceof Error ? e.message : String(e);
+      if (!abort.signal.aborted) console.warn('[模型壓縮] 出錯，上傳原檔：', e);
+      return { status: 'failed', reason, blob: file, beforeBytes: file.size, afterBytes: file.size, timings: {} };
+    }).then((outcome) => {
+      if (!abort.signal.aborted) setCompress({ kind: 'done', outcome });
+      return outcome;
+    });
+    compressJobRef.current = { promise, abort };
   }
 
   function onDrop(e: React.DragEvent) {
@@ -155,12 +203,27 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
     }));
   }
 
-  // 把 .glb 真檔上傳到 R2（如果有 file）
+  // 把 .glb 真檔上傳到 R2（如果有 file）：壓縮過、檢查過的就上傳壓縮檔，不然上傳原檔
   async function uploadPickedFile() {
     if (!pickedFile) return;
-    setUploadProgress(`上傳 ${(pickedFile.size / 1024 / 1024).toFixed(1)} MB 中…`);
+    let body: Blob = pickedFile;
+    const job = compressJobRef.current;
+    if (job) {
+      setUploadPct(0);
+      setWaitingCompress(true);
+      try {
+        const outcome = await job.promise;
+        if (outcome.status === 'compressed') body = outcome.blob;
+      } finally {
+        setWaitingCompress(false);
+      }
+    }
+    const compressed = body !== pickedFile;
+    setUploadProgress(compressed
+      ? `上傳壓縮後的模型 ${formatModelSize(body.size)} 中…（原本 ${formatModelSize(pickedFile.size)}）`
+      : `上傳 ${formatModelSize(pickedFile.size)} 中…`);
     setUploadPct(0);
-    await api.uploadModel(projectId, pickedFile, (loaded, total) => {
+    await api.uploadModel(projectId, body, (loaded, total) => {
       if (total > 0) setUploadPct(Math.min(100, Math.round((loaded / total) * 100)));
     });
     setUploadPct(100);
@@ -225,6 +288,20 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
   };
   meshes.forEach(m => { counts[m.category]++; });
   const otherCount = counts.other;
+  const compressText = compress.kind === 'running'
+    ? `壓縮模型中…（${formatModelSize(compress.beforeBytes)}）`
+    : compress.kind === 'done' && compress.outcome.status === 'compressed'
+      ? `模型壓縮好了：${sizeChangeText(compress.outcome)}`
+      : compress.kind === 'done'
+        ? (compress.outcome.reason === '這個模型已經壓縮過了' ? '模型已經壓縮過了，直接上傳' : '不壓縮，上傳原檔')
+        : '';
+  const compressOk = compress.kind === 'done' && compress.outcome.status === 'compressed';
+  const compressTitle = compress.kind === 'running' ? COMPRESS_PHASE_TEXT[compress.phase]
+    : compressOk ? '只壓縮形狀資料：物件名稱、位置、旋轉、縮放、UV 都檢查過跟原檔一樣'
+      : compress.kind === 'done' ? compress.outcome.reason : undefined;
+  const importingText = waitingCompress && compress.kind === 'running'
+    ? `壓縮模型中（${formatModelSize(compress.beforeBytes)}）：${COMPRESS_PHASE_TEXT[compress.phase]}`
+    : uploadProgress || '匯入中…';
 
   return (
     <div className="upload-overlay" onClick={() => stage !== 'parsing' && stage !== 'importing' && stage !== 'confirmReplace' && onClose()}>
@@ -313,7 +390,19 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
               {otherCount > 0 && (
                 <span className="upload-warn"><Icon icon={TriangleAlert} /> {otherCount} 個沒對到命名規則，請手動選分類</span>
               )}
+              {compressText && (
+                <span
+                  className={'upload-summary__compress' + (compressOk ? ' is-ok' : compress.kind === 'done' ? ' is-muted' : '')}
+                  title={compressTitle}
+                  data-testid="upload-compress-status"
+                >
+                  <Icon icon={compress.kind === 'running' ? LoaderCircle : Shrink} spin={compress.kind === 'running'} /> {compressText}
+                </span>
+              )}
             </div>
+            {compress.kind === 'done' && compress.outcome.status === 'failed' && compress.outcome.reason && (
+              <div className="upload-compress-note">沒有壓縮的原因：{compress.outcome.reason}</div>
+            )}
 
             {warnings.length > 0 && (
               <div className="upload-warnings">
@@ -450,7 +539,7 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
           <div className="upload-status">
             <div className="spinner" />
             <div style={{ width: '100%', maxWidth: 400 }}>
-              <div style={{ marginBottom: 6, fontSize: 12.5 }}>{uploadProgress || '匯入中…'}</div>
+              <div style={{ marginBottom: 6, fontSize: 12.5 }} data-testid="upload-importing-text">{importingText}</div>
               {uploadPct > 0 && uploadPct < 100 && (
                 <>
                   <div className="upload-progress-bar">
@@ -466,6 +555,9 @@ export default function UploadModelDialog({ open, projectId, onClose, onImported
         {stage === 'done' && (
           <div className="upload-status upload-status--ok">
             <Icon icon={CircleCheck} size="lg" /> 匯入成功！
+            {compressOk && compress.kind === 'done' && (
+              <small className="upload-status__compressed">模型 {sizeChangeText(compress.outcome)}</small>
+            )}
           </div>
         )}
 

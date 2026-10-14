@@ -375,3 +375,31 @@
 .upload-replace-confirm b { color: var(--text); }
 .upload-replace-confirm .muted { color: var(--text-dim); font-size: 12px; }
 .btn.upload-replace-confirm__danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+
+/* 上傳前壓縮模型（lib/modelCompress）：解析完在背景壓 */
+.upload-summary__compress {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.upload-summary__compress.is-ok {
+  color: var(--accent);
+  background: var(--accent-dim);
+}
+.upload-summary__compress.is-muted { color: var(--text-muted); }
+.upload-compress-note {
+  margin: 8px 22px 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.upload-status__compressed {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-dim);
+}

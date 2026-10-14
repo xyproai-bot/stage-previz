@@ -11,6 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@gltf-transform/core": "4.4.2",
+    "@gltf-transform/extensions": "4.4.2",
+    "draco3dgltf": "1.5.7",
     "lucide-react": "1.38.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

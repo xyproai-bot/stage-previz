@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, useCallback, type ReactNode } fro
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { loadModel } from '../lib/modelLoader';
 import { RectAreaLightUniformsLib } from 'three/examples/jsm/lights/RectAreaLightUniformsLib.js';
 import { RectAreaLightHelper } from 'three/examples/jsm/helpers/RectAreaLightHelper.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
@@ -1315,9 +1315,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
     let cancelled = false;
     setModelLoading(true);
-    const loader = new GLTFLoader();
-    loader.load(
-      modelUrl,
+    // 壓縮過的模型（Draco / meshopt）會先載入解壓縮器；解出來的節點、位置、縮放跟原檔一樣（lib/modelLoader.ts）
+    const abort = new AbortController();
+    loadModel(modelUrl, { signal: abort.signal }).then(
       (gltf) => {
         if (cancelled) return;
         // 算 scene bbox + scaleFactor（跟 parseGlb 同邏輯，避免兩邊不一致）
@@ -1397,15 +1397,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         setModelLoading(false);
         setModelVersion((v) => v + 1);
       },
-      undefined,
-      (err) => {
-        if (cancelled) return;
-        console.error('GLTF load failed:', err);
-        setModelLoading(false);
-      }
-    );
+    ).catch((err) => {
+      if (cancelled) return;
+      console.error('GLTF load failed:', err);
+      setModelLoading(false);
+    });
 
-    return () => { cancelled = true; };
+    return () => { cancelled = true; abort.abort(); };
   }, [modelUrl]);
 
   // ── Sync states → scene meshes ──
