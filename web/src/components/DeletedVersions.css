@@ -1,0 +1,29 @@
+/* 最近刪除（DeletedVersions.tsx）：跟影片版本視窗同一套樣子 */
+.delvid-dialog { max-width: 560px; }
+.delvid__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.delvid__empty { color: var(--text-muted); font-size: 13px; padding: 8px 2px; display: flex; gap: 6px; align-items: center; }
+.delvid__empty.is-error { color: var(--danger); }
+.delvid-row {
+  display: grid;
+  grid-template-columns: 44px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.delvid-row__num { font-family: var(--font-mono); font-weight: 600; color: var(--text-dim); }
+.delvid-row__main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.delvid-row__title { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.delvid-row__meta { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+.delvid-row__left.is-soon { color: var(--danger); }
+.songvid__deleted { border-top: 1px solid var(--border); padding-top: 10px; }
+.songvid__deleted > summary { cursor: pointer; color: var(--text-dim); font-size: 13px; display: flex; align-items: center; gap: 6px; padding: 2px 0 8px; }
+.songvid__deleted > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.songvid-tag.is-dup { background: rgba(255, 176, 32, 0.15); color: var(--warning, #e0a020); }
+.songvid-row__dup { color: var(--warning, #e0a020); font-size: 12px; line-height: 1.5; }
+@media (max-width: 560px) {
+  .delvid-row { grid-template-columns: 36px 1fr; }
+  .delvid-row .songvid-btn { grid-column: 1 / -1; justify-content: center; }
+}

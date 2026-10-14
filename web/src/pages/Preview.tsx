@@ -14,6 +14,7 @@ import { playheadCommentId } from '../lib/review/playhead';
 import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
+import { DeletedVersionsDialog } from '../components/DeletedVersions';
 import AddVideoDialog from '../components/AddVideoDialog';
 import ActivityDrawer from '../components/ActivityDrawer';
 import NotificationBell from '../components/NotificationBell';
@@ -945,6 +946,8 @@ function SongDetail({
   const canUpload = canAddVideo(perm);
   const canAdd = canPasteVideoLink(perm);
   const [addOpen, setAddOpen] = useState(false);
+  // 最近刪除（製作：30 天內可以救回來）
+  const [deletedOpen, setDeletedOpen] = useState(false);
   const allJobs = useVideoJobs(projectId);
   const songJobs = useMemo(() => allJobs.filter(j => j.songId === song.id), [allJobs, song.id]);
   const reloadVersions = versions.reload;
@@ -1050,6 +1053,16 @@ function SongDetail({
               : canAdd ? '這首歌還沒有影片（動畫師交了之後會自動出現；有影片連結也可以按右邊「加影片」貼上）'
               : '這首歌還沒有影片（動畫師交了之後會自動出現）'}
             newVersion={newVersion}
+            userId={user?.id ?? null}
+            onShowDeleted={projectRole === 'admin' ? () => setDeletedOpen(true) : undefined}
+          />
+          <DeletedVersionsDialog
+            open={deletedOpen}
+            onClose={() => setDeletedOpen(false)}
+            projectId={projectId}
+            songId={song.id}
+            songLabel={songTitle(song)}
+            onRestored={() => { void versions.reload(); }}
           />
 
           <div className="song-detail__stage">

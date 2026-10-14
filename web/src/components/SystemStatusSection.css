@@ -82,3 +82,27 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+
+/* 空間用量 / 重複的檔案（StorageUsagePanel.tsx） */
+.storage { display: flex; flex-direction: column; gap: 8px; }
+.storage .sys-status__subtitle { display: flex; align-items: center; gap: 6px; }
+.storage__total { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; align-items: flex-end; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); }
+.storage__big { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.storage__cost { text-align: right; }
+.storage__note { margin: 0; }
+.storage__link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; display: inline-flex; align-items: center; gap: 4px; }
+.storage__link:hover { text-decoration: underline; }
+.storage__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.storage__row { display: flex; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; }
+.storage__row.is-top { border-color: var(--accent); background: var(--accent-dim); }
+.storage__row-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.storage__row-name { font-weight: 600; overflow-wrap: anywhere; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.storage__row-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; flex-shrink: 0; }
+.storage__row-total { font-weight: 700; font-variant-numeric: tabular-nums; }
+.storage__tag { font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 4px; background: var(--surface-2); color: var(--text-dim); border: 1px solid var(--border); }
+.storage__tag.is-top { color: var(--accent); border-color: var(--accent); background: transparent; }
+@media (max-width: 560px) {
+  .storage__row { flex-direction: column; }
+  .storage__row-side { align-items: flex-start; text-align: left; }
+  .storage__cost { text-align: left; }
+}

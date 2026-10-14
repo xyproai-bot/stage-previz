@@ -1,0 +1,21 @@
+/* 專案結束清影片（ProjectWrapUpDialog.tsx）：外框用影片版本視窗那一套 */
+.wrapup { max-width: 620px; }
+.wrapup__muted { color: var(--text-dim); font-size: 13px; line-height: 1.6; display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.wrapup__warn { color: var(--danger); font-size: 13px; line-height: 1.6; }
+.wrapup__group { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.wrapup__group > legend { font-size: 12px; color: var(--text-muted); padding: 0 0 4px; }
+.wrapup__opt {
+  display: flex; gap: 10px; align-items: flex-start;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); cursor: pointer;
+}
+.wrapup__opt input { margin-top: 3px; accent-color: var(--accent); }
+.wrapup__opt span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.wrapup__opt strong { font-weight: 600; color: var(--text); }
+.wrapup__opt small { color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.wrapup__opt.is-on { border-color: var(--accent); }
+.wrapup__opt.is-danger.is-on { border-color: var(--danger); background: rgba(255, 84, 112, 0.06); }
+.wrapup__opt.is-danger input { accent-color: var(--danger); }
+.wrapup__opt:has(input:disabled) { opacity: 0.6; cursor: default; }
+.wrapup__songs { margin: 0 0 0 12px; padding-left: 16px; color: var(--text-dim); font-size: 12px; line-height: 1.7; max-height: 160px; overflow-y: auto; }
+.wrapup__song { color: var(--text); }
+.wrapup__cost { display: flex; gap: 8px; color: var(--text-muted); font-size: 12px; line-height: 1.6; padding: 4px 2px; }

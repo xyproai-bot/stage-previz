@@ -29,7 +29,8 @@
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
-//   只有全站 admin：建立 / 匯入 / 複製 / 封存 / 還原專案、Drive 帳號和資料夾綁定、
+//   歌曲影片：最近刪除、救回來（30 天內）                                      admin（這個專案的 admin）
+//   只有全站 admin：建立 / 匯入 / 複製 / 封存 / 還原專案、專案結束清影片、Drive 帳號和資料夾綁定、
 //                   3D 檢視設定、專案狀態、Show 管理、用戶管理、邀請連結（建立 / 清單 / 撤銷）
 //   共用模型庫（/api/assets）：看清單 = 全站 admin 或某個專案的 admin（canBrowseSharedAssets）；改 = 全站 admin
 
@@ -258,6 +259,11 @@ export function describeProjectRoute(method, segs) {
       return m === 'POST' ? r('duplicate', 'globalAdmin') : bad('duplicate');
     case 'restore':
       return m === 'POST' ? r('restore', 'globalAdmin', { allowArchived: true }) : bad('restore');
+    // 專案結束清影片（storage.mjs）：先看會怎樣 / 照選的做；封存以後也可以做
+    case 'wrap-up':
+      if (a) return null;
+      if (read) return r('wrapUp.get', 'globalAdmin');
+      return m === 'POST' ? r('wrapUp.apply', 'globalAdmin', { allowArchived: true }) : bad('wrapUp');
     case 'export':
       return read ? r('export', 'editor') : bad('export');
     // 機關（設計：docs/superpowers/specs/2026-10-14-mechanism-system-design.md；API：docs/mechanisms-api.md）
@@ -359,12 +365,19 @@ export function describeProjectRoute(method, segs) {
 //   POST   videos/:videoId/abort        取消上傳                 admin 或交這一版的人
 //   POST   videos/:videoId/retry        複製失敗重試             admin 或交這一版的人
 //   GET    videos/:videoId/stream       播放（也可以用 /api/videos/:videoId/stream?pass=） 成員
+//   GET    videos/deleted               最近刪除（30 天內）         製作
+//   POST   videos/:videoId/restore      救回來（號碼不變）          製作
+//   POST   videos/duplicates            有沒有同一個檔案（指紋）    交影片的人
 function describeVideoRoute(m, read, songId, c, d, e) {
   const r = (kind, need, extra = {}) => ({ kind, need, songId, ...extra });
   const bad = (kind) => ({ kind, need: null, methodNotAllowed: true });
   if (!c) return read ? r('videos.list', 'member') : bad('videos.list');
   if (c === 'uploads' && !d) return m === 'POST' ? r('videos.createUpload', 'videoUploader') : bad('videos.createUpload');
   if (c === 'link' && !d) return m === 'POST' ? r('videos.link', 'videoLinker') : bad('videos.link');
+  // 最近刪除（30 天內還能救回來）：只有製作
+  if (c === 'deleted' && !d) return read ? r('videos.deleted', 'editor') : bad('videos.deleted');
+  // 上傳之前問：這個專案有沒有同一個檔案（指紋）；跟上傳同一個權限
+  if (c === 'duplicates' && !d) return m === 'POST' ? r('videos.duplicates', 'videoUploader') : bad('videos.duplicates');
   const videoId = c;
   if (!d) {
     if (read) return r('videos.get', 'member', { videoId });
@@ -378,6 +391,10 @@ function describeVideoRoute(m, read, songId, c, d, e) {
     return m === 'POST' ? r('videos.' + d, 'videoEditor', { videoId }) : bad('videos.' + d);
   }
   if (d === 'stream' && !e) return read ? r('videos.stream', 'member', { videoId }) : bad('videos.stream');
+  // 救回刪掉的版本（號碼不變）：只有製作；網址上的是刪掉的版本 → deletedVideoId（不用 videoId 那套「找不到就 404」）
+  if (d === 'restore' && !e) {
+    return m === 'POST' ? r('videos.restore', 'editor', { deletedVideoId: videoId, allowArchived: true }) : bad('videos.restore');
+  }
   return null;
 }
 

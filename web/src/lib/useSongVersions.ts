@@ -160,7 +160,9 @@ export function useSongVersions(o: {
   }, [songId, reloadKey, load]);
 
   // 有複製中 / 上傳中的 → 每 5 秒更新一次進度（每次查詢也會推動後台繼續複製）
-  const busy = data.result.pending.some(v => v.status === 'processing' || v.status === 'uploading');
+  // 剛交好、後台還在算指紋的也再抓幾次（算完才知道是不是跟之前哪一版重複）
+  const busy = data.result.pending.some(v => v.status === 'processing' || v.status === 'uploading')
+    || data.result.items.some(it => !!it.video?.fingerprintPending);
   useEffect(() => {
     if (!busy) return;
     const id = window.setInterval(() => {

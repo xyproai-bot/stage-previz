@@ -7,7 +7,8 @@ import { parseServerTime } from '../lib/serverTime';
 import { toast } from '../lib/toast';
 import { confirmDialog } from '../components/dialogs';
 import Icon from '../components/Icon';
-import { Archive, RotateCcw, TriangleAlert } from 'lucide-react';
+import { Archive, Film, RotateCcw, TriangleAlert } from 'lucide-react';
+import ProjectWrapUpDialog from '../components/ProjectWrapUpDialog';
 import './ArchivedProjects.css';
 
 export default function ArchivedProjects() {
@@ -15,6 +16,7 @@ export default function ArchivedProjects() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [restoring, setRestoring] = useState<string | null>(null);
+  const [wrapUp, setWrapUp] = useState<Project | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -30,7 +32,7 @@ export default function ArchivedProjects() {
   async function handleRestore(p: Project) {
     if (!(await confirmDialog({
       title: `還原專案「${p.name}」？`,
-      message: '還原後會回到專案總覽，大家又看得到。',
+      message: '還原後會回到專案總覽，大家又看得到。改成長期存放的影片不會自動搬回來：照樣可以播，只是打開時有一點讀取費。',
       confirmLabel: '還原',
     }))) return;
     setRestoring(p.id);
@@ -74,6 +76,9 @@ export default function ArchivedProjects() {
                   </div>
                   {p.description && <div className="archived__row-desc">{p.description}</div>}
                 </div>
+                <button className="btn btn--ghost btn--sm" onClick={() => setWrapUp(p)} title="只留每首歌最後通過的那一版、改成長期存放">
+                  <Icon icon={Film} /> 清影片
+                </button>
                 <button
                   className="btn btn--primary btn--sm"
                   onClick={() => handleRestore(p)}
@@ -86,6 +91,7 @@ export default function ArchivedProjects() {
           </ul>
         )}
       </div>
+      {wrapUp && <ProjectWrapUpDialog open mode="later" project={wrapUp} onClose={() => setWrapUp(null)} onDone={() => { void refresh(); }} />}
     </AdminLayout>
   );
 }

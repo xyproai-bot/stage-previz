@@ -245,7 +245,7 @@ export function canModifyVideo(p: PermInput & { item: Pick<VersionItem, 'kind' |
 export function deleteVersionMessage(item: Pick<VersionItem, 'label' | 'title'>): string {
   const name = item.label || '這一版';
   return `要刪掉 ${name}${item.title ? `（${item.title}）` : ''} 嗎？\n\n`
-    + '刪掉後，所有人的清單上都看不到這一版，沒辦法從畫面上救回來。\n'
+    + '刪掉後，所有人的清單上都看不到這一版。30 天內製作可以在「影片版本 → 最近刪除」救回來，30 天後檔案會清掉。\n'
     + `${name} 這個號碼不會再用：之後交的新版本號碼會繼續往上加，不會補回 ${name}。`;
 }
 

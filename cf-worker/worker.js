@@ -84,6 +84,8 @@ import { newProjectModelKey, newSharedAssetKey, isModelVersionFile, modelCacheCo
 import { handleClientErrorPost } from './clientErrors.mjs';
 import { handleOpsRoute, runOpsCron } from './ops.mjs';
 import { handleNdiDownload, downloadNameFromPath } from './downloads.mjs';
+// 省空間：刪掉的版本留 30 天、救回來、專案結束清影片、長期存放、空間用量、重複的檔案（指紋）
+import * as storage from './storage.mjs';
 
 const MAX_COMMENTS_PER_SESSION = 500;
 const SESSION_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -132,6 +134,8 @@ export default {
     })());
     // 資料庫每天備份到 R2、NDI 小程序檢查新版、清掉 30 天以前的前端錯誤（ops.mjs）
     ctx.waitUntil(runOpsCron(env).catch(e => console.error('[cron ops]', e?.message || e)));
+    // 刪掉超過 30 天的版本清檔案、空間用量、搬到長期存放、補算指紋（storage.mjs）
+    ctx.waitUntil(storage.runStorageCron(env).catch(e => console.error('[cron storage]', e?.message || e)));
   }
 };
 
@@ -339,7 +343,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.deletedVideoId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -461,6 +465,8 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'comments.summary':      return commentsSummary(env, ctx);
     case 'duplicate':             return duplicateProject(request, env, projectId);
     case 'restore':               return restoreProject(request, env, projectId);
+    case 'wrapUp.get':            return mechResp(storage.wrapUpPreview(env, { projectId }));
+    case 'wrapUp.apply':          return applyProjectWrapUp(request, env, ctx);
     case 'export':                return exportProject(request, env, projectId);
     case 'cueTemplates.list':     return listCueTemplates(env, projectId);
     case 'cueTemplates.create':   return createCueTemplate(request, env, ctx);
@@ -489,6 +495,13 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'videos.retry':          return retrySongVideo(request, env, ctx);
     case 'videos.patch':          return patchSongVideo(request, env, ctx);
     case 'videos.delete':         return deleteSongVideo(request, env, ctx);
+    case 'videos.deleted':        return mechResp(storage.listDeletedVideos(env, { projectId, songId }));
+    case 'videos.restore':        return restoreDeletedVideo(request, env, ctx, route.deletedVideoId);
+    case 'videos.duplicates': {
+      let body = null;
+      try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+      return mechResp(storage.handleDuplicateCheck(env, ctx, body));
+    }
     case 'videos.stream':
       return ctx.video.status === 'ready'
         ? serveR2Video(request, env, ctx.video)
@@ -4666,7 +4679,7 @@ function videoUploadInfo(v, partNumbers) {
 }
 
 // 成員看到的一版影片
-function videoToApi(v, { streamUrl = null, latestId = null, upload = null } = {}) {
+function videoToApi(v, { streamUrl = null, latestId = null, upload = null, duplicateOf = null, fingerprintPending = false } = {}) {
   const inFlight = v.status === 'uploading' || v.status === 'processing';
   return {
     id: v.id,
@@ -4693,6 +4706,10 @@ function videoToApi(v, { streamUrl = null, latestId = null, upload = null } = {}
     readyAt: v.ready_at || null,
     isLatest: !!latestId && v.id === latestId,
     streamUrl: v.status === 'ready' ? streamUrl : null,
+    storageClass: v.storage_class || 'Standard',
+    // 跟更早交的哪一版是同一個檔案（storage.mjs duplicateMarks；沒有 = null）；還在算指紋 → fingerprintPending
+    duplicateOf,
+    fingerprintPending,
     ...(upload ? { upload } : {}),
   };
 }
@@ -4769,12 +4786,19 @@ async function listSongVideos(request, env, ctx) {
   `).bind(projectId, song.id).all();
   const rows = r.results || [];
   const latest = rows.filter(v => v.status === 'ready').sort((a, b) => b.version - a.version)[0] || null;
+  const dups = await storage.duplicateMarks(env, projectId, rows).catch(() => ({ marks: new Map(), pending: new Set() }));
   const videos = [];
   for (const v of rows) {
     const streamUrl = v.status === 'ready' ? await memberVideoStreamUrl(env, v.id, me.id) : null;
-    videos.push(videoToApi(v, { streamUrl, latestId: latest?.id }));
+    videos.push(videoToApi(v, {
+      streamUrl, latestId: latest?.id, duplicateOf: dups.marks.get(v.id) || null, fingerprintPending: dups.pending.has(v.id),
+    }));
   }
   nudgeVideoCopies(request, env, rows, { songId: song.id });
+  // 交好的版本還沒有指紋 → 這個請求做完後順便算幾段（貼連結 / Drive 的好了以後很快就知道有沒有重複）
+  if (rows.some(v => v.status === 'ready' && !v.fingerprint)) {
+    runInBackground(request, storage.runFingerprintStep(env, { songId: song.id, maxBlocks: storage.STORAGE_DEFAULTS.fpBlocksRequest }));
+  }
   return jsonResp({ videos, latestVideoId: latest?.id || null, songCode: song.code || null });
 }
 
@@ -4834,8 +4858,8 @@ async function createVideoUpload(request, env, ctx) {
   const t = nowIso();
   await env.DB.prepare(`
     INSERT INTO song_videos (id, project_id, song_id, title, note, source, r2_key, mime, size_bytes,
-                             width, height, duration_sec, status, upload_id, part_size, created_by, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'upload', ?, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?, ?, ?)
+                             width, height, duration_sec, status, upload_id, part_size, created_by, created_at, updated_at, fingerprint)
+    VALUES (?, ?, ?, ?, ?, 'upload', ?, ?, ?, ?, ?, ?, 'uploading', ?, ?, ?, ?, ?, ?)
   `).bind(
     id, projectId, song.id,
     cleanVideoText(body?.title, VIDEO_TITLE_MAX) || titleFromFilename(filename),
@@ -4843,6 +4867,8 @@ async function createVideoUpload(request, env, ctx) {
     key, mime, size,
     cleanVideoDim(body?.width), cleanVideoDim(body?.height), cleanVideoDuration(body?.durationSec),
     mpu.uploadId, plan.partSize, me.id, t, t,
+    // 瀏覽器交之前算好的檔案指紋（videoFingerprint.ts；格式不對就不存，之後排程從 R2 算）
+    storage.cleanFingerprint(body?.fingerprint),
   ).run();
   return songVideoResponse(env, ctx, { id }, 201);
 }
@@ -5000,19 +5026,21 @@ async function abortSongVideo(request, env, ctx) {
   return jsonResp({ ok: true });
 }
 
-async function cancelAndHideVideo(env, v, reason) {
+async function cancelAndHideVideo(env, v, reason, byUserId = null) {
   if (v.upload_id) {
     try { await env.MODELS.resumeMultipartUpload(v.r2_key, v.upload_id).abort(); } catch { /* ignore */ }
   }
-  const t = nowIso();
+  const now = Date.now();
+  const t = new Date(now).toISOString();
   await env.DB.batch([
     env.DB.prepare(`
       UPDATE song_videos
          SET deleted_at = ?, updated_at = ?, lease_until = NULL, upload_id = NULL,
+             purge_after = ?, deleted_by = ?,
              status = CASE WHEN status IN ('uploading', 'processing') THEN 'failed' ELSE status END,
              error = CASE WHEN status IN ('uploading', 'processing') THEN ? ELSE error END
        WHERE id = ? AND deleted_at IS NULL
-    `).bind(t, t, reason, v.id),
+    `).bind(t, t, storage.purgeAfterIso(now), byUserId, reason, v.id),
     env.DB.prepare(`DELETE FROM song_video_parts WHERE video_id = ?`).bind(v.id),
   ]);
 }
@@ -5036,16 +5064,41 @@ async function patchSongVideo(request, env, ctx) {
   return songVideoResponse(env, ctx, v);
 }
 
-// 刪掉一版：從清單拿掉（R2 的檔案留著，之後可以救回來）；號碼不會再用。還沒好的會順便取消
+// 刪掉一版：從清單拿掉（R2 的檔案留 30 天，製作可以在「最近刪除」救回來，之後排程清掉）；號碼不會再用。還沒好的會順便取消
 async function deleteSongVideo(request, env, ctx) {
   const { me, song, role, video: v } = ctx;
   const d = videoModifyDecision({ role, userId: me.id, song, video: v });
   if (!d.ok) return jsonResp({ error: d.error }, d.status);
-  await cancelAndHideVideo(env, v, '已取消');
+  await cancelAndHideVideo(env, v, '已取消', me.id);
   await logActivity(request, env, ctx.projectId, 'delete', 'song_video', v.id, {
     songId: v.song_id, version: v.version, label: versionLabel(v.version), title: v.title,
   });
   return jsonResp({ ok: true });
+}
+
+// 救回刪掉的版本（storage.mjs；號碼不變）
+async function restoreDeletedVideo(request, env, ctx, videoId) {
+  const r = await storage.restoreVideo(env, { projectId: ctx.projectId, songId: ctx.song.id, videoId });
+  if (r.row) {
+    await logActivity(request, env, ctx.projectId, 'restore', 'song_video', videoId, {
+      songId: ctx.song.id, version: r.row.version, label: versionLabel(r.row.version), title: r.row.title,
+    });
+  }
+  return jsonResp(r.body, r.status);
+}
+
+// 專案結束清影片（storage.mjs）：只留每首歌最後通過的那一版 / 搬到長期存放
+async function applyProjectWrapUp(request, env, ctx) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const r = await storage.applyWrapUp(env, { projectId: ctx.projectId, me: ctx.me, keep: body?.keep, storage: body?.storage });
+  if (r.status === 200 && (r.body.removedCount || r.body.queuedForInfrequent)) {
+    await logActivity(request, env, ctx.projectId, 'update', 'project', ctx.projectId, {
+      wrapUp: true, keep: r.body.keep, storage: r.body.storage, removed: r.body.removed.map(x => x.label).slice(0, 50),
+      removedCount: r.body.removedCount, queuedForInfrequent: r.body.queuedForInfrequent,
+    });
+  }
+  return jsonResp(r.body, r.status);
 }
 
 // 複製失敗 → 重試（格式不支援 / 太大的不能重試）

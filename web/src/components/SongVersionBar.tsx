@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { CircleAlert, Film, LoaderCircle, Plus, Trash2, TriangleAlert } from 'lucide-react';
+import { CircleAlert, Copy, Film, History, LoaderCircle, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
 import PendingVideoRow from './PendingVideoRow';
@@ -49,6 +49,15 @@ interface Props {
   onRetryFinish?: (v: SongVideo) => void;
   /** 專案的 LED 畫布大小：貼連結的版本第一次播之後，跟它比（還沒設定 = 不比） */
   ledCanvas?: CanvasSize | null;
+  /** 有給才出現「最近刪除」（製作：30 天內可以救回來） */
+  onShowDeleted?: () => void;
+  /** 現在登入的人（自己交的那一版跟別版重複 → 提醒他） */
+  userId?: string | null;
+}
+
+/** 「跟 V2 重複」（別首歌：「跟 S03 夜曲 的 V2 重複」） */
+export function duplicateLabel(d: NonNullable<SongVideo['duplicateOf']>): string {
+  return `跟 ${d.sameSong ? '' : `${[d.songCode, d.songName].filter(Boolean).join(' ')} 的 `}${d.label} 重複`;
 }
 
 /** 誰交的 · 什麼時候（伺服器時間 → 本地時間） */
@@ -73,7 +82,7 @@ function versionTooltip(it: VersionItem): string {
 export default function SongVersionBar({
   status, error, items, selectedKey, onSelect, pending, jobs, onRetryLoad, onAdd,
   canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
-  stalled, onResumePending, onRetryFinish, ledCanvas,
+  stalled, onResumePending, onRetryFinish, ledCanvas, onShowDeleted, userId,
 }: Props) {
   // 預覽模式（製作用其他身分看）：交影片、刪除、重試…照樣出現但按不下去
   const { ro } = useViewAs();
@@ -116,6 +125,7 @@ export default function SongVersionBar({
                   >
                     <span className="vbar__chip-label">
                       {cannotPlay && <Icon icon={TriangleAlert} size="xs" label="這台電腦播不了" />}
+                      {it.video?.duplicateOf && <Icon icon={Copy} size="xs" label={duplicateLabel(it.video.duplicateOf)} />}
                       {it.label}
                     </span>
                     {versionByline(it) && <span className="vbar__chip-by">{versionByline(it)}</span>}
@@ -160,6 +170,11 @@ export default function SongVersionBar({
 
         <span className="vbar__grow" />
         {extra}
+        {onShowDeleted && (
+          <button type="button" className="vbar__btn" onClick={onShowDeleted} title="刪掉的版本留 30 天，這段時間可以救回來">
+            <Icon icon={History} size="sm" /> 最近刪除
+          </button>
+        )}
         {onAdd && (
           <button type="button" className="btn btn--sm btn--primary vbar__add" onClick={onAdd} {...ro()}>
             <Icon icon={Plus} size="sm" /> 加影片
@@ -179,6 +194,18 @@ export default function SongVersionBar({
               </>}
           </div>
           <HelpLink anchor={HELP_ANCHORS.animAeExport} />
+        </div>
+      )}
+
+      {selected?.video?.duplicateOf && (
+        <div className="vbar__check" role="status">
+          <Icon icon={Copy} size="sm" />
+          <div className="vbar__check-text">
+            <span>
+              {selected.label} {duplicateLabel(selected.video.duplicateOf)}：檔案一模一樣。
+              {userId && selected.video.createdBy?.id === userId ? ` 這一版是你交的，不需要的話可以刪掉 ${selected.label}。` : ''}
+            </span>
+          </div>
         </div>
       )}
 

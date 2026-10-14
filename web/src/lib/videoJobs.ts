@@ -171,6 +171,8 @@ export interface StartUploadInput {
   note?: string;
   /** 接著傳停住的那一版（「繼續上傳（選同一個檔案）」；別台電腦開始傳的也可以） */
   resumeVideoId?: string;
+  /** 交之前算好的檔案指紋（AddVideoDialog 比對重複時算的） */
+  fingerprint?: string | null;
 }
 
 export interface AddLinkInput {
@@ -213,6 +215,7 @@ export function createVideoJobStore(deps: VideoJobDeps): VideoJobStore {
   const doneListeners = new Set<(job: VideoJob) => void>();
   const controllers = new Map<string, AbortController>();
   const files = new Map<string, File>();
+  const fingerprints = new Map<string, string>();
   const pollMs = Math.max(1000, deps.pollMs ?? 3000);
 
   const find = (id: string) => jobs.find(j => j.id === id);
@@ -269,6 +272,7 @@ export function createVideoJobStore(deps: VideoJobDeps): VideoJobStore {
       const video = await deps.upload(job.projectId, job.songId, file, {
         note: job.note || undefined,
         resumeVideoId: job.videoId ?? storageGet(key),
+        fingerprint: fingerprints.get(id) ?? null,
         signal: ctrl.signal,
         onStarted: (v) => {
           storageSet(key, v.id);
@@ -362,6 +366,7 @@ export function createVideoJobStore(deps: VideoJobDeps): VideoJobStore {
     startUpload(input) {
       const job = { ...baseJob('upload', input, input.file.name, input.file.size), videoId: input.resumeVideoId ?? null };
       files.set(job.id, input.file);
+      if (input.fingerprint) fingerprints.set(job.id, input.fingerprint);
       add(job);
       void runUpload(job.id);
       return job.id;

@@ -16,7 +16,7 @@ const TARGET_LABEL: Record<string, string> = {
 
 const ACTION_VERB: Record<string, string> = {
   create: '新增', update: '修改', delete: '刪除', reorder: '重新排序',
-  reset: '重置', activate: '切換', archive: '封存', upload: '上傳', bulk_create: '批次建立', seed: '加入範例',
+  reset: '重置', activate: '切換', archive: '封存', upload: '上傳', bulk_create: '批次建立', seed: '加入範例', restore: '救回',
 };
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
@@ -61,6 +61,14 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
     const title = str(p.title);
     if (action === 'create') return `交了影片${label ? ` ${label}` : ''}${quoted(title)}`;
     if (action === 'delete') return `刪除影片${label ? ` ${label}` : ''}${quoted(title)}`;
+    if (action === 'restore') return `從最近刪除救回影片${label ? ` ${label}` : ''}${quoted(title)}`;
+  }
+  // 專案結束清影片（storage.mjs）
+  if (type === 'project' && p.wrapUp === true) {
+    const removed = num(p.removedCount) ?? 0;
+    const moved = num(p.queuedForInfrequent) ?? 0;
+    const bits = [removed ? `清掉 ${removed} 版影片（30 天內可以救回來）` : '', moved ? `${moved} 版改成長期存放` : ''].filter(Boolean);
+    return `專案結束清影片${bits.length ? `：${bits.join('、')}` : ''}`;
   }
   // 模型切換版本
   if (type === 'model' && action === 'activate') {

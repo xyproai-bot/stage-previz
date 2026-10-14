@@ -1,5 +1,6 @@
 // 測試用：記憶體裡的假 R2（env.MODELS），夠備份 / 下載檔 / 模型檔的測試用
-//   put（Uint8Array / ArrayBuffer / 字串 / ReadableStream）、get（range、onlyIf: If-None-Match）、head、list（prefix / cursor / limit）、delete（一個或一串）
+//   put（Uint8Array / ArrayBuffer / 字串 / ReadableStream；storageClass）、get（range、onlyIf: If-None-Match）、head、list（prefix / cursor / limit）、delete（一個或一串）
+//   分段上傳 createMultipartUpload / resumeMultipartUpload（uploadPart / complete / abort；storageClass）
 import { createHash } from 'node:crypto';
 
 async function toBytes(value) {
@@ -19,6 +20,7 @@ function objectMeta(key, rec) {
     etag: rec.etag,
     httpEtag: `"${rec.etag}"`,
     uploaded: rec.uploaded,
+    storageClass: rec.storageClass || 'Standard',
     httpMetadata: { ...rec.httpMetadata },
     customMetadata: { ...rec.customMetadata },
     writeHttpMetadata(headers) {
@@ -31,18 +33,57 @@ function objectMeta(key, rec) {
 export function memoryR2({ clock = () => Date.now() } = {}) {
   const store = new Map();
   const calls = { put: 0, get: 0, head: 0, list: 0, delete: 0 };
+  const uploads = new Map();
+  let mpuSeq = 0;
   return {
     store,
     calls,
+    uploads,
     keys() { return [...store.keys()].sort(); },
     bytes(key) { return store.get(key)?.bytes ?? null; },
     async put(key, value, opts = {}) {
       calls.put++;
       const bytes = await toBytes(value);
       const etag = createHash('md5').update(bytes).digest('hex');
-      const rec = { bytes, etag, uploaded: new Date(clock()), httpMetadata: opts.httpMetadata || {}, customMetadata: opts.customMetadata || {} };
+      const rec = { bytes, etag, uploaded: new Date(clock()), httpMetadata: opts.httpMetadata || {}, customMetadata: opts.customMetadata || {}, storageClass: opts.storageClass || 'Standard' };
       store.set(key, rec);
       return objectMeta(key, rec);
+    },
+    async createMultipartUpload(key, opts = {}) {
+      calls.mpuCreate = (calls.mpuCreate || 0) + 1;
+      const uploadId = 'mpu_' + (++mpuSeq);
+      uploads.set(uploadId, { key, opts, parts: new Map() });
+      return this.resumeMultipartUpload(key, uploadId);
+    },
+    resumeMultipartUpload(key, uploadId) {
+      const bucket = this;
+      return {
+        key, uploadId,
+        async uploadPart(n, value) {
+          const u = uploads.get(uploadId);
+          if (!u || u.key !== key) throw new Error('fake R2: no such upload');
+          const bytes = await toBytes(value);
+          const etag = createHash('md5').update(bytes).digest('hex');
+          u.parts.set(n, { bytes, etag });
+          return { partNumber: n, etag };
+        },
+        async complete(list) {
+          const u = uploads.get(uploadId);
+          if (!u || u.key !== key) throw new Error('fake R2: no such upload');
+          const chunks = list.map(({ partNumber, etag }) => {
+            const p = u.parts.get(partNumber);
+            if (!p || p.etag !== etag) throw new Error('fake R2: bad part');
+            return p.bytes;
+          });
+          const total = chunks.reduce((a, c) => a + c.byteLength, 0);
+          const all = new Uint8Array(total);
+          let o = 0;
+          for (const c of chunks) { all.set(c, o); o += c.byteLength; }
+          uploads.delete(uploadId);
+          return bucket.put(key, all, u.opts);
+        },
+        async abort() { uploads.delete(uploadId); },
+      };
     },
     async head(key) {
       calls.head++;

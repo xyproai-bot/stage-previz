@@ -67,6 +67,12 @@ export interface SongVideo {
   streamUrl: string | null;
   /** 上傳中（status = uploading）時才有：續傳用 */
   upload?: SongVideoUploadInfo;
+  /** R2 存放方式：'Standard' 標準 / 'InfrequentAccess' 長期存放（舊的後台沒有這欄） */
+  storageClass?: string;
+  /** 跟更早交的哪一版是同一個檔案（指紋一樣）；沒有 = null（舊的後台沒有這欄） */
+  duplicateOf?: { videoId: string; label: string; songId: string; songCode: string | null; songName: string; sameSong: boolean } | null;
+  /** 剛交好、後台還在算指紋（算完才知道有沒有重複）→ 清單會再更新 */
+  fingerprintPending?: boolean;
 }
 
 export interface SongVideoList {
@@ -286,7 +292,7 @@ export function uploadResumeKey(projectId: string, songId: string, file: { name:
 /** 開始上傳：回 status = 'uploading' 的一版，video.upload 告訴你怎麼切 */
 export async function createVideoUpload(
   projectId: string, songId: string,
-  input: { filename: string; sizeBytes: number; mime: string; title?: string; note?: string; width?: number; height?: number; durationSec?: number },
+  input: { filename: string; sizeBytes: number; mime: string; title?: string; note?: string; width?: number; height?: number; durationSec?: number; fingerprint?: string },
 ): Promise<SongVideo> {
   return (await call<{ video: SongVideo }>(`${songBase(projectId, songId)}/uploads`, {
     method: 'POST', body: JSON.stringify(input),
@@ -451,6 +457,8 @@ export interface UploadSongVideoOptions {
   retries?: number;
   /** 續傳：上次沒傳完的那一版 id（uploadResumeKey 存的） */
   resumeVideoId?: string | null;
+  /** 交之前算好的檔案指紋（videoFingerprint.ts）→ 存在這一版，之後才知道有沒有人交了一樣的檔案 */
+  fingerprint?: string | null;
   signal?: AbortSignal;
   /** 進度：傳到一半也會叫（同時傳好幾段時是加起來的，最多每 0.1 秒一次）；每傳好一段一定叫一次 */
   onProgress?: (p: { bytesDone: number; totalBytes: number; video: SongVideo }) => void;
@@ -484,6 +492,7 @@ export async function uploadSongVideo(
     const meta = opts.meta ?? await readVideoFileMeta(file);
     video = await createVideoUpload(projectId, songId, {
       filename: file.name, sizeBytes: file.size, mime, title: opts.title, note: opts.note, ...meta,
+      ...(opts.fingerprint ? { fingerprint: opts.fingerprint } : {}),
     });
   }
   opts.onStarted?.(video);

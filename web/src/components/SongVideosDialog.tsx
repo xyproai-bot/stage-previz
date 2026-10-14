@@ -5,7 +5,8 @@
 //   ＋ 加影片：開「加影片」視窗，蓋在這個視窗上面（covered 時 Esc 先關上面那個）
 // 權限跟後台一樣（lib/songVersions.ts canModifyVideo）；編輯頁只有製作進得來，製作每一版都能刪。
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, ExternalLink, Film, LoaderCircle, Plus, Trash2, TriangleAlert, X } from 'lucide-react';
+import { CircleAlert, Copy, ExternalLink, Film, History, LoaderCircle, Plus, Trash2, TriangleAlert, X } from 'lucide-react';
+import { DeletedVersionsList } from './DeletedVersions';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
 import PendingVideoRow from './PendingVideoRow';
@@ -29,6 +30,7 @@ import { CANNOT_PLAY_TEXT } from '../lib/videoCheck';
 import { useEscapeClose } from '../lib/useEscapeClose';
 import './NewProjectDialog.css';
 import './SongVideosDialog.css';
+import './DeletedVersions.css';
 
 interface Props {
   open: boolean;
@@ -55,6 +57,10 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
   const versions = useSongVersions({ songId: open ? song.id : null, fetcher, storageKey: null, reloadKey: song.latestVideoId });
   const playChecks = usePlayChecks();
   const [busyId, setBusyId] = useState<string | null>(null);
+  // 最近刪除（30 天內可以救回來）：刪了一版就重新讀
+  const [deletedRev, setDeletedRev] = useState(0);
+  const [deletedCount, setDeletedCount] = useState<number | null>(null);
+  const isProducer = user?.role === 'admin';
 
   const perm = { accountRole: user?.role ?? null, projectRole: null, userId: user?.id ?? null, song };
   const canDelete = (it: VersionItem) => canModifyVideo({ ...perm, item: { ...it, source: it.video?.source ?? null } });
@@ -105,7 +111,8 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
     setBusyId(it.id);
     try {
       await deleteSongVideo(projectId, song.id, it.id);
-      toast.success(`已刪除 ${it.label}`);
+      toast.success(`已刪除 ${it.label}（30 天內可以在「最近刪除」救回來）`);
+      setDeletedRev(n => n + 1);
       await versions.reload();
       onChanged();
       panelRef.current?.focus();
@@ -212,6 +219,11 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
                           ? <span className="songvid-tag is-error" title={CANNOT_PLAY_TEXT}><Icon icon={TriangleAlert} size="xs" /> 播不了</span>
                           : <span className="songvid-tag is-ok">可以播</span>}
                         {it.video?.isLatest && <span className="songvid-tag is-latest">最新</span>}
+                        {it.video?.duplicateOf && (
+                          <span className="songvid-tag is-dup" title="檔案跟那一版一模一樣（佔兩份空間）">
+                            <Icon icon={Copy} size="xs" /> 跟 {it.video.duplicateOf.sameSong ? '' : `${[it.video.duplicateOf.songCode, it.video.duplicateOf.songName].filter(Boolean).join(' ')} 的 `}{it.video.duplicateOf.label} 重複
+                          </span>
+                        )}
                         <span className="songvid-row__by" title={it.at ? formatRelativeTime(it.at) : undefined}>
                           {[by, when].filter(Boolean).join(' · ')}
                         </span>
@@ -221,6 +233,9 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
                         : <div className="songvid-row__note is-empty">（沒有寫說明）</div>}
                       {it.title && <div className="songvid-row__file" title={it.title}>{it.title}</div>}
                       {cannotPlay && <div className="songvid-row__issue">在這台電腦播的時候發現：{CANNOT_PLAY_TEXT}</div>}
+                      {it.video?.duplicateOf && it.video.createdBy?.id && it.video.createdBy.id === user?.id && (
+                        <div className="songvid-row__dup">你交的 {it.label} 跟 {it.video.duplicateOf.label} 是同一個檔案。不需要的話可以刪掉 {it.label}（30 天內救得回來）。</div>
+                      )}
                     </div>
                     <div className="songvid-row__actions">
                       <a
@@ -262,6 +277,19 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
               <div>這首歌現在沒有可以播的影片</div>
               <small>按下面的「加影片」交一版{hasPending ? '，或等上面那一版好了' : ''}</small>
             </div>
+          )}
+
+          {isProducer && (
+            <details className="songvid__deleted">
+              <summary><Icon icon={History} size="sm" /> 最近刪除{deletedCount ? `（${deletedCount}）` : ''} · 30 天內可以救回來</summary>
+              <DeletedVersionsList
+                projectId={projectId}
+                songId={song.id}
+                reloadKey={deletedRev}
+                onCount={setDeletedCount}
+                onRestored={() => { void versions.reload(); onChanged(); }}
+              />
+            </details>
           )}
         </div>
 

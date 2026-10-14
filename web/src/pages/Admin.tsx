@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useParams, useSearchParams } from 'react-rout
 import AdminLayout from '../components/AdminLayout';
 import ProjectCard from '../components/ProjectCard';
 import NewProjectWizard from '../components/NewProjectWizard';
+import ProjectWrapUpDialog from '../components/ProjectWrapUpDialog';
 import RecentProjectsBar from '../components/RecentProjectsBar';
 import OverflowMenu from '../components/OverflowMenu';
 import * as api from '../lib/api';
@@ -97,6 +98,8 @@ function ProjectsTab() {
   }, [wizardStep]); // eslint-disable-line react-hooks/exhaustive-deps
   const resumeProject = resume && needsResume(resume) ? projects.find(p => p.id === resume.projectId) ?? null : null;
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // 封存：問要不要順便清影片（專案結束清影片）
+  const [archiving, setArchiving] = useState<Project | null>(null);
 
   function toggleSelect(p: Project) {
     setSelectedIds(prev => {
@@ -111,7 +114,7 @@ function ProjectsTab() {
     const ids = Array.from(selectedIds);
     if (!(await confirmDialog({
       title: `封存選中的 ${ids.length} 個專案？`,
-      message: '封存後不會出現在專案總覽，資料都會留著，之後可以在「封存的專案」還原。',
+      message: '封存後不會出現在專案總覽，資料都會留著，之後可以在「封存的專案」還原。影片全部留著；要清掉用不到的版本，之後可以在「封存的專案」按「清影片」。',
       confirmLabel: '封存',
       destructive: true,
     }))) return;
@@ -187,19 +190,8 @@ function ProjectsTab() {
     }
   }
 
-  async function handleArchive(p: Project) {
-    if (!(await confirmDialog({
-      title: `封存專案「${p.name}」？`,
-      message: '封存後不會出現在專案總覽，資料都會留著，之後可以在「封存的專案」還原。',
-      confirmLabel: '封存',
-      destructive: true,
-    }))) return;
-    try {
-      await api.archiveProject(p.id);
-      await refresh();
-    } catch (e) {
-      toast.error('封存失敗：' + (e instanceof Error ? e.message : String(e)));
-    }
+  function handleArchive(p: Project) {
+    setArchiving(p);
   }
 
   async function handleExport(p: Project) {
@@ -420,6 +412,9 @@ function ProjectsTab() {
           onOpenEditor={(id) => navigate(`/admin/projects/${encodeURIComponent(id)}`)}
           onProjectCreated={() => { void refresh(); }}
         />
+      )}
+      {archiving && (
+        <ProjectWrapUpDialog open mode="archive" project={archiving} onClose={() => setArchiving(null)} onDone={() => { void refresh(); }} />
       )}
     </>
   );

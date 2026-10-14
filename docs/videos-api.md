@@ -64,7 +64,7 @@
 | GET | `/api/projects/:p/songs/:s/videos` | `{ videos: SongVideo[], latestVideoId, songCode }`。上傳中 / 複製中 / 失敗的在最前面（新的在前），接著版本號由大到小 |
 | GET | `/api/projects/:p/songs/:s/videos/:v` | `{ video }`（上傳中多 `upload` 給續傳用） |
 | PATCH | `/api/projects/:p/songs/:s/videos/:v` | body 任選 `{ title, note, width, height, durationSec }` → `{ video }` |
-| DELETE | `/api/projects/:p/songs/:s/videos/:v` | `{ ok: true }`。從清單拿掉（R2 的檔案先留著），還沒好的順便取消 |
+| DELETE | `/api/projects/:p/songs/:s/videos/:v` | `{ ok: true }`。從清單拿掉（R2 的檔案留 30 天，見下面「最近刪除」），還沒好的順便取消 |
 
 歌曲清單 `GET /api/projects/:p/songs` 每首歌多了：`code`、`latestVideoId`、`latestVideoVersion`（沒有影片 = null）。
 
@@ -140,6 +140,25 @@ Cloudflare 一個請求做完後最多再跑 30 秒、免費方案一次最多 5
 
 分享看到的一版沒有 `note`、`createdBy`、`originalUrl`。限定單首歌的連結看不到別首歌的影片（403）。
 
+## 最近刪除、專案結束清影片、重複的檔案（0029，`cf-worker/storage.mjs`）
+
+- **刪掉的版本留 30 天**：`purge_after` = 刪的時間 + 30 天。排程每 5 分鐘清一批到期的（先在資料庫標 `purged_at` 再刪 R2，標成功才刪 → 不會跟救回來搶）。
+  `wrangler.toml` 的 `VIDEO_PURGE` 不是 `"on"` 時只記錄會清哪些（`ops_state` 的 `video_purge` + log `[cron purge]`），什麼都不刪。清掉的號碼照樣不會再用。
+
+| | 網址 | 誰 | 回傳 |
+|---|---|---|---|
+| GET | `/api/projects/:p/songs/:s/videos/deleted` | 製作 | `{ videos: [{ id, label, title, note, sizeBytes, createdBy, deletedAt, deletedBy, purgeAfter, daysLeft }], keepDays: 30 }`（交好的才列） |
+| POST | `/api/projects/:p/songs/:s/videos/:v/restore` | 製作 | `{ ok, label }`，號碼不變。沒被刪 409、清掉了 / 檔案不在 410。封存的專案也可以 |
+| POST | `/api/projects/:p/songs/:s/videos/duplicates` | 交影片的人 | body `{ fingerprint }` → `{ matches: [{ songCode, songName, sameSong, label, createdBy, createdAt, deleted }] }`（只看這個專案，還在的 + 30 天內刪掉的） |
+| GET | `/api/projects/:p/wrap-up` | 全站製作 | 每首歌留哪一版（最後通過的；沒有就最新的）、會清掉哪幾版、多大 |
+| POST | `/api/projects/:p/wrap-up` | 全站製作 | body `{ keep: 'all' \| 'final', storage: 'standard' \| 'infrequent' }`。final 的照一般刪除（30 天內救得回來）；infrequent 把剩下的排進「搬到長期存放」（排程分段搬，R2 `storageClass: 'InfrequentAccess'`）。封存後也可以 |
+| GET | `/api/admin/storage` | 全站製作 | 每個專案 / 整個帳號的空間（影片從資料庫算，模型 / 留言圖片用排程每 6 小時列 R2 的結果 `storage_usage`）、重複的檔案、清檔案的狀態 |
+| POST | `/api/admin/storage/rescan` | 全站製作 | 下一輪排程馬上重新列 R2 |
+
+- **檔案指紋** `fingerprint`：`fp1:` + SHA-256（大小 + 頭、中、尾各 8 MiB，每 1 MiB 一段先算），算法在 `web/src/lib/videoFingerprint.ts`（前後台共用）。
+  上傳時瀏覽器先算好放在 `POST .../uploads` 的 `fingerprint`；貼連結 / Drive / 舊的版本由後台從 R2 一段一段算（看清單時順便算幾段 + 排程補算）。
+- 清單的每一版多了 `storageClass`、`duplicateOf`（`{ videoId, label, songCode, songName, sameSong }`，跟更早交的哪一版一樣）、`fingerprintPending`（剛交好、還在算）。
+
 ## 歌曲代號
 
 - 規則：英文字母、數字、中間可以有 `-`，1～12 字，存成大寫（`S01`、`ENC-1`、`OP`）。`S1` 和 `S01` 算同一個。
@@ -163,5 +182,6 @@ Cloudflare 一個請求做完後最多再跑 30 秒、免費方案一次最多 5
 | `VIDEO_MAX_BYTES` | `4294967296`（4 GB） | 單一影片上限 |
 | `VIDEO_COPY_PART_BYTES` | 32 MiB | 後台複製每段多大（5 MiB～95 MiB） |
 | `VIDEO_COPY_STEP_FETCHES` | 10 | 請求裡每輪最多抓幾段（測試用） |
+| `VIDEO_PURGE` | `"dry-run"` | `"on"` = 刪掉超過 30 天的版本真的清 R2 的檔案；其他 = 只記錄 |
 
-R2 位置：`videos/<專案>/<歌>/<影片 id>.<mp4|mov|webm>`（bucket `stage-previz-models`，binding `MODELS`）。刪歌時那首歌的影片檔一起清掉。
+R2 位置：`videos/<專案>/<歌>/<影片 id>.<mp4|mov|webm>`（bucket `stage-previz-models`，binding `MODELS`）。刪歌時那首歌的影片檔一起清掉（不等 30 天）。

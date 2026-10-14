@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { CircleAlert, FileVideo, FolderOpen, Link2, LoaderCircle, MonitorPlay, TriangleAlert, Upload, X } from 'lucide-react';
+import { CircleAlert, Copy, FileVideo, FolderOpen, Link2, LoaderCircle, MonitorPlay, TriangleAlert, Upload, X } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
 import HelpLink from './HelpLink';
@@ -13,6 +13,8 @@ import { isJobActive, useVideoJobDone, videoJobs, type VideoJob } from '../lib/v
 import { detectVideoLink, videoLinkHint } from '../lib/videoLink';
 import { songTitle } from '../lib/songCode';
 import { friendlyError } from '../lib/songReview';
+import { fingerprintBlob } from '../lib/videoFingerprint';
+import { checkDuplicateVideo, duplicateWarning, type DuplicateMatch } from '../lib/storageApi';
 import './AddVideoDialog.css';
 
 type Way = 'upload' | 'link' | 'local';
@@ -34,10 +36,10 @@ interface Props {
   ledCanvas?: CanvasSize | null;
 }
 
-/** 選好檔案、還沒開始傳：先在這台電腦試播 */
+/** 選好檔案、還沒開始傳：先在這台電腦試播，再比對這個專案有沒有交過一樣的檔案 */
 type FileCheck =
-  | { phase: 'checking'; file: File }
-  | { phase: 'checked'; file: File; check: VideoCheck };
+  | { phase: 'checking'; file: File; step?: 'play' | 'duplicate' }
+  | { phase: 'checked'; file: File; check: VideoCheck; fingerprint: string | null; duplicates: DuplicateMatch[] };
 
 /**
  * 「＋加影片」：三種方法
@@ -105,10 +107,10 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   }, [open, song.id, projectId, onClose]);
   useVideoJobDone(onDone);
 
-  const beginUpload = (file: File) => {
+  const beginUpload = (file: File, fingerprint: string | null = null) => {
     checkTokenRef.current++;
     setFileCheck(null);
-    videoJobs.startUpload({ projectId, songId: song.id, songLabel: label, file, note });
+    videoJobs.startUpload({ projectId, songId: song.id, songLabel: label, file, note, fingerprint });
     setNote('');
   };
 
@@ -127,10 +129,21 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
     if (list.length > 1) setFileError(`一次交一個檔案：先交「${file.name}」，其他的請再拖一次`);
     const token = ++checkTokenRef.current;
     setFileCheck({ phase: 'checking', file });
-    void checkVideoFile(file, ledCanvas).then(({ check }) => {
+    void checkVideoFile(file, ledCanvas).then(async ({ check }) => {
       if (checkTokenRef.current !== token) return;
-      if (!check.block && check.warnings.length === 0) beginUpload(file);
-      else setFileCheck({ phase: 'checked', file, check });
+      if (check.block) { setFileCheck({ phase: 'checked', file, check, fingerprint: null, duplicates: [] }); return; }
+      // 播得了 → 比對這個專案有沒有一模一樣的檔案（只讀頭、中、尾，一兩秒）；比對不了就算了，不擋
+      setFileCheck({ phase: 'checking', file, step: 'duplicate' });
+      let fingerprint: string | null = null;
+      let duplicates: DuplicateMatch[] = [];
+      try {
+        fingerprint = await fingerprintBlob(file);
+        if (checkTokenRef.current !== token) return;
+        duplicates = await checkDuplicateVideo(projectId, song.id, fingerprint);
+      } catch { /* 比對不了：照常交 */ }
+      if (checkTokenRef.current !== token) return;
+      if (check.warnings.length === 0 && duplicates.length === 0) beginUpload(file, fingerprint);
+      else setFileCheck({ phase: 'checked', file, check, fingerprint, duplicates });
     });
   };
 
@@ -244,7 +257,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
                   state={fileCheck}
                   canForce={canForce}
                   onPickAnother={() => fileRef.current?.click()}
-                  onUpload={() => beginUpload(fileCheck.file)}
+                  onUpload={() => beginUpload(fileCheck.file, fileCheck.phase === 'checked' ? fileCheck.fingerprint : null)}
                   onCancel={cancelCheck}
                 />
               ) : (
@@ -356,10 +369,10 @@ function FileCheckPanel({ state, canForce, onPickAnother, onUpload, onCancel }: 
       <div className="addvid__check is-checking" role="status">
         <div className="addvid__check-head">
           <Icon icon={LoaderCircle} spin size="md" />
-          <strong>正在檢查影片能不能在瀏覽器播…</strong>
+          <strong>{state.step === 'duplicate' ? '正在比對這個專案有沒有交過一樣的檔案…' : '正在檢查影片能不能在瀏覽器播…'}</strong>
         </div>
         <div className="addvid__check-file"><Icon icon={FileVideo} size="sm" /> {name}</div>
-        <div className="addvid__hint">在這台電腦試播一下，檔案還沒有傳出去。最多十幾秒。</div>
+        <div className="addvid__hint">{state.step === 'duplicate' ? '只讀檔案的頭、中、尾，檔案還沒有傳出去。' : '在這台電腦試播一下，檔案還沒有傳出去。最多十幾秒。'}</div>
         <div className="addvid__check-actions">
           <button type="button" className="btn btn--ghost" onClick={onCancel}>取消</button>
         </div>
@@ -392,6 +405,29 @@ function FileCheckPanel({ state, canForce, onPickAnother, onUpload, onCancel }: 
       </div>
     );
   }
+  const dups = state.duplicates;
+  // 只有重複、沒有其他提醒：「取消」/「還是要交」
+  if (check.warnings.length === 0 && dups.length > 0) {
+    return (
+      <div className="addvid__check is-warn" role="alert">
+        <div className="addvid__check-head">
+          <Icon icon={Copy} size="md" />
+          <strong>{duplicateWarning(dups[0])}</strong>
+        </div>
+        <div className="addvid__check-file"><Icon icon={FileVideo} size="sm" /> {name}{check.summary ? ` · ${check.summary}` : ''}</div>
+        {dups.length > 1 && (
+          <ul className="addvid__check-list">
+            {dups.slice(1, 4).map(d => <li key={d.videoId}>{duplicateWarning(d)}</li>)}
+          </ul>
+        )}
+        <div className="addvid__hint">交了也會變成新的一版，只是佔兩份空間。是不是選錯檔案了？</div>
+        <div className="addvid__check-actions">
+          <button type="button" className="btn btn--ghost" onClick={onCancel}>取消</button>
+          <button type="button" className="btn btn--primary" onClick={onUpload}><Icon icon={Upload} /> 還是要交</button>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="addvid__check is-warn" role="status">
       <div className="addvid__check-head">
@@ -400,6 +436,7 @@ function FileCheckPanel({ state, canForce, onPickAnother, onUpload, onCancel }: 
       </div>
       <div className="addvid__check-file"><Icon icon={FileVideo} size="sm" /> {name}{check.summary ? ` · ${check.summary}` : ''}</div>
       <ul className="addvid__check-list">
+        {dups.slice(0, 3).map(d => <li key={d.videoId}>{duplicateWarning(d)}</li>)}
         {check.warnings.map(w => <li key={w.kind}>{w.text}</li>)}
       </ul>
       {help}

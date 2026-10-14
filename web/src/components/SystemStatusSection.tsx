@@ -1,10 +1,12 @@
-// 設定頁的「系統狀態」（只有製作看得到）：資料庫最近一次自動備份、最近 7 天的前端錯誤（同一個訊息算一組）
+// 設定頁的「系統狀態」（只有製作看得到）：資料庫最近一次自動備份、空間用量 / 估計費用 / 重複的檔案（StorageUsagePanel）、
+// 最近 7 天的前端錯誤（同一個訊息算一組）
 import { useCallback, useEffect, useState } from 'react';
 import { CircleCheck, Database, Download, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import Icon from './Icon';
 import { downloadBackup, formatBackupSize, getSystemStatus, type SystemStatus } from '../lib/systemStatusApi';
 import { formatDateTime, formatRelativeTime } from '../lib/serverTime';
 import { toast } from '../lib/toast';
+import StorageUsagePanel from './StorageUsagePanel';
 import './SystemStatusSection.css';
 
 export default function SystemStatusSection() {
@@ -12,10 +14,13 @@ export default function SystemStatusSection() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
+  // 按「重新整理」→ 空間用量也重新讀
+  const [rev, setRev] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setRev(n => n + 1);
     try {
       setData(await getSystemStatus());
     } catch (e) {
@@ -49,7 +54,7 @@ export default function SystemStatusSection() {
           <Icon icon={loading ? LoaderCircle : RefreshCw} spin={loading} /> 重新整理
         </button>
       </div>
-      <p className="settings-desc">資料庫每天自動備份一份；大家的畫面出錯會自動回報到這裡。</p>
+      <p className="settings-desc">資料庫每天自動備份一份；空間用了多少、每個月大概多少錢；大家的畫面出錯會自動回報到這裡。</p>
 
       {error && <p className="sys-status__warn"><Icon icon={TriangleAlert} /> 讀不到系統狀態：{error}</p>}
 
@@ -76,6 +81,8 @@ export default function SystemStatusSection() {
               </button>
             )}
           </div>
+
+          <StorageUsagePanel key={rev} />
 
           <h3 className="sys-status__subtitle">最近 7 天的畫面錯誤</h3>
           {groups.length === 0 ? (

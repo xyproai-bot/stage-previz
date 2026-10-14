@@ -4,11 +4,14 @@
 //   GET /api/admin/backups                 備份清單
 //   GET /api/admin/backups/YYYY-MM-DD.sql.gz  下載一份備份
 //   GET /api/admin/client-errors?days=7    最近的前端錯誤（同一個訊息算一組）
+//   GET /api/admin/storage                 空間用量、估計費用要的數字、重複的檔案（storage.mjs）
+//   POST /api/admin/storage/rescan         請排程馬上重新列一次 R2（模型、留言圖片的大小）
 // 全部只有全站的製作（users.role = 'admin'）能用；權限判斷在 describeOpsRoute。
 
 import * as backups from './backups.mjs';
 import { listClientErrorGroups, pruneClientErrors } from './clientErrors.mjs';
 import { refreshDownloadsIfStale } from './downloads.mjs';
+import * as storage from './storage.mjs';
 
 /**
  * /api/admin/... 是哪一個、什麼方法可以用（全部要全站製作）
@@ -22,6 +25,11 @@ export function describeOpsRoute(method, segs) {
   const r = (kind, more = {}) => (read ? { kind, need: 'globalAdmin', ...more } : { kind, need: 'globalAdmin', methodNotAllowed: true });
   if (sub === 'system-status' && !file) return r('ops.status');
   if (sub === 'client-errors' && !file) return r('ops.clientErrors');
+  // 空間用量（storage.mjs）：看 / 請排程馬上重新列一次 R2
+  if (sub === 'storage' && !file) return r('ops.storage');
+  if (sub === 'storage' && file === 'rescan') {
+    return m === 'POST' ? { kind: 'ops.storageRescan', need: 'globalAdmin' } : { kind: 'ops.storageRescan', need: 'globalAdmin', methodNotAllowed: true };
+  }
   if (sub === 'backups') {
     if (!file) return r('ops.backups');
     if (!backups.parseBackupFileName(file)) return null;
@@ -96,6 +104,10 @@ export async function handleOpsRoute(request, env, url, { me, now = Date.now() }
         });
         return new Response(request.method === 'HEAD' ? null : obj.body, { status: 200, headers });
       }
+      case 'ops.storage':
+        return json(await storage.storageSummary(env, { now }));
+      case 'ops.storageRescan':
+        return json(await storage.requestStorageRescan(env, now));
       case 'ops.clientErrors': {
         const days = Number(url.searchParams.get('days')) || 7;
         const groups = await listClientErrorGroups(env.DB, { now, days, limit: 100 });

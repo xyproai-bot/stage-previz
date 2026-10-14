@@ -472,6 +472,13 @@ export default function ProjectEditor() {
   // 「影片版本」視窗（歌單上點「影片 V3」）：看每一版、刪除、到導演頁播放
   const [versionsSongId, setVersionsSongId] = useState<string | null>(null);
   const versionsSong = versionsSongId ? songs.find(s => s.id === versionsSongId) ?? null : null;
+  // 從系統狀態的「重複的檔案」→「打開影片版本」過來 → 一進來就打開那首歌的影片版本
+  useEffect(() => {
+    const sid = (location.state as { openVersionsSongId?: string } | null)?.openVersionsSongId;
+    if (!sid) return;
+    setVersionsSongId(sid);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.state]);  // eslint-disable-line react-hooks/exhaustive-deps
   // 刪了一版 / 交好了：安靜地重新讀歌單（「影片 V3」跟著變；不閃載入中）
   const reloadSongsQuietly = useCallback(() => {
     if (!projectId) return;
