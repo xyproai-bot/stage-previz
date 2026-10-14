@@ -1,9 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeftRight, ChevronDown, ChevronUp, GripHorizontal, MessageSquarePlus, Pause, Play, RefreshCw, Repeat, Volume2, VolumeX } from 'lucide-react';
+import {
+  ArrowLeftRight, Brackets, ChevronDown, ChevronUp, GripHorizontal, MessageSquarePlus, Pause, Pencil, Play, RefreshCw, Repeat,
+  StepBack, StepForward, Volume2, VolumeX, X,
+} from 'lucide-react';
 import Icon from './Icon';
 import { formatClock, parkVideo, type LocalVideoState } from '../lib/localVideo';
 import type { SongComment } from '../lib/api';
 import type { CompareOption } from '../lib/abCompare';
+import type { ReviewSession } from '../lib/review/useReviewSession';
+import { PLAYBACK_RATES, formatRange, formatTimecode, rateLabel } from '../lib/review/timecode';
 import './MiniPlayer.css';
 
 /** 「比較」（A/B）：選第二個版本，一個按鈕（或按 C）在兩版之間切，停在同一秒（lib/abCompare.ts） */
@@ -17,6 +22,19 @@ export interface MiniPlayerCompare {
   onFlip: () => void;
 }
 
+/** 審片（lib/review/useReviewSession.ts）：逐格、速度、時間碼、區段、留言跟著播放、畫記 */
+export interface MiniPlayerReview {
+  session: ReviewSession;
+  /** 離播放頭最近的留言（時間軸上亮起來） */
+  activeId?: string | null;
+  /** 點時間軸上的留言 / 區段 */
+  onOpenComment?: (c: SongComment) => void;
+  /** 「畫記」按鈕（沒給 = 沒有這個按鈕） */
+  onDraw?: () => void;
+  /** false = 沒有區段（標區段的按鈕、拖時間軸上面那一條）；分享連結沒開留言時 */
+  ranges?: boolean;
+}
+
 interface Props {
   player: LocalVideoState;
   /** 標題（例：V3） */
@@ -25,7 +43,7 @@ interface Props {
   detail?: string;
   /** 記住位置 / 收起來（每個頁面一個） */
   storageKey: string;
-  /** 掛在影片時間上的留言 → 時間軸上的小點 */
+  /** 掛在影片時間上的留言 → 時間軸上的小點（區段 → 一條） */
   comments?: SongComment[];
   onCommentPinClick?: (c: SongComment) => void;
   /** 有給才顯示「在 0:12 加留言」 */
@@ -36,6 +54,8 @@ interface Props {
   extra?: ReactNode;
   /** 有給（而且有兩版以上）才顯示「比較」 */
   compare?: MiniPlayerCompare;
+  /** 審片的播放控制（逐格、速度、時間碼、區段…） */
+  review?: MiniPlayerReview;
 }
 
 interface Placement { right: number; bottom: number; collapsed: boolean | null }
@@ -63,13 +83,16 @@ function clamp(n: number, lo: number, hi: number) {
   return Math.max(lo, Math.min(hi, n));
 }
 
+const hasRange = (c: SongComment) => c.timeEnd != null && c.timeEnd > c.time;
+
 /**
  * 浮在 3D 畫面上的小播放器（像子母畫面）：看得到影片本身、播放 / 暫停、拉時間軸、時間。
  * 同一個 <video> 也是 LED 的貼圖，所以這裡暫停 LED 也停。
  * 可以拖標題列移位置、按 ︿ 收成一條；放在 3D 畫面裡面（不會蓋到下面的 cue 列）。
+ * 有 review → 多了逐格、速度、時間碼、區段（拖時間軸上面那一條，或按 I / O）、畫記。
  */
 export default function MiniPlayer({
-  player, label, detail, storageKey, comments, onCommentPinClick, onAddCommentAtTime, onRetry, extra, compare,
+  player, label, detail, storageKey, comments, onCommentPinClick, onAddCommentAtTime, onRetry, extra, compare, review,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -149,6 +172,8 @@ export default function MiniPlayer({
   };
 
   const { playing, time, duration, loop, muted, ready, error } = player;
+  const session = review?.session;
+  const rangesOn = !!review && review.ranges !== false;
   const canCompare = !!compare && compare.options.length > 0;
   const compareLabel = compare?.value ? compare.options.find(o => o.key === compare.value)?.label ?? null : null;
   const flipBtn = canCompare && compareLabel && (
@@ -174,31 +199,113 @@ export default function MiniPlayer({
       <Icon icon={ArrowLeftRight} size="sm" /> 比較
     </button>
   ));
-  const pins = (comments || []).filter(c => typeof c.time === 'number' && c.time > 0 && duration > 0 && c.time <= duration + 1);
+  const inDuration = (t: number) => duration > 0 && t <= duration + 1;
+  const all = comments || [];
+  const pins = all.filter(c => typeof c.time === 'number' && c.time > 0 && inDuration(c.time) && !(rangesOn && hasRange(c)));
+  const bars = rangesOn ? all.filter(c => hasRange(c) && inDuration(c.time)) : [];
+  const pct = (t: number) => `${clamp(duration > 0 ? (t / duration) * 100 : 0, 0, 100)}%`;
+  const openPin = (c: SongComment) => {
+    if (review?.onOpenComment) review.onOpenComment(c);
+    else if (onCommentPinClick) onCommentPinClick(c);
+    else player.seek(c.time);
+  };
+
+  // 時間軸上面那一條：拖 = 標區段（手指也可以）；點一下 = 跳到那裡
+  const laneRef = useRef<HTMLDivElement>(null);
+  const laneDragRef = useRef<{ id: number; t0: number; moved: boolean } | null>(null);
+  const laneTime = (clientX: number) => {
+    const r = laneRef.current?.getBoundingClientRect();
+    if (!r || !(r.width > 0) || !(duration > 0)) return 0;
+    return clamp(((clientX - r.left) / r.width) * duration, 0, duration);
+  };
+  const onLaneDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!session || !ready || (e.target as HTMLElement).closest('button')) return;
+    e.preventDefault();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    laneDragRef.current = { id: e.pointerId, t0: laneTime(e.clientX), moved: false };
+  };
+  const onLaneMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = laneDragRef.current;
+    if (!d || d.id !== e.pointerId || !session) return;
+    const t = laneTime(e.clientX);
+    if (!d.moved && Math.abs(t - d.t0) < Math.max(0.15, duration * 0.004)) return;
+    d.moved = true;
+    session.setMarks(d.t0, t);
+  };
+  const onLaneUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = laneDragRef.current;
+    if (!d || d.id !== e.pointerId || !session) return;
+    laneDragRef.current = null;
+    if (!d.moved) { player.seek(d.t0); return; }
+    session.setMarks(d.t0, laneTime(e.clientX));
+  };
+
+  const marks = session?.marks;
+  const pendingRange = session?.range ?? null;
+  const loopRange = session?.loop ?? null;
+  const timeText = session?.timecode
+    ? `${formatTimecode(time, session.fps)}`
+    : `${formatClock(time)} / ${formatClock(duration)}`;
 
   const scrub = (
     <div className="mini-player__scrub">
-      <input
-        type="range"
-        min={0}
-        max={duration || 0}
-        step={0.01}
-        value={Math.min(time, duration || 0)}
-        onChange={(e) => player.seek(parseFloat(e.target.value))}
-        disabled={!ready}
-        aria-label="影片時間"
-      />
-      {pins.map(c => (
-        <button
-          key={c.id}
-          type="button"
-          className={'mini-player__pin mini-player__pin--' + c.role}
-          style={{ left: `${(c.time / duration) * 100}%` }}
-          onClick={() => (onCommentPinClick ? onCommentPinClick(c) : player.seek(c.time))}
-          title={`${formatClock(c.time)} ${c.author}：${c.text.slice(0, 60)}`}
-          aria-label={`${formatClock(c.time)} 的留言`}
+      {rangesOn && (
+        <div
+          ref={laneRef}
+          className={'mini-player__lane' + (pendingRange ? ' has-range' : '')}
+          onPointerDown={onLaneDown}
+          onPointerMove={onLaneMove}
+          onPointerUp={onLaneUp}
+          onPointerCancel={() => { laneDragRef.current = null; }}
+          title="拖這一條可以標區段（也可以按 I / O）"
+        >
+          {loopRange && duration > 0 && (
+            <span className="mini-player__loop" style={{ left: pct(loopRange.start), width: `calc(${pct(loopRange.end)} - ${pct(loopRange.start)})` }} aria-hidden="true" />
+          )}
+          {bars.map(c => (
+            <button
+              key={c.id}
+              type="button"
+              className={'mini-player__bar mini-player__bar--' + c.role
+                + (review.activeId === c.id ? ' is-active' : '') + (session?.selectedId === c.id ? ' is-selected' : '')}
+              style={{ left: pct(c.time), width: `max(4px, calc(${pct(c.timeEnd as number)} - ${pct(c.time)}))` }}
+              onClick={() => openPin(c)}
+              title={`${formatRange(c.time, c.timeEnd)} ${c.author}：${c.text.slice(0, 60)}`}
+              aria-label={`${formatRange(c.time, c.timeEnd)} 的區段留言`}
+            />
+          ))}
+          {pendingRange && duration > 0 && (
+            <span className="mini-player__pending" style={{ left: pct(pendingRange.start), width: `calc(${pct(pendingRange.end)} - ${pct(pendingRange.start)})` }} aria-hidden="true" />
+          )}
+          {marks && marks.in != null && !pendingRange && duration > 0 && (
+            <span className="mini-player__mark" style={{ left: pct(marks.in) }} aria-hidden="true" />
+          )}
+        </div>
+      )}
+      <div className="mini-player__track">
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step={0.01}
+          value={Math.min(time, duration || 0)}
+          onChange={(e) => player.seek(parseFloat(e.target.value))}
+          disabled={!ready}
+          aria-label="影片時間"
         />
-      ))}
+        {pins.map(c => (
+          <button
+            key={c.id}
+            type="button"
+            className={'mini-player__pin mini-player__pin--' + c.role
+              + (review?.activeId === c.id ? ' is-active' : '') + (session?.selectedId === c.id ? ' is-selected' : '')}
+            style={{ left: `calc(7px + (100% - 14px) * ${clamp(c.time / duration, 0, 1)})` }}
+            onClick={() => openPin(c)}
+            title={`${formatClock(c.time)} ${c.author}：${c.text.slice(0, 60)}`}
+            aria-label={`${formatClock(c.time)} 的留言`}
+          />
+        ))}
+      </div>
     </div>
   );
 
@@ -208,17 +315,37 @@ export default function MiniPlayer({
       className="mini-player__btn mini-player__btn--play"
       onClick={player.togglePlay}
       disabled={!ready}
-      title={playing ? '暫停' : '播放'}
+      title={playing ? '暫停（空白鍵）' : '播放（空白鍵）'}
       aria-label={playing ? '暫停' : '播放'}
     >
       <Icon icon={playing ? Pause : Play} size="md" />
     </button>
   );
 
+  // 區段按鈕：沒有 → 「標開始」；有開始 → 「標結束」；標好了 → 「區段 0:12–0:18 ×」
+  const rangeBtn = session && rangesOn && (
+    pendingRange ? (
+      <span className="mini-player__range-chip">
+        <Icon icon={Brackets} size="xs" /> {formatRange(pendingRange.start, pendingRange.end)}
+        <button type="button" className="mini-player__chip-x" onClick={session.clearMarks} title="不要區段" aria-label="不要區段"><Icon icon={X} size="xs" /></button>
+      </span>
+    ) : (
+      <button
+        type="button"
+        className={'mini-player__action' + (marks?.in != null ? ' is-active' : '')}
+        onClick={() => (marks?.in != null ? session.markOut() : session.markIn())}
+        disabled={!ready}
+        title={marks?.in != null ? `區段的結束（快捷鍵 O），從 ${formatClock(marks.in)} 開始` : '區段的開始（快捷鍵 I）'}
+      >
+        <Icon icon={Brackets} size="sm" /> {marks?.in != null ? `標結束（${formatClock(marks.in)} 起）` : '標區段'}
+      </button>
+    )
+  );
+
   return (
     <div
       ref={rootRef}
-      className={'mini-player' + (collapsed ? ' is-collapsed' : '')}
+      className={'mini-player' + (collapsed ? ' is-collapsed' : '') + (review ? ' has-review' : '')}
       style={{ right: place.right, bottom: place.bottom }}
       role="region"
       aria-label={`影片 ${label}`}
@@ -258,8 +385,41 @@ export default function MiniPlayer({
           </div>
           <div className="mini-player__controls">
             {playBtn}
-            <span className="mini-player__time">{formatClock(time)} / {formatClock(duration)}</span>
+            {session && (
+              <>
+                <button type="button" className="mini-player__btn mini-player__btn--step" onClick={() => session.frameStep(-1)} disabled={!ready} title="往前一格（,）" aria-label="往前一格">
+                  <Icon icon={StepBack} size="sm" />
+                </button>
+                <button type="button" className="mini-player__btn mini-player__btn--step" onClick={() => session.frameStep(1)} disabled={!ready} title="往後一格（.）" aria-label="往後一格">
+                  <Icon icon={StepForward} size="sm" />
+                </button>
+              </>
+            )}
+            {session ? (
+              <button
+                type="button"
+                className={'mini-player__time mini-player__time--btn' + (session.timecode ? ' is-timecode' : '')}
+                onClick={session.toggleTimecode}
+                title={session.timecode
+                  ? `時間碼（${session.fps ? `${session.fps} 格 / 秒` : '還不知道幾格，先用 30 格 / 秒算'}）；按一下換回分:秒`
+                  : '按一下顯示時間碼（時:分:秒:格）'}
+              >{timeText}</button>
+            ) : (
+              <span className="mini-player__time">{formatClock(time)} / {formatClock(duration)}</span>
+            )}
             <span className="mini-player__grow" />
+            {session && (
+              <select
+                className="mini-player__rate"
+                value={String(session.speed)}
+                onChange={(e) => session.setSpeed(parseFloat(e.target.value))}
+                title="播放速度"
+                aria-label="播放速度"
+              >
+                {PLAYBACK_RATES.map(r => <option key={r} value={String(r)}>{rateLabel(r)}</option>)}
+                {!PLAYBACK_RATES.includes(session.speed as 0.5 | 1 | 2) && <option value={String(session.speed)}>{rateLabel(session.speed)}</option>}
+              </select>
+            )}
             <button
               type="button"
               className={'mini-player__btn' + (loop ? ' is-active' : '')}
@@ -298,10 +458,20 @@ export default function MiniPlayer({
               {flipBtn || <span className="mini-player__compare-hint">選一版，按 C 切換</span>}
             </div>
           )}
-          {onAddCommentAtTime && (
-            <button type="button" className="mini-player__comment" onClick={() => onAddCommentAtTime(player.video.currentTime)} disabled={!ready}>
-              <Icon icon={MessageSquarePlus} size="sm" /> 在 {formatClock(time)} 加留言
-            </button>
+          {(onAddCommentAtTime || review?.onDraw || rangesOn) && (
+            <div className="mini-player__actions">
+              {onAddCommentAtTime && (
+                <button type="button" className="mini-player__action mini-player__action--main" onClick={() => onAddCommentAtTime(player.video.currentTime)} disabled={!ready}>
+                  <Icon icon={MessageSquarePlus} size="sm" /> 在 {formatClock(time)} 加留言
+                </button>
+              )}
+              {review?.onDraw && (
+                <button type="button" className={'mini-player__action' + (session?.draft.active ? ' is-active' : '')} onClick={review.onDraw} disabled={!ready} title="暫停在這一格，在 3D 畫面上畫">
+                  <Icon icon={Pencil} size="sm" /> 畫記
+                </button>
+              )}
+              {rangeBtn}
+            </div>
           )}
         </>
       )}

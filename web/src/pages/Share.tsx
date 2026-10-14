@@ -1,8 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import * as api from '../lib/api';
-import type { Cue, CueState, SharePublicData, ShareRef } from '../lib/api';
-import StageScene from '../components/StageScene';
+import type { Cue, CueState, SharePublicData, ShareRef, SongComment } from '../lib/api';
+import StageScene, { type StageViewApi } from '../components/StageScene';
+import AnnotationLayer from '../components/AnnotationLayer';
+import GuestCommentsPanel from '../components/GuestCommentsPanel';
+import { useReviewSession } from '../lib/review/useReviewSession';
+import { playheadCommentId } from '../lib/review/playhead';
+import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
@@ -351,6 +356,49 @@ export default function Share() {
     cues, selectedCueId, refreshKey: cueRefresh, video: local.video,
   });
 
+  // ── 審片的播放控制（空白鍵、J / K / L、逐格、速度、時間碼）；製作打開「允許看的人留言」→ 還有留言、區段、畫記 ──
+  const allowComments = !!data?.allowComments;
+  const viewApiRef = useRef<StageViewApi | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [guestComments, setGuestComments] = useState<SongComment[]>([]);
+  const [pendingCommentTime, setPendingCommentTime] = useState<number | null>(null);
+  useEffect(() => { setGuestComments([]); }, [selectedSongId]);
+  const cueStep = useCallback((dir: 1 | -1) => {
+    if (!cues.length) return;
+    const idx = cues.findIndex(c => c.id === selectedCueId);
+    const next = dir > 0 ? (idx < 0 ? 0 : Math.min(idx + 1, cues.length - 1)) : (idx <= 0 ? 0 : idx - 1);
+    selectCue(cues[next]);
+  }, [cues, selectedCueId, selectCue]);
+  const focusComposer = useCallback(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }));
+  }, []);
+  const session = useReviewSession({
+    player: local, videoActive: versionVideoMode, resetKey: selectedSongId, viewApiRef,
+    versions: { items: versions.items, currentKey: selectedVersion?.key ?? null, select: versions.select },
+    beforeOpenVersion: () => chooseSource('version'),
+    cueId: selectedCueId, onCueStep: cueStep, onFocusComposer: allowComments ? focusComposer : undefined,
+  });
+  const guestRoots = useMemo(() => guestComments.filter(c => !c.parentId), [guestComments]);
+  const activeCommentId = versionVideoMode && allowComments ? playheadCommentId(guestRoots, local.time) : null;
+  const openedComment = session.selectedId ? guestComments.find(c => c.id === session.selectedId) ?? null : null;
+  const openComment = useCallback((c: SongComment) => {
+    void session.open(c);
+    const el = document.getElementById(`comment-${c.id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      el.classList.add('song-comment--flash');
+      setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
+    }
+  }, [session]);
+  const startDraw = useCallback(() => {
+    if (session.draft.start()) focusComposer();
+  }, [session.draft, focusComposer]);
+
   if (loading) return <div className="share-loading"><Icon icon={LoaderCircle} size="lg" spin /> 載入中…</div>;
 
   if (requiresPassword) {
@@ -391,7 +439,7 @@ export default function Share() {
         <span className="grow" />
         {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
         <a className="share-top__help" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
-        <span className="share-top__hint">公開預覽 · 唯讀</span>
+        <span className="share-top__hint">{data.allowComments ? '公開預覽 · 可以留言' : '公開預覽 · 唯讀'}</span>
       </header>
 
       {/* 檔案拖到頁面哪裡都收（左邊清單、舞台都可以）；清單裡拖曳排順序的不算（沒有 'Files'） */}
@@ -443,6 +491,7 @@ export default function Share() {
           </aside>
         )}
 
+        <div className="share-center">
         <main className="share-stage">
           <LedSourceSwitch
             source={source}
@@ -508,7 +557,17 @@ export default function Share() {
                 projectName={data.project.name}
                 ledCanvas={ledCanvas}
                 helpHref={helpUrl(HELP_ANCHORS.client)}
-              />
+                viewApiRef={viewApiRef}
+                transportKeys
+              >
+                <AnnotationLayer
+                  draft={session.draft}
+                  showing={session.showing}
+                  showingLabel={openedComment ? `${openedComment.author}${openedComment.time > 0 ? ` · ${formatClockShort(openedComment.time)}` : ''}` : undefined}
+                  onHideShowing={session.clearSelection}
+                  onDone={focusComposer}
+                />
+              </StageScene>
               {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
               {selectedVersion && (
                 <MiniPlayer
@@ -517,6 +576,12 @@ export default function Share() {
                   detail={versionByline(selectedVersion) || selectedVersion.title}
                   storageKey="sp_mini_player:share"
                   onRetry={retryVersion}
+                  comments={allowComments ? guestComments : undefined}
+                  onAddCommentAtTime={allowComments ? (t) => { setPendingCommentTime(t); focusComposer(); } : undefined}
+                  review={{
+                    session, activeId: activeCommentId, onOpenComment: openComment,
+                    onDraw: allowComments ? startDraw : undefined, ranges: allowComments,
+                  }}
                 />
               )}
             </div>
@@ -584,6 +649,27 @@ export default function Share() {
             </div>
           )}
         </main>
+        {allowComments && shareRef && selectedSongId && (
+          <GuestCommentsPanel
+            shareRef={shareRef}
+            accessToken={accessToken}
+            songId={selectedSongId}
+            session={session}
+            videoActive={versionVideoMode}
+            playing={local.playing}
+            videoId={selectedVersion?.kind === 'version' ? selectedVersion.id : null}
+            activeId={activeCommentId}
+            onOpen={openComment}
+            onStartDraw={startDraw}
+            composerRef={composerRef}
+            pendingTime={pendingCommentTime}
+            onConsumedPendingTime={() => setPendingCommentTime(null)}
+            onComments={setGuestComments}
+            onAuthError={onShareFetchError}
+            onDisabled={() => { setData(d => (d ? { ...d, allowComments: false } : d)); toast.info('製作把這個連結的留言關掉了'); }}
+          />
+        )}
+        </div>
       </div>
     </div>
   );

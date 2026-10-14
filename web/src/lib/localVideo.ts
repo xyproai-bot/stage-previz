@@ -43,6 +43,8 @@ export interface LoadUrlOptions {
   crossOrigin?: 'anonymous' | 'use-credentials';
   /** 載好了要不要自己開始播（預設要） */
   autoplay?: boolean;
+  /** 載好了先跳到這一秒（打開留言：停在留言的那一格） */
+  startAt?: number;
 }
 
 export interface LocalVideoState {
@@ -70,6 +72,9 @@ export interface LocalVideoState {
   seek: (t: number) => void;
   setLoop: (on: boolean) => void;
   setMuted: (on: boolean) => void;
+  /** 播放速度（0.5 / 1 / 2…）；換影片照舊 */
+  rate: number;
+  setRate: (r: number) => void;
 }
 
 export function useLocalVideo(): LocalVideoState {
@@ -91,11 +96,15 @@ export function useLocalVideo(): LocalVideoState {
   const [duration, setDuration] = useState(0);
   const [loop, setLoopState] = useState(true);
   const [muted, setMutedState] = useState(false);
+  const [rate, setRateState] = useState(1);
+  const rateRef = useRef(1);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     parkVideo(video);
     const onMeta = () => {
+      // 換來源時瀏覽器會把速度改回 1 → 照使用者選的
+      if (video.playbackRate !== rateRef.current) video.playbackRate = rateRef.current;
       setDuration(video.duration || 0);
       if (!video.videoWidth) {
         setError('這個影片只有聲音、沒有畫面');
@@ -213,6 +222,12 @@ export function useLocalVideo(): LocalVideoState {
     // crossOrigin 一定要在 src 之前設：LED 貼圖要讀畫面，沒有就會被瀏覽器擋
     video.crossOrigin = opts.crossOrigin ?? 'anonymous';
     video.src = url;
+    if (opts.startAt != null && opts.startAt > 0) {
+      const at = opts.startAt;
+      video.addEventListener('loadedmetadata', () => {
+        try { video.currentTime = Math.min(at, video.duration || at); } catch { /* 跳不過去就從頭 */ }
+      }, { once: true });
+    }
     if (opts.autoplay !== false) video.play().catch(() => { /* 自動播放被擋就等使用者按播放 */ });
   }, [video, revokeObjectUrl, resetState, setKey]);
 
@@ -227,9 +242,11 @@ export function useLocalVideo(): LocalVideoState {
     setKey(opts.key);
     video.crossOrigin = opts.crossOrigin ?? 'anonymous';
     video.src = url;
+    const to = opts.startAt != null ? opts.startAt : at;
+    const play = opts.autoplay ?? wasPlaying;
     video.addEventListener('loadedmetadata', () => {
-      try { video.currentTime = Math.min(at, video.duration || at); } catch { /* 跳不過去就從頭 */ }
-      if (wasPlaying) video.play().catch(() => {});
+      try { video.currentTime = Math.min(to, video.duration || to); } catch { /* 跳不過去就從頭 */ }
+      if (play) video.play().catch(() => {});
     }, { once: true });
   }, [video, revokeObjectUrl, setKey]);
 
@@ -248,10 +265,16 @@ export function useLocalVideo(): LocalVideoState {
 
   const setLoop = useCallback((on: boolean) => { video.loop = on; setLoopState(on); }, [video]);
   const setMuted = useCallback((on: boolean) => { video.muted = on; setMutedState(on); }, [video]);
+  const setRate = useCallback((r: number) => {
+    const v = Math.max(0.25, Math.min(4, Number(r) || 1));
+    rateRef.current = v;
+    video.playbackRate = v;
+    setRateState(v);
+  }, [video]);
   const getSrcKey = useCallback(() => srcKeyRef.current, []);
 
   return {
     video, fileName, srcKey, getSrcKey, ready, playing, time, duration, loop, muted, error,
-    load, loadUrl, replaceUrl, clear, togglePlay, play, pause, seek, setLoop, setMuted,
+    load, loadUrl, replaceUrl, clear, togglePlay, play, pause, seek, setLoop, setMuted, rate, setRate,
   };
 }

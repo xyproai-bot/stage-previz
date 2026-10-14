@@ -9,6 +9,7 @@ import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
 import type { SongReviewFields } from './reviewApi';
 import { friendlyError } from './songReview';
+import type { Annotation } from './review/annotations';
 
 // 開發時可以用 localStorage 'stagepreviz-api-base' override
 const DEFAULT_API_BASE = 'https://proxy.haimiaan.com';
@@ -913,15 +914,23 @@ export type CommentAnchor =
   | { type: 'world'; world: { x: number; y: number; z: number } }
   | { type: 'mesh'; meshName: string; offset?: { x: number; y: number; z: number } | null };
 
+/** 留言當下的 3D 攝影機（0026）：position / target 是場景座標，fov 是上下的角度，aspect = 畫面寬 / 高 */
+export interface CameraView {
+  position: [number, number, number];
+  target: [number, number, number];
+  fov: number;
+  aspect?: number;
+}
+
 export interface SongComment {
   id: string;
-  time: number;            // 影片秒數（無片時填 0）
+  time: number;            // 影片秒數（無片時填 0）；區段留言 = 開始
   x: number;               // 0-1 螢幕座標（screen anchor 用）
   y: number;
   text: string;
-  author: string;          // 顯示名稱
+  author: string;          // 顯示名稱（訪客：「訪客：小李（給經紀人）」）
   email: string | null;
-  role: 'designer' | 'director' | 'animator';
+  role: 'designer' | 'director' | 'animator' | 'guest';
   createdAt: string;
   authorUserId?: string;   // 留言的人（後台依登入的人填；很舊的留言沒有）
   anchor?: CommentAnchor;  // 3D 錨點
@@ -937,6 +946,39 @@ export interface SongComment {
   resolvedVersion?: number;
   resolvedByUserId?: string;
   kind?: 'needs_changes';   // 導演按「需修改」時寫的原因
+  // 審片像 Frame.io（0026；舊留言沒有）
+  timeEnd?: number;         // 區段留言的結束（0:12–0:18）
+  view?: CameraView;        // 留言當下的 3D 視角（點留言時飛過去）
+  cueId?: string;           // 留言當下的 cue
+  annotation?: Annotation;  // 畫記（畫在 3D 畫面上的）
+  thumbUrl?: string;        // 縮圖（相對路徑，前面接 apiBase()）；含畫記
+  guest?: { name: string; linkName: string };  // 分享連結的訪客留的
+}
+
+/** 留言多帶的（0026）：區段、3D 視角、cue、畫記、縮圖（data:image/jpeg;base64,…） */
+export interface CommentExtras {
+  timeEnd?: number | null;
+  view?: CameraView | null;
+  cueId?: string | null;
+  annotation?: Annotation | null;
+  thumbnail?: string | null;
+}
+
+/** 有帶才放進要送的 JSON（舊版後台看不懂也沒關係） */
+export function commentExtrasBody(x: CommentExtras): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (x.timeEnd != null) out.timeEnd = x.timeEnd;
+  if (x.view) out.view = x.view;
+  if (x.cueId) out.cueId = x.cueId;
+  if (x.annotation && x.annotation.shapes.length) out.annotation = x.annotation;
+  if (x.thumbnail) out.thumbnail = x.thumbnail;
+  return out;
+}
+
+/** 縮圖網址（相對 → 完整）；沒有 = null */
+export function commentThumbSrc(c: Pick<SongComment, 'thumbUrl'>): string | null {
+  if (!c.thumbUrl) return null;
+  return /^https?:/.test(c.thumbUrl) ? c.thumbUrl : apiBase() + c.thumbUrl;
 }
 
 export function songCommentSession(projectId: string, songId: string): string {
@@ -991,7 +1033,7 @@ export async function postSongComment(
     videoId?: string | null;
     /** 回覆哪一則 */
     parentId?: string | null;
-  }
+  } & CommentExtras
 ): Promise<SongComment[]> {
   const c: Record<string, unknown> = {
     id: 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
@@ -1006,6 +1048,7 @@ export async function postSongComment(
   if (comment.mentions && comment.mentions.length > 0) c.mentions = comment.mentions;
   if (comment.videoId) c.videoId = comment.videoId;
   if (comment.parentId) c.parentId = comment.parentId;
+  Object.assign(c, commentExtrasBody(comment));
   const data = await commentsFetch<{ comments: SongComment[] }>(
     songCommentSession(projectId, songId),
     { method: 'POST', body: JSON.stringify({ comment: c }) }
@@ -1202,6 +1245,12 @@ export interface ShareLink {
   viewCount: number;
   lastViewedAt: string | null;
   createdAt: string;
+  /** 允許看的人留言（0026；舊版 worker 沒這欄 → undefined = 關） */
+  allowComments?: boolean;
+  /** 連結名稱（例：給經紀人；團隊看訪客留言時顯示） */
+  label?: string | null;
+  /** 從這條連結留了幾則 */
+  guestCommentCount?: number;
 }
 
 export async function listShareLinks(projectId: string): Promise<ShareLink[]> {
@@ -1209,7 +1258,7 @@ export async function listShareLinks(projectId: string): Promise<ShareLink[]> {
   return Array.isArray(data?.links) ? data.links : [];
 }
 
-export async function createShareLink(projectId: string, input: { songId?: string | null; password?: string; expiresInDays?: number; slug?: string | null }): Promise<{ token: string; slug?: string | null; expiresAt: string | null }> {
+export async function createShareLink(projectId: string, input: { songId?: string | null; password?: string; expiresInDays?: number; slug?: string | null; allowComments?: boolean; label?: string | null }): Promise<{ token: string; slug?: string | null; expiresAt: string | null }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/share-links`, {
     method: 'POST',
     body: JSON.stringify(input || {}),
@@ -1224,6 +1273,14 @@ export async function updateShareLinkSlug(projectId: string, token: string, slug
   });
 }
 
+/** 改「允許看的人留言」（打開只有製作）、連結名稱 */
+export async function updateShareLink(projectId: string, token: string, patch: { allowComments?: boolean; label?: string | null }): Promise<{ allowComments: boolean; label: string | null }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(token)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+}
+
 export async function deleteShareLink(projectId: string, token: string): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(token)}`, { method: 'DELETE' });
 }
@@ -1231,7 +1288,7 @@ export async function deleteShareLink(projectId: string, token: string): Promise
 /** 分享頁是用哪種網址打開的：舊式 /share/<連結碼> 或好讀 /s/<網址名稱> */
 export type ShareRef = { kind: 'token' | 'slug'; key: string };
 
-function shareApiPath(ref: ShareRef): string {
+export function shareApiPath(ref: ShareRef): string {
   return ref.kind === 'slug'
     ? `/api/s/${encodeURIComponent(ref.key)}`
     : `/api/share/${encodeURIComponent(ref.key)}`;
@@ -1257,9 +1314,11 @@ export interface SharePublicData {
    * 不用每次都送密碼；影片網址（streamUrl）後台已經接好通行證。沒密碼的連結 = null；舊版 worker 沒有 → undefined
    */
   access?: { token: string; expiresAt: number } | null;
+  /** 製作有沒有打開「允許看的人留言」（0026；舊版 worker 沒有 → undefined = 沒開） */
+  allowComments?: boolean;
 }
 
-async function shareError(r: Response): Promise<Error & { status?: number; requiresPassword?: boolean }> {
+export async function shareError(r: Response): Promise<Error & { status?: number; requiresPassword?: boolean }> {
   const err = await r.json().catch(() => ({} as { error?: string; requiresPassword?: boolean }));
   const e: Error & { status?: number; requiresPassword?: boolean } = new Error(err.error || `HTTP ${r.status}`);
   e.status = r.status;
@@ -1268,7 +1327,7 @@ async function shareError(r: Response): Promise<Error & { status?: number; requi
 }
 
 /** 分享連結的通行證 header（密碼只在第一次 getSharePublicData 送，之後都用通行證） */
-function shareAccessHeaders(access?: string): Record<string, string> {
+export function shareAccessHeaders(access?: string): Record<string, string> {
   return access ? { 'x-share-access': access } : {};
 }
 

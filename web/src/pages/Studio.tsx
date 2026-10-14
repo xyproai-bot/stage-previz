@@ -5,7 +5,13 @@ import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } fro
 import type { ProjectMember, ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
-import StageScene from '../components/StageScene';
+import StageScene, { type StageViewApi } from '../components/StageScene';
+import AnnotationLayer from '../components/AnnotationLayer';
+import { CommentFilterBar, ReviewCompose, readFollow, saveFollow, type StatusFilter } from '../components/ReviewCompose';
+import ExportCommentsDialog from '../components/ExportCommentsDialog';
+import { useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
+import { playheadCommentId } from '../lib/review/playhead';
+import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import AddVideoDialog from '../components/AddVideoDialog';
@@ -585,6 +591,60 @@ function StudioInner({ projectId }: { projectId: string }) {
     if (c) selectCueByUser(c);
   }, [masterCues, selectCueByUser]);
 
+  // ── 審片：播放快捷鍵（空白鍵、J / K / L、, / .、I / O）、Shift+J / K 切 cue、[ / ] 切歌、區段、打開留言、畫記 ──
+  const viewApiRef = useRef<StageViewApi | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const [pendingCommentTime, setPendingCommentTime] = useState<number | null>(null);
+  const cueStep = useCallback((dir: 1 | -1) => {
+    if (!masterCues.length) return;
+    const idx = masterCues.findIndex(c => c.id === selectedCueId);
+    const next = dir > 0
+      ? (idx < 0 ? 0 : Math.min(idx + 1, masterCues.length - 1))
+      : (idx <= 0 ? 0 : idx - 1);
+    selectCueByUser(masterCues[next]);
+  }, [masterCues, selectedCueId, selectCueByUser]);
+  const songStep = useCallback((dir: 1 | -1) => {
+    if (!visibleSongs.length) return;
+    const idx = visibleSongs.findIndex(s => s.id === selectedSongId);
+    const next = dir > 0
+      ? (idx < 0 ? 0 : Math.min(idx + 1, visibleSongs.length - 1))
+      : (idx <= 0 ? 0 : idx - 1);
+    setSelectedSongId(visibleSongs[next].id);
+  }, [visibleSongs, selectedSongId]);
+  const focusComposer = useCallback(() => {
+    setTab('review');
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }));
+  }, []);
+  const session = useReviewSession({
+    player, videoActive: versionVideoMode, resetKey: selectedSongId, viewApiRef,
+    versions: { items: versions.items, currentKey: selectedVersion?.key ?? null, select: versions.select },
+    beforeOpenVersion: () => chooseSource('version'),
+    cueId: selectedCueId, onCueStep: cueStep, onSongStep: songStep, onFocusComposer: focusComposer,
+  });
+  const selectedRootComments = useMemo(() => (selectedComments ?? []).filter(c => !c.parentId), [selectedComments]);
+  const activeCommentId = versionVideoMode ? playheadCommentId(selectedRootComments, player.time) : null;
+  const openedComment = session.selectedId ? (selectedComments ?? []).find(c => c.id === session.selectedId) ?? null : null;
+  const openComment = useCallback((c: SongComment) => {
+    setTab('review');
+    void session.open(c);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`comment-${c.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        el.classList.add('song-comment--flash');
+        setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
+      }
+    });
+  }, [session]);
+  const startDraw = useCallback(() => {
+    if (session.draft.start()) focusComposer();
+  }, [session.draft, focusComposer]);
+
   // ── 交影片（admin / 負責這首歌的動畫師；歌沒指派人 = 專案裡的動畫師都可以）──
   const videoPerm = { accountRole: user?.role ?? null, projectRole, userId: user?.id ?? null, song: selectedSong };
   const canAdd = canAddVideo(videoPerm);
@@ -739,34 +799,7 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   /* ──────────── UI ──────────── */
 
-  // 鍵盤：j/k 切歌、Shift+J/K 切 cue
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-      const k = e.key.toLowerCase();
-      if (k !== 'j' && k !== 'k') return;
-      e.preventDefault();
-      if (e.shiftKey) {
-        if (!masterCues.length) return;
-        const idx = masterCues.findIndex(c => c.id === selectedCueId);
-        const next = k === 'j'
-          ? (idx < 0 ? 0 : Math.min(idx + 1, masterCues.length - 1))
-          : (idx <= 0 ? 0 : idx - 1);
-        selectCueByUser(masterCues[next]);
-      } else {
-        if (!visibleSongs.length) return;
-        const idx = visibleSongs.findIndex(s => s.id === selectedSongId);
-        const next = k === 'j'
-          ? (idx < 0 ? 0 : Math.min(idx + 1, visibleSongs.length - 1))
-          : (idx <= 0 ? 0 : idx - 1);
-        setSelectedSongId(visibleSongs[next].id);
-      }
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [masterCues, visibleSongs, selectedCueId, selectedSongId, selectCueByUser]);
+  // 鍵盤（[ / ] 切歌、Shift+J / K 切 cue、播放快捷鍵）在上面的 useReviewSession
 
   const topBar = (
     <header className="studio-top">
@@ -919,7 +952,7 @@ function StudioInner({ projectId }: { projectId: string }) {
           </ul>
 
           <div className="studio-songs__hint">
-            <span className="studio-songs__hint-item"><kbd>J</kbd>/<kbd>K</kbd> 切歌</span>
+            <span className="studio-songs__hint-item"><kbd>[</kbd>/<kbd>]</kbd> 切歌</span>
             <span className="studio-songs__hint-sep" aria-hidden="true">·</span>
             <span className="studio-songs__hint-item"><kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd> 切 cue</span>
           </div>
@@ -1036,7 +1069,17 @@ function StudioInner({ projectId }: { projectId: string }) {
                   projectName={projectName}
                   ledCanvas={view.ledCanvas}
                   onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
-                />
+                  viewApiRef={viewApiRef}
+                  transportKeys
+                >
+                  <AnnotationLayer
+                    draft={session.draft}
+                    showing={session.showing}
+                    showingLabel={openedComment ? `${openedComment.author}${openedComment.time > 0 ? ` · ${formatClockShort(openedComment.time)}` : ''}` : undefined}
+                    onHideShowing={session.clearSelection}
+                    onDone={focusComposer}
+                  />
+                </StageScene>
                 {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
                 {selectedVersion && (
                   <MiniPlayer
@@ -1046,6 +1089,14 @@ function StudioInner({ projectId }: { projectId: string }) {
                     storageKey="sp_mini_player:studio"
                     onRetry={retryVersion}
                     compare={compare}
+                    comments={selectedComments}
+                    onAddCommentAtTime={canPostComment({ role: projectRole, userId: user?.id ?? null, song: selectedSong })
+                      ? (t) => { setPendingCommentTime(t); focusComposer(); }
+                      : undefined}
+                    review={{
+                      session, activeId: activeCommentId, onOpenComment: openComment,
+                      onDraw: canPostComment({ role: projectRole, userId: user?.id ?? null, song: selectedSong }) ? startDraw : undefined,
+                    }}
                   />
                 )}
                 {dragOver && (
@@ -1175,7 +1226,7 @@ function StudioInner({ projectId }: { projectId: string }) {
               </EmptyState>
             ) : (
               <EmptyState icon={Music} title="先挑一首歌">
-                從歌曲清單點一首歌，3D 舞台、影片和留言會出現在這裡。鍵盤 J / K 也可以切歌。
+                從歌曲清單點一首歌，3D 舞台、影片和留言會出現在這裡。鍵盤 [ / ] 也可以切歌。
               </EmptyState>
             )
           )}
@@ -1244,6 +1295,16 @@ function StudioInner({ projectId }: { projectId: string }) {
                 hasVersions={versions.hasVersions}
                 focusComment={focusComment}
                 onSeek={source === 'version' ? (t) => player.seek(t) : undefined}
+                session={session}
+                videoActive={versionVideoMode}
+                playing={player.playing}
+                activeId={activeCommentId}
+                onOpen={openComment}
+                onStartDraw={startDraw}
+                composerRef={composerRef}
+                pendingTime={pendingCommentTime}
+                onConsumedPendingTime={() => setPendingCommentTime(null)}
+                projectName={projectName}
               />
             )}
             {tab === 'review' && !selectedSong && (
@@ -1316,6 +1377,7 @@ function CuesTab({
 function ReviewTab({
   projectId, song, user, projectRole, members, comments, onCommentsChange, onRefreshComments,
   onChangeStatus, onSubmitForReview, viewed, latest, hasVersions, focusComment, onSeek,
+  session, videoActive, playing, activeId, onOpen, onStartDraw, composerRef, pendingTime, onConsumedPendingTime, projectName,
 }: {
   projectId: string;
   song: Song;
@@ -1337,8 +1399,33 @@ function ReviewTab({
   focusComment: { id: string; nonce: number } | null;
   /** 點留言上的影片時間（正在放歌曲影片時才有） */
   onSeek?: (t: number) => void;
+  /** 審片（區段、畫記、視角、打開留言） */
+  session: ReviewSession;
+  videoActive: boolean;
+  playing: boolean;
+  activeId: string | null;
+  onOpen: (c: SongComment) => void;
+  onStartDraw: () => void;
+  composerRef: React.RefObject<HTMLTextAreaElement>;
+  /** 小播放器「在 0:12 加留言」 */
+  pendingTime: number | null;
+  onConsumedPendingTime: () => void;
+  projectName: string;
 }) {
   const [note, setNote] = useState('');
+  const [attachTime, setAttachTime] = useState<number | null>(null);
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>(() => {
+    try { return (localStorage.getItem('sp_comment_filter_studio') as StatusFilter) || 'all'; } catch { return 'all'; }
+  });
+  useEffect(() => { try { localStorage.setItem('sp_comment_filter_studio', filterStatus); } catch { /* 只是下次不記得 */ } }, [filterStatus]);
+  const [follow, setFollowState] = useState(readFollow);
+  const setFollow = (on: boolean) => { setFollowState(on); saveFollow(on); };
+  const [exportOpen, setExportOpen] = useState(false);
+  useEffect(() => {
+    if (pendingTime === null) return;
+    setAttachTime(pendingTime);
+    onConsumedPendingTime();
+  }, [pendingTime, onConsumedPendingTime]);
   const [posting, setPosting] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [scope, setScope] = useState<CommentScope>(() => defaultScope(hasVersions));
@@ -1357,6 +1444,7 @@ function ReviewTab({
   useEffect(() => {
     if (lastSongIdRef.current !== song.id) {
       setNote('');
+      setAttachTime(null);
       lastSongIdRef.current = song.id;
       scopeTouchedRef.current = false;
       setScope(defaultScope(hasVersions));
@@ -1370,11 +1458,15 @@ function ReviewTab({
     if (!text) return;
     setPosting(true);
     try {
+      // 帶上區段、3D 視角、cue、畫記、縮圖（縮圖在按送出時抓一次；有畫記就用畫的那一格）
+      const extras = session.collect(videoActive ? attachTime : null);
       const updated = await api.postSongComment(projectId, song.id, {
-        text, mentions: extractMentions(text, members), videoId: viewed?.id ?? null,
+        text, mentions: extractMentions(text, members), videoId: viewed?.id ?? null, ...extras,
       });
       onCommentsChange(updated);
       setNote('');
+      setAttachTime(null);
+      session.afterSend();
     } catch (e) {
       toast.error('留言失敗：' + friendlyError(e));
     } finally {
@@ -1410,7 +1502,13 @@ function ReviewTab({
   const threads = useMemo(() => buildThreads(list), [list]);
   const viewedVersion = viewed ? { id: viewed.id, version: viewed.version } : null;
   const effectiveScope: CommentScope = viewedVersion ? scope : 'all';
-  const visible = filterAndSortThreads(scopeThreads(threads, effectiveScope, viewedVersion), { sort: 'newest' });
+  const scopedThreads = scopeThreads(threads, effectiveScope, viewedVersion);
+  const visible = filterAndSortThreads(scopedThreads, { status: filterStatus, sort: 'newest' });
+  const statusCounts = {
+    open: scopedThreads.filter(t => t.root.status !== 'resolved').length,
+    resolved: scopedThreads.filter(t => t.root.status === 'resolved').length,
+    all: scopedThreads.length,
+  };
   const versionCount = viewedVersion ? scopeThreads(threads, 'version', viewedVersion).length : 0;
 
   // 通知點進來 → 這一版看不到就切到「全部」，捲過去閃一下
@@ -1493,10 +1591,26 @@ function ReviewTab({
             onClick={() => chooseScope('all')}
           >全部 {threads.length}</button>
         </div>
+        <CommentFilterBar
+          status={filterStatus}
+          onStatus={setFilterStatus}
+          counts={statusCounts}
+          follow={follow}
+          onFollow={setFollow}
+          onExport={list.length > 0 ? () => setExportOpen(true) : undefined}
+        />
 
         {canPost ? (
           <div className="studio-review__compose">
+            <ReviewCompose
+              session={session}
+              videoActive={videoActive}
+              attachTime={videoActive ? attachTime : null}
+              onClearTime={() => setAttachTime(null)}
+              onStartDraw={onStartDraw}
+            />
             <textarea
+              ref={composerRef}
               placeholder={canSubmit
                 ? '寫一段給導演 / 製作的話，按「提交審查」會一起送出'
                 : `在這裡留言${viewed ? `（會記在 ${viewed.label}）` : ''}；打 @ 加名字可以提及成員`}
@@ -1531,12 +1645,28 @@ function ReviewTab({
             latest={latest}
             onChange={onCommentsChange}
             onSeek={onSeek}
+            onOpen={onOpen}
+            selectedId={session.selectedId}
+            activeId={activeId}
+            autoScroll={follow && playing}
             emptyText={threads.length === 0
               ? '還沒有留言'
+              : visible.length === 0 && scopedThreads.length > 0
+              ? `沒有符合篩選的留言（共 ${scopedThreads.length} 則）`
               : `${viewed?.label ?? '這一版'} 沒有要改的留言（按「全部」看所有版本的 ${threads.length} 則）`}
           />
         )}
       </section>
+      {exportOpen && (
+        <ExportCommentsDialog
+          onClose={() => setExportOpen(false)}
+          projectName={projectName}
+          songTitle={`${song.code ? `${song.code} ` : ''}${song.name}`}
+          comments={list}
+          viewed={viewed ? { id: viewed.id, version: viewed.version, label: viewed.label } : null}
+          fps={session.fps}
+        />
+      )}
     </div>
   );
 }

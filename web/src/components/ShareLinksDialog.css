@@ -221,3 +221,23 @@
   .share-slug__input input { flex-basis: 100%; }
   .share-slug__affix:first-child { display: none; }
 }
+
+/* 0026：連結名稱、允許看的人留言 */
+.share-dlg__row .share-dlg__label-field { grid-column: 1 / -1; }
+.share-dlg__allow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 4px 0 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: rgba(90, 169, 255, 0.06);
+  cursor: pointer;
+}
+.share-dlg__allow input { margin-top: 3px; accent-color: var(--accent); }
+.share-dlg__allow span { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.share-dlg__allow small { color: var(--text-dim); font-size: 11.5px; line-height: 1.5; }
+.share-link-row__label { display: flex; align-items: center; gap: 4px; font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+.share-link-row__comments { color: #8ec5ff; }
+.share-link-row__actions .btn.is-on { color: #8ec5ff; border-color: rgba(90, 169, 255, 0.5); }

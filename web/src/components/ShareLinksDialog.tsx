@@ -7,7 +7,7 @@ import {
 } from '../lib/shareSlug';
 import { shareSlugUrl, shareTokenUrl } from '../lib/siteUrl';
 import { parseServerTime } from '../lib/serverTime';
-import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, Music, Pencil, Trash2, X } from 'lucide-react';
+import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, MessageSquareOff, MessageSquareText, Music, Pencil, Tag, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
 import { confirmDialog, promptDialog } from './dialogs';
 import './ShareLinksDialog.css';
@@ -53,6 +53,9 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
   const [songId, setSongId] = useState<string>('');
   const [password, setPassword] = useState('');
   const [expiresInDays, setExpiresInDays] = useState<number>(0); // 0 = 永久
+  // 0026：連結名稱（團隊看訪客留言時顯示）、允許看的人留言（預設關）
+  const [label, setLabel] = useState('');
+  const [allowComments, setAllowComments] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createDraft, setCreateDraft] = useState<SlugDraft>(() => newDraft(projectName));
   // 名稱還沒被改過 → 專案名稱晚一點才拿到時跟著換
@@ -96,8 +99,12 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
         password: password || undefined,
         expiresInDays: expiresInDays > 0 ? expiresInDays : undefined,
         slug: createSlug || null,
+        label: label.trim() || null,
+        allowComments,
       });
       setPassword('');
+      setLabel('');
+      setAllowComments(false);
       // 下一條連結換一組隨機碼（名稱留著）
       setCreateDraft(d => ({ ...d, suffix: randomSlugSuffix() }));
       await refresh();
@@ -150,6 +157,41 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
     void saveSlug(l, null);
   }
 
+  async function toggleComments(l: ShareLink) {
+    const on = !l.allowComments;
+    if (on && !(await confirmDialog({
+      title: '允許看的人留言？',
+      message: '拿到這條連結的人寫一個名字，就能在影片上留言、畫記（不用帳號）。他們只看得到從這條連結留的留言、和你們在底下的回覆；團隊的其他留言看不到。之後可以隨時關掉。',
+      confirmLabel: '允許留言',
+    }))) return;
+    try {
+      await api.updateShareLink(projectId, l.token, { allowComments: on });
+      toast.success(on ? '這條連結的人可以留言了' : '已關掉這條連結的留言（之前的留言還在）');
+      await refresh();
+    } catch (e) {
+      toast.error('沒有改成：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function editLabel(l: ShareLink) {
+    const next = await promptDialog({
+      title: '連結的名稱',
+      message: '給誰看的（例：給經紀人、給主辦）。只有團隊看得到，訪客留言時會寫「訪客：名字（這個名稱）」。',
+      label: '名稱',
+      defaultValue: l.label || '',
+      maxLength: 40,
+      confirmLabel: '儲存',
+    });
+    if (next === null || next === undefined) return;
+    try {
+      await api.updateShareLink(projectId, l.token, { label: next.trim() || null });
+      toast.success(next.trim() ? '名稱改好了' : '已拿掉名稱');
+      await refresh();
+    } catch (e) {
+      toast.error('存不起來：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   async function copyLink(url: string) {
     try {
       await navigator.clipboard.writeText(url);
@@ -181,7 +223,7 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
         </header>
         <div className="dlg__body">
           <p className="share-dlg__hint">
-            建立連結後傳給外部的人，對方不用登入就能看（只能看、不能改；包含 3D 舞台和 cue 切換）
+            建立連結後傳給外部的人，對方不用登入就能看（包含 3D 舞台和 cue 切換；不能改）。勾「允許看的人留言」的連結，對方也可以留言。
           </p>
 
           {/* Create form */}
@@ -215,11 +257,30 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                 </select>
               </label>
             </div>
+            <div className="share-dlg__row">
+              <label className="share-dlg__label-field">
+                <span>名稱（可選，只有團隊看得到）</span>
+                <input
+                  type="text"
+                  value={label}
+                  onChange={e => setLabel(e.target.value)}
+                  placeholder="例：給經紀人"
+                  maxLength={40}
+                />
+              </label>
+            </div>
             <SlugFields
               draft={createDraft}
               onChange={(d) => { if (d.base !== createDraft.base) createBaseTouched.current = true; setCreateDraft(d); }}
               allowEmpty
             />
+            <label className="share-dlg__allow">
+              <input type="checkbox" checked={allowComments} onChange={e => setAllowComments(e.target.checked)} />
+              <span>
+                <strong>允許看的人留言</strong>
+                <small>寫一個名字就能在影片上留言、畫記；只看得到從這條連結留的留言和你們的回覆。你們會收到通知。</small>
+              </span>
+            </label>
             <button className="btn btn--primary btn--sm" onClick={handleCreate} disabled={creating || !!createProblem}>
               {creating ? '建立中…' : '+ 建立分享連結'}
             </button>
@@ -245,6 +306,7 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                     <li key={l.token} className={'share-link-row' + (expired ? ' is-expired' : '')}>
                       <div className="share-link-row__top">
                         <div className="share-link-row__main">
+                          {l.label && <div className="share-link-row__label"><Icon icon={Tag} size="xs" /> {l.label}</div>}
                           <code className="share-link-row__url" title={mainUrl}>{mainUrl}</code>
                           {prettyUrl && (
                             <div className="share-link-row__alt">
@@ -260,6 +322,8 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                             {l.hasPassword && <> · <Icon icon={Lock} size="xs" /> 有密碼</>}
                             {l.expiresAt && <> · <Icon icon={Clock} size="xs" /> {expired ? '已過期' : `到期 ${new Date(parseServerTime(l.expiresAt)).toLocaleDateString('zh-TW')}`}</>}
                             <> · <Icon icon={Eye} size="xs" /> {l.viewCount} 次瀏覽</>
+                            {l.allowComments && <> · <span className="share-link-row__comments"><Icon icon={MessageSquareText} size="xs" /> 可以留言{l.guestCommentCount ? `（${l.guestCommentCount} 則）` : ''}</span></>}
+                            {!l.allowComments && !!l.guestCommentCount && <> · <Icon icon={MessageSquareOff} size="xs" /> 留言已關（之前 {l.guestCommentCount} 則）</>}
                             {l.lastViewedAt && ` · 上次 ${formatRelative(l.lastViewedAt)}`}
                           </div>
                         </div>
@@ -272,6 +336,14 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                             title={l.slug ? '改好讀網址' : '加一個好讀網址'}
                             aria-label={l.slug ? '改好讀網址' : '加一個好讀網址'}
                           ><Icon icon={Pencil} /></button>
+                          <button
+                            className={'btn btn--ghost btn--sm' + (l.allowComments ? ' is-on' : '')}
+                            onClick={() => toggleComments(l)}
+                            title={l.allowComments ? '關掉「允許看的人留言」' : '允許看的人留言'}
+                            aria-label={l.allowComments ? '關掉「允許看的人留言」' : '允許看的人留言'}
+                            aria-pressed={!!l.allowComments}
+                          ><Icon icon={l.allowComments ? MessageSquareText : MessageSquareOff} /></button>
+                          <button className="btn btn--ghost btn--sm" onClick={() => editLabel(l)} title="改連結的名稱" aria-label="改連結的名稱"><Icon icon={Tag} /></button>
                           <button className="btn btn--ghost btn--sm" onClick={() => handleDelete(l.token)} title="刪除這條連結" aria-label="刪除這條連結"><Icon icon={Trash2} /></button>
                         </div>
                       </div>

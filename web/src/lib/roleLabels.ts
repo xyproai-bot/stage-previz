@@ -8,9 +8,10 @@ export const ROLE_LABEL: Record<UserRole, string> = {
   director: '導演',
 };
 
-/** 任何角色代號 → 顯示名稱；舊留言的 designer、admin、不認得的 → 製作 */
+/** 任何角色代號 → 顯示名稱；分享連結的訪客 → 訪客；舊留言的 designer、admin、不認得的 → 製作 */
 export function roleLabel(role: string | null | undefined): string {
   if (role === 'animator') return ROLE_LABEL.animator;
   if (role === 'director') return ROLE_LABEL.director;
+  if (role === 'guest') return '訪客';
   return ROLE_LABEL.admin;
 }

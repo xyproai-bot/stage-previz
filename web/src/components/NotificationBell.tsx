@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AtSign, Bell, BellOff, CheckCheck, CircleCheck, CornerDownRight, Film, RotateCcw, UserPlus, X } from 'lucide-react';
+import { AtSign, Bell, BellOff, CheckCheck, CircleCheck, CornerDownRight, Film, MessageSquareText, RotateCcw, UserPlus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Icon from './Icon';
 import EmptyState from './EmptyState';
@@ -30,6 +30,7 @@ const KIND_ICON: Record<NotificationKind, LucideIcon> = {
   approved: CircleCheck,
   new_version: Film,
   assigned: UserPlus,
+  guest_comment: MessageSquareText,
 };
 
 interface Props {
@@ -184,7 +185,7 @@ function NotificationBellInner({ placement = 'down-right', className }: Props) {
               <div className="notif__empty">讀取中…</div>
             ) : items.length === 0 ? (
               <EmptyState icon={BellOff} title="還沒有通知" size="compact">
-                有人 @ 你、你的歌被退或通過、有新版等你審、歌指派給你時，會出現在這裡。
+                有人 @ 你、你的歌被退或通過、有新版等你審、歌指派給你、分享連結的訪客留言時，會出現在這裡。
               </EmptyState>
             ) : (
               groups.map(g => (

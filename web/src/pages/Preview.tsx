@@ -5,7 +5,13 @@ import type { Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import type { ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
-import StageScene from '../components/StageScene';
+import StageScene, { type StageViewApi } from '../components/StageScene';
+import AnnotationLayer from '../components/AnnotationLayer';
+import { CommentFilterBar, ReviewCompose, readFollow, saveFollow, type StatusFilter } from '../components/ReviewCompose';
+import ExportCommentsDialog from '../components/ExportCommentsDialog';
+import { useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
+import { playheadCommentId } from '../lib/review/playhead';
+import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import AddVideoDialog from '../components/AddVideoDialog';
@@ -47,7 +53,7 @@ import Icon, { StatusDot } from '../components/Icon';
 import HelpLink from '../components/HelpLink';
 import { HELP_ANCHORS } from '../lib/helpLinks';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Clock, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin, Pause, Play,
+  ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin, Pause, Play,
   Plus, RefreshCw, Square, X,
 } from 'lucide-react';
 import './Preview.css';
@@ -873,36 +879,49 @@ function SongDetail({
     projectId, songId: song.id, cues: cuesReady ? cues : EMPTY_CUES, selectedCueId, video: player.video, live,
   });
 
-  // 鍵盤：Shift+J/K 切 cue（有在放影片的話影片跟著跳到那個 cue 的時間）
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
-      if (!e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
-      const k = e.key.toLowerCase();
-      if (k !== 'j' && k !== 'k') return;
-      if (!cues.length) return;
-      e.preventDefault();
-      const idx = cues.findIndex(c => c.id === selectedCueId);
-      const next = k === 'j'
-        ? (idx < 0 ? 0 : Math.min(idx + 1, cues.length - 1))
-        : (idx <= 0 ? 0 : idx - 1);
-      selectCueByUser(cues[next]);
-    }
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+  // ── 審片：播放快捷鍵（空白鍵、J / K / L、, / .、I / O、Shift+J / K 切 cue）、區段、打開留言、畫記（lib/review/useReviewSession.ts）──
+  const viewApiRef = useRef<StageViewApi | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  const cueStep = useCallback((dir: 1 | -1) => {
+    if (!cues.length) return;
+    const idx = cues.findIndex(c => c.id === selectedCueId);
+    const next = dir > 0
+      ? (idx < 0 ? 0 : Math.min(idx + 1, cues.length - 1))
+      : (idx <= 0 ? 0 : idx - 1);
+    selectCueByUser(cues[next]);
   }, [cues, selectedCueId, selectCueByUser]);
+  const focusComposer = useCallback(() => {
+    requestAnimationFrame(() => {
+      const el = composerRef.current;
+      if (!el) return;
+      el.focus({ preventScroll: true });
+      el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    });
+  }, []);
+  const session = useReviewSession({
+    player, videoActive: videoMode, resetKey: song.id, viewApiRef,
+    versions: { items: versions.items, currentKey: selected?.key ?? null, select: versions.select },
+    cueId: selectedCueId, onCueStep: cueStep, onFocusComposer: focusComposer,
+  });
+  // 播放時離播放頭最近的留言（清單、時間軸上亮起來）
+  const rootComments = useMemo(() => comments.filter(c => !c.parentId), [comments]);
+  const activeCommentId = videoMode ? playheadCommentId(rootComments, player.time) : null;
+  const openedComment = session.selectedId ? comments.find(c => c.id === session.selectedId) ?? null : null;
 
-  // 點時間軸上的留言點 → 影片跳過去、捲到那則留言
-  const handlePinClick = useCallback((c: SongComment) => {
-    player.seek(c.time);
+  // 打開一則留言：換版本、跳到那一格、攝影機飛過去、疊上畫記、區段循環；清單捲過去閃一下
+  const openComment = useCallback((c: SongComment) => {
+    void session.open(c);
     const el = document.getElementById(`comment-${c.id}`);
     if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
       el.classList.add('song-comment--flash');
       setTimeout(() => el.classList.remove('song-comment--flash'), 1500);
     }
-  }, [player]);
+  }, [session]);
+  const handlePinClick = openComment;
+  const startDraw = useCallback(() => {
+    if (session.draft.start()) focusComposer();
+  }, [session.draft, focusComposer]);
 
   // ── 交影片（admin / 負責的動畫師；導演只能看）──
   const perm = { accountRole: user?.role ?? null, projectRole, userId: user?.id ?? null, song };
@@ -1067,7 +1086,17 @@ function SongDetail({
                 })}
                 ledVideo={videoMode && player.ready ? player.video : null}
                 poseAtFrame={poseAtFrame}
-              />
+                viewApiRef={viewApiRef}
+                transportKeys
+              >
+                <AnnotationLayer
+                  draft={session.draft}
+                  showing={session.showing}
+                  showingLabel={openedComment ? `${openedComment.author}${openedComment.time > 0 ? ` · ${formatClockShort(openedComment.time)}` : ''}` : undefined}
+                  onHideShowing={session.clearSelection}
+                  onDone={focusComposer}
+                />
+              </StageScene>
               {/* 小播放器（子母畫面）：可以拖、可以收起來；在 3D 畫面裡面，不會蓋到下面的 cue 列 */}
               {selected && (
                 <MiniPlayer
@@ -1080,6 +1109,7 @@ function SongDetail({
                   onAddCommentAtTime={va.guard((t: number) => setPendingCommentTime(t))}
                   onRetry={retryVersion}
                   compare={compare}
+                  review={{ session, activeId: activeCommentId, onOpenComment: openComment, onDraw: startDraw }}
                 />
               )}
             </div>
@@ -1109,7 +1139,7 @@ function SongDetail({
                     </button>
                   ))}
                 </div>
-                <div className="cuebar-hint">
+                <div className="cuebar-hint" title="下一個 / 上一個 cue">
                   <kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd>
                 </div>
               </div>
@@ -1146,6 +1176,14 @@ function SongDetail({
             pendingAnchor={pendingCommentAnchor}
             onConsumedPendingAnchor={() => { setPendingCommentAnchor(null); pendingAnchorRef.current = null; }}
             members={members}
+            session={session}
+            videoActive={videoMode}
+            playing={player.playing}
+            activeId={activeCommentId}
+            onOpen={openComment}
+            onStartDraw={startDraw}
+            composerRef={composerRef}
+            projectName={projectName || ''}
           />
         </aside>
       </div>
@@ -1170,6 +1208,7 @@ function SongComments({
   projectId, song, user, projectRole, comments, loading, onChange, onRefresh,
   pendingTime, onConsumedPendingTime, pendingAnchor, onConsumedPendingAnchor, members,
   viewed, latest, hasVersions, focusComment, onSeek,
+  session, videoActive, playing, activeId, onOpen, onStartDraw, composerRef, projectName,
 }: {
   projectId: string;
   song: Song;
@@ -1192,13 +1231,29 @@ function SongComments({
   /** 通知 / 審片紀錄點進來：捲到這則留言 */
   focusComment: { id: string; nonce: number } | null;
   onSeek: (t: number) => void;
+  /** 審片（區段、畫記、視角、打開留言） */
+  session: ReviewSession;
+  /** 歌曲影片正在 LED 上放 */
+  videoActive: boolean;
+  playing: boolean;
+  /** 播放時離播放頭最近的留言 */
+  activeId: string | null;
+  onOpen: (c: SongComment) => void;
+  onStartDraw: () => void;
+  /** 留言框（按 O、畫好畫記後拿到焦點） */
+  composerRef: React.RefObject<HTMLTextAreaElement>;
+  projectName: string;
 }) {
   const [text, setText] = useState('');
   const [posting, setPosting] = useState(false);
   // 用戶可以「掛在某個時間」留言（從 timeline 來、或自己 toggle）
   const [attachTime, setAttachTime] = useState<number | null>(null);
   const [attachAnchor, setAttachAnchor] = useState<import('../lib/api').CommentAnchor | null>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const textareaRef = composerRef;
+  // 「跟著播放」：播放時清單自己捲到離播放頭最近的那則（記在這台電腦）
+  const [follow, setFollowState] = useState(readFollow);
+  const setFollow = (on: boolean) => { setFollowState(on); saveFollow(on); };
+  const [exportOpen, setExportOpen] = useState(false);
   // @-mention 自動完成
   const [mentionState, setMentionState] = useState<{
     open: boolean; query: string; startIdx: number; activeIdx: number;
@@ -1263,10 +1318,10 @@ function SongComments({
   const deletableSelected = comments.filter(c => selectedIds.has(c.id) && canModify(c));
   const resolvableSelected = comments.filter(c => selectedIds.has(c.id) && c.status !== 'resolved' && canResolveComment(c, who));
   // Filter / sort（舊的「未解決」預設會把灰掉的「已改好」藏起來 → 換一個存的名字，預設全部）
-  const [filterStatus, setFilterStatus] = useState<'all' | 'open' | 'resolved'>(() => {
-    try { return (localStorage.getItem('sp_comment_filter_v2') as 'all' | 'open' | 'resolved') || 'all'; } catch { return 'all'; }
+  const [filterStatus, setFilterStatus] = useState<StatusFilter>(() => {
+    try { return (localStorage.getItem('sp_comment_filter_v2') as StatusFilter) || 'all'; } catch { return 'all'; }
   });
-  const [filterRole, setFilterRole] = useState<'all' | 'animator' | 'director' | 'designer'>('all');
+  const [filterRole, setFilterRole] = useState<'all' | 'animator' | 'director' | 'designer' | 'guest'>('all');
   const [sortBy, setSortBy] = useState<'newest' | 'oldest' | 'time-asc'>(() => {
     try { return (localStorage.getItem('sp_comment_sort') as 'newest' | 'oldest' | 'time-asc') || 'newest'; } catch { return 'newest'; }
   });
@@ -1294,18 +1349,21 @@ function SongComments({
     if (!t) return;
     setPosting(true);
     try {
-      // 作者 / 身分由後台依登入的人填；綁正在看的那一版
+      // 作者 / 身分由後台依登入的人填；綁正在看的那一版；
+      // 帶上區段、3D 視角、cue、畫記、縮圖（縮圖在按送出時抓一次；有畫記就用畫的那一格）
+      const extras = session.collect(videoActive ? attachTime : null);
       const updated = await api.postSongComment(projectId, song.id, {
         text: t,
-        time: attachTime ?? 0,
         anchor: attachAnchor ?? undefined,
         mentions: extractMentions(t, members),
         videoId: viewed?.id ?? null,
+        ...extras,
       });
       onChange(updated);
       setText('');
       setAttachTime(null);
       setAttachAnchor(null);
+      session.afterSend();
     } catch (e) {
       toast.error('留言失敗：' + friendlyError(e));
     } finally {
@@ -1361,6 +1419,11 @@ function SongComments({
   const effectiveScope: CommentScope = viewedVersion ? scope : 'all';
   const scoped = useMemo(() => scopeThreads(threads, effectiveScope, viewedVersion), [threads, effectiveScope, viewedVersion?.id, viewedVersion?.version]);  // eslint-disable-line react-hooks/exhaustive-deps
   const visible = filterAndSortThreads(scoped, { status: filterStatus, role: filterRole, sort: sortBy });
+  const statusCounts = {
+    open: scoped.filter(t => t.root.status !== 'resolved').length,
+    resolved: scoped.filter(t => t.root.status === 'resolved').length,
+    all: scoped.length,
+  };
   const versionCount = viewedVersion ? scopeThreads(threads, 'version', viewedVersion).length : 0;
 
   // 通知 / 審片紀錄點進來 → 這一版看不到就切到「全部」，捲過去閃一下
@@ -1432,17 +1495,22 @@ function SongComments({
         </div>
       )}
 
+      <CommentFilterBar
+        status={filterStatus}
+        onStatus={setFilterStatus}
+        counts={statusCounts}
+        follow={follow}
+        onFollow={setFollow}
+        onExport={comments.length > 0 ? () => setExportOpen(true) : undefined}
+      />
+
       <div className="song-comments__filters">
-        <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as 'all' | 'open' | 'resolved')} aria-label="狀態">
-          <option value="all">全部狀態</option>
-          <option value="open">還沒改好</option>
-          <option value="resolved">已改好</option>
-        </select>
-        <select value={filterRole} onChange={e => setFilterRole(e.target.value as 'all' | 'animator' | 'director' | 'designer')} aria-label="角色">
+        <select value={filterRole} onChange={e => setFilterRole(e.target.value as 'all' | 'animator' | 'director' | 'designer' | 'guest')} aria-label="角色">
           <option value="all">所有角色</option>
           <option value="director">導演</option>
           <option value="animator">動畫師</option>
           <option value="designer">製作</option>
+          <option value="guest">訪客</option>
         </select>
         <select value={sortBy} onChange={e => setSortBy(e.target.value as 'newest' | 'oldest' | 'time-asc')} aria-label="排序">
           <option value="newest">最新優先</option>
@@ -1453,12 +1521,13 @@ function SongComments({
 
       {user && canPost && (
         <div className="song-comments__compose">
-          {attachTime !== null && (
-            <div className="song-comments__attach">
-              <Icon icon={Clock} /> 掛在 <strong>{formatTimeMS(attachTime)}</strong>
-              <button className="link-btn" onClick={() => setAttachTime(null)} title="取消綁時間" aria-label="取消綁時間"><Icon icon={X} /></button>
-            </div>
-          )}
+          <ReviewCompose
+            session={session}
+            videoActive={videoActive}
+            attachTime={videoActive ? attachTime : null}
+            onClearTime={() => setAttachTime(null)}
+            onStartDraw={onStartDraw}
+          />
           {attachAnchor && (
             <div className="song-comments__attach song-comments__attach--3d">
               <Icon icon={MapPin} /> 3D 位置：<strong>
@@ -1474,14 +1543,17 @@ function SongComments({
           <div style={{ position: 'relative' }}>
             <textarea
               ref={textareaRef}
-              placeholder={attachTime !== null
-                ? `在 ${formatTimeMS(attachTime)} 留言${viewed ? `（${viewed.label}）` : ''}（打 @ 可以提及成員）`
+              placeholder={session.draft.active
+                ? '說明一下畫的是什麼（例：這塊 LED 再亮一點）'
+                : attachTime !== null || session.range
+                ? `在 ${session.range ? `${formatTimeMS(session.range.start)}–${formatTimeMS(session.range.end)}` : formatTimeMS(attachTime ?? 0)} 留言${viewed ? `（${viewed.label}）` : ''}（打 @ 可以提及成員）`
                 : `留言給動畫師${viewed ? `（會記在 ${viewed.label}）` : ''}，例：第 3 個 cue 機關升起來太慢；打 @ 可以提及成員`}
               value={text}
               onChange={handleTextChange}
               readOnly={readOnly}
               {...ro()}
               onKeyDown={(e) => {
+                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !mentionState.open) { e.preventDefault(); void handlePost(); return; }
                 if (!mentionState.open || filteredMembers.length === 0) return;
                 if (e.key === 'ArrowDown') {
                   e.preventDefault();
@@ -1538,12 +1610,26 @@ function SongComments({
           latest={latest}
           onChange={onChange}
           onSeek={onSeek}
+          onOpen={onOpen}
+          selectedId={session.selectedId}
+          activeId={activeId}
+          autoScroll={follow && playing}
           selection={{ ids: selectedIds, toggle: toggleSelect }}
           emptyText={threads.length === 0
             ? '還沒有留言'
             : effectiveScope === 'version'
               ? `${viewed?.label ?? '這一版'} 還沒有留言（按「全部」看所有版本的 ${threads.length} 則）`
               : `沒有符合篩選的留言（共 ${threads.length} 則）`}
+        />
+      )}
+      {exportOpen && (
+        <ExportCommentsDialog
+          onClose={() => setExportOpen(false)}
+          projectName={projectName}
+          songTitle={`${song.code ? `${song.code} ` : ''}${song.name}`}
+          comments={comments}
+          viewed={viewed ? { id: viewed.id, version: viewed.version, label: viewed.label } : null}
+          fps={session.fps}
         />
       )}
     </div>

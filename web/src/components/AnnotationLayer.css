@@ -1,0 +1,133 @@
+/* 畫記：疊在 3D 畫面上（StageScene 的 children，跟畫面一樣大）
+   z-index 20：蓋過 3D 工具列（畫的時候不能轉視角），在小播放器（25）下面 → 畫的時候照樣可以拉時間、播放 */
+.ann-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  pointer-events: none;
+}
+.ann-layer.is-drawing {
+  pointer-events: auto;
+  cursor: crosshair;
+  background: rgba(0, 0, 0, 0.08);
+  box-shadow: inset 0 0 0 2px rgba(255, 59, 48, 0.55);
+}
+.ann-layer__svg {
+  position: absolute;
+  display: block;
+  overflow: visible;
+  /* 手指 / 筆在這裡畫，不要捲動、縮放頁面 */
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.ann-layer.is-showing .ann-layer__svg { animation: ann-fade-in 0.28s ease-out; }
+@keyframes ann-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ann-layer.is-showing .ann-layer__svg { animation: none; } }
+
+/* ── 工具列（上方置中） ── */
+.ann-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  max-width: calc(100% - 16px);
+  background: rgba(16, 17, 20, 0.95);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  cursor: default;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.ann-toolbar__group { display: flex; align-items: center; gap: 2px; }
+.ann-toolbar__sep { width: 1px; height: 20px; background: var(--border-strong); margin: 0 2px; }
+.ann-toolbar__count { color: var(--text-dim); padding: 0 4px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.ann-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+}
+.ann-tool:hover:not(:disabled) { background: rgba(255, 255, 255, 0.08); }
+.ann-tool.is-active { background: rgba(255, 59, 48, 0.18); border-color: rgba(255, 59, 48, 0.6); }
+.ann-tool:disabled { opacity: 0.35; cursor: default; }
+.ann-tool--done { color: var(--accent); }
+.ann-tool:focus-visible, .ann-color:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.ann-color {
+  width: 22px;
+  height: 22px;
+  margin: 0 2px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: var(--ann-swatch);
+  padding: 0;
+}
+.ann-color.is-active { border-color: #fff; box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.6); }
+
+/* 窄的畫面：一顆「工具 + 顏色」按鈕，點開才看到全部 */
+.ann-toolbar.is-compact { gap: 2px; }
+.ann-toolbar__pick { gap: 3px; }
+.ann-toolbar__dot { width: 10px; height: 10px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.5); }
+.ann-toolbar__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  background: rgba(16, 17, 20, 0.97);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.ann-toolbar__row { display: flex; align-items: center; gap: 4px; }
+
+@media (hover: none) and (pointer: coarse) {
+  .ann-tool { min-width: 40px; height: 40px; }
+  .ann-color { width: 28px; height: 28px; }
+}
+
+/* ── 打開留言時的畫記小標 ── */
+.ann-badge {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 999px;
+  background: rgba(16, 17, 20, 0.88);
+  border: 1px solid rgba(255, 59, 48, 0.55);
+  color: var(--text);
+  font-size: 12px;
+  pointer-events: auto;
+  max-width: calc(100% - 16px);
+}
+.ann-badge > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ann-badge__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+}
+.ann-badge__close:hover { background: rgba(255, 255, 255, 0.1); color: var(--text); }

@@ -10,7 +10,8 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
-import type { CueState, Vec3, Euler, StageObject } from '../lib/api';
+import type { CueState, Vec3, Euler, StageObject, CameraView } from '../lib/api';
+import { fitFov } from '../lib/review/annotations';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
@@ -206,6 +207,29 @@ interface Props {
   ledMapMenu?: boolean;
   /** 有給 →「更多」選單最下面多一個「說明」（新分頁打開使用說明的這一段） */
   helpHref?: string;
+  /** 審片用：拿目前的視角、飛到某個視角（留言記住的）、抓一張縮圖（StageViewApi） */
+  viewApiRef?: React.MutableRefObject<StageViewApi | null>;
+  /** 審片頁：J / K / L、空白鍵給播放器用 → 3D 畫面的 L（物件名稱）不當快捷鍵（工具列照樣按得到） */
+  transportKeys?: boolean;
+  /** 疊在 3D 畫面上的東西（畫記），跟畫面一樣大 */
+  children?: ReactNode;
+}
+
+/** 審片用的 3D 畫面操作（StageScene 的 viewApiRef） */
+export interface StageViewApi {
+  /** 現在的攝影機（aspect = 畫面寬 / 高）；還沒準備好 = null */
+  getView(): CameraView | null;
+  /**
+   * 平滑飛到某個視角（繞著舞台轉過去，不是直線穿過去）；飛到了才 resolve（被使用者轉視角打斷也 resolve）
+   * fitAspect：當時畫面的比例 → 現在的畫面比較窄就把鏡頭角度放大，當時左右的東西都看得到（畫記才對得上）
+   */
+  flyTo(view: CameraView, opts?: { fitAspect?: number | null; durationMs?: number }): Promise<void>;
+  /** 抓一張現在的畫面（最寬 maxWidth px，給留言縮圖）；抓不到 = null。只在按的時候抓一次 */
+  capture(maxWidth?: number): HTMLCanvasElement | null;
+  /** 畫面寬 / 高 */
+  aspect(): number;
+  /** 使用者自己開始轉 / 縮放視角（畫記要收起來） */
+  onUserMove(cb: () => void): () => void;
 }
 
 /** 設定機關時問舞台的事（StageScene 的 sceneQueryRef） */
@@ -233,7 +257,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, mechanismOffsets, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -262,6 +286,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const selectedIdsRef = useRef<string[]>(selectedObjectIds);
   const readOnlyRef = useRef(readOnly);
   readOnlyRef.current = readOnly;
+  const transportKeysRef = useRef(transportKeys);
+  transportKeysRef.current = transportKeys;
   // 多選共動的 pivot（虛擬中心點，gizmo attach 在它身上；mesh 暫時 reparent 進 pivot）
   const multiPivotRef = useRef<THREE.Object3D | null>(null);
 
@@ -503,28 +529,55 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     flyCamera(new THREE.Vector3(...bm.pos), new THREE.Vector3(...bm.target), bm.fov);
   }
 
-  // 平滑飛行 0.6 秒到指定視角
-  function flyCamera(toPos: THREE.Vector3, toTarget: THREE.Vector3, toFov: number) {
+  // 平滑飛到指定視角：看的點直線移過去，攝影機繞著它轉（像搖臂，不會從舞台中間穿過去）；
+  // 距離越遠飛越久（0.5～1.2 秒）。新的一趟 / 使用者自己轉視角 → 舊的那趟停在那裡（Promise 照樣 resolve）
+  const flightRef = useRef<{ cancelled: boolean; resolve: () => void } | null>(null);
+  function cancelFlight() {
+    const f = flightRef.current;
+    if (f) { f.cancelled = true; f.resolve(); flightRef.current = null; }
+  }
+  function flyCamera(toPos: THREE.Vector3, toTarget: THREE.Vector3, toFov: number, durationMs?: number): Promise<void> {
     const cam = cameraRef.current;
     const orb = orbitRef.current;
-    if (!cam || !orb) return;
-    const fromPos = cam.position.clone();
+    if (!cam || !orb) return Promise.resolve();
+    cancelFlight();
     const fromTarget = orb.target.clone();
     const fromFov = cam.fov;
+    const s0 = new THREE.Spherical().setFromVector3(cam.position.clone().sub(fromTarget));
+    const s1 = new THREE.Spherical().setFromVector3(toPos.clone().sub(toTarget));
+    let dTheta = s1.theta - s0.theta;
+    if (dTheta > Math.PI) dTheta -= Math.PI * 2;
+    if (dTheta < -Math.PI) dTheta += Math.PI * 2;
+    const r0 = Math.max(1e-3, s0.radius), r1 = Math.max(1e-3, s1.radius);
+    const travel = fromTarget.distanceTo(toTarget) / Math.max(r0, r1) + Math.abs(dTheta) + Math.abs(s1.phi - s0.phi) + Math.abs(Math.log(r1 / r0));
+    const dur = durationMs ?? Math.min(1200, Math.max(500, 420 + travel * 300));
     const startTs = performance.now();
-    const dur = 600;
-    const stepCam = cam;
-    const stepOrb = orb;
-    function step() {
-      const t = Math.min((performance.now() - startTs) / dur, 1);
-      const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-      stepCam.position.lerpVectors(fromPos, toPos, e);
-      stepOrb.target.lerpVectors(fromTarget, toTarget, e);
-      stepCam.fov = fromFov + (toFov - fromFov) * e;
-      stepCam.updateProjectionMatrix();
-      if (t < 1) requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
+    const tgt = new THREE.Vector3();
+    const off = new THREE.Vector3();
+    const sp = new THREE.Spherical();
+    return new Promise<void>((resolve) => {
+      const flight = { cancelled: false, resolve };
+      flightRef.current = flight;
+      const step = () => {
+        if (flight.cancelled) return;
+        const t = Math.min((performance.now() - startTs) / dur, 1);
+        const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        tgt.lerpVectors(fromTarget, toTarget, e);
+        sp.set(r0 * Math.pow(r1 / r0, e), s0.phi + (s1.phi - s0.phi) * e, s0.theta + dTheta * e);
+        off.setFromSpherical(sp);
+        cam.position.copy(tgt).add(off);
+        orb.target.copy(tgt);
+        cam.fov = fromFov + (toFov - fromFov) * e;
+        cam.updateProjectionMatrix();
+        if (t < 1) { requestAnimationFrame(step); return; }
+        // 最後一格對準（球座標換算的小誤差）
+        cam.position.copy(toPos);
+        orb.target.copy(toTarget);
+        if (flightRef.current === flight) flightRef.current = null;
+        resolve();
+      };
+      requestAnimationFrame(step);
+    });
   }
 
   function deleteBookmark(id: string) {
@@ -1578,6 +1631,63 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     return () => { if (sceneQueryRef.current === query) sceneQueryRef.current = null; };
   }, [sceneQueryRef]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── 審片：目前的視角、飛到留言記住的視角、抓縮圖 ──
+  useEffect(() => {
+    if (!viewApiRef) return;
+    const listeners = new Set<() => void>();
+    const orbit = orbitRef.current;
+    const onStart = () => {
+      cancelFlight();
+      for (const cb of listeners) { try { cb(); } catch { /* 一個壞掉不影響別的 */ } }
+    };
+    orbit?.addEventListener('start', onStart);
+    const r4 = (n: number) => Math.round(n * 10000) / 10000;
+    const api: StageViewApi = {
+      getView: () => {
+        const cam = cameraRef.current;
+        const orb = orbitRef.current;
+        if (!cam || !orb) return null;
+        return {
+          position: [r4(cam.position.x), r4(cam.position.y), r4(cam.position.z)],
+          target: [r4(orb.target.x), r4(orb.target.y), r4(orb.target.z)],
+          fov: r4(cam.fov),
+          aspect: r4(viewAspect()),
+        };
+      },
+      flyTo: (v, opts = {}) => {
+        if (!v || !Array.isArray(v.position) || !Array.isArray(v.target)) return Promise.resolve();
+        userMovedCameraRef.current = true;  // 之後才讀到的重置視角不要把鏡頭搬走
+        const fov = fitFov(v.fov, opts.fitAspect ?? v.aspect ?? null, viewAspect());
+        return flyCamera(new THREE.Vector3(...v.position), new THREE.Vector3(...v.target), fov, opts.durationMs);
+      },
+      capture: (maxWidth = 480) => {
+        const src = rendererRef.current?.domElement;
+        if (!src || !src.width || !src.height) return null;
+        try {
+          const k = Math.min(1, maxWidth / src.width);
+          const c = document.createElement('canvas');
+          c.width = Math.max(1, Math.round(src.width * k));
+          c.height = Math.max(1, Math.round(src.height * k));
+          const ctx = c.getContext('2d');
+          if (!ctx) return null;
+          ctx.drawImage(src, 0, 0, c.width, c.height);
+          return c;
+        } catch (e) {
+          console.warn('[StageScene] capture failed:', e);
+          return null;
+        }
+      },
+      aspect: () => viewAspect(),
+      onUserMove: (cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; },
+    };
+    viewApiRef.current = api;
+    return () => {
+      orbit?.removeEventListener('start', onStart);
+      if (viewApiRef.current === api) viewApiRef.current = null;
+      cancelFlight();
+    };
+  }, [viewApiRef]); // eslint-disable-line react-hooks/exhaustive-deps
+
   /** 這些物件在 cue 位置（沒加機關）時的外框 */
   function baseBox(ids: string[]): THREE.Box3 {
     const scene = sceneRef.current;
@@ -2409,7 +2519,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (viewerRef.current) return;
       // 唯讀模式：保留 L / X，不啟用 W/E/Q/Esc
       if (readOnlyRef.current) {
-        if (e.key === 'l' || e.key === 'L') setShowLabels(s => !s);
+        // 審片頁的 L 是播放（J / K / L）→ 物件名稱只能從工具列開
+        if ((e.key === 'l' || e.key === 'L') && !transportKeysRef.current) setShowLabels(s => !s);
         else if (e.key === 'x' || e.key === 'X') setWireframe(w => !w);
         return;
       }
@@ -2604,8 +2715,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     }
     tools.push({
       id: 'labels', group: 'show', priority: 2,
-      render: (l) => toolBtn({ icon: Tag, label: '名稱', title: showLabels ? '隱藏物件名稱 (L)' : '顯示物件名稱 (L)', labeled: l, active: showLabels, pressed: showLabels, onClick: () => setShowLabels(s => !s) }),
-      menu: { icon: Tag, label: '物件名稱', shortcut: 'L', checked: showLabels, onSelect: () => setShowLabels(s => !s) },
+      render: (l) => toolBtn({ icon: Tag, label: '名稱', title: (showLabels ? '隱藏物件名稱' : '顯示物件名稱') + (transportKeys ? '' : ' (L)'), labeled: l, active: showLabels, pressed: showLabels, onClick: () => setShowLabels(s => !s) }),
+      menu: { icon: Tag, label: '物件名稱', shortcut: transportKeys ? undefined : 'L', checked: showLabels, onSelect: () => setShowLabels(s => !s) },
     });
   }
   tools.push({
@@ -2978,6 +3089,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           </div>
         </div>
       )}
+      {/* 疊在 3D 畫面上的東西（審片的畫記），跟畫面一樣大 */}
+      {children}
       {/* 自動調低畫質時的小提示（不擋操作） */}
       {qualityLevel !== 'high' && (
         <div className="stage-scene__quality-note">畫質自動調低以保持順暢</div>
@@ -2987,7 +3100,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         {viewer
           ? <>拖拉旋轉視角 · 滾輪縮放</>
           : readOnly
-          ? <><kbd>L</kbd> 物件名稱 · 拖拉旋轉視角 · 滾輪縮放</>
+          ? (transportKeys ? <>拖拉旋轉視角 · 滾輪縮放</> : <><kbd>L</kbd> 物件名稱 · 拖拉旋轉視角 · 滾輪縮放</>)
           : <><kbd>W</kbd> 移動 · <kbd>E</kbd> 旋轉 · <kbd>Q</kbd> 世界 / 物件軸 · <kbd>L</kbd> 物件名稱 · <kbd>Esc</kbd> 取消選取</>
         }
       </div>

@@ -107,7 +107,7 @@ export function resolvedLabel(c: Pick<SongComment, 'status' | 'resolvedVersion'>
 // ─── 篩選 / 排序（導演頁的「未解決 / 已解決」「角色」「排序」） ───
 
 export type StatusFilter = 'all' | 'open' | 'resolved';
-export type RoleFilter = 'all' | 'animator' | 'director' | 'designer';
+export type RoleFilter = 'all' | 'animator' | 'director' | 'designer' | 'guest';
 export type SortBy = 'newest' | 'oldest' | 'time-asc';
 
 export function filterAndSortThreads<T extends CommentThread>(

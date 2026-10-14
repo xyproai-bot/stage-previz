@@ -31,6 +31,27 @@
 .rvc-comment--animator { border-left-color: var(--accent); }
 .rvc-comment--director { border-left-color: var(--warn); }
 .rvc-comment--designer { border-left-color: var(--text-dim); }
+.rvc-comment--guest { border-left-color: #5aa9ff; }
+/* 點一下打開（跳時間、飛視角、畫記） */
+.rvc-comment.is-openable { cursor: pointer; }
+.rvc-comment.is-openable:hover { background: rgba(255, 255, 255, 0.035); }
+/* 播放時離播放頭最近的那串 / 打開的那串 */
+.rvc-thread.is-playhead { border-color: rgba(255, 255, 255, 0.32); box-shadow: inset 3px 0 0 0 rgba(255, 255, 255, 0.55); }
+.rvc-thread.is-open { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.rvc-main { display: flex; gap: 8px; align-items: flex-start; }
+.rvc-body { flex: 1 1 auto; min-width: 0; }
+.rvc-thumb {
+  flex: 0 0 auto;
+  width: 72px;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #000;
+}
+.rvc-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.rvc-thumb:disabled { cursor: default; }
 .rvc-replies {
   list-style: none;
   margin: 0;
@@ -95,6 +116,10 @@
 button.rvc-attach { cursor: pointer; }
 button.rvc-attach:hover { filter: brightness(1.15); }
 .rvc-attach--3d { color: #7aa8ff; background: rgba(82, 148, 255, 0.15); }
+.rvc-attach--view { color: #c9a7ff; background: rgba(194, 100, 255, 0.14); }
+.rvc-attach--ann { color: #ff7b72; background: rgba(255, 59, 48, 0.14); }
+.rvc-role--guest { color: #8ec5ff; background: rgba(90, 169, 255, 0.14); }
+.rvc-replybox__note { font-size: 11.5px; color: #8ec5ff; }
 .rvc-resolved {
   display: inline-flex;
   align-items: center;
@@ -208,6 +233,19 @@ button.rvc-attach:hover { filter: brightness(1.15); }
 .comment-scope__btn + .comment-scope__btn { border-left: 1px solid var(--border-strong); }
 .comment-scope__btn.is-active { background: var(--accent-dim); color: var(--accent); }
 .comment-scope__btn:disabled { color: var(--text-muted); cursor: not-allowed; }
+
+/* 「未解決 / 已解決 / 全部」、「跟著播放」 */
+.comment-filterbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.comment-follow {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.comment-follow input { accent-color: var(--accent); margin: 0; }
 
 /* 觸控：按鈕大一點 */
 @media (hover: none) and (pointer: coarse) {

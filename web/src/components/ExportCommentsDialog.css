@@ -1,0 +1,9 @@
+.export-dialog { max-width: 480px; }
+.export-dialog__row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.export-dialog__label { width: 40px; color: var(--text-dim); font-size: 13px; }
+.export-dialog__summary { margin: 4px 0 6px; font-size: 13px; color: var(--text); }
+.export-dialog__hint { margin: 0 0 4px; font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+.export-dialog .dialog__footer .btn { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 640px) {
+  .export-dialog { max-width: none; }
+}

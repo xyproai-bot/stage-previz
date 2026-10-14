@@ -18,6 +18,8 @@ export function notificationTitle(n: AppNotification): string {
     case 'approved': return `${songOf(n)}${v(n)} 已通過（${who}）`;
     case 'new_version': return `${songOf(n)}有新版${v(n)} 等你審${n.actorName ? `（${n.actorName} 交的）` : ''}`;
     case 'assigned': return `${who} 把${songOf(n)}指派給你`;
+    // 分享連結的訪客留言：actorName = 「訪客：小李（給經紀人）」
+    case 'guest_comment': return `${who} 在${songOf(n)}${v(n)} 留言`;
     default: return `${songOf(n)}有新動態`;
   }
 }
