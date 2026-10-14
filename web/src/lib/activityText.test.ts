@@ -11,6 +11,12 @@ describe('describeActivity（最近活動的一句話）', () => {
     expect(describeActivity(e('create', 'mechanism', { name: '旋轉舞台' }))).toBe('新增機關「旋轉舞台」');
     expect(describeActivity(e('update', 'drive_file', {}))).toBe('修改 Drive 檔案');
   });
+  it('一排機關：一次建立、改共用設定、解散、刪除都是白話', () => {
+    expect(describeActivity(e('bulk_create', 'mechanism', { name: 'LED 升降', count: 8 }))).toBe('一次建立 8 個機關「LED 升降」');
+    expect(describeActivity(e('update', 'mechanism_group', { name: 'LED 升降', shared: true }))).toBe('修改一排機關「LED 升降」的共用設定');
+    expect(describeActivity(e('update', 'mechanism_group', { name: 'LED 升降', dissolved: true, mechanisms: 8 }))).toBe('解散一排機關「LED 升降」（8 個機關留著）');
+    expect(describeActivity(e('delete', 'mechanism_group', { name: 'LED 升降', mechanisms: 8 }))).toBe('刪除一排機關「LED 升降」（連同 8 個機關）');
+  });
   it('交新版後自動回到審查中：沒有歌名也不會出現 undefined', () => {
     const s = describeActivity(e('update', 'song', { statusFrom: 'needs_changes', statusTo: 'in_review', auto: true, label: 'V2' }));
     expect(s).toBe('把歌曲從「需修改」改成「審查中」（交了新版 V2，自動改的）');

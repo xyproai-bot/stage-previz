@@ -16,6 +16,7 @@
 - 存的值不會因為改行程被改掉；播放 / 畫面 / 總表用的值夾在行程內。
 - **每個 cue 每個機關自己的時間**（v2，0027）：`delaySec` = GO 之後幾秒開始動、`durationSec` = 走幾秒（0 = 直接切換）；`null` = 跟著 cue（延遲 0、走 = 轉場）。跟著那個 cue 自己存的位置那一列，**不沿用**；回到沿用時一起清掉。規則：`docs/superpowers/specs/2026-10-15-mechanism-v2-design.md`。
 - **對開和翻轉**（v2 第 2 階段，0030）：對開 = 兩邊用同一個數字往反方向動（`variant: "split"`）；翻轉 = 旋轉機關沿著物件的某個邊緣翻（轉軸和轉軸中心已經算好存在 `axis` / `pivot`，選的邊緣記在 `metadata.setup`）。見下面「對開和翻轉」。
+- **一排機關和動作花樣**（v2 第 3 階段，0031）：一次建立 N 個機關放進同一排（`mechanism_groups`，機關的 `groupId` / `groupIndex`）；花樣（一起 / 依序 / 波浪 / 漸層）在前端算好，用「一次寫很多個 cue 位置」存成一列一列普通的位置。見下面「一排機關」。
 - 機關可以裝在另一個機關上（`parentId`，例：轉台上的升降台），一層套一層最多 4 層。一個物件只能**直接**放在一個機關。
 - 每個 cue 的位置不寫活動紀錄（拖滑桿不洗版）；機關的新增 / 修改 / 刪除 / 排序會寫。
 
@@ -50,7 +51,9 @@
   "updatedAt": "2026-10-14 03:00:00",
   "variant": null,              // v2：null 一般 | "split" 對開
   "mirror": null,               // 只有對開：B 邊 { axis, pivot（旋轉才有）, consoleLabel }
-  "objectSides": {}             // 只有對開：{ [物件 id]: "a" | "b" }（沒寫 = A 邊）
+  "objectSides": {},            // 只有對開：{ [物件 id]: "a" | "b" }（沒寫 = A 邊）
+  "groupId": null,              // v2 第 3 階段：屬於哪一排（沒有 = null）
+  "groupIndex": null            // 這一排裡的第幾個（0 起算）
 }
 ```
 
@@ -64,13 +67,31 @@
 - **翻轉**：`kind: "rotary"`，`axis` / `pivot` 由畫面從帶動物件的外框算好（`hingeFromBox`，`flip.ts`）；`metadata.setup = { hinge: "top" | "bottom" | "left" | "right" | "front" | "back", positive: "first" | "second" }` 只是讓編輯時看得到原本的選擇（後台不看它、舊版前端也照樣存回來）。
 - **舊版前端相容**：讀機關和位置的網址要帶 `?mech=2`（新版畫面一律帶；`GET …/mechanisms`、`…/mechanism-sheet`、`…/songs/:s/mechanism-positions`、分享連結的 `…/data` 和 `…/mechanism-positions`）。**沒帶（還在跑的舊版前端）→ 後台不給 `variant` 不是空的機關，也不給它們的位置**：對開的零件在舊版畫面是靜止的，不會往錯的方向動；翻轉是普通的旋轉機關，舊版照樣看得到、會動。新增 / 修改的回應一律給完整的。
 
+### 一排機關（`mechanism_groups`、`groupId`、`groupIndex`）
+
+- 一排裡的每個機關都是**普通機關**（`variant` 是 null）：自己的物件、方向、行程、速度、控台編號、每個 cue 一列位置。「一排」只是把它們放在一起（名字、順序）。
+- 一排的長相：`{ id, name, order, settings: { namePrefix?, numbering? } | null, updatedAt }`。`numbering`：`leftToRight` / `rightToLeft` / `frontToBack` / `selection`，只是建立時選的，編輯時看得到。成員 = `groupId` 指到這一排的機關，照 `groupIndex` 排。
+- 讀：`GET …/mechanisms?mech=2` 的回應多 `groups: MechanismGroup[]`（沒帶 `?mech=2` 的舊版前端回應跟以前一模一樣，沒有 `groups`；`groupId` / `groupIndex` 是多出來的欄位，舊版前端不認得就忽略）。
+- 一次建立：`POST …/mechanisms/batch`，一個物件一個機關，名稱「{namePrefix} {編號}」，同一個交易建好；物件已經在別的機關 → 409，問過後帶 `moveObjects: true` 再送（整批一起移）。
+  - `base`：每個機關共用的設定（`kind`、`axis`、`pivot`、`travelMin` / `travelMax`、`defaultValue`、`maxSpeed`、`presets`、`parentId`、`metadata`…），規則跟單獨新增一樣；不能是對開。
+  - `objectIds`：2 ~ 64 個，**照這個順序編 1、2、3…**（畫面已經照「編號順序」排好）。`namePrefix`：名稱開頭；`groupName`：這一排的名字（沒給 = 名稱開頭）；`numbering`：建立時選的編號順序。
+  - `overrides`：`{ [物件 id]: { axis?, pivot? } }`，沿著邊緣翻的轉軸要照每個物件自己的外框算。
+- 改一排：`PATCH …/mechanism-groups/:g`，`name` 是這一排的名字；`travelMin` / `travelMax` / `defaultValue` / `maxSpeed` / `presets` 是**共用設定**，這一排每個機關都改成一樣（每個都用單獨修改的規則檢查，錯了整批不改）。成員的名字不會跟著排名改。回 `{ group, mechanisms, outOfRangeCount }`。
+- 解散 / 刪除：`DELETE …/mechanism-groups/:g?dissolve=1` 只解散這一排（機關都留著，位置和時間不動）→ `{ ok, dissolved, mechanisms }`；不帶 `dissolve` = 這一排和裡面的機關一起刪掉（連每個 cue 的位置）→ `{ ok, removedMechanisms, removedPositions }`。一排裡最後一個機關被刪掉（含舊版前端刪）→ 這一排也自動刪掉，不留空殼。
+- 一次寫很多個 cue 位置（套用花樣、復原花樣）：`PUT …/songs/:s/cues/:c/mechanism-positions`，`{ items: [{ mechanismId, value, delaySec?, durationSec? }] }`（1 ~ 200 列，同一個機關只能一列，機關都要在這個專案裡）。**一個交易**：要嘛全寫、要嘛都不動。`value` 是數字 → 存位置（夾進各自的行程）；`value` 是 `null` → 刪掉這個 cue 自己的那一列（回到沿用，時間一起清掉）；`delaySec` / `durationSec` 沒放 = 不改、`null` = 跟著 cue、數字 = 設定（跟單獨寫一樣）。回 `{ ok, items: [{ mechanismId, value, clamped, delaySec, durationSec } | { mechanismId, removed: true }] }`。跟單獨寫一樣不寫活動紀錄。
+- 舊版前端相容：一排裡就是一個一個普通機關，舊版讀、存（只送它認得的欄位）、排序、刪除都不會動到 `groupId` / `groupIndex` 或弄壞這一排；它不認得延遲（跟以前一樣）。複製專案 / 匯出匯入帶著一排（匯出檔多 `mechanismGroups`，機關列上的 `group_id` / `group_index` 指過去；匯入給新 id；舊的匯出檔沒有 → 都是一般機關）。
+
 ## 網址
 
-`:p` = 專案 id，`:s` = 歌 id，`:c` = cue id，`:m` = 機關 id。
+`:p` = 專案 id，`:s` = 歌 id，`:c` = cue id，`:m` = 機關 id，`:g` = 一排的 id。
 
 | | 網址 | 送 | 回傳 |
 |---|---|---|---|
-| GET | `/api/projects/:p/mechanisms?mech=2` | | `{ mechanisms: Mechanism[] }`（照順序；沒帶 `?mech=2` 不含對開） |
+| GET | `/api/projects/:p/mechanisms?mech=2` | | `{ mechanisms: Mechanism[], groups: MechanismGroup[] }`（照順序；沒帶 `?mech=2` 不含對開，也沒有 `groups`） |
+| POST | `/api/projects/:p/mechanisms/batch` | `{ base, objectIds, namePrefix, groupName?, numbering?, overrides?, moveObjects? }` | 201 `{ group, mechanisms }`（一次建立 N 個，見「一排機關」） |
+| PATCH | `/api/projects/:p/mechanism-groups/:g` | `{ name?, travelMin?, travelMax?, defaultValue?, maxSpeed?, presets? }` | `{ group, mechanisms, outOfRangeCount }`（共用設定套到每個成員） |
+| DELETE | `/api/projects/:p/mechanism-groups/:g[?dissolve=1]` | | 解散 `{ ok, dissolved, mechanisms }`；刪除 `{ ok, removedMechanisms, removedPositions }` |
+| PUT | `/api/projects/:p/songs/:s/cues/:c/mechanism-positions` | `{ items: [{ mechanismId, value, delaySec?, durationSec? }] }`（1 ~ 200 列） | `{ ok, items }`（一個交易；`value: null` = 回到沿用） |
 | POST | `/api/projects/:p/mechanisms` | 機關的欄位（不用 id / order / cueCount）+ `moveObjects?: true` | 201 `{ mechanism }` |
 | POST | `/api/projects/:p/mechanisms/reorder` | `{ ids: string[] }` | `{ ok }` |
 | PATCH | `/api/projects/:p/mechanisms/:m` | 要改的欄位 + `moveObjects?: true` | `{ mechanism, outOfRangeCount }`（有幾個 cue 存的值超出新的行程） |
@@ -93,11 +114,14 @@
 | 狀態 | 什麼時候 | `error` |
 |---|---|---|
 | 400 | 檢查沒過（還會帶 `field`：name / kind / variant / axis / pivot / mirror / travel / maxSpeed / presets / objectIds / parentId） | 「機關名稱不能空白」「這個專案已經有叫「…」的機關」「機關類型不正確」「方向不正確」「轉軸中心要是數字」「行程的最高要比最低大」「行程要填數字」「最高速度要是正的數字，或留空不檢查」「常用位置最多 12 個」「常用位置的名稱重複了：「…」」「一個機關最多帶 200 個物件」「有物件不在這個專案裡」「不能選自己，或裝在自己上面的機關」「機關一層套一層最多 4 層」「找不到要裝上去的機關」「機關的變化類型不正確」「對開的 B 邊方向不正確」「對開的 B 邊轉軸中心要是數字」「對開的機關不能當別的機關的上層」「有機關裝在它上面，不能改成對開」 |
+| 400 | 一排：一次建立 / 改一排（`field`：objectIds / namePrefix / groupName / variant，還有上面單獨新增的欄位） | 「一排至少要 2 個機關，請多選幾個物件」「一次最多建立 64 個機關」「名稱開頭太長了（最多 N 個字，後面還要接編號）」「這個專案已經有叫「…」的一排機關」「這一排的名字不能空白」「這一排的名字最多 40 個字」「一次建立的機關不能是對開，請一個一個設定」 |
+| 400 | 一次寫很多個位置（`field`：items / value / delaySec / durationSec） | 「一次最多設定 200 個機關的位置」「每一列都要有機關和位置」「同一個機關在這一次只能出現一次」「有機關不在這個專案裡」 |
 | 400 | PUT 每個 cue 的位置不是數字 | 「位置要是數字」 |
 | 400 | PUT 的秒數不對（`field`：delaySec / durationSec） | 「延遲要是 0 到 3600 秒，或留空跟著 cue」「走幾秒要是 0 到 3600 秒，或留空跟著轉場」 |
 | 400 | 只送時間，但這個 cue 還沒有自己的位置 | 「這個 cue 還沒有設定這個機關的位置，要一起送位置」 |
 | 403 | 導演 / 動畫師改東西 | 「只有製作可以修改專案內容」 |
 | 404 | 網址上的機關不在這個專案 | 「這個專案裡找不到這個機關」 |
+| 404 | 網址上的一排不在這個專案 | 「這個專案裡找不到這一排機關」 |
 | 409 | 要放的物件已經直接放在別的機關（還會帶 `conflicts: [{ objectId, objectName, mechanismId, mechanismName }]`）。畫面問「要把它移到「…」嗎？」，要移就再送一次帶 `moveObjects: true` | 「「LED-1」已經在「升降台」裡，一個物件只能直接放在一個機關」 |
 | 409 | 轉換：這個機關已經有 cue 設了位置 | 「這個機關已經有 cue 設了位置，只有還沒在 cue 裡設過位置的機關可以轉」 |
 
@@ -114,7 +138,7 @@
 
 | 功能 | 機關 |
 |---|---|
-| 複製專案 | 機關（新 id、`parentId` 換成新的）、帶的物件、每個 cue 的位置都跟著；舊滑桿的數值也換成新物件的 id |
+| 複製專案 | 機關（新 id、`parentId` 換成新的）、一排（新 id）、帶的物件、每個 cue 的位置都跟著；舊滑桿的數值也換成新物件的 id |
 | 匯出 / 匯入專案 | 匯出檔多 `mechanisms`、`mechanismObjects`、`cueMechanismPositions`（資料庫原樣，含對開的 `variant`、`mirror`、`side`）；舊的匯出檔沒有 → 什麼都不做（沒有 variant / mirror / side 的當一般機關） |
 | 新 cue「沿用」 | 複製來源 cue 自己存的機關位置和時間 |
 | 新 cue「從目前 3D 畫面」 | `POST …/cues` 多送 `snapshotMechanisms: { [機關 id]: 值 }` → 存成新 cue 自己的值 |

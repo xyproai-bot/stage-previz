@@ -11,7 +11,8 @@ import type { HistoryStep } from '../editHistory';
 import { historyScope } from '../editHistory';
 import { STOP_LIVE_REFRESH, isProjectGoneError, useLiveRefresh } from '../liveRefresh';
 import { toast } from '../toast';
-import { clampValue, type CueMechanismPosition, type Mechanism, type MechanismTimings, type MechanismValues } from './model';
+import { clampValue, type CueMechanismPosition, type Mechanism, type MechanismGroup, type MechanismTimings, type MechanismValues } from './model';
+import type { BulkPositionItem } from './group';
 import { defaultRow, ownTimingsByCue, ownValuesByCue, resolveSongMechanisms, valuesOf, type ResolvedRow } from './track';
 import { buildMechanismTimeline, checkSongMechanisms, ownMoveFor, sortMasters, type MechanismMotion, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
 import * as mapi from './mechanismApi';
@@ -207,6 +208,7 @@ export function useEditorMechanisms(o: {
 }) {
   const { projectId, songId, selectedCueId } = o;
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
+  const [groups, setGroups] = useState<MechanismGroup[]>(EMPTY_GROUPS);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[] } | null>(null);
   // 拖滑桿時的預覽（還沒存）：mechId → value
@@ -231,8 +233,9 @@ export function useEditorMechanisms(o: {
   const refreshDefs = useCallback(async () => {
     if (!projectId) return;
     try {
-      const list = await mapi.listMechanisms(projectId);
-      setMechanisms(list);
+      const r = await mapi.listMechanismsAndGroups(projectId);
+      setMechanisms(r.mechanisms);
+      setGroups(r.groups);
       setStatus('ready');
     } catch (e) {
       console.warn('[mechanisms] load failed', e);
@@ -250,7 +253,7 @@ export function useEditorMechanisms(o: {
     }
   }, [projectId, songId]);
 
-  useEffect(() => { setStatus('loading'); setMechanisms(null); void refreshDefs(); }, [refreshDefs]);
+  useEffect(() => { setStatus('loading'); setMechanisms(null); setGroups(EMPTY_GROUPS); void refreshDefs(); }, [refreshDefs]);
   // 換歌 / cue 清單變了（新增、沿用、刪除 cue 時後台會複製 / 刪掉位置）→ 重新讀
   useEffect(() => { void refreshPositions(); }, [refreshPositions, o.cues]);
   useEffect(() => { setPreview({}); }, [selectedCueId, songId]);
@@ -401,6 +404,53 @@ export function useEditorMechanisms(o: {
     }
   }, [projectId, songId, o.canEdit, pb.resolved, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * 一次存很多個機關在這個 cue 的位置和延遲（套用花樣）；整批一個交易，復原也是一步。
+   * delaySec 沒放 = 不動延遲（第一個 cue 沒有「走過來」，花樣不設延遲）；null = 清掉（跟著 cue）。
+   * 回 true = 存好了
+   */
+  const applyPositions = useCallback(async (cueId: string, items: { mechanismId: string; value: number; delaySec?: number | null }[]): Promise<boolean> => {
+    const sid = songId;
+    if (!projectId || !sid || !o.canEdit || items.length === 0) return false;
+    const before = items.map(it => ownEntry(cueId, it.mechanismId));
+    const forward: BulkPositionItem[] = items.map(it => (it.delaySec === undefined
+      ? { mechanismId: it.mechanismId, value: it.value }
+      : { mechanismId: it.mechanismId, value: it.value, delaySec: it.delaySec }));
+    const backward: BulkPositionItem[] = items.map((it, i) => {
+      const b = before[i];
+      return b ? { mechanismId: it.mechanismId, value: b.value, delaySec: b.delaySec ?? null, durationSec: b.durationSec ?? null } : { mechanismId: it.mechanismId, value: null };
+    });
+    const fresh = new Set(items.filter((_, i) => !before[i]).map(it => it.mechanismId));
+    const bumpCounts = (d: number) => {
+      if (fresh.size === 0) return;
+      setMechanisms(prev => prev && prev.map(x => (fresh.has(x.id) ? { ...x, cueCount: Math.max(0, x.cueCount + d) } : x)));
+    };
+    const run = async (list: BulkPositionItem[]) => {
+      const res = await mapi.setCuePositionsBulk(projectId, sid, cueId, list);
+      for (const r of res) {
+        if (r.removed) putLocal(sid, cueId, r.mechanismId, null);
+        else putLocal(sid, cueId, r.mechanismId, r.value ?? 0, { delaySec: r.delaySec ?? null, durationSec: r.durationSec ?? null });
+      }
+    };
+    try {
+      bumpCounts(1);
+      try { await run(forward); } catch (e) { bumpCounts(-1); throw e; }
+      historyRef.current?.push(historyScope(cueId), {
+        undo: async () => { await run(backward); bumpCounts(-1); },
+        redo: async () => { bumpCounts(1); await run(forward); },
+      });
+      historyRef.current?.bump();
+      return true;
+    } catch (e) {
+      toast.error('花樣沒有存到：' + (e instanceof Error ? e.message : String(e)));
+      void refreshPositions();
+      return false;
+    }
+  }, [projectId, songId, o.canEdit, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** 套用花樣前的預覽：一次讓好幾個機關在 3D 畫面移到指定位置（不存）；null = 取消預覽 */
+  const previewValues = useCallback((values: MechanismValues | null) => setPreview(values ? { ...values } : {}), []);
+
   // ── 機關時間軸：拉時間尺 / 播放時，3D 畫面的機關跟著時間軸（照機器速度；物件停在目前選的 cue）──
   // 只寫 ref，不重畫 React；StageScene 每幀問 mechanismAtFrame
   const previewTimeRef = useRef<number | null>(null);
@@ -440,6 +490,28 @@ export function useEditorMechanisms(o: {
     await Promise.all([refreshDefs(), refreshPositions()]);
     return r;
   }, [projectId, refreshDefs, refreshPositions]);
+  /** 一次建立 N 個機關（一排）；物件已經在別的機關 → 丟 409，問過後帶 moveObjects 再送 */
+  const createBatch = useCallback(async (input: mapi.BatchPayload) => {
+    if (!projectId) throw new Error('no project');
+    const r = await mapi.createMechanismBatch(projectId, input);
+    await refreshDefs();
+    return r;
+  }, [projectId, refreshDefs]);
+  /** 改這一排的名字 / 共用設定（每個成員都改） */
+  const updateGroup = useCallback(async (groupId: string, patch: mapi.GroupPatch) => {
+    if (!projectId) throw new Error('no project');
+    const r = await mapi.updateMechanismGroup(projectId, groupId, patch);
+    await refreshDefs();
+    return r;
+  }, [projectId, refreshDefs]);
+  /** 解散（機關留著）或連同機關一起刪掉 */
+  const removeGroup = useCallback(async (groupId: string, dissolve: boolean) => {
+    if (!projectId) throw new Error('no project');
+    const r = await mapi.deleteMechanismGroup(projectId, groupId, dissolve);
+    setFocusedId(null);
+    await Promise.all([refreshDefs(), refreshPositions()]);
+    return r;
+  }, [projectId, refreshDefs, refreshPositions]);
   const reorder = useCallback(async (ids: string[]) => {
     if (!projectId) return;
     setMechanisms(prev => prev && ids.map(id => prev.find(m => m.id === id)!).filter(Boolean).map((m, i) => ({ ...m, order: i })));
@@ -457,6 +529,8 @@ export function useEditorMechanisms(o: {
     status, mechanisms: mechanisms || EMPTY_MECHS, positions: list, resolved: pb.resolved, selectedRow: pb.selectedRow,
     targets, check, preview, focusedId, setFocusedId, sceneQueryRef,
     commitValue, clearValue, previewValue, create, update, remove, reorder,
+    /** 一排機關（v2 第 3 階段）：分組、一次建立、共用設定、花樣（一次存很多個位置）、花樣預覽 */
+    groups, createBatch, updateGroup, removeGroup, applyPositions, previewValues,
     /** 延遲 / 走幾秒（v2）、機關時間軸 */
     commitTiming, timings: pb.timings, timeline: pb.timeline, setPreviewTime, previewTimeRef, timelineOpen, setTimelineOpen,
     /** 「照機器速度播放」：換 cue 時照機器速度（預設關 = 照轉場秒數） */
@@ -470,5 +544,6 @@ export function useEditorMechanisms(o: {
 }
 
 const EMPTY_MECHS: Mechanism[] = [];
+const EMPTY_GROUPS: MechanismGroup[] = [];
 
 export type EditorMechanisms = ReturnType<typeof useEditorMechanisms>;

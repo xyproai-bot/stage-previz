@@ -67,6 +67,22 @@ export interface Mechanism {
   mirror?: MechanismMirror | null;
   /** 只有對開：每個帶的物件在哪一邊（沒寫 = A 邊） */
   objectSides?: Record<string, MechanismSide>;
+  /** v2 第 3 階段（0031）：屬於哪一排（沒有 = 不在任何一排裡；舊後台沒有這兩欄 → 讀成沒有） */
+  groupId?: string | null;
+  /** 這一排裡的第幾個（0 起算；花樣「依序」「波浪」照這個順序） */
+  groupIndex?: number | null;
+}
+
+/** 一排機關一次建立時選的選項（編輯時看得到原本選的） */
+export type GroupNumbering = 'leftToRight' | 'rightToLeft' | 'frontToBack' | 'selection';
+export interface MechanismGroupSettings { namePrefix?: string; numbering?: GroupNumbering }
+/** 一排機關（0031）：名字、順序；成員是 mechanisms.groupId 指到這一排的機關 */
+export interface MechanismGroup {
+  id: string;
+  name: string;
+  order: number;
+  settings: MechanismGroupSettings | null;
+  updatedAt: string;
 }
 
 /** mechanismId → 位置 */
@@ -128,6 +144,10 @@ export const MECH_LIMITS = {
   pivotAbs: 1e5,
   /** 每個 cue 的延遲 / 走幾秒：0 ~ 3600 秒（存到 0.001 秒） */
   timingMaxSec: 3600,
+  /** 一排機關：一次最多建立幾個、一次花樣最多寫幾列（一次寫入的上限也是 200） */
+  groupMembersMax: 64,
+  groupNameMax: 40,
+  bulkPositionsMax: 200,
 } as const;
 
 /** 給畫面用：單位 */
@@ -171,7 +191,7 @@ function normalize(v: MechVec3): MechVec3 | null {
 // ─────────────────────────────────────────────
 
 export type MechanismField =
-  | 'name' | 'kind' | 'variant' | 'axis' | 'pivot' | 'mirror' | 'travel' | 'maxSpeed' | 'presets' | 'objectIds' | 'parentId';
+  | 'groupName' | 'namePrefix' | 'name' | 'kind' | 'variant' | 'axis' | 'pivot' | 'mirror' | 'travel' | 'maxSpeed' | 'presets' | 'objectIds' | 'parentId';
 
 export const MECH_MESSAGES = {
   nameEmpty: '機關名稱不能空白',
@@ -199,6 +219,19 @@ export const MECH_MESSAGES = {
   splitAsParent: '對開的機關不能當別的機關的上層',
   splitHasChildren: '有機關裝在它上面，不能改成對開',
   splitConvert: '對開的機關不能轉換 cue 位置（兩邊的物件動法不一樣）',
+  // 一排機關（0031）
+  groupNameEmpty: '這一排的名字不能空白',
+  groupNameTaken: (name: string) => `這個專案已經有叫「${name}」的一排機關`,
+  groupNameLong: '這一排的名字最多 40 個字',
+  groupPrefixLong: (max: number) => `名稱開頭太長了（最多 ${max} 個字，後面還要接編號）`,
+  groupMin: '一排至少要 2 個機關，請多選幾個物件',
+  groupMax: '一次最多建立 64 個機關',
+  groupSplit: '一次建立的機關不能是對開，請一個一個設定',
+  bulkItems: '一次最多設定 200 個機關的位置',
+  bulkItem: '每一列都要有機關和位置',
+  bulkDuplicate: '同一個機關在這一次只能出現一次',
+  bulkForeign: '有機關不在這個專案裡',
+  groupEmpty: '這一排已經沒有機關了',
 } as const;
 
 /** 專案裡其他機關（檢查名稱重複、裝在哪個機關上） */

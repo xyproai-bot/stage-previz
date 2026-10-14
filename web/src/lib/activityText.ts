@@ -10,7 +10,7 @@ const SONG_STATUS_LABEL: Record<string, string> = {
 
 const TARGET_LABEL: Record<string, string> = {
   project: '專案', song: '歌曲', cue: 'cue', cue_state: '物件位置', stage_object: '物件', model: '模型',
-  song_video: '影片', mechanism: '機關', drive_file: 'Drive 檔案', cue_template: '常用擺位', invite: '邀請連結',
+  song_video: '影片', mechanism: '機關', mechanism_group: '一排機關', drive_file: 'Drive 檔案', cue_template: '常用擺位', invite: '邀請連結',
   share_link: '分享連結', comment: '留言',
 };
 
@@ -80,6 +80,16 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
   if (action === 'reorder') {
     const count = num(p.count);
     return count != null ? `重新排序 ${count} ${join("個", target)}` : join("重新排序", target);
+  }
+  // 一排機關（機關 v2 第 3 階段）
+  if (type === 'mechanism' && action === 'bulk_create') {
+    const count = num(p.count);
+    return `一次建立${count != null ? ` ${count} 個` : ''}機關${quoted(name)}`;
+  }
+  if (type === 'mechanism_group') {
+    if (action === 'delete') return `刪除一排機關${quoted(name)}${num(p.mechanisms) != null ? `（連同 ${num(p.mechanisms)} 個機關）` : ''}`;
+    if (action === 'update' && p.dissolved === true) return `解散一排機關${quoted(name)}（${num(p.mechanisms) ?? 0} 個機關留著）`;
+    if (action === 'update') return `修改一排機關${quoted(name)}${p.shared === true ? '的共用設定' : ''}`;
   }
   if (action === 'bulk_create') {
     const inserted = num(p.inserted);

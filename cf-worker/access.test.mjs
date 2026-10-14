@@ -340,6 +340,18 @@ test('路由：機關（看 = 成員；新增 / 改 / 刪 / 排序 / 每個 cue 
     { kind: 'mechPositions.item', need: 'editor', songId: 's1', cueId: 'c1', mechId: 'm1' });
   assert.equal(route('GET', `${p}/songs/s1/cues/c1/mechanisms/m1`).methodNotAllowed, true);
   assert.equal(route('GET', `${p}/songs/s1/cues/c1/mechanisms`), null);
+  // 一排機關（機關 v2 第 3 階段）：一次建立、改 / 解散 / 刪掉、一次寫很多個 cue 位置，都是 editor
+  assert.deepEqual(route('POST', `${p}/mechanisms/batch`), { kind: 'mechanisms.batch', need: 'editor' });
+  assert.equal(route('GET', `${p}/mechanisms/batch`).methodNotAllowed, true);
+  assert.deepEqual(route('PATCH', `${p}/mechanism-groups/g1`), { kind: 'mechGroups.item', need: 'editor', groupId: 'g1' });
+  assert.deepEqual(route('DELETE', `${p}/mechanism-groups/g1`), { kind: 'mechGroups.item', need: 'editor', groupId: 'g1' });
+  assert.equal(route('GET', `${p}/mechanism-groups/g1`).methodNotAllowed, true);
+  assert.equal(route('GET', `${p}/mechanism-groups`), null);
+  assert.equal(route('PATCH', `${p}/mechanism-groups/g1/x`), null);
+  assert.deepEqual(route('PUT', `${p}/songs/s1/cues/c1/mechanism-positions`),
+    { kind: 'mechPositions.bulk', need: 'editor', songId: 's1', cueId: 'c1' });
+  assert.equal(route('POST', `${p}/songs/s1/cues/c1/mechanism-positions`).methodNotAllowed, true);
+  assert.equal(route('PUT', `${p}/songs/s1/cues/c1/mechanism-positions/x`), null);
   // 導演 / 動畫師看得到、改不了（403）
   const as = (role) => ({ role, globalRole: role });
   assert.equal(roleMeetsNeed('editor', as('director')), false);

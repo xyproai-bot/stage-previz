@@ -13,6 +13,7 @@ import {
   normalizeMechanismInput, mechanismToInput, parseCuePositionBody, parseTimingSeconds, clampValue, MECH_MESSAGES,
 } from '../web/src/lib/mechanisms/model.ts';
 import { planCueConversion } from '../web/src/lib/mechanisms/convert.ts';
+import { planBatch, planGroupPatch, groupMembers, parseBulkPositions, isNumbering } from '../web/src/lib/mechanisms/group.ts';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const newId = (prefix, i = 0) => prefix + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + (i ? String(i) : '');
@@ -87,6 +88,23 @@ export function rowToMechanism(row, objectIds = [], cueCount = 0, sides = {}) {
     variant,
     mirror,
     objectSides,
+    // 一排（0031）：舊資料 / 舊後台沒有 → null
+    groupId: row.group_id || null,
+    groupIndex: Number.isFinite(Number(row.group_index)) && row.group_index !== null ? Number(row.group_index) : null,
+  };
+}
+
+/** mechanism_groups 一列 → API 的 MechanismGroup */
+export function rowToGroup(row) {
+  const st = parseJson(row.settings, null);
+  const settings = {};
+  if (st && typeof st === 'object' && !Array.isArray(st)) {
+    if (typeof st.namePrefix === 'string' && st.namePrefix.trim()) settings.namePrefix = st.namePrefix.trim().slice(0, 40);
+    if (isNumbering(st.numbering)) settings.numbering = st.numbering;
+  }
+  return {
+    id: row.id, name: row.name, order: Number(row.order) || 0,
+    settings: Object.keys(settings).length ? settings : null, updatedAt: row.updated_at,
   };
 }
 
@@ -179,8 +197,18 @@ export function wantsMech2(request) {
   try { return Number(new URL(request.url).searchParams.get('mech')) >= 2; } catch { return false; }
 }
 
+/** 這個專案的「一排」機關（照順序） */
+export async function loadMechanismGroups(env, projectId) {
+  const r = await env.DB.prepare(
+    `SELECT id, name, "order", settings, updated_at FROM mechanism_groups WHERE project_id = ? ORDER BY "order" ASC, created_at ASC, id ASC`
+  ).bind(projectId).all();
+  return (r.results || []).map(rowToGroup);
+}
+
 export async function listMechanisms(env, ctx, { mech2 = true } = {}) {
-  return ok({ mechanisms: await loadMechanisms(env, ctx.projectId, null, { mech2 }) });
+  // groups：只給新版畫面（網址帶 ?mech=2）；舊版前端的回應跟以前一模一樣
+  const mechanisms = await loadMechanisms(env, ctx.projectId, null, { mech2 });
+  return ok(mech2 ? { mechanisms, groups: await loadMechanismGroups(env, ctx.projectId) } : { mechanisms });
 }
 
 /** 一首歌每個 cue 自己設的機關位置；masterOnly = 分享連結（只看得到正式 cue） */
@@ -358,11 +386,18 @@ export async function updateMechanism(request, env, ctx, mechId, log) {
 
 export async function deleteMechanism(request, env, ctx, mechId, log) {
   const before = await env.DB.prepare(
-    `SELECT m.name, (SELECT COUNT(*) FROM cue_mechanism_positions p WHERE p.mechanism_id = m.id) AS n
+    `SELECT m.name, m.group_id, (SELECT COUNT(*) FROM cue_mechanism_positions p WHERE p.mechanism_id = m.id) AS n
        FROM mechanisms m WHERE m.id = ? AND m.project_id = ?`
   ).bind(mechId, ctx.projectId).first();
   if (!before) return bad('這個專案裡找不到這個機關', 404);
-  await env.DB.prepare(`DELETE FROM mechanisms WHERE id = ? AND project_id = ?`).bind(mechId, ctx.projectId).run();
+  const stmts = [env.DB.prepare(`DELETE FROM mechanisms WHERE id = ? AND project_id = ?`).bind(mechId, ctx.projectId)];
+  // 一排裡最後一個機關刪掉了 → 這一排也不留空殼（舊版前端刪機關也走這裡）
+  if (before.group_id) {
+    stmts.push(env.DB.prepare(
+      `DELETE FROM mechanism_groups WHERE id = ? AND project_id = ? AND NOT EXISTS (SELECT 1 FROM mechanisms WHERE group_id = mechanism_groups.id)`
+    ).bind(before.group_id, ctx.projectId));
+  }
+  await env.DB.batch(stmts);
   const removedPositions = Number(before.n) || 0;
   await log?.('delete', 'mechanism', mechId, { name: before.name, removedPositions });
   return ok({ ok: true, removedPositions });
@@ -378,6 +413,127 @@ export async function reorderMechanisms(request, env, ctx, log) {
     env.DB.prepare(`UPDATE mechanisms SET "order" = ? WHERE id = ? AND project_id = ?`).bind(i, id, ctx.projectId)));
   await log?.('reorder', 'mechanism', null, { count: ids.length });
   return ok({ ok: true });
+}
+
+// ─────────────────────────────────────────────
+// 一排機關（0031）：一次建立 N 個、改名 / 共用設定、解散 / 刪掉
+// ─────────────────────────────────────────────
+
+/**
+ * POST /mechanisms/batch  body: { base, objectIds, namePrefix, groupName?, numbering?, overrides?, moveObjects? }
+ * 一個物件一個機關（照 objectIds 的順序編 1、2、3…），放進同一排；每個機關都是普通機關，用單獨新增一樣的規則檢查。
+ * 物件已經在別的機關 → 409（跟單獨新增一樣，問使用者後帶 moveObjects: true 再送）。
+ * 回 201 { group, mechanisms }
+ */
+export async function createMechanismBatch(request, env, ctx, log) {
+  const body = await readJson(request);
+  if (!body) return bad('Invalid JSON');
+  const facts = await projectFacts(env, ctx.projectId);
+  const groups = await loadMechanismGroups(env, ctx.projectId);
+  const plan = planBatch(body, {
+    siblings: facts.siblings, projectObjectIds: facts.projectObjectIds, groupNames: groups.map(g => g.name),
+  });
+  if (!plan.ok) return bad(plan.error, 400, { field: plan.field });
+  const { groupName, settings, members } = plan.value;
+  const allObjects = members.flatMap(m => m.objectIds);
+  const conflicts = findObjectConflicts(allObjects, facts.memberships, facts.objectNames, null);
+  if (conflicts.length && body.moveObjects !== true) return bad(conflictMessage(conflicts[0]), 409, { conflicts });
+
+  const maxM = Number((await env.DB.prepare(`SELECT COALESCE(MAX("order"), -1) AS m FROM mechanisms WHERE project_id = ?`).bind(ctx.projectId).first())?.m);
+  const maxG = Number((await env.DB.prepare(`SELECT COALESCE(MAX("order"), -1) AS m FROM mechanism_groups WHERE project_id = ?`).bind(ctx.projectId).first())?.m);
+  const firstOrder = Number.isFinite(maxM) ? maxM + 1 : 0;
+  const groupId = newId('mgrp_');
+  const stmts = [
+    env.DB.prepare(`INSERT INTO mechanism_groups (id, project_id, name, "order", settings) VALUES (?, ?, ?, ?, ?)`)
+      .bind(groupId, ctx.projectId, groupName, Number.isFinite(maxG) ? maxG + 1 : 0, JSON.stringify(settings)),
+  ];
+  // 從別的機關移過來：那些機關算「在新介面改過」
+  for (const c of conflicts) {
+    stmts.push(env.DB.prepare(`DELETE FROM mechanism_objects WHERE stage_object_id = ? AND mechanism_id = ?`).bind(c.objectId, c.mechanismId));
+  }
+  for (const mid of new Set(conflicts.map(c => c.mechanismId))) {
+    stmts.push(env.DB.prepare(`UPDATE mechanisms SET edited_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).bind(mid));
+  }
+  members.forEach((v, i) => {
+    const id = newId('mech_', i + 1);
+    const c = inputToColumns(v);
+    stmts.push(env.DB.prepare(
+      `INSERT INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
+                               presets, parent_id, console_label, "order", metadata, variant, mirror, group_id, group_index, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+    ).bind(id, ctx.projectId, c.name, c.kind, c.axis, c.pivot, c.travel_min, c.travel_max, c.default_value, c.max_speed,
+      c.presets, c.parent_id, c.console_label, firstOrder + i, c.metadata, null, null, groupId, i));
+    for (const oid of v.objectIds) {
+      stmts.push(env.DB.prepare(`INSERT INTO mechanism_objects (mechanism_id, stage_object_id, side) VALUES (?, ?, NULL)`).bind(id, oid));
+    }
+  });
+  await env.DB.batch(stmts);
+  await log?.('bulk_create', 'mechanism', groupId, { name: groupName, count: members.length, moved: conflicts.length || undefined });
+  const [group] = (await loadMechanismGroups(env, ctx.projectId)).filter(g => g.id === groupId);
+  const mechanisms = groupMembers(await loadMechanisms(env, ctx.projectId), groupId);
+  return ok({ group, mechanisms }, 201);
+}
+
+/**
+ * PATCH /mechanism-groups/:g  body: { name?, travelMin?, travelMax?, defaultValue?, maxSpeed?, presets? }
+ * name = 這一排的名字；其他是共用設定 → 這一排每個機關都改成一樣（每個都用單獨修改的規則檢查）
+ * 回 { group, mechanisms, outOfRangeCount }（有幾個 cue 存的位置超出新的行程）
+ */
+export async function updateMechanismGroup(request, env, ctx, groupId, log) {
+  const body = await readJson(request);
+  if (!body) return bad('Invalid JSON');
+  const groups = await loadMechanismGroups(env, ctx.projectId);
+  const group = groups.find(g => g.id === groupId);
+  if (!group) return bad('這個專案裡找不到這一排機關', 404);
+  const members = groupMembers(await loadMechanisms(env, ctx.projectId), groupId);
+  const facts = await projectFacts(env, ctx.projectId);
+  const plan = planGroupPatch(body, members, { siblings: facts.siblings, otherGroupNames: groups.filter(g => g.id !== groupId).map(g => g.name) });
+  if (!plan.ok) return bad(plan.error, 400, { field: plan.field });
+  const { name, shared, members: updates } = plan.value;
+  const stmts = [];
+  if (name !== null) {
+    stmts.push(env.DB.prepare(`UPDATE mechanism_groups SET name = ?, updated_at = datetime('now') WHERE id = ? AND project_id = ?`).bind(name, groupId, ctx.projectId));
+  }
+  for (const u of updates) {
+    const c = inputToColumns(u.input);
+    stmts.push(env.DB.prepare(
+      `UPDATE mechanisms SET travel_min = ?, travel_max = ?, default_value = ?, max_speed = ?, presets = ?,
+              edited_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ? AND project_id = ?`
+    ).bind(c.travel_min, c.travel_max, c.default_value, c.max_speed, c.presets, u.id, ctx.projectId));
+  }
+  if (stmts.length) await env.DB.batch(stmts);
+  const out = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM cue_mechanism_positions p JOIN mechanisms m ON m.id = p.mechanism_id
+      WHERE m.group_id = ? AND (p.value < m.travel_min OR p.value > m.travel_max)`
+  ).bind(groupId).first();
+  const changes = {};
+  for (const k of Object.keys(body)) changes[k] = body[k];
+  await log?.('update', 'mechanism_group', groupId, { name: name ?? group.name, shared: shared || undefined, changes });
+  const [fresh] = (await loadMechanismGroups(env, ctx.projectId)).filter(g => g.id === groupId);
+  return ok({ group: fresh, mechanisms: groupMembers(await loadMechanisms(env, ctx.projectId), groupId), outOfRangeCount: Number(out?.n) || 0 });
+}
+
+/**
+ * DELETE /mechanism-groups/:g[?dissolve=1]
+ *   dissolve → 只解散這一排：機關都留著（變成一個一個普通機關），位置和時間不動
+ *   沒帶     → 這一排和裡面所有機關一起刪掉（連同每個 cue 的位置）
+ */
+export async function deleteMechanismGroup(request, env, ctx, groupId, log, { dissolve = false } = {}) {
+  const g = await env.DB.prepare(`SELECT name FROM mechanism_groups WHERE id = ? AND project_id = ?`).bind(groupId, ctx.projectId).first();
+  if (!g) return bad('這個專案裡找不到這一排機關', 404);
+  const cnt = await env.DB.prepare(
+    `SELECT COUNT(*) AS m, (SELECT COUNT(*) FROM cue_mechanism_positions p JOIN mechanisms x ON x.id = p.mechanism_id WHERE x.group_id = ?) AS p
+       FROM mechanisms WHERE group_id = ? AND project_id = ?`
+  ).bind(groupId, groupId, ctx.projectId).first();
+  const members = Number(cnt?.m) || 0, positions = Number(cnt?.p) || 0;
+  const stmts = dissolve
+    ? [env.DB.prepare(`UPDATE mechanisms SET group_id = NULL, group_index = NULL WHERE group_id = ? AND project_id = ?`).bind(groupId, ctx.projectId)]
+    : [env.DB.prepare(`DELETE FROM mechanisms WHERE group_id = ? AND project_id = ?`).bind(groupId, ctx.projectId)];
+  stmts.push(env.DB.prepare(`DELETE FROM mechanism_groups WHERE id = ? AND project_id = ?`).bind(groupId, ctx.projectId));
+  await env.DB.batch(stmts);
+  await log?.(dissolve ? 'update' : 'delete', 'mechanism_group', groupId, { name: g.name, dissolved: dissolve || undefined, mechanisms: members });
+  return ok(dissolve ? { ok: true, dissolved: true, mechanisms: members } : { ok: true, removedMechanisms: members, removedPositions: positions });
 }
 
 // ─────────────────────────────────────────────
@@ -436,6 +592,64 @@ export async function putCuePosition(request, env, ctx, cueId) {
   });
 }
 
+/**
+ * PUT …/cues/:c/mechanism-positions  body: { items: [{ mechanismId, value, delaySec?, durationSec? }] }（1~200 列）
+ * 一次寫很多個機關在這個 cue 的位置和時間（套用花樣、復原花樣），一個交易：要嘛全部寫進去，要嘛都不動。
+ *   value 是數字 → 存位置（夾進各自的行程）；value 是 null → 刪掉這個 cue 自己的那一列（回到沿用）
+ *   delaySec / durationSec：沒放 = 不改；null = 跟著 cue；數字 = 設定（跟單獨寫一樣）
+ * 機關要都在這個專案裡，不然整批 400。
+ * 回 { ok, items: [{ mechanismId, value, clamped, delaySec, durationSec } | { mechanismId, removed: true }] }
+ */
+export async function putCuePositionsBulk(request, env, ctx, cueId) {
+  const body = await readJson(request);
+  if (!body) return bad('Invalid JSON');
+  const p = parseBulkPositions(body);
+  if (!p.ok) return bad(p.error, 400, { field: p.field });
+  const mechs = (await env.DB.prepare(`SELECT id, travel_min, travel_max FROM mechanisms WHERE project_id = ?`).bind(ctx.projectId).all()).results || [];
+  const byId = new Map(mechs.map(m => [m.id, m]));
+  if (p.items.some(it => !byId.has(it.mechanismId))) return bad(MECH_MESSAGES.bulkForeign, 400, { field: 'items' });
+  const touch = () => env.DB.prepare(
+    `UPDATE mechanisms SET edited_at = datetime('now') WHERE id IN (SELECT mechanism_id FROM cue_mechanism_positions WHERE cue_id = ?)`
+  ).bind(cueId);
+  const stmts = [touch()];
+  const clamped = new Map();
+  for (const it of p.items) {
+    if (it.value === null) {
+      stmts.push(env.DB.prepare(`DELETE FROM cue_mechanism_positions WHERE cue_id = ? AND mechanism_id = ?`).bind(cueId, it.mechanismId));
+      continue;
+    }
+    const m = byId.get(it.mechanismId);
+    const value = clampValue(it.value, Number(m.travel_min), Number(m.travel_max));
+    clamped.set(it.mechanismId, value !== it.value);
+    stmts.push(env.DB.prepare(
+      `INSERT INTO cue_mechanism_positions (cue_id, mechanism_id, value, delay_sec, duration_sec, updated_at)
+       VALUES (?, ?, ?, ?, ?, datetime('now'))
+       ON CONFLICT(cue_id, mechanism_id) DO UPDATE SET value = excluded.value,
+         delay_sec = CASE WHEN ? THEN excluded.delay_sec ELSE delay_sec END,
+         duration_sec = CASE WHEN ? THEN excluded.duration_sec ELSE duration_sec END,
+         updated_at = excluded.updated_at`
+    ).bind(cueId, it.mechanismId, value, it.delaySec ?? null, it.durationSec ?? null,
+      it.delaySec !== undefined ? 1 : 0, it.durationSec !== undefined ? 1 : 0));
+  }
+  stmts.push(touch());
+  await env.DB.batch(stmts);
+  const rows = (await env.DB.prepare(
+    `SELECT mechanism_id, value, delay_sec, duration_sec FROM cue_mechanism_positions WHERE cue_id = ?`
+  ).bind(cueId).all()).results || [];
+  const byMech = new Map(rows.map(r => [r.mechanism_id, r]));
+  return ok({
+    ok: true,
+    items: p.items.map(it => {
+      const r = byMech.get(it.mechanismId);
+      if (it.value === null || !r) return { mechanismId: it.mechanismId, removed: true };
+      return {
+        mechanismId: it.mechanismId, value: Number(r.value), clamped: clamped.get(it.mechanismId) === true,
+        delaySec: secOrNull(r.delay_sec), durationSec: secOrNull(r.duration_sec),
+      };
+    }),
+  });
+}
+
 export async function deleteCuePosition(request, env, ctx, cueId) {
   const m = ctx.mechanism;
   const [r] = await env.DB.batch([
@@ -457,7 +671,7 @@ export async function copyMechanismsToProject(env, srcProjectId, dstProjectId, o
 
 /** 匯出檔的三個欄位（資料庫原樣的列） */
 export async function exportMechanisms(env, projectId) {
-  const [mr, or, pr] = await env.DB.batch([
+  const [mr, or, pr, gr] = await env.DB.batch([
     env.DB.prepare(`SELECT * FROM mechanisms WHERE project_id = ? ORDER BY "order" ASC`).bind(projectId),
     env.DB.prepare(
       `SELECT mo.mechanism_id, mo.stage_object_id, mo.side FROM mechanism_objects mo
@@ -467,11 +681,14 @@ export async function exportMechanisms(env, projectId) {
       `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec FROM cue_mechanism_positions p
          JOIN mechanisms m ON m.id = p.mechanism_id WHERE m.project_id = ?`
     ).bind(projectId),
+    env.DB.prepare(`SELECT id, name, "order", settings FROM mechanism_groups WHERE project_id = ? ORDER BY "order" ASC`).bind(projectId),
   ]);
   return {
     mechanisms: mr.results || [],
     mechanismObjects: or.results || [],
     cueMechanismPositions: pr.results || [],
+    // 一排機關（0031；每個機關列上的 group_id / group_index 指到這裡；舊的匯出檔沒有 → 都是一般機關）
+    mechanismGroups: gr.results || [],
   };
 }
 
@@ -481,7 +698,7 @@ export async function exportMechanisms(env, projectId) {
  */
 export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap) {
   const mechs = Array.isArray(data?.mechanisms) ? data.mechanisms.slice(0, 500) : [];
-  if (!mechs.length) return { mechanisms: 0, objects: 0, positions: 0 };
+  if (!mechs.length) return { mechanisms: 0, objects: 0, positions: 0, groups: 0 };
   const idMap = new Map();
   const rows = [];
   const splitIds = new Set();   // 新 id：對開的機關（帶的物件要記哪一邊）
@@ -499,17 +716,38 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     if (n.value.variant === 'split') splitIds.add(id);
     rows.push({
       id, c: inputToColumns(n.value), order: m.order, parentOld: m.parentId,
+      groupOld: typeof raw.group_id === 'string' && raw.group_id ? raw.group_id : null,
+      groupIndex: Number.isInteger(raw.group_index) && raw.group_index >= 0 ? raw.group_index : null,
       legacyObj, legacyAxis: legacyObj ? raw.legacy_axis : null,
       // 沒在新介面改過的舊滑桿機關照樣讓舊網站同步；其他一律算改過
       editedAt: legacyObj ? (raw.edited_at ?? null) : 'now',
     });
   });
-  const stmts = rows.map(r => env.DB.prepare(
-    `INSERT OR IGNORE INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
-                             presets, parent_id, console_label, "order", metadata, variant, mirror, legacy_object_id, legacy_axis, edited_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
-  ).bind(r.id, projectId, r.c.name, r.c.kind, r.c.axis, r.c.pivot, r.c.travel_min, r.c.travel_max, r.c.default_value,
-    r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata, r.c.variant, r.c.mirror, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
+  // 一排機關（0031）：有成員被匯入的才建，新 id；先建一排、再建機關（機關指到一排）
+  const groupMap = new Map();
+  const stmts = [];
+  let groups = 0;
+  for (const g of Array.isArray(data.mechanismGroups) ? data.mechanismGroups.slice(0, 500) : []) {
+    if (!g || typeof g.id !== 'string' || !rows.some(r => r.groupOld === g.id)) continue;
+    const name = String(g.name ?? '').trim().slice(0, 40);
+    if (!name) continue;
+    const gid = newId('mgrp_', groupMap.size + 1);
+    groupMap.set(g.id, gid);
+    const settings = rowToGroup({ id: gid, name, order: g.order, settings: g.settings }).settings;
+    stmts.push(env.DB.prepare(`INSERT INTO mechanism_groups (id, project_id, name, "order", settings) VALUES (?, ?, ?, ?, ?)`)
+      .bind(gid, projectId, name, Number(g.order) || 0, settings ? JSON.stringify(settings) : null));
+    groups++;
+  }
+  for (const r of rows) {
+    const gid = r.groupOld && groupMap.has(r.groupOld) ? groupMap.get(r.groupOld) : null;
+    stmts.push(env.DB.prepare(
+      `INSERT OR IGNORE INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
+                               presets, parent_id, console_label, "order", metadata, variant, mirror, group_id, group_index, legacy_object_id, legacy_axis, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
+    ).bind(r.id, projectId, r.c.name, r.c.kind, r.c.axis, r.c.pivot, r.c.travel_min, r.c.travel_max, r.c.default_value,
+      r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata, r.c.variant, r.c.mirror,
+      gid, gid ? r.groupIndex : null, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
+  }
   for (const r of rows) {
     const p = r.parentOld ? idMap.get(r.parentOld) : null;
     if (p && p !== r.id) stmts.push(env.DB.prepare(`UPDATE mechanisms SET parent_id = ? WHERE id = ?`).bind(p, r.id));
@@ -535,7 +773,7 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     positions++;
   }
   for (let i = 0; i < stmts.length; i += 200) await env.DB.batch(stmts.slice(i, i + 200));
-  return { mechanisms: rows.length, objects, positions };
+  return { mechanisms: rows.length, objects, positions, groups };
 }
 
 /** 匯入 / 常用擺位的秒數：不合法 → null（跟著 cue） */

@@ -278,7 +278,7 @@ test('複製專案 / 匯出：機關、帶的物件、每個 cue 的位置都跟
   seedCue(db, 'c9', 's9', 1);
   const r = await copyMechanismsToProject(env, 'p1', 'p9',
     new Map([['lift', 'lift9'], ['led', 'led9'], ['deck', 'deck9']]), new Map([['c2', 'c9']]));
-  assert.deepEqual(r, { mechanisms: 2, objects: 3, positions: 1 });
+  assert.deepEqual(r, { mechanisms: 2, objects: 3, positions: 1, groups: 0 });
   const copied = await loadMechanisms(env, 'p9');
   const cl = copied.find(m => m.name === '中央升降台');
   const cr = copied.find(m => m.name === '轉台');

@@ -274,6 +274,8 @@ export function describeProjectRoute(method, segs) {
         return bad('mechanisms');
       }
       if (a === 'reorder' && !b) return m === 'POST' ? r('mechanisms.reorder', 'editor') : bad('mechanisms.reorder');
+      // 一次建立 N 個機關（一排）
+      if (a === 'batch' && !b) return m === 'POST' ? r('mechanisms.batch', 'editor') : bad('mechanisms.batch');
       if (!b) {
         if (m === 'PATCH' || m === 'DELETE') return r('mechanisms.item', 'editor', { mechId: a });
         return bad('mechanisms.item');
@@ -286,6 +288,11 @@ export function describeProjectRoute(method, segs) {
     case 'mechanism-sheet':
       if (a) return null;
       return read ? r('mechanisms.sheet', 'editor') : bad('mechanisms.sheet');
+    // 一排機關：改名字 / 共用設定、解散或刪掉（讀在 GET …/mechanisms 的 groups 裡）
+    case 'mechanism-groups':
+      if (!a || b) return null;
+      if (m === 'PATCH' || m === 'DELETE') return r('mechGroups.item', 'editor', { groupId: a });
+      return bad('mechGroups.item');
 
     case 'cue-templates':
       if (read) return r('cueTemplates.list', 'member');
@@ -346,6 +353,8 @@ export function describeProjectRoute(method, segs) {
         if (m === 'PUT' || m === 'DELETE') return r('mechPositions.item', 'editor', { songId, cueId, mechId: e });
         return bad('mechPositions.item');
       }
+      // 一次寫很多個機關在這個 cue 的位置和延遲（套用花樣）
+      if (d === 'mechanism-positions' && !e) return m === 'PUT' ? r('mechPositions.bulk', 'editor', { songId, cueId }) : bad('mechPositions.bulk');
       return null;
     }
     default:

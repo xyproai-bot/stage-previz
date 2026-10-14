@@ -295,3 +295,47 @@
 }
 .mech-tl__head { position: absolute; top: 0; bottom: 0; left: 8px; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
 .mech-tl__drag { position: absolute; right: 10px; bottom: 6px; background: var(--surface-2); border-radius: 4px; padding: 2px 8px; }
+
+/* 一排機關（v2 第 3 階段） */
+.mech-group { list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: rgba(0, 0, 0, 0.1); padding: 4px 6px 6px; display: flex; flex-direction: column; gap: 6px; }
+.mech-group__head { display: flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.mech-group__head .grow { flex: 1; }
+.mech-group__head .btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.mech-group__name { font-weight: 600; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
+.mech-group__flag { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--warn); }
+.mech-rows--member { padding-left: 6px; border-left: 2px solid var(--border-strong); margin-left: 6px; }
+.mech-setup-list--member { padding: 0 6px 6px 18px; }
+
+/* 套用花樣 */
+.mech-pat {
+  display: flex; flex-direction: column; gap: 8px; padding: 9px 10px;
+  background: rgba(255, 170, 68, 0.05); border: 1px solid rgba(255, 170, 68, 0.3); border-radius: var(--radius-md);
+}
+.mech-pat__head { display: flex; flex-direction: column; gap: 2px; }
+.mech-pat__head strong { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.mech-pat select {
+  background: rgba(0, 0, 0, 0.4); border: 1px solid var(--border-strong); color: var(--text);
+  border-radius: var(--radius-sm); padding: 5px 8px; font-size: 12.5px; min-width: 0;
+}
+.mech-pat .num-field { min-width: 96px; }
+.mech-pat__fields > * { flex: 1 1 110px; }
+.mech-pat__list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 220px; overflow-y: auto; }
+.mech-pat__item { display: grid; grid-template-columns: 18px minmax(60px, 1.2fr) minmax(40px, 1fr) 62px 74px; align-items: center; gap: 6px; font-size: 11.5px; }
+.mech-pat__no { color: var(--text-muted); font-family: var(--font-mono); text-align: right; }
+.mech-pat__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mech-pat__bar { height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.1); overflow: hidden; }
+.mech-pat__bar > span { display: block; height: 100%; background: var(--warn); }
+.mech-pat__val { font-family: var(--font-mono); text-align: right; }
+.mech-pat__delay { white-space: nowrap; font-size: 11px; }
+
+/* 機關時間軸：一排（可以收起來，收起來時畫整排的合併色塊） */
+.mech-tl__label--group { font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 4px; }
+.mech-tl__label--group .ui-icon { flex-shrink: 0; }
+.mech-tl__label--member { padding-left: 22px; }
+.mech-tl__row--group { background: rgba(255, 255, 255, 0.03); }
+.mech-tl__gmove {
+  position: absolute; top: 5px; height: 18px; padding: 0; border-radius: 4px; cursor: pointer;
+  background: rgba(16, 199, 138, 0.3); border: 1px solid var(--accent); overflow: hidden;
+}
+.mech-tl__gmove.is-fast { background: rgba(255, 69, 58, 0.35); border-color: var(--danger); }
+.mech-tl__gmove.is-selected { box-shadow: 0 0 0 2px var(--text); }

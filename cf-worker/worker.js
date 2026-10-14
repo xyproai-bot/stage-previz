@@ -343,7 +343,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.deletedVideoId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.groupId, route.deletedVideoId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -363,6 +363,7 @@ async function handleProjectsRouter(request, env, url) {
     if (route.objId && !ctx.objFound) return jsonResp({ error: '這個專案裡找不到這個物件' }, 404);
     if (route.videoId && !ctx.video) return jsonResp({ error: '這首歌裡找不到這一版影片' }, 404);
     if (route.mechId && !ctx.mechanism) return jsonResp({ error: '這個專案裡找不到這個機關' }, 404);
+    if (route.groupId && !ctx.mechGroup) return jsonResp({ error: '這個專案裡找不到這一排機關' }, 404);
 
     return await dispatchProjectRoute(request, env, url, ctx, route, segs);
   } catch (e) {
@@ -414,6 +415,12 @@ async function loadProjectContext(env, me, projectId, route) {
       `SELECT id, kind, travel_min, travel_max FROM mechanisms WHERE id = ? AND project_id = ? LIMIT 1`
     ).bind(route.mechId, projectId));
   }
+  if (route.groupId) {
+    at.mechGroup = stmts.length;
+    stmts.push(env.DB.prepare(
+      `SELECT id FROM mechanism_groups WHERE id = ? AND project_id = ? LIMIT 1`
+    ).bind(route.groupId, projectId));
+  }
   const results = stmts.length === 1 ? [await stmts[0].all()] : await env.DB.batch(stmts);
   const first = (i) => (i === undefined ? null : ((results[i]?.results || [])[0] || null));
   const project = first(0);
@@ -428,6 +435,7 @@ async function loadProjectContext(env, me, projectId, route) {
     objFound: !!first(at.obj),
     video: first(at.video),
     mechanism: first(at.mechanism),
+    mechGroup: first(at.mechGroup),
   };
 }
 
@@ -530,6 +538,12 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         ? mech.updateMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId))
         : mech.deleteMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
     case 'mechanisms.convert':    return mechResp(mech.convertCuePositions(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
+    case 'mechanisms.batch':      return mechResp(mech.createMechanismBatch(request, env, ctx, mechLog(request, env, projectId)));
+    case 'mechGroups.item':
+      return mechResp(request.method === 'PATCH'
+        ? mech.updateMechanismGroup(request, env, ctx, route.groupId, mechLog(request, env, projectId))
+        : mech.deleteMechanismGroup(request, env, ctx, route.groupId, mechLog(request, env, projectId), { dissolve: url.searchParams.get('dissolve') === '1' }));
+    case 'mechPositions.bulk':    return mechResp(mech.putCuePositionsBulk(request, env, ctx, cueId));
     case 'mechanisms.sheet':      return mechResp(mech.mechanismSheet(env, ctx, { mech2: mech.wantsMech2(request) }));
     case 'mechPositions.list':    return mechResp(mech.listSongPositions(env, ctx, songId, { mech2: mech.wantsMech2(request) }));
     case 'mechPositions.item':

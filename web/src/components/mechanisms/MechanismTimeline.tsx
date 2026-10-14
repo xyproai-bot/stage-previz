@@ -5,10 +5,12 @@
 //   上面是 cue 的記號（GO → 到位）；點時間尺 / 播放 → 3D 畫面的機關跟著時間軸動（物件停在目前選的 cue）
 // 每幀不重畫 React：播放頭、時間字直接改 DOM；機關位置 StageScene 每幀問 mech.previewTimeRef
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ChevronDown, Pause, Play, Square, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { ChevronDown, ChevronRight, Pause, Play, Square, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import Icon from '../Icon';
 import type { Cue } from '../../lib/api';
 import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
+import type { Mechanism, MechanismGroup } from '../../lib/mechanisms/model';
+import { layoutMechanisms } from '../../lib/mechanisms/group';
 import { SPEED_TOLERANCE_S, formatMechValue, formatSeconds, sortMasters, type TimelineMove } from '../../lib/mechanisms/motion';
 import { sheetTime } from '../../lib/mechanisms/cueSheet';
 
@@ -28,6 +30,11 @@ const clamp0 = (v: number) => Math.max(0, Math.min(3600, v));
 
 type Drag = { cueId: string; mechId: string; mode: 'move' | 'resize'; x0: number; delay0: number; dur0: number; delay: number; dur: number; moved: boolean };
 
+/** 時間軸上的一行：一個機關，或一排的標題行（收起來時畫整排合併的色塊） */
+type TlRow =
+  | { key: string; kind: 'mech'; mech: Mechanism; member: boolean }
+  | { key: string; kind: 'group'; group: MechanismGroup; members: Mechanism[]; collapsed: boolean };
+
 export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectCue, onClose }: Props) {
   const tl = mech.timeline;
   const mechanisms = mech.mechanisms;
@@ -45,6 +52,18 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
   const [playing, setPlaying] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const total = Math.max(10, (tl?.endTime ?? 0) + 4);
+  // 一排機關：標題行可以收起來（預設展開）；一排的成員接在標題行後面
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const rows = useMemo<TlRow[]>(() => {
+    const out: TlRow[] = [];
+    for (const it of layoutMechanisms(mechanisms, mech.groups)) {
+      if (it.type === 'single') { out.push({ key: it.mech.id, kind: 'mech', mech: it.mech, member: false }); continue; }
+      const isCollapsed = collapsed.has(it.group.id);
+      out.push({ key: 'g:' + it.group.id, kind: 'group', group: it.group, members: it.members, collapsed: isCollapsed });
+      if (!isCollapsed) for (const m of it.members) out.push({ key: m.id, kind: 'mech', mech: m, member: true });
+    }
+    return out;
+  }, [mechanisms, mech.groups, collapsed]);
 
   const fit = () => {
     const w = scrollRef.current?.clientWidth ?? 600;
@@ -204,6 +223,38 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     movesBy.set(mv.mechId, list);
   }
   const cueLabel = (id: string) => `Cue ${cueNo.get(id) ?? '?'}「${cueById.get(id)?.name ?? ''}」`;
+  const toggleGroup = (id: string) => setCollapsed(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+
+  /** 一排的標題行：每個 cue 一條合併的色塊（最早開始動 → 最後一個到位）；收起來時看這一條就知道整排什麼時候動 */
+  const groupRow = (row: Extract<TlRow, { kind: 'group' }>) => {
+    const byCue = new Map<string, { start: number; end: number; fast: boolean; first: TimelineMove; n: number }>();
+    for (const m of row.members) {
+      for (const mv of movesBy.get(m.id) || []) {
+        const start = mv.go + mv.delay, end = start + mv.duration;
+        const fast = mv.need > mv.duration + SPEED_TOLERANCE_S;
+        const cur = byCue.get(mv.cueId);
+        if (!cur) byCue.set(mv.cueId, { start, end, fast, first: mv, n: 1 });
+        else { cur.start = Math.min(cur.start, start); cur.end = Math.max(cur.end, end); cur.fast = cur.fast || fast; cur.n++; }
+      }
+    }
+    return (
+      <div key={row.key} className={'mech-tl__row mech-tl__row--group' + (row.members.some(m => m.id === mech.focusedId) ? ' is-focused' : '')}>
+        {tl!.windows.map(w => <span key={w.cueId} className="mech-tl__gridline" style={{ left: 8 + w.arrive * scale }} />)}
+        {[...byCue.entries()].map(([cueId, b]) => {
+          const sel = cueId === selectedCueId && row.members.some(m => m.id === mech.focusedId);
+          const label = `「${row.group.name}」${cueLabel(cueId)}：${b.n} 個機關，${sheetTime(b.start)} 最早開始動、${sheetTime(b.end)} 最後一個到位`;
+          return (
+            <button key={cueId} type="button" className={'mech-tl__gmove' + (b.fast ? ' is-fast' : '') + (sel ? ' is-selected' : '')}
+              style={{ left: 8 + b.start * scale, width: Math.max(4, (b.end - b.start) * scale) }}
+              title={`${label}${b.fast ? '\n有機關照最高速度來不及，展開看是哪幾個' : ''}\n展開這一排可以拖每一個機關的色塊`}
+              aria-label={label} onClick={() => select(b.first)}>
+              {(b.end - b.start) * scale > 46 && <span className="mech-tl__movelabel">{cueNo.get(cueId)}</span>}
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <section className="mech-tl" aria-label="機關時間軸">
@@ -211,10 +262,16 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
       <div className="mech-tl__body">
         <div className="mech-tl__labels" style={{ width: LABEL_W }}>
           <div className="mech-tl__ruler-pad">{untimed > 0 ? <span className="muted small" title="沒設影片時間的 cue 不在時間軸上">{untimed} 個 cue 沒設時間</span> : null}</div>
-          {mechanisms.map(m => (
-            <button key={m.id} type="button" className={'mech-tl__label' + (mech.focusedId === m.id ? ' is-focused' : '')}
-              onClick={() => mech.setFocusedId(m.id)} title={m.name}>{m.name}</button>
-          ))}
+          {rows.map(row => (row.kind === 'group' ? (
+            <button key={row.key} type="button" className={'mech-tl__label mech-tl__label--group' + (row.members.some(m => m.id === mech.focusedId) ? ' is-focused' : '')}
+              aria-expanded={!row.collapsed} onClick={() => toggleGroup(row.group.id)}
+              title={`${row.group.name}（${row.members.length} 個機關）：${row.collapsed ? '按一下展開' : '按一下收起來'}`}>
+              <Icon icon={row.collapsed ? ChevronRight : ChevronDown} size="sm" />{row.group.name}
+            </button>
+          ) : (
+            <button key={row.key} type="button" className={'mech-tl__label' + (row.member ? ' mech-tl__label--member' : '') + (mech.focusedId === row.mech.id ? ' is-focused' : '')}
+              onClick={() => mech.setFocusedId(row.mech.id)} title={row.mech.name}>{row.mech.name}</button>
+          )))}
         </div>
         <div className="mech-tl__scroll" ref={scrollRef}>
           <div className="mech-tl__content" style={{ width }}>
@@ -230,7 +287,10 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
                 </span>
               ))}
             </div>
-            {mechanisms.map(m => (
+            {rows.map(row => {
+              if (row.kind === 'group') return groupRow(row);
+              const m = row.mech;
+              return (
               <div key={m.id} className={'mech-tl__row' + (mech.focusedId === m.id ? ' is-focused' : '')}>
                 {tl.windows.map(w => <span key={w.cueId} className="mech-tl__gridline" style={{ left: 8 + w.arrive * scale }} />)}
                 {(movesBy.get(m.id) || []).map(mv => {
@@ -272,7 +332,8 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
                   );
                 })}
               </div>
-            ))}
+              );
+            })}
             <div ref={headRef} className="mech-tl__head" style={{ display: 'none' }} aria-hidden="true" />
           </div>
         </div>

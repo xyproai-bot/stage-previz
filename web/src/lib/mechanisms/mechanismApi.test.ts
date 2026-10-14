@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import {
   parseMechanism, parsePositions, listMechanisms, createMechanism, updateMechanism, setCuePosition,
-  getShareSongPositions, getMechanismSheet, convertCuePositions,
+  getShareSongPositions, getMechanismSheet, convertCuePositions, createMechanismBatch, updateMechanismGroup, deleteMechanismGroup,
+  setCuePositionsBulk, listMechanismsAndGroups,
 } from './mechanismApi';
 
 const json = (status: number, body: unknown) =>
@@ -100,6 +101,47 @@ describe('呼叫後台', () => {
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('https://proxy.haimiaan.com/api/s/show-k7p2/songs/s1/mechanism-positions?mech=2');
     expect((init.headers as Record<string, string>)['x-share-access']).toBe('acc');
+  });
+
+  it('一排機關：一次建立、改共用設定、解散 / 刪除、一次存很多個位置', async () => {
+    const f = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith('/mechanisms/batch')) return json(201, { group: { id: 'g1', name: 'LED 升降', settings: { namePrefix: 'LED 升降' } }, mechanisms: [{ id: 'm1', groupId: 'g1', groupIndex: 0 }] });
+      if (url.includes('/mechanism-groups/') && init?.method === 'PATCH') return json(200, { group: { id: 'g1', name: '前排' }, mechanisms: [], outOfRangeCount: 2 });
+      if (url.includes('/mechanism-groups/')) return json(200, { ok: true, dissolved: url.includes('dissolve=1'), removedMechanisms: 4, removedPositions: 7 });
+      return json(200, { ok: true, items: [{ mechanismId: 'm1', value: 2, clamped: true, delaySec: 0.5, durationSec: null }, { mechanismId: 'm2', removed: true }] });
+    });
+    vi.stubGlobal('fetch', f);
+    const made = await createMechanismBatch('p', { base: { kind: 'linear' }, objectIds: ['o1', 'o2'], namePrefix: 'LED 升降' });
+    expect(made.group.name).toBe('LED 升降');
+    expect(made.mechanisms[0]).toMatchObject({ groupId: 'g1', groupIndex: 0 });
+    let [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect([url, init.method]).toEqual(['https://proxy.haimiaan.com/api/projects/p/mechanisms/batch', 'POST']);
+
+    expect((await updateMechanismGroup('p', 'g 1', { name: '前排', travelMax: 2 })).outOfRangeCount).toBe(2);
+    [url, init] = f.mock.calls[1] as unknown as [string, RequestInit];
+    expect([url, init.method, init.body]).toEqual(['https://proxy.haimiaan.com/api/projects/p/mechanism-groups/g%201', 'PATCH', '{"name":"前排","travelMax":2}']);
+
+    expect(await deleteMechanismGroup('p', 'g1', true)).toEqual({ removedMechanisms: 4, removedPositions: 7 });
+    expect((f.mock.calls[2] as unknown as [string])[0]).toBe('https://proxy.haimiaan.com/api/projects/p/mechanism-groups/g1?dissolve=1');
+    await deleteMechanismGroup('p', 'g1', false);
+    expect((f.mock.calls[3] as unknown as [string])[0]).toBe('https://proxy.haimiaan.com/api/projects/p/mechanism-groups/g1');
+
+    const res = await setCuePositionsBulk('p', 's', 'c', [{ mechanismId: 'm1', value: 2, delaySec: 0.5 }, { mechanismId: 'm2', value: null }]);
+    expect(res).toEqual([
+      { mechanismId: 'm1', value: 2, clamped: true, delaySec: 0.5, durationSec: null },
+      { mechanismId: 'm2', removed: true },
+    ]);
+    [url, init] = f.mock.calls[4] as unknown as [string, RequestInit];
+    expect([url, init.method]).toEqual(['https://proxy.haimiaan.com/api/projects/p/songs/s/cues/c/mechanism-positions', 'PUT']);
+    expect(JSON.parse(init.body as string)).toEqual({ items: [{ mechanismId: 'm1', value: 2, delaySec: 0.5 }, { mechanismId: 'm2', value: null }] });
+  });
+
+  it('清單帶一排：舊後台沒有 groups → 空的', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, { mechanisms: [{ id: 'm1' }], groups: [{ id: 'g1', name: '前排', order: 0 }, { name: '沒有 id' }] })));
+    const r = await listMechanismsAndGroups('p');
+    expect(r.groups.map(g => g.id)).toEqual(['g1']);
+    vi.stubGlobal('fetch', vi.fn(async () => json(200, { mechanisms: [{ id: 'm1' }] })));
+    expect((await listMechanismsAndGroups('p')).groups).toEqual([]);
   });
 
   it('總表 / 轉換', async () => {

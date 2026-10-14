@@ -3,20 +3,24 @@
 //   下面：設定機關（新增 / 編輯 / 刪除 / 排序；表單直接展開在這裡，3D 畫面照樣能轉、能選物件）
 //   匯出機關總表（CSV，用 Excel 打開）
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChartGantt, Cog, FileSpreadsheet, LoaderCircle, Pencil, Plus, TriangleAlert } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChartGantt, ChevronDown, ChevronRight, Cog, FileSpreadsheet, LoaderCircle, Pencil, Plus, Rows3, TriangleAlert, Waves } from 'lucide-react';
 import Icon from '../Icon';
 import type { Cue, StageObject } from '../../lib/api';
 import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
 import { formatMechValue } from '../../lib/mechanisms/motion';
-import { speedUnitOf, type Mechanism, type MechanismInput, type MechVec3 } from '../../lib/mechanisms/model';
+import { speedUnitOf, type Mechanism, type MechanismGroup, type MechanismInput, type MechVec3 } from '../../lib/mechanisms/model';
 import { flipLabel } from '../../lib/mechanisms/flip';
 import { countSides } from '../../lib/mechanisms/split';
+import { layoutMechanisms, moveLayoutItem, valueRange } from '../../lib/mechanisms/group';
 import * as mapi from '../../lib/mechanisms/mechanismApi';
 import { buildMechanismSheetCsv, downloadMechanismSheet, sheetFileName } from '../../lib/mechanisms/cueSheet';
 import { toast } from '../../lib/toast';
 import { confirmDialog } from '../dialogs';
 import MechanismCueRow from './MechanismCueRow';
 import MechanismSetupForm from './MechanismSetupForm';
+import MechanismBatchForm from './MechanismBatchForm';
+import MechanismGroupForm from './MechanismGroupForm';
+import MechanismPatternPanel from './MechanismPatternPanel';
 import HelpLink from '../HelpLink';
 import { HELP_ANCHORS } from '../../lib/helpLinks';
 import './mechanisms.css';
@@ -48,6 +52,23 @@ export default function MechanismTab({
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [front, setFront] = useState<MechVec3 | null>(null);
+  // 一排機關（v2 第 3 階段）：清單怎麼排、哪幾排展開、哪一排正在套花樣、哪一排在編輯、一次建立的表單
+  const layout = useMemo(() => layoutMechanisms(mechanisms, mech.groups), [mechanisms, mech.groups]);
+  const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());     // 「這個 cue 的機關位置」展開的排
+  const [openSetup, setOpenSetup] = useState<Set<string>>(() => new Set());   // 「設定機關」展開的排
+  const [patternFor, setPatternFor] = useState<string | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const toggle = (set: Set<string>, id: string) => { const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); return n; };
+  // 在時間軸點到某一排裡的機關 → 這裡也把那一排展開，看得到是哪一個
+  const focusedGroupId = mechanisms.find(m => m.id === mech.focusedId)?.groupId ?? null;
+  useEffect(() => {
+    if (focusedGroupId) {
+      setOpenRows(s => (s.has(focusedGroupId) ? s : new Set(s).add(focusedGroupId)));
+      setOpenSetup(s => (s.has(focusedGroupId) ? s : new Set(s).add(focusedGroupId)));
+    }
+  }, [focusedGroupId, mech.focusedId]);
+  useEffect(() => { if (!selectedCue) setPatternFor(null); }, [selectedCue]);
   const masters = useMemo(() => cues.filter(c => c.status === 'master').sort((a, b) => a.order - b.order), [cues]);
   const cueName = useMemo(() => {
     const byId = new Map(cues.map(c => [c.id, c.name]));
@@ -169,12 +190,98 @@ export default function MechanismTab({
     }
   }
 
-  function move(m: Mechanism, dir: -1 | 1) {
-    const ids = mechanisms.map(x => x.id);
-    const i = ids.indexOf(m.id), j = i + dir;
-    if (i < 0 || j < 0 || j >= ids.length) return;
-    [ids[i], ids[j]] = [ids[j], ids[i]];
-    void mech.reorder(ids);
+  /** 清單上的一項（一個機關或一整排）上移 / 下移一格；一整排一起移，不會被拆開 */
+  function move(index: number, dir: -1 | 1) {
+    const ids = moveLayoutItem(layout, index, dir);
+    if (ids) void mech.reorder(ids);
+  }
+
+  /** 一次建立 N 個機關（一排）；有物件已經在別的機關 → 問過再移過來 */
+  async function saveBatch(payload: mapi.BatchPayload) {
+    setBusy(true);
+    try {
+      let r;
+      try {
+        r = await mech.createBatch(payload);
+      } catch (e) {
+        const err = e as mapi.MechanismApiError;
+        if (err.status !== 409 || !err.data?.conflicts?.length) throw e;
+        const c = err.data.conflicts;
+        const names = c.slice(0, 4).map(x => `「${x.objectName}」（在「${x.mechanismName}」）`).join('、') + (c.length > 4 ? `…等 ${c.length} 個` : '');
+        const ok = await confirmDialog({
+          title: `要把這些物件移到新的一排「${payload.namePrefix}」嗎？`,
+          message: `${names} 已經在別的機關裡，一個物件只能直接放在一個機關。`,
+          confirmLabel: '移過來',
+        });
+        if (!ok) return;
+        r = await mech.createBatch({ ...payload, moveObjects: true });
+      }
+      toast.success(`已建立「${r.group.name}」：${r.mechanisms.length} 個機關`);
+      setBatchOpen(false);
+      setOpenRows(s => new Set(s).add(r.group.id));
+      setOpenSetup(s => new Set(s).add(r.group.id));
+      if (r.mechanisms[0]) mech.setFocusedId(r.mechanisms[0].id);
+    } catch (e) {
+      toast.error('機關沒有建立：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveGroup(g: MechanismGroup, patch: mapi.GroupPatch) {
+    setBusy(true);
+    try {
+      const r = await mech.updateGroup(g.id, patch);
+      if (r.outOfRangeCount > 0) toast.warn(`有 ${r.outOfRangeCount} 個 cue 存的位置超出新的行程，播放時會停在邊界`);
+      toast.success(`已儲存「${r.group.name}」`);
+      setEditingGroupId(null);
+    } catch (e) {
+      toast.error('這一排沒有存到：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function dissolveGroup(g: MechanismGroup, count: number) {
+    const ok = await confirmDialog({
+      title: `解散「${g.name}」這一排？`,
+      message: `${count} 個機關都會留著，變成一個一個普通機關；每個 cue 的位置和時間都不會變。`,
+      confirmLabel: '解散',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await mech.removeGroup(g.id, true);
+      setEditingGroupId(null);
+      setPatternFor(null);
+      toast.success(`已解散「${g.name}」，${count} 個機關還在`);
+    } catch (e) {
+      toast.error('解散失敗：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteGroup(g: MechanismGroup, members: Mechanism[]) {
+    const positions = members.reduce((n, m) => n + m.cueCount, 0);
+    const ok = await confirmDialog({
+      title: `刪除「${g.name}」和裡面的 ${members.length} 個機關？`,
+      message: `會一起清掉 ${positions} 筆 cue 裡設定的機關位置，不能復原。只想拆開這一排、機關要留著的話，按「只解散這一排」。`,
+      confirmLabel: '刪除',
+      destructive: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await mech.removeGroup(g.id, false);
+      setEditingGroupId(null);
+      setPatternFor(null);
+      toast.success(`已刪除「${g.name}」`);
+    } catch (e) {
+      toast.error('刪除失敗：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
   }
 
   const children = (m: Mechanism) => mechanisms.filter(x => x.parentId === m.id).map(x => x.name);
@@ -208,6 +315,148 @@ export default function MechanismTab({
       </div>
     );
   }
+
+  /** 「這個 cue 的機關位置」裡一個機關那一列 */
+  const cueRow = (m: Mechanism) => (
+    <MechanismCueRow
+      key={m.id}
+      mech={m}
+      resolved={mech.selectedRow[m.id] ?? { value: m.defaultValue, stored: m.defaultValue, source: 'default', fromCueId: null, clamped: false }}
+      editingDefault={editingDefault}
+      cueName={cueName}
+      check={cueCheck?.items[m.id]}
+      cueFix={cueCheck?.fix ?? null}
+      front={front}
+      focused={mech.focusedId === m.id}
+      disabled={busy}
+      onFocus={() => { if (mech.focusedId !== m.id) mech.setFocusedId(m.id); }}
+      onCommit={(v) => void mech.commitValue(m.id, v)}
+      onPreview={(v) => mech.previewValue(m.id, v)}
+      onClear={() => void mech.clearValue(m.id)}
+      onFix={(s) => void onSetCrossfade(s)}
+      timing={selectedCue ? mech.timings.get(selectedCue.id)?.[m.id] ?? null : null}
+      showTiming={!!selectedCue && mech.selectedRow[m.id]?.source === 'own' && !!cueCheck?.items[m.id]?.prevCueId}
+      cueSpan={cueCheck?.items[m.id]?.span ?? null}
+      cueLabel={cueLabel}
+      onTiming={selectedCue ? (patch) => void mech.commitTiming(selectedCue.id, m.id, patch) : undefined}
+    />
+  );
+
+  /** 一排：標題（展開 / 收起、這個 cue 的位置範圍、套用花樣），底下是每個成員那一列 */
+  const cueGroup = (g: MechanismGroup, members: Mechanism[]) => {
+    const open = openRows.has(g.id);
+    const range = valueRange(members.map(m => (editingDefault ? m.defaultValue : mech.selectedRow[m.id]?.value ?? m.defaultValue)));
+    const kind = members[0]?.kind ?? 'linear';
+    const problems = members.filter(m => cueCheck?.items[m.id] && cueCheck.items[m.id].status === 'tooFast').length;
+    const firstCue = !!selectedCue && !members.some(m => cueCheck?.items[m.id]?.prevCueId);
+    return (
+      <li key={g.id} className="mech-group">
+        <div className="mech-group__head">
+          <button type="button" className="mech-icon-btn" aria-expanded={open} aria-label={open ? `收起「${g.name}」` : `展開「${g.name}」`}
+            onClick={() => setOpenRows(s => toggle(s, g.id))}><Icon icon={open ? ChevronDown : ChevronRight} /></button>
+          <span className="mech-group__name" title={g.name}>{g.name}</span>
+          <span className="muted small">{members.length} 個機關{range ? ` · ${formatMechValue(range.min, kind)}${range.max !== range.min ? ` ~ ${formatMechValue(range.max, kind)}` : ''}` : ''}</span>
+          {problems > 0 && <span className="mech-group__flag" title={`有 ${problems} 個機關來不及到位，展開看是哪幾個`}><Icon icon={TriangleAlert} size="sm" /> {problems}</span>}
+          <span className="grow" />
+          <button type="button" className="btn btn--ghost btn--sm" disabled={!selectedCue || busy || patternFor === g.id}
+            title={selectedCue ? '一次設好這一排在這個 cue 的位置和延遲：一起、依序、波浪、漸層' : '先在上面選一個 cue，花樣是設在 cue 上的'}
+            onClick={() => { setPatternFor(g.id); mech.setFocusedId(members[0]?.id ?? null); }}><Icon icon={Waves} /> 套用花樣</button>
+        </div>
+        {patternFor === g.id && selectedCue && (
+          <MechanismPatternPanel
+            key={selectedCue.id}
+            group={g}
+            members={members}
+            mech={mech}
+            cueId={selectedCue.id}
+            cueLabel={cueLabel(selectedCue.id)}
+            isFirstCue={firstCue}
+            disabled={busy}
+            onClose={() => setPatternFor(null)}
+          />
+        )}
+        {open && <ul className="mech-rows mech-rows--member">{members.map(cueRow)}</ul>}
+      </li>
+    );
+  };
+
+  /** 「設定機關」裡一個機關那一列（index = 在清單的第幾項；一排裡面的成員不能單獨上下移，傳 null） */
+  const setupItem = (m: Mechanism, index: number | null) => {
+    const kids = children(m);
+    const speed = m.maxSpeed === null ? null
+      : m.kind === 'rotary' ? `${formatMechValue(m.maxSpeed, 'rotary', false)}${speedUnitOf('rotary')}` : `${formatMechValue(m.maxSpeed, 'linear', false)} ${speedUnitOf('linear')}`;
+    return (
+      <li key={m.id} className={'mech-setup-item' + (mech.focusedId === m.id ? ' is-focused' : '')}>
+        <div className="mech-setup-item__row" onClick={() => mech.setFocusedId(m.id)}>
+          <div className="mech-setup-item__main">
+            <span className="mech-setup-item__name">{m.name}</span>
+            <span className="muted small">
+              {formatMechValue(m.travelMin, m.kind, false)} ~ {formatMechValue(m.travelMax, m.kind)}
+              {speed && ` · ${speed}`}
+              {flipLabel(m.metadata) && ` · ${flipLabel(m.metadata)}`}
+              {m.variant === 'split'
+                ? ` · 對開：A 邊 ${countSides(m.objectIds, m.objectSides ?? {}).a} 個、B 邊 ${countSides(m.objectIds, m.objectSides ?? {}).b} 個 · ${m.cueCount} 個 cue 有設定`
+                : ` · ${m.objectIds.length} 個物件 · ${m.cueCount} 個 cue 有設定`}
+            </span>
+            {kids.length > 0 && <span className="muted small">帶動：{kids.join('、')}</span>}
+          </div>
+          <div className="mech-setup-item__actions" onClick={e => e.stopPropagation()}>
+            {index !== null && (
+              <>
+                <button type="button" className="mech-icon-btn" title="上移" aria-label="上移" disabled={index === 0} onClick={() => move(index, -1)}><Icon icon={ArrowUp} /></button>
+                <button type="button" className="mech-icon-btn" title="下移" aria-label="下移" disabled={index === layout.length - 1} onClick={() => move(index, 1)}><Icon icon={ArrowDown} /></button>
+              </>
+            )}
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setEditingId(m.id); mech.setFocusedId(m.id); }} disabled={editingId === m.id}>
+              <Icon icon={Pencil} /> 編輯
+            </button>
+          </div>
+        </div>
+        {editingId === m.id && formFor(m)}
+      </li>
+    );
+  };
+
+  /** 「設定機關」裡的一排：標題 + 編輯這一排（名字、共用設定、解散、刪除），展開後是每個成員 */
+  const setupGroup = (g: MechanismGroup, members: Mechanism[], index: number) => {
+    const open = openSetup.has(g.id);
+    const first = members[0];
+    return (
+      <li key={g.id} className={'mech-setup-item mech-setup-group' + (members.some(m => m.id === mech.focusedId) ? ' is-focused' : '')}>
+        <div className="mech-setup-item__row" onClick={() => setOpenSetup(s => toggle(s, g.id))}>
+          <button type="button" className="mech-icon-btn" aria-expanded={open} aria-label={open ? `收起「${g.name}」` : `展開「${g.name}」`}
+            onClick={e => { e.stopPropagation(); setOpenSetup(s => toggle(s, g.id)); }}><Icon icon={open ? ChevronDown : ChevronRight} /></button>
+          <div className="mech-setup-item__main">
+            <span className="mech-setup-item__name">{g.name}</span>
+            <span className="muted small">
+              一排 {members.length} 個機關
+              {first && ` · ${formatMechValue(first.travelMin, first.kind, false)} ~ ${formatMechValue(first.travelMax, first.kind)}`}
+            </span>
+          </div>
+          <div className="mech-setup-item__actions" onClick={e => e.stopPropagation()}>
+            <button type="button" className="mech-icon-btn" title="上移" aria-label="上移" disabled={index === 0} onClick={() => move(index, -1)}><Icon icon={ArrowUp} /></button>
+            <button type="button" className="mech-icon-btn" title="下移" aria-label="下移" disabled={index === layout.length - 1} onClick={() => move(index, 1)}><Icon icon={ArrowDown} /></button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setEditingGroupId(g.id); setEditingId(null); setBatchOpen(false); }} disabled={editingGroupId === g.id}>
+              <Icon icon={Pencil} /> 編輯這一排
+            </button>
+          </div>
+        </div>
+        {editingGroupId === g.id && (
+          <MechanismGroupForm
+            key={g.id}
+            group={g}
+            members={members}
+            busy={busy}
+            onSave={(patch) => saveGroup(g, patch)}
+            onCancel={() => setEditingGroupId(null)}
+            onDissolve={() => void dissolveGroup(g, members.length)}
+            onDelete={() => void deleteGroup(g, members)}
+          />
+        )}
+        {open && <ul className="mech-setup-list mech-setup-list--member">{members.map(m => setupItem(m, null))}</ul>}
+      </li>
+    );
+  };
 
   return (
     <div className="mech-tab">
@@ -263,30 +512,7 @@ export default function MechanismTab({
           </div>
         ) : (
           <ul className="mech-rows">
-            {mechanisms.map(m => (
-              <MechanismCueRow
-                key={m.id}
-                mech={m}
-                resolved={mech.selectedRow[m.id] ?? { value: m.defaultValue, stored: m.defaultValue, source: 'default', fromCueId: null, clamped: false }}
-                editingDefault={editingDefault}
-                cueName={cueName}
-                check={cueCheck?.items[m.id]}
-                cueFix={cueCheck?.fix ?? null}
-                front={front}
-                focused={mech.focusedId === m.id}
-                disabled={busy}
-                onFocus={() => { if (mech.focusedId !== m.id) mech.setFocusedId(m.id); }}
-                onCommit={(v) => void mech.commitValue(m.id, v)}
-                onPreview={(v) => mech.previewValue(m.id, v)}
-                onClear={() => void mech.clearValue(m.id)}
-                onFix={(s) => void onSetCrossfade(s)}
-                timing={selectedCue ? mech.timings.get(selectedCue.id)?.[m.id] ?? null : null}
-                showTiming={!!selectedCue && mech.selectedRow[m.id]?.source === 'own' && !!cueCheck?.items[m.id]?.prevCueId}
-                cueSpan={cueCheck?.items[m.id]?.span ?? null}
-                cueLabel={cueLabel}
-                onTiming={selectedCue ? (patch) => void mech.commitTiming(selectedCue.id, m.id, patch) : undefined}
-              />
-            ))}
+            {layout.map(it => (it.type === 'single' ? cueRow(it.mech) : cueGroup(it.group, it.members)))}
           </ul>
         )}
       </section>
@@ -294,9 +520,15 @@ export default function MechanismTab({
       <section className="mech-section">
         <header className="mech-section__head">
           <h3 className="mech-section__title">設定機關</h3>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => setEditingId('new')} disabled={editingId === 'new'}>
-            <Icon icon={Plus} /> 新增機關
-          </button>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setBatchOpen(true); setEditingId(null); setEditingGroupId(null); }} disabled={batchOpen}
+              title="用 3D 畫面選取的好幾個物件，一個物件一個機關，編號、名稱、方向、行程一次設好">
+              <Icon icon={Rows3} /> 一次建立多個
+            </button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setEditingId('new'); setBatchOpen(false); }} disabled={editingId === 'new'}>
+              <Icon icon={Plus} /> 新增機關
+            </button>
+          </span>
         </header>
         {scaleCorrection === 1 && (
           <div className="mech-warn" role="status">
@@ -305,39 +537,23 @@ export default function MechanismTab({
           </div>
         )}
         {editingId === 'new' && formFor(null)}
+        {batchOpen && (
+          <MechanismBatchForm
+            mechanisms={mechanisms}
+            groups={mech.groups}
+            stageObjects={stageObjects}
+            selectedObjectIds={selectedObjectIds}
+            front={front ?? { x: 0, y: 0, z: 1 }}
+            groupCenter={(ids) => mech.sceneQueryRef.current?.groupCenter(ids) ?? null}
+            groupBox={(ids) => mech.sceneQueryRef.current?.groupBox(ids) ?? null}
+            busy={busy}
+            onSave={saveBatch}
+            onCancel={() => setBatchOpen(false)}
+          />
+        )}
         {mechanisms.length > 0 && (
           <ul className="mech-setup-list">
-            {mechanisms.map((m, i) => {
-              const kids = children(m);
-              const speed = m.maxSpeed === null ? null
-                : m.kind === 'rotary' ? `${formatMechValue(m.maxSpeed, 'rotary', false)}${speedUnitOf('rotary')}` : `${formatMechValue(m.maxSpeed, 'linear', false)} ${speedUnitOf('linear')}`;
-              return (
-                <li key={m.id} className={'mech-setup-item' + (mech.focusedId === m.id ? ' is-focused' : '')}>
-                  <div className="mech-setup-item__row" onClick={() => mech.setFocusedId(m.id)}>
-                    <div className="mech-setup-item__main">
-                      <span className="mech-setup-item__name">{m.name}</span>
-                      <span className="muted small">
-                        {formatMechValue(m.travelMin, m.kind, false)} ~ {formatMechValue(m.travelMax, m.kind)}
-                        {speed && ` · ${speed}`}
-                        {flipLabel(m.metadata) && ` · ${flipLabel(m.metadata)}`}
-                        {m.variant === 'split'
-                          ? ` · 對開：A 邊 ${countSides(m.objectIds, m.objectSides ?? {}).a} 個、B 邊 ${countSides(m.objectIds, m.objectSides ?? {}).b} 個 · ${m.cueCount} 個 cue 有設定`
-                          : ` · ${m.objectIds.length} 個物件 · ${m.cueCount} 個 cue 有設定`}
-                      </span>
-                      {kids.length > 0 && <span className="muted small">帶動：{kids.join('、')}</span>}
-                    </div>
-                    <div className="mech-setup-item__actions" onClick={e => e.stopPropagation()}>
-                      <button type="button" className="mech-icon-btn" title="上移" aria-label="上移" disabled={i === 0} onClick={() => move(m, -1)}><Icon icon={ArrowUp} /></button>
-                      <button type="button" className="mech-icon-btn" title="下移" aria-label="下移" disabled={i === mechanisms.length - 1} onClick={() => move(m, 1)}><Icon icon={ArrowDown} /></button>
-                      <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setEditingId(m.id); mech.setFocusedId(m.id); }} disabled={editingId === m.id}>
-                        <Icon icon={Pencil} /> 編輯
-                      </button>
-                    </div>
-                  </div>
-                  {editingId === m.id && formFor(m)}
-                </li>
-              );
-            })}
+            {layout.map((it, i) => (it.type === 'single' ? setupItem(it.mech, i) : setupGroup(it.group, it.members, i)))}
           </ul>
         )}
       </section>

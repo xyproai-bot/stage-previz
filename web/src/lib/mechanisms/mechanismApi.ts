@@ -5,7 +5,11 @@
 
 import { apiBase, getSessionToken, type ShareRef } from '../api';
 import { saveStatus } from '../saveStatus';
-import type { CueMechanismPosition, Mechanism, MechanismInput, MechanismMirror, MechanismPreset, MechanismSide, MechanismValues, MechVec3 } from './model';
+import type {
+  CueMechanismPosition, GroupNumbering, Mechanism, MechanismGroup, MechanismGroupSettings, MechanismInput, MechanismMirror,
+  MechanismPreset, MechanismSide, MechanismValues, MechVec3,
+} from './model';
+import type { BulkPositionItem } from './group';
 
 /** 後台回的錯誤：message 是中文、可以直接顯示；data 是整個錯誤內容 */
 export interface MechanismApiError extends Error {
@@ -141,8 +145,29 @@ export function parseMechanism(raw: unknown): Mechanism {
     variant,
     mirror,
     objectSides,
+    // 一排（v2 第 3 階段）：舊後台沒有這兩欄 → 不在任何一排裡
+    groupId: typeof r.groupId === 'string' && r.groupId ? r.groupId : null,
+    groupIndex: typeof r.groupIndex === 'number' && Number.isFinite(r.groupIndex) ? r.groupIndex : null,
   };
 }
+
+const NUMBERINGS: GroupNumbering[] = ['leftToRight', 'rightToLeft', 'frontToBack', 'selection'];
+
+export function parseGroup(raw: unknown): MechanismGroup {
+  const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const st = (r.settings && typeof r.settings === 'object' ? r.settings : null) as Record<string, unknown> | null;
+  const settings: MechanismGroupSettings = {};
+  if (st && typeof st.namePrefix === 'string' && st.namePrefix) settings.namePrefix = st.namePrefix;
+  if (st && NUMBERINGS.includes(st.numbering as GroupNumbering)) settings.numbering = st.numbering as GroupNumbering;
+  return {
+    id: String(r.id ?? ''),
+    name: typeof r.name === 'string' ? r.name : '',
+    order: finite(r.order, 0),
+    settings: Object.keys(settings).length ? settings : null,
+    updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : '',
+  };
+}
+export const parseGroups = (raw: unknown): MechanismGroup[] => (Array.isArray(raw) ? raw.map(parseGroup).filter(g => g.id) : []);
 
 /** 延遲 / 走幾秒：舊後台沒有這兩欄 → null（跟著 cue） */
 const secOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
@@ -164,8 +189,13 @@ export const parseMechanisms = (raw: unknown): Mechanism[] => (Array.isArray(raw
 // ─── 機關 ───
 
 export async function listMechanisms(projectId: string): Promise<Mechanism[]> {
-  const d = await call<{ mechanisms: unknown }>(`${base(projectId)}/mechanisms?${MECH_V2}`);
-  return parseMechanisms(d.mechanisms);
+  return (await listMechanismsAndGroups(projectId)).mechanisms;
+}
+
+/** 管理頁用：機關 + 一排一排的分組（舊後台沒有 groups → 空的） */
+export async function listMechanismsAndGroups(projectId: string): Promise<{ mechanisms: Mechanism[]; groups: MechanismGroup[] }> {
+  const d = await call<{ mechanisms: unknown; groups?: unknown }>(`${base(projectId)}/mechanisms?${MECH_V2}`);
+  return { mechanisms: parseMechanisms(d.mechanisms), groups: parseGroups(d.groups) };
 }
 
 export type MechanismPayload = Partial<MechanismInput> & { moveObjects?: boolean };
@@ -191,6 +221,61 @@ export async function deleteMechanism(projectId: string, mechId: string): Promis
 
 export async function reorderMechanisms(projectId: string, ids: string[]): Promise<void> {
   await call(`${base(projectId)}/mechanisms/reorder`, { method: 'POST', body: JSON.stringify({ ids }) });
+}
+
+// ─── 一排機關（v2 第 3 階段） ───
+
+/** 一次建立 N 個機關的內容（跟後台 POST …/mechanisms/batch 一樣；見 docs/mechanisms-api.md） */
+export interface BatchPayload {
+  /** 每個機關共用的設定（方向、行程、最高速度、常用位置、預設位置、metadata…） */
+  base: Partial<MechanismInput>;
+  /** 一個物件一個機關，照這個順序編 1、2、3… */
+  objectIds: string[];
+  namePrefix: string;
+  groupName?: string;
+  numbering?: GroupNumbering;
+  /** 每個物件自己的轉軸（沿著邊緣翻要照每個物件自己的外框算） */
+  overrides?: Record<string, { axis?: MechVec3; pivot?: MechVec3 }>;
+  moveObjects?: boolean;
+}
+
+/** 一次建立；物件已經在別的機關 → 丟 409（data.conflicts），問使用者後帶 moveObjects: true 再送 */
+export async function createMechanismBatch(projectId: string, input: BatchPayload): Promise<{ group: MechanismGroup; mechanisms: Mechanism[] }> {
+  const d = await call<{ group: unknown; mechanisms: unknown }>(`${base(projectId)}/mechanisms/batch`, { method: 'POST', body: JSON.stringify(input) });
+  return { group: parseGroup(d.group), mechanisms: parseMechanisms(d.mechanisms) };
+}
+
+/** 這一排的共用設定（改一次、每個成員都改）：name / travelMin / travelMax / defaultValue / maxSpeed / presets */
+export type GroupPatch = Partial<Pick<MechanismInput, 'travelMin' | 'travelMax' | 'defaultValue' | 'maxSpeed' | 'presets'>> & { name?: string };
+
+export async function updateMechanismGroup(projectId: string, groupId: string, patch: GroupPatch): Promise<{ group: MechanismGroup; mechanisms: Mechanism[]; outOfRangeCount: number }> {
+  const d = await call<{ group: unknown; mechanisms: unknown; outOfRangeCount?: number }>(
+    `${base(projectId)}/mechanism-groups/${enc(groupId)}`, { method: 'PATCH', body: JSON.stringify(patch) },
+  );
+  return { group: parseGroup(d.group), mechanisms: parseMechanisms(d.mechanisms), outOfRangeCount: finite(d.outOfRangeCount, 0) };
+}
+
+/** dissolve = 只解散這一排（機關都留著）；沒帶 = 這一排和裡面的機關一起刪掉 */
+export async function deleteMechanismGroup(projectId: string, groupId: string, dissolve: boolean): Promise<{ removedMechanisms: number; removedPositions: number }> {
+  const d = await call<{ removedMechanisms?: number; removedPositions?: number; mechanisms?: number }>(
+    `${base(projectId)}/mechanism-groups/${enc(groupId)}${dissolve ? '?dissolve=1' : ''}`, { method: 'DELETE' },
+  );
+  return { removedMechanisms: finite(d.removedMechanisms, 0), removedPositions: finite(d.removedPositions, 0) };
+}
+
+/** 一次寫很多個機關在這個 cue 的位置和時間（套用花樣 / 復原）；value = null → 回到沿用 */
+export interface BulkResultItem { mechanismId: string; removed?: boolean; value?: number; clamped?: boolean; delaySec?: number | null; durationSec?: number | null }
+export async function setCuePositionsBulk(projectId: string, songId: string, cueId: string, items: BulkPositionItem[]): Promise<BulkResultItem[]> {
+  const d = await call<{ items?: unknown }>(
+    `${base(projectId)}/songs/${enc(songId)}/cues/${enc(cueId)}/mechanism-positions`,
+    { method: 'PUT', body: JSON.stringify({ items }) },
+  );
+  return (Array.isArray(d.items) ? d.items : []).map(x => {
+    const r = (x && typeof x === 'object' ? x : {}) as Record<string, unknown>;
+    const id = String(r.mechanismId ?? '');
+    if (r.removed === true) return { mechanismId: id, removed: true };
+    return { mechanismId: id, value: finite(r.value, 0), clamped: r.clamped === true, delaySec: secOrNull(r.delaySec), durationSec: secOrNull(r.durationSec) };
+  });
 }
 
 // ─── 每個 cue 的位置 ───
