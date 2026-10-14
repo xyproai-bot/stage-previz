@@ -33,6 +33,17 @@ describe('讀回來的資料補預設值', () => {
     expect(parseMechanism({ maxSpeed: 0 }).maxSpeed).toBeNull();
     expect(parseMechanism(null).id).toBe('');
   });
+  it('對開（v2）：舊後台沒有這三欄 → 一般機關；B 邊壞掉 → 直線用反方向、旋轉當一般機關', () => {
+    expect(parseMechanism({ id: 'a', kind: 'linear' })).toMatchObject({ variant: null, mirror: null, objectSides: {} });
+    const split = parseMechanism({
+      id: 's', kind: 'linear', axis: { x: 1, y: 0, z: 0 }, variant: 'split', objectIds: ['o1', 'o2'],
+      mirror: { axis: { x: -1, y: 0, z: 0 }, pivot: null, consoleLabel: 'Axis 8' }, objectSides: { o2: 'b', o9: 'b' },
+    });
+    expect(split).toMatchObject({ variant: 'split', mirror: { axis: { x: -1, y: 0, z: 0 }, pivot: null, consoleLabel: 'Axis 8' }, objectSides: { o1: 'a', o2: 'b' } });
+    expect(parseMechanism({ id: 's', kind: 'linear', axis: { x: 0, y: 1, z: 0 }, variant: 'split' }).mirror?.axis).toEqual({ x: 0, y: -1, z: 0 });
+    expect(parseMechanism({ id: 's', kind: 'rotary', variant: 'split' }).variant).toBeNull();
+    expect(parseMechanism({ id: 's', variant: 'hoist' }).variant).toBeNull();
+  });
   it('位置：不是數字的略過', () => {
     // 舊後台沒有延遲 / 走幾秒 → null（跟著 cue）；負的 / 不是數字 → null
     expect(parsePositions([
@@ -54,7 +65,7 @@ describe('呼叫後台', () => {
     const list = await listMechanisms('p 1');
     expect(list[0].id).toBe('m1');
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://proxy.haimiaan.com/api/projects/p%201/mechanisms');
+    expect(url).toBe('https://proxy.haimiaan.com/api/projects/p%201/mechanisms?mech=2');
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok');
     localStorage.removeItem('sp_session_token');
   });
@@ -87,12 +98,12 @@ describe('呼叫後台', () => {
     vi.stubGlobal('fetch', f);
     expect((await getShareSongPositions({ kind: 'slug', key: 'show-k7p2' }, 's1', 'acc'))[0].value).toBe(2);
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://proxy.haimiaan.com/api/s/show-k7p2/songs/s1/mechanism-positions');
+    expect(url).toBe('https://proxy.haimiaan.com/api/s/show-k7p2/songs/s1/mechanism-positions?mech=2');
     expect((init.headers as Record<string, string>)['x-share-access']).toBe('acc');
   });
 
   it('總表 / 轉換', async () => {
-    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.endsWith('mechanism-sheet')
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => (url.includes('mechanism-sheet')
       ? json(200, { songs: [{ id: 's', cues: [] }], positions: [], mechanisms: [{ id: 'm' }] })
       : json(200, { ok: true, dryRun: true, converted: 3, skipped: [], positions: 3, rowsChanged: 6 }))));
     expect((await getMechanismSheet('p')).mechanisms[0].id).toBe('m');

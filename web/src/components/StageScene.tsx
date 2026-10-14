@@ -241,6 +241,8 @@ export interface StageSceneQuery {
   stageFront(): MechVec3;
   /** 這些物件在 cue 位置（沒加機關）時的外框中心；都找不到 → null */
   groupCenter(ids: string[]): MechVec3 | null;
+  /** 這些物件在 cue 位置（沒加機關）時的外框（翻轉從外框算轉軸）；都找不到 → null */
+  groupBox(ids: string[]): { min: MechVec3; max: MechVec3 } | null;
 }
 
 // 機關：每幀共用的暫存（不配置記憶體）
@@ -1646,6 +1648,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const c = box.getCenter(new THREE.Vector3());
         return { x: c.x, y: c.y, z: c.z };
       },
+      groupBox: (ids) => {
+        const box = baseBox(ids);
+        if (box.isEmpty()) return null;
+        return { min: { x: box.min.x, y: box.min.y, z: box.min.z }, max: { x: box.max.x, y: box.max.y, z: box.max.z } };
+      },
     };
     sceneQueryRef.current = query;
     return () => { if (sceneQueryRef.current === query) sceneQueryRef.current = null; };
@@ -1738,23 +1745,28 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const m = focusedMechanismId ? rig.byId.get(focusedMechanismId) : undefined;
     if (!m) return;
     // 畫在哪：機關帶的第一個物件（通常就是升降台 / 轉台本身）；沒有 → 裝在它上面的機關帶的物件
+    // 對開：A 邊、B 邊各畫一條（B 邊用鏡像的方向 / 轉軸中心）
     const def = (mechanisms || []).find(x => x.id === m.id);
-    let ids = def?.objectIds.filter(id => rig.chains.get(id)?.[0] === m).slice(0, 1) ?? [];
-    if (ids.length === 0) ids = [...rig.chains].filter(([, chain]) => chain.includes(m)).map(([id]) => id);
-    const box = baseBox(ids);
-    const center = box.isEmpty() ? m.pivot.clone() : box.getCenter(new THREE.Vector3());
-    const size = box.isEmpty() ? 1 : Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 0.2);
     const presets = def?.presets.map(p => p.value) || [];
-    const g = travelGeometry(m, center, size, presets);
+    const geoms: ReturnType<typeof travelGeometry>[] = [];
+    for (const node of [m, rig.mirrors.get(m.id)]) {
+      if (!node) continue;
+      let ids = def?.objectIds.filter(id => rig.chains.get(id)?.[0] === node).slice(0, 1) ?? [];
+      if (ids.length === 0 && !node.side) ids = [...rig.chains].filter(([, chain]) => chain.includes(node)).map(([id]) => id);
+      const box = baseBox(ids);
+      const center = box.isEmpty() ? node.pivot.clone() : box.getCenter(new THREE.Vector3());
+      const size = box.isEmpty() ? 1 : Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 0.2);
+      geoms.push(travelGeometry(node, center, size, presets));
+    }
     const color = new THREE.Color(0xffaa44);
     const lineMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
     const tickMat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthTest: false });
     const group = new THREE.Group();
     group.name = 'mechanism-travel';
-    const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(g.path), lineMat);
-    const segs = [...g.ends, ...g.ticks].flat();
+    const lines = geoms.map(g => new THREE.Line(new THREE.BufferGeometry().setFromPoints(g.path), lineMat));
+    const segs = geoms.flatMap(g => [...g.ends, ...g.ticks].flat());
     const ticks = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(segs), tickMat);
-    for (const o of [line, ticks]) { o.renderOrder = 999; o.frustumCulled = false; group.add(o); }
+    for (const o of [...lines, ticks]) { o.renderOrder = 999; o.frustumCulled = false; group.add(o); }
     // 外層的機關（這個機關裝在哪個機關上）
     const outer: RigMechanism[] = [];
     for (let cur = m.parentId ? rig.byId.get(m.parentId) : undefined; cur && outer.length < 4 && !outer.includes(cur); cur = cur.parentId ? rig.byId.get(cur.parentId) : undefined) {
@@ -1765,7 +1777,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     applyChain(outer, displayedMechRef.current, ZERO_VEC, IDENTITY_QUAT, group.position, group.quaternion);
     return () => {
       scene.remove(group);
-      line.geometry.dispose();
+      for (const l of lines) l.geometry.dispose();
       ticks.geometry.dispose();
       lineMat.dispose();
       tickMat.dispose();

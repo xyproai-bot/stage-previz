@@ -11,9 +11,23 @@
 // 模型的縮放永遠不動；公尺 → 場景單位用專案的測距校準倍率換算。
 
 export type MechanismKind = 'linear' | 'rotary';
+/** 機關的變體：沒有 = 一般機關；'split' = 對開（兩邊往反方向動，一個位置）。之後的階段還會有吊掛 */
+export type MechanismVariant = 'split';
+/** 對開的哪一邊（A 邊 = 機關本來的方向；B 邊 = 鏡像） */
+export type MechanismSide = 'a' | 'b';
 export interface MechanismPreset { name: string; value: number }
 /** 這個檔案不能 import，所以自己定一個 {x,y,z}（跟 api.ts 的 Vec3 一樣） */
 export interface MechVec3 { x: number; y: number; z: number }
+
+/**
+ * 對開的 B 邊：同一個位置，往鏡像的方向動。
+ * axis / pivot 跟機關本來的一樣是場景座標；直線 pivot = null；consoleLabel = B 邊在控台上的軸名
+ */
+export interface MechanismMirror {
+  axis: MechVec3;
+  pivot: MechVec3 | null;
+  consoleLabel: string | null;
+}
 
 export interface Mechanism {
   id: string;
@@ -39,11 +53,20 @@ export interface Mechanism {
   /** 自動化控台上的軸名（匯出機關總表用） */
   consoleLabel: string | null;
   order: number;
-  /** 之後放加減速、碰撞外框等；現在 null */
+  /**
+   * 之後放加減速、碰撞外框等。翻轉（沿著邊緣翻）記在 metadata.setup = { hinge, positive }，
+   * 編輯時才看得到原本選的是哪個邊、哪個方向（轉軸 / 轉軸中心已經算好存在 axis / pivot）
+   */
   metadata: Record<string, unknown> | null;
   /** 幾個 cue 有自己設定的位置（刪除確認、設定清單用） */
   cueCount: number;
   updatedAt: string;
+  /** v2（0030）：null / 沒有 = 一般機關；舊後台沒有這三欄 → 讀成一般機關 */
+  variant?: MechanismVariant | null;
+  /** 只有對開：B 邊的方向 / 轉軸 / 控台編號 */
+  mirror?: MechanismMirror | null;
+  /** 只有對開：每個帶的物件在哪一邊（沒寫 = A 邊） */
+  objectSides?: Record<string, MechanismSide>;
 }
 
 /** mechanismId → 位置 */
@@ -83,6 +106,9 @@ export interface MechanismInput {
   objectIds: string[];
   consoleLabel: string | null;
   metadata: Record<string, unknown> | null;
+  variant: MechanismVariant | null;
+  mirror: MechanismMirror | null;
+  objectSides: Record<string, MechanismSide>;
 }
 
 export const MECH_LIMITS = {
@@ -145,7 +171,7 @@ function normalize(v: MechVec3): MechVec3 | null {
 // ─────────────────────────────────────────────
 
 export type MechanismField =
-  | 'name' | 'kind' | 'axis' | 'pivot' | 'travel' | 'maxSpeed' | 'presets' | 'objectIds' | 'parentId';
+  | 'name' | 'kind' | 'variant' | 'axis' | 'pivot' | 'mirror' | 'travel' | 'maxSpeed' | 'presets' | 'objectIds' | 'parentId';
 
 export const MECH_MESSAGES = {
   nameEmpty: '機關名稱不能空白',
@@ -167,10 +193,16 @@ export const MECH_MESSAGES = {
   delay: '延遲要是 0 到 3600 秒，或留空跟著 cue',
   duration: '走幾秒要是 0 到 3600 秒，或留空跟著轉場',
   timingNeedsValue: '這個 cue 還沒有設定這個機關的位置，要一起送位置',
+  variant: '機關的變化類型不正確',
+  mirror: '對開的 B 邊方向不正確',
+  mirrorPivot: '對開的 B 邊轉軸中心要是數字',
+  splitAsParent: '對開的機關不能當別的機關的上層',
+  splitHasChildren: '有機關裝在它上面，不能改成對開',
+  splitConvert: '對開的機關不能轉換 cue 位置（兩邊的物件動法不一樣）',
 } as const;
 
 /** 專案裡其他機關（檢查名稱重複、裝在哪個機關上） */
-export interface MechanismSibling { id: string; name: string; parentId: string | null }
+export interface MechanismSibling { id: string; name: string; parentId: string | null; variant?: MechanismVariant | null }
 
 export interface NormalizeContext {
   /** 修改：原本的機關（沒送的欄位用原本的） */
@@ -194,6 +226,11 @@ export function mechanismToInput(m: Pick<Mechanism, keyof MechanismInput>): Mech
     travelMin: m.travelMin, travelMax: m.travelMax, defaultValue: m.defaultValue, maxSpeed: m.maxSpeed,
     presets: m.presets.map(p => ({ ...p })), parentId: m.parentId, objectIds: [...m.objectIds],
     consoleLabel: m.consoleLabel, metadata: m.metadata,
+    variant: m.variant === 'split' ? 'split' : null,
+    mirror: m.variant === 'split' && m.mirror
+      ? { axis: { ...m.mirror.axis }, pivot: m.mirror.pivot ? { ...m.mirror.pivot } : null, consoleLabel: m.mirror.consoleLabel }
+      : null,
+    objectSides: m.variant === 'split' ? { ...(m.objectSides ?? {}) } : {},
   };
 }
 
@@ -202,7 +239,7 @@ export function blankMechanismInput(): MechanismInput {
   return {
     name: '', kind: 'linear', axis: { x: 0, y: 1, z: 0 }, pivot: null,
     travelMin: 0, travelMax: 1, defaultValue: 0, maxSpeed: null, presets: [], parentId: null,
-    objectIds: [], consoleLabel: null, metadata: null,
+    objectIds: [], consoleLabel: null, metadata: null, variant: null, mirror: null, objectSides: {},
   };
 }
 
@@ -229,6 +266,11 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
   const kind: MechanismKind = kindRaw === 'rotary' ? 'rotary' : 'linear';
   if (kindRaw !== 'linear' && kindRaw !== 'rotary') fail('kind', MECH_MESSAGES.kind);
 
+  // 變化類型（目前只有對開）
+  const varRaw = has('variant') ? r.variant : base.variant;
+  const variant: MechanismVariant | null = varRaw === 'split' ? 'split' : null;
+  if (varRaw !== null && varRaw !== undefined && varRaw !== 'split') fail('variant', MECH_MESSAGES.variant);
+
   // 方向 / 轉軸
   const axisRaw = has('axis') ? vec3(r.axis) : base.axis;
   const axis = axisRaw ? normalize(axisRaw) : null;
@@ -246,6 +288,25 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
         pivot = null;
       }
     }
+  }
+
+  // 對開的 B 邊：直線沒給就是反方向；旋轉要給轉軸和轉軸中心（表單用 mirrorForSplit 算）
+  let mirror: MechanismMirror | null = null;
+  if (variant === 'split') {
+    const mr = has('mirror') ? r.mirror : base.mirror;
+    const mo = isObj(mr) ? mr : null;
+    const mAxis = mo ? (vec3(mo.axis) ? normalize(vec3(mo.axis)!) : null) : (kind === 'linear' && axis ? { x: -axis.x || 0, y: -axis.y || 0, z: -axis.z || 0 } : null);
+    if (!mAxis) fail('mirror', MECH_MESSAGES.mirror);
+    let mPivot: MechVec3 | null = null;
+    if (kind === 'rotary') {
+      mPivot = mo ? vec3(mo.pivot) : null;
+      if (!mPivot || [mPivot.x, mPivot.y, mPivot.z].some(c => Math.abs(c) > MECH_LIMITS.pivotAbs)) {
+        fail('mirror', MECH_MESSAGES.mirrorPivot);
+        mPivot = null;
+      }
+    }
+    const mcl = mo && typeof mo.consoleLabel === 'string' && mo.consoleLabel.trim() ? mo.consoleLabel.trim().slice(0, MECH_LIMITS.consoleLabelMax) : null;
+    if (mAxis) mirror = { axis: mAxis, pivot: mPivot, consoleLabel: mcl };
   }
 
   // 行程（超過上下限就收到上下限）
@@ -310,7 +371,14 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
     fail('objectIds', MECH_MESSAGES.objectsForeign);
   }
 
-  // 裝在哪個機關上
+  // 對開：每個物件在哪一邊（沒寫 = A 邊；不是帶的物件就略過）。不是對開 → 沒有邊
+  const sidesRaw = has('objectSides') ? r.objectSides : base.objectSides;
+  const objectSides: Record<string, MechanismSide> = {};
+  if (variant === 'split') {
+    for (const id of objectIds) objectSides[id] = isObj(sidesRaw) && sidesRaw[id] === 'b' ? 'b' : 'a';
+  }
+
+  // 裝在哪個機關上（對開的機關不能當別人的上層，也不能裝了別人之後才改成對開）
   const parRaw = has('parentId') ? r.parentId : base.parentId;
   const parentId = typeof parRaw === 'string' && parRaw ? parRaw : null;
   if (parentId) {
@@ -319,6 +387,10 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
     if (check === 'missing') fail('parentId', MECH_MESSAGES.parentMissing);
     else if (check === 'cycle') fail('parentId', MECH_MESSAGES.parentCycle);
     else if (check === 'depth') fail('parentId', MECH_MESSAGES.parentDepth);
+    else if (siblings.find(s => s.id === parentId)?.variant === 'split') fail('parentId', MECH_MESSAGES.splitAsParent);
+  }
+  if (variant === 'split' && ctx.selfId && (ctx.siblings || []).some(s => s.parentId === ctx.selfId)) {
+    fail('variant', MECH_MESSAGES.splitHasChildren);
   }
 
   const clRaw = has('consoleLabel') ? r.consoleLabel : base.consoleLabel;
@@ -327,14 +399,14 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
   const mdRaw = has('metadata') ? r.metadata : base.metadata;
   const metadata = isObj(mdRaw) ? mdRaw : null;
 
-  const order: MechanismField[] = ['name', 'kind', 'axis', 'pivot', 'travel', 'maxSpeed', 'presets', 'objectIds', 'parentId'];
+  const order: MechanismField[] = ['name', 'kind', 'variant', 'axis', 'pivot', 'mirror', 'travel', 'maxSpeed', 'presets', 'objectIds', 'parentId'];
   const first = order.find(f => errors[f]);
   if (first) return { ok: false, error: errors[first]!, field: first, errors };
   return {
     ok: true,
     value: {
       name, kind, axis: axis!, pivot, travelMin, travelMax, defaultValue, maxSpeed, presets, parentId,
-      objectIds, consoleLabel, metadata,
+      objectIds, consoleLabel, metadata, variant, mirror, objectSides,
     },
   };
 }
@@ -499,6 +571,57 @@ export function rotaryAxisVector(kind: RotaryAxisKind, positiveFirst: boolean, f
   else if (kind === 'pitch') a = positiveFirst ? audienceRight(f) : neg(audienceRight(f));
   else a = positiveFirst ? f : neg(f);  // 往左倒 = +正面
   return a;
+}
+
+// ─────────────────────────────────────────────
+// 對開（兩邊往反方向）：B 邊的方向 / 轉軸
+// ─────────────────────────────────────────────
+
+/** 向量 v 對著法向量 n 的平面鏡射：v − 2(v·n)n */
+export function reflectAcross(v: MechVec3, n: MechVec3): MechVec3 {
+  const d = 2 * dot(v, n);
+  return { x: v.x - d * n.x || 0, y: v.y - d * n.y || 0, z: v.z - d * n.z || 0 };
+}
+
+/**
+ * 對開的 B 邊要怎麼動（鏡像）：
+ *   直線：B 的方向 = −A 的方向（兩邊往反方向）
+ *   旋轉：n = A 邊中心 → B 邊中心的方向（鏡面的法向量）；
+ *         B 的轉軸 = −reflect(A 的轉軸, n)（鏡射會把轉動方向反過來，所以要多一個負號）；
+ *         B 的轉軸中心 = B 邊中心 + reflect(A 的轉軸中心 − A 邊中心, n)
+ *   兩邊中心重疊（算不出鏡面）→ 轉軸反過來、轉軸中心跟 A 邊一樣
+ * 左右對稱時 n 就是 normalize(B 轉軸中心 − A 轉軸中心)，跟設計文件寫的一樣。
+ * 位置都是場景單位。
+ */
+export function mirrorForSplit(
+  kind: MechanismKind, axisA: MechVec3, pivotA: MechVec3 | null, centerA: MechVec3 | null, centerB: MechVec3 | null,
+): { axis: MechVec3; pivot: MechVec3 | null } {
+  const flip = neg(axisA);
+  if (kind === 'linear') return { axis: flip, pivot: null };
+  const pa = pivotA ?? { x: 0, y: 0, z: 0 };
+  const n = centerA && centerB ? normalize({ x: centerB.x - centerA.x, y: centerB.y - centerA.y, z: centerB.z - centerA.z }) : null;
+  if (!n || !centerA || !centerB) return { axis: flip, pivot: { ...pa } };
+  const ra = reflectAcross(axisA, n);
+  const off = reflectAcross({ x: pa.x - centerA.x, y: pa.y - centerA.y, z: pa.z - centerA.z }, n);
+  return {
+    axis: { x: -ra.x || 0, y: -ra.y || 0, z: -ra.z || 0 },
+    pivot: { x: centerB.x + off.x, y: centerB.y + off.y, z: centerB.z + off.z },
+  };
+}
+
+/** 對開在清單 / 總表上的兩邊名稱：「升降門（A 邊）」「升降門（B 邊）」 */
+export function splitSideName(name: string, side: MechanismSide): string {
+  return `${name}（${side === 'a' ? 'A' : 'B'} 邊）`;
+}
+
+/** 對開某一邊的控台編號（B 邊用 mirror.consoleLabel；A 邊用機關本來的） */
+export function splitConsoleLabel(m: Pick<Mechanism, 'consoleLabel' | 'mirror'>, side: MechanismSide): string | null {
+  return side === 'a' ? m.consoleLabel : (m.mirror?.consoleLabel ?? null);
+}
+
+/** 對開某一邊的方向 / 轉軸中心（A 邊 = 機關本來的；B 邊 = 鏡像） */
+export function splitSideGeometry(m: Pick<Mechanism, 'axis' | 'pivot' | 'mirror'>, side: MechanismSide): { axis: MechVec3; pivot: MechVec3 | null } {
+  return side === 'a' || !m.mirror ? { axis: m.axis, pivot: m.pivot } : { axis: m.mirror.axis, pivot: m.mirror.pivot };
 }
 
 /** 已經存的方向 → 最接近的白話選項（編輯時用）；exact = 跟選項完全一樣 */

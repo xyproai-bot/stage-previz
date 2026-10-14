@@ -180,6 +180,23 @@
 .mech-objects__item { display: flex; align-items: center; gap: 6px; font-size: 12.5px; padding: 2px 0 2px 4px; cursor: pointer; }
 .mech-objects__item > span:first-of-type { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* 對開：A 邊 / B 邊兩欄；翻轉：進階（轉軸 / 轉軸中心） */
+.mech-sides__cols { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.mech-sides__col {
+  border: 1px solid var(--border); border-radius: var(--radius-sm); background: rgba(0, 0, 0, 0.2);
+  padding: 4px 6px; display: flex; flex-direction: column; gap: 2px; min-width: 0;
+}
+.mech-sides__title { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+.mech-sides__item { display: flex; align-items: center; gap: 4px; font-size: 12.5px; min-width: 0; }
+.mech-sides__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mech-advanced { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 4px 8px; }
+.mech-advanced > summary { cursor: pointer; font-size: 11.5px; font-weight: 600; color: var(--text-dim); padding: 2px 0; }
+.mech-advanced[open] > summary { margin-bottom: 6px; }
+.mech-advanced .mech-form__row + .mech-fieldset, .mech-fieldset .mech-form__row + .mech-form__row { margin-top: 8px; }
+.mech-fieldset { border: none; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; }
+.mech-fieldset:disabled { opacity: 0.55; }
+.mech-row__split { font-size: 11.5px; color: var(--text-muted); padding-left: 2px; }
+
 .mech-form__actions { display: flex; align-items: center; gap: 6px; }
 .mech-form__actions .grow { flex: 1; }
 .mech-form__actions .btn { display: inline-flex; align-items: center; gap: 5px; }

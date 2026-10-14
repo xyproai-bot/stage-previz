@@ -1,6 +1,6 @@
 # Mechanism v2 (機關 v2) — design
 
-Date: 2026-10-15. Builds on v1 (`2026-10-14-mechanism-system-design.md`, implemented). Stage 1 is implemented on `feat/live-stage-look` (migration **0027**). Stages 2–4 are designed here and built later; each gets its own additive migration (next free number at that time; written below as 0028–0030).
+Date: 2026-10-15. Builds on v1 (`2026-10-14-mechanism-system-design.md`, implemented). Stage 1 is implemented on `feat/live-stage-look` (migration **0027**). **Stage 2 is implemented (migration 0030, see the note below).** Stages 3–4 are designed here and built later; each gets its own additive migration (next free number at that time; written below as 0029–0030, which will move: 0028 went to comment attachments and 0029 is reserved by another job).
 
 UI strings are quoted exactly as they ship. No emoji; icons via `Icon` + lucide. In-page dialogs only.
 
@@ -26,15 +26,15 @@ ALTER TABLE cue_mechanism_positions ADD COLUMN duration_sec REAL CHECK (duration
 ```
 Stored to 0.001 s. Deleting the row (回到沿用) clears its timing.
 
-**0028 (stage 2, 對開 / 翻轉):**
+**0030 (stage 2, 對開 / 翻轉; implemented. This section was drafted as 0028, but 0028 was taken by comment attachments and 0029 is reserved, so the file is `0030_mechanism_split_flip.sql`).** The columns also carry CHECKs (`variant IN ('split','hoist_rig','hoist')`, `side IN ('a','b')`):
 ```sql
 ALTER TABLE mechanisms ADD COLUMN variant TEXT;        -- NULL 一般 | 'split' 對開 | 'hoist_rig' 吊掛 | 'hoist' 吊點 (stage 4)
 ALTER TABLE mechanisms ADD COLUMN mirror TEXT;         -- split only: {"axis":{x,y,z},"pivot":{x,y,z}|null,"consoleLabel":"Axis 8"|null}
 ALTER TABLE mechanism_objects ADD COLUMN side TEXT;    -- split: NULL/'a' = A 邊, 'b' = B 邊
 ```
-Flip setup stores no schema: it computes `axis`/`pivot` and keeps the choice in `metadata.setup = { hinge: 'top'|'bottom'|'left'|'right'|'front'|'back', positive: ... }` so editing shows it again.
+Flip setup stores no schema: it computes `axis`/`pivot` and keeps the choice in `metadata.setup = { hinge: 'top'|'bottom'|'left'|'right'|'front'|'back', positive: 'first'|'second' }` (`first` = the first option of 正的角度 for that hinge, see `FLIP_HINGES`) so editing shows it again.
 
-**0029 (stage 3, 一排機關):**
+**Stage 3, 一排機關 (will be a later number than 0030's predecessors; 0029 is reserved by another job, so check the migrations folder first):**
 ```sql
 CREATE TABLE mechanism_groups (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   name TEXT NOT NULL, "order" INTEGER NOT NULL DEFAULT 0, settings TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')),
@@ -43,7 +43,7 @@ ALTER TABLE mechanisms ADD COLUMN group_id TEXT REFERENCES mechanism_groups(id) 
 ALTER TABLE mechanisms ADD COLUMN group_index INTEGER;
 ```
 
-**0030 (stage 4, 多點吊掛):**
+**Stage 4, 多點吊掛 (next free number at that time):**
 ```sql
 ALTER TABLE mechanisms ADD COLUMN rig_id TEXT REFERENCES mechanisms(id) ON DELETE CASCADE;  -- hoist → its rig
 ALTER TABLE mechanisms ADD COLUMN rig_index INTEGER;                                        -- 吊點 1..4
@@ -62,7 +62,7 @@ Stage 1 (live):
 
 Stage 2 adds `variant`, `mirror` and `objectSides` to `MechanismInput`. Stage 3 adds `POST /mechanisms/batch` (`{ base, objectIds, namePrefix, groupName }`), `PATCH/DELETE /mechanism-groups/:g` (shared settings apply to every member; delete has a 「只解散群組」 option), and the bulk per-cue write `PUT /songs/:s/cues/:c/mechanism-positions` `{ items: [{ mechanismId, value, delaySec?, durationSec? }] }` (≤ 200 items, one undo step). Stage 4 lets `POST /mechanisms` take `{ variant:'hoist_rig', objectIds, hoists:[{ name, attach, travelMin, travelMax, maxSpeed, consoleLabel, defaultValue }] }` with 2–4 hoists, created in one batch.
 
-From stage 2 on, old frontends must not show the new variants with the wrong motion. The new frontend sends `?mech=2` on mechanism reads and on the share bundle. Without it, the worker omits `split`, `hoist_rig` and `hoist` rows, so those pieces show static instead of moving the wrong way.
+From stage 2 on, old frontends must not show the new variants with the wrong motion. The new frontend sends `?mech=2` on mechanism reads and on the share bundle. Without it, the worker omits `split`, `hoist_rig` and `hoist` rows (every row whose `variant` is not NULL) and their positions, so those pieces show static instead of moving the wrong way. Implemented for `GET …/mechanisms`, `…/mechanism-sheet`, `…/songs/:s/mechanism-positions` and the share `…/data` and `…/mechanism-positions`; write responses (create / update) always return the full row. Flip is an ordinary rotary mechanism, so an old frontend still sees it and moves it correctly.
 
 ## 3. Shared pure logic (`web/src/lib/mechanisms/`)
 
@@ -81,9 +81,9 @@ From stage 2 on, old frontends must not show the new variants with the wrong mot
 
 Each value is clamped into its own travel. Durations are untouched. The rows are ordinary rows, so each one stays individually editable.
 
-**Mirrored sides (stage 2, `pose.ts`):** `compileRig` makes two nodes with the same `id` (one value). Node B uses `mirror.axis` and `mirror.pivot`. The form computes them as: linear B axis = −axis; rotary B axis = −reflect(axis, n) with n = normalize(pivotB − pivotA), and B pivot from side B's bounding box. A split mechanism cannot be a parent.
+**Mirrored sides (stage 2, `pose.ts`, `model.ts`):** `compileRig` makes two nodes with the same `id` (one value). Node B uses `mirror.axis` and `mirror.pivot`. Only the A node is in `rig.mechanisms` / `byId` (so the tweener runs each value once); node B lives in `rig.mirrors`, and the chain of every side-B object starts with it, so `applyChain` and `basePoseFromScene` need no new case (B is an ordinary linear or rotary node with an exact inverse). The form computes the mirror with `mirrorForSplit`: linear B axis = −axis; rotary B axis = −reflect(axis, n) and B pivot = centreB + reflect(pivotA − centreA, n), with n = normalize(centreB − centreA) (the two side bounding-box centres). For a left/right symmetric layout this is the same as the n = normalize(pivotB − pivotA) written earlier. A split mechanism cannot be a parent (checked in `normalizeMechanismInput`), and cannot use 轉換 cue 位置.
 
-**Flip hinge (stage 2):** `hingeFromBox(box in stage frame, hinge)` returns axis + pivot.
+**Flip hinge (stage 2, `flip.ts`):** `hingeFromBox(box, hinge, front, positiveFirst)` returns axis + pivot. The world-space box is projected onto the stage's right / up / front axes, so a stage that is not aligned with X or Z still works (the box grows a little). The sign of each axis was checked with the right-hand rule in `flip.test.ts`: `first` = 上緣翻：下緣往觀眾翻出來; 下緣翻：上緣往觀眾倒; 左緣翻：右緣往觀眾轉出來; 右緣翻：左緣往觀眾轉出來; 前緣翻：後面抬高; 後緣翻：前面抬高. `second` is the opposite.
 - 上緣 / 下緣: axis = audience-right, pivot at the top / bottom edge, at the centre of the depth.
 - 左緣 / 右緣: axis = up, pivot at the left / right edge.
 - 前緣 / 後緣 (tilting decks): axis = audience-right, pivot at the bottom of the front / back edge.
@@ -118,7 +118,7 @@ The v1 rule still holds: stored = base pose; drawn = `applyChain(base, values)`,
   - The ruler and Play drive a 3D preview at machine speed, with objects held at the selected cue. The playhead and clock update the DOM directly, with no React render per frame.
   - When the editor gains song-video playback, the timeline follows `video.currentTime` instead of its own clock.
 
-**Stage 2:** 「動作」 adds a 「對開（兩邊往反方向）」 toggle. The object list splits into 「A 邊」 and 「B 邊」 (with 「照位置自動分兩邊」), and there are two labels: 「控台編號（A 邊）」 and 「控台編號（B 邊）」. The value reads 「每邊 2 m（中間開 4 m）」. Rotary adds 「沿著上緣翻 / 下緣翻 / 左緣翻 / 右緣翻 / 前緣翻 / 後緣翻」; pivot/axis fields move under 「進階」.
+**Stage 2 (built as written; the rotary form shows 「怎麼轉」 first, with 「轉台，或自己設定轉軸（進階）」 as the old behaviour and the six edges; the axis and pivot fields sit under 「進階」, disabled while an edge is chosen):** 「動作」 adds a 「對開（兩邊往反方向）」 toggle. The object list splits into 「A 邊」 and 「B 邊」 (with 「照位置自動分兩邊」), and there are two labels: 「控台編號（A 邊）」 and 「控台編號（B 邊）」. The value reads 「每邊 2 m（中間開 4 m）」. Rotary adds 「沿著上緣翻 / 下緣翻 / 左緣翻 / 右緣翻 / 前緣翻 / 後緣翻」; pivot/axis fields move under 「進階」.
 
 **Stage 3:** 「一次建立 N 個機關」 from the 3D selection: 「名稱開頭」 (「LED 升降」 → 「LED 升降 1…8」) and 「編號順序：從左到右 / 從右到左 / 從前到後 / 照選取順序」. Per cue, 「套用花樣」 offers 一起 / 依序（間隔 N 秒）/ 波浪（中間值、振幅、週期、相位）/ 漸層（從 A 到 B）, with a preview before saving. In the timeline, a group is a collapsible block; collapsed, it shows the union of its bars.
 
@@ -179,6 +179,6 @@ S01 開場,4,收起,0:50.0,1:00.0,10,中央升降台,Axis 3,2.000,0.000,m,,2.000
 | 1 ✓ | 0027, worker PUT / reads / copies | `0027_mechanism_timing.sql`, `mechanisms.mjs`, `mechanismTiming.test.mjs` |
 | 1 ✓ | API client, hooks (`commitTiming`, preview), StageScene timings | `mechanismApi.ts`, `useMechanisms.ts`, `StageScene.tsx` |
 | 1 ✓ | Row fields and warnings, 機關時間軸, editor dock, help | `MechanismCueRow.tsx`, `MechanismTimeline.tsx`, `MechanismTab.tsx`, `ProjectEditor.tsx`, `Help.tsx` |
-| 2 | 0028; split nodes in `pose.ts`; `hingeFromBox`; form (對開 toggle, sides, flip edges, 進階); `?mech=2` filter; CSV two rows | `pose.ts`, `model.ts`, `MechanismSetupForm.tsx`, `mechanisms.mjs`, `cueSheet.ts`, `api.ts` |
+| 2 ✓ | 0030 (was 0028); split nodes in `pose.ts`; `hingeFromBox`; form (對開 toggle, sides, flip edges, 進階); `?mech=2` filter; CSV two rows | `pose.ts`, `model.ts`, `MechanismSetupForm.tsx`, `mechanisms.mjs`, `cueSheet.ts`, `api.ts` |
 | 3 | 0029; batch create and group APIs; `patterns.ts`; pattern dialog; group block in timeline; bulk PUT | new `patterns.ts`, `mechanisms.mjs`, `MechanismTab.tsx`, `MechanismTimeline.tsx` |
 | 4 | 0030; `hoist.ts`; rig node in `pose.ts`; rig form and attach picker; tilt display and coplanarity checks (also sampled along moves); CSV per hoist | new `hoist.ts`, `pose.ts`, `MechanismSetupForm.tsx`, `motion.ts`, `cueSheet.ts` |

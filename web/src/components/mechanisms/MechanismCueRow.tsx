@@ -179,10 +179,16 @@ export default function MechanismCueRow({
       <div className="mech-row__head">
         <span className="mech-row__icon" aria-hidden="true"><Icon icon={kindIcon} /></span>
         <span className="mech-row__name" title={mech.consoleLabel ? `控台：${mech.consoleLabel}` : undefined}>{mech.name}</span>
-        <span className="mech-row__word">{word}</span>
+        <span className="mech-row__word">{word}{mech.variant === 'split' ? ' · 對開' : ''}</span>
         <span className="mech-row__value">{fmt(shown)}</span>
         {source}
       </div>
+
+      {mech.variant === 'split' && (
+        <div className="mech-row__split" role="note">
+          {mech.kind === 'linear' ? `每邊 ${fmt(shown)}（中間開 ${fmt(shown * 2)}）` : `每邊轉 ${fmt(shown)}（A 邊、B 邊往相反的方向轉）`}
+        </div>
+      )}
 
       {mech.presets.length > 0 && (
         <div className="mech-row__presets" role="group" aria-label={`「${mech.name}」的常用位置`}>

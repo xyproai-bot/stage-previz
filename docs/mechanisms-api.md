@@ -15,6 +15,7 @@
 - **每個 cue 存自己的位置**；沒存 = 沿用前面最近一個**正式 cue** 存的；前面都沒存 = 預設位置（規則在 `web/src/lib/mechanisms/track.ts`，每一頁都用同一份）。
 - 存的值不會因為改行程被改掉；播放 / 畫面 / 總表用的值夾在行程內。
 - **每個 cue 每個機關自己的時間**（v2，0027）：`delaySec` = GO 之後幾秒開始動、`durationSec` = 走幾秒（0 = 直接切換）；`null` = 跟著 cue（延遲 0、走 = 轉場）。跟著那個 cue 自己存的位置那一列，**不沿用**；回到沿用時一起清掉。規則：`docs/superpowers/specs/2026-10-15-mechanism-v2-design.md`。
+- **對開和翻轉**（v2 第 2 階段，0030）：對開 = 兩邊用同一個數字往反方向動（`variant: "split"`）；翻轉 = 旋轉機關沿著物件的某個邊緣翻（轉軸和轉軸中心已經算好存在 `axis` / `pivot`，選的邊緣記在 `metadata.setup`）。見下面「對開和翻轉」。
 - 機關可以裝在另一個機關上（`parentId`，例：轉台上的升降台），一層套一層最多 4 層。一個物件只能**直接**放在一個機關。
 - 每個 cue 的位置不寫活動紀錄（拖滑桿不洗版）；機關的新增 / 修改 / 刪除 / 排序會寫。
 
@@ -44,11 +45,24 @@
   "objectIds": ["so_…", "so_…"],
   "consoleLabel": "Axis 3",     // 自動化控台上的軸名（選填）
   "order": 0,
-  "metadata": null,             // 之後放加減速、碰撞外框
+  "metadata": null,             // 之後放加減速、碰撞外框；翻轉記 { "setup": { "hinge": "top", "positive": "first" } }
   "cueCount": 12,               // 幾個 cue 有自己設的位置
-  "updatedAt": "2026-10-14 03:00:00"
+  "updatedAt": "2026-10-14 03:00:00",
+  "variant": null,              // v2：null 一般 | "split" 對開
+  "mirror": null,               // 只有對開：B 邊 { axis, pivot（旋轉才有）, consoleLabel }
+  "objectSides": {}             // 只有對開：{ [物件 id]: "a" | "b" }（沒寫 = A 邊）
 }
 ```
+
+### 對開和翻轉（`variant`、`mirror`、`objectSides`、`metadata.setup`）
+
+- **對開**：`variant: "split"`。A 邊就是機關本來的 `axis` / `pivot` / `consoleLabel`；B 邊用 `mirror`（`axis`、`pivot`、`consoleLabel`）。兩邊**同一個位置**（一個數字），所以每個 cue 的位置、延遲、走幾秒、檢查都只有一份。`objectSides` 說每個帶動的物件在 A 邊還是 B 邊。
+  - 直線沒給 `mirror` → 後台補反方向；旋轉一定要給 `mirror.axis` 和 `mirror.pivot`（不然 400，`field: "mirror"`）。畫面用 `mirrorForSplit`（`model.ts`）算：直線 B 方向 = −A 方向；旋轉 n = A 邊中心 → B 邊中心的方向，B 轉軸 = −reflect(A 轉軸, n)，B 轉軸中心 = B 邊中心 + reflect(A 轉軸中心 − A 邊中心, n)（左右對稱時 n = normalize(B 轉軸中心 − A 轉軸中心)）。
+  - 對開的機關**不能當別的機關的上層**（`parentId` 指到它 → 400「對開的機關不能當別的機關的上層」；有機關裝在它上面時不能改成對開）；它自己可以裝在別的機關上。
+  - 改回一般機關：`PATCH { "variant": null }` → `mirror` 和每個物件的邊都清掉。換邊：`PATCH { "objectSides": {...} }`。只改名字、行程這類不會動到邊。
+  - 對開不能用「轉換 cue 位置」（400「對開的機關不能轉換 cue 位置（兩邊的物件動法不一樣）」）。
+- **翻轉**：`kind: "rotary"`，`axis` / `pivot` 由畫面從帶動物件的外框算好（`hingeFromBox`，`flip.ts`）；`metadata.setup = { hinge: "top" | "bottom" | "left" | "right" | "front" | "back", positive: "first" | "second" }` 只是讓編輯時看得到原本的選擇（後台不看它、舊版前端也照樣存回來）。
+- **舊版前端相容**：讀機關和位置的網址要帶 `?mech=2`（新版畫面一律帶；`GET …/mechanisms`、`…/mechanism-sheet`、`…/songs/:s/mechanism-positions`、分享連結的 `…/data` 和 `…/mechanism-positions`）。**沒帶（還在跑的舊版前端）→ 後台不給 `variant` 不是空的機關，也不給它們的位置**：對開的零件在舊版畫面是靜止的，不會往錯的方向動；翻轉是普通的旋轉機關，舊版照樣看得到、會動。新增 / 修改的回應一律給完整的。
 
 ## 網址
 
@@ -56,7 +70,7 @@
 
 | | 網址 | 送 | 回傳 |
 |---|---|---|---|
-| GET | `/api/projects/:p/mechanisms` | | `{ mechanisms: Mechanism[] }`（照順序） |
+| GET | `/api/projects/:p/mechanisms?mech=2` | | `{ mechanisms: Mechanism[] }`（照順序；沒帶 `?mech=2` 不含對開） |
 | POST | `/api/projects/:p/mechanisms` | 機關的欄位（不用 id / order / cueCount）+ `moveObjects?: true` | 201 `{ mechanism }` |
 | POST | `/api/projects/:p/mechanisms/reorder` | `{ ids: string[] }` | `{ ok }` |
 | PATCH | `/api/projects/:p/mechanisms/:m` | 要改的欄位 + `moveObjects?: true` | `{ mechanism, outOfRangeCount }`（有幾個 cue 存的值超出新的行程） |
@@ -78,7 +92,7 @@
 
 | 狀態 | 什麼時候 | `error` |
 |---|---|---|
-| 400 | 檢查沒過（還會帶 `field`：name / kind / axis / pivot / travel / maxSpeed / presets / objectIds / parentId） | 「機關名稱不能空白」「這個專案已經有叫「…」的機關」「機關類型不正確」「方向不正確」「轉軸中心要是數字」「行程的最高要比最低大」「行程要填數字」「最高速度要是正的數字，或留空不檢查」「常用位置最多 12 個」「常用位置的名稱重複了：「…」」「一個機關最多帶 200 個物件」「有物件不在這個專案裡」「不能選自己，或裝在自己上面的機關」「機關一層套一層最多 4 層」「找不到要裝上去的機關」 |
+| 400 | 檢查沒過（還會帶 `field`：name / kind / variant / axis / pivot / mirror / travel / maxSpeed / presets / objectIds / parentId） | 「機關名稱不能空白」「這個專案已經有叫「…」的機關」「機關類型不正確」「方向不正確」「轉軸中心要是數字」「行程的最高要比最低大」「行程要填數字」「最高速度要是正的數字，或留空不檢查」「常用位置最多 12 個」「常用位置的名稱重複了：「…」」「一個機關最多帶 200 個物件」「有物件不在這個專案裡」「不能選自己，或裝在自己上面的機關」「機關一層套一層最多 4 層」「找不到要裝上去的機關」「機關的變化類型不正確」「對開的 B 邊方向不正確」「對開的 B 邊轉軸中心要是數字」「對開的機關不能當別的機關的上層」「有機關裝在它上面，不能改成對開」 |
 | 400 | PUT 每個 cue 的位置不是數字 | 「位置要是數字」 |
 | 400 | PUT 的秒數不對（`field`：delaySec / durationSec） | 「延遲要是 0 到 3600 秒，或留空跟著 cue」「走幾秒要是 0 到 3600 秒，或留空跟著轉場」 |
 | 400 | 只送時間，但這個 cue 還沒有自己的位置 | 「這個 cue 還沒有設定這個機關的位置，要一起送位置」 |
@@ -101,7 +115,7 @@
 | 功能 | 機關 |
 |---|---|
 | 複製專案 | 機關（新 id、`parentId` 換成新的）、帶的物件、每個 cue 的位置都跟著；舊滑桿的數值也換成新物件的 id |
-| 匯出 / 匯入專案 | 匯出檔多 `mechanisms`、`mechanismObjects`、`cueMechanismPositions`（資料庫原樣）；舊的匯出檔沒有 → 什麼都不做 |
+| 匯出 / 匯入專案 | 匯出檔多 `mechanisms`、`mechanismObjects`、`cueMechanismPositions`（資料庫原樣，含對開的 `variant`、`mirror`、`side`）；舊的匯出檔沒有 → 什麼都不做（沒有 variant / mirror / side 的當一般機關） |
 | 新 cue「沿用」 | 複製來源 cue 自己存的機關位置和時間 |
 | 新 cue「從目前 3D 畫面」 | `POST …/cues` 多送 `snapshotMechanisms: { [機關 id]: 值 }` → 存成新 cue 自己的值 |
 | 存成常用擺位 / 套用 | 常用擺位多存 `mechanismPositions: [{ name, value, delaySec?, durationSec? }]`（時間有設才放），套用時**照機關名稱**對（別的專案有同名的機關也套得上），夾進行程 |

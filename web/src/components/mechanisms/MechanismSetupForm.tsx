@@ -1,7 +1,7 @@
 // 設定一個機關（新增 / 編輯）：直接展開在機關分頁裡（不是跳出視窗 → 3D 畫面照樣可以轉、可以 Shift 點物件）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bookmark, Crosshair, Gauge, Layers, MoveVertical, Plus, RotateCw, Ruler, Search, Trash2, Wand2,
+  ArrowLeftRight, Bookmark, Crosshair, Gauge, Layers, MoveVertical, Plus, RotateCw, Ruler, Search, Trash2, Wand2,
 } from 'lucide-react';
 import Icon from '../Icon';
 import { confirmDialog } from '../dialogs';
@@ -9,9 +9,11 @@ import type { StageObject } from '../../lib/api';
 import { STAGE_CATEGORY } from '../stageCategories';
 import {
   LINEAR_DIRECTIONS, MECH_LIMITS, ROTARY_AXES, blankMechanismInput, linearDirectionVector, matchLinearDirection,
-  matchRotaryAxis, mechanismToInput, normalizeMechanismInput, rotaryAxisVector, standardPresets, unitOf, speedUnitOf,
-  type LinearDirection, type Mechanism, type MechanismField, type MechanismInput, type MechVec3, type RotaryAxisKind,
+  matchRotaryAxis, mechanismToInput, mirrorForSplit, normalizeMechanismInput, rotaryAxisVector, standardPresets, unitOf, speedUnitOf,
+  type LinearDirection, type Mechanism, type MechanismField, type MechanismInput, type MechanismSide, type MechVec3, type RotaryAxisKind,
 } from '../../lib/mechanisms/model';
+import { FLIP_HINGES, flipSetupOf, hingeFromBox, withFlipSetup, type FlipHinge, type StageBox } from '../../lib/mechanisms/flip';
+import { autoSplitSides, countSides } from '../../lib/mechanisms/split';
 import { formatFieldNumber, metersToScene, parseNumberInput, sceneToMeters } from '../../lib/numberField';
 
 export interface SetupFormProps {
@@ -24,6 +26,8 @@ export interface SetupFormProps {
   scaleCorrection: number;
   front: MechVec3;
   groupCenter: (ids: string[]) => MechVec3 | null;
+  /** 這些物件在 cue 位置的外框（翻轉從外框算轉軸）；找不到 → null */
+  groupBox: (ids: string[]) => StageBox | null;
   busy: boolean;
   onSave: (input: MechanismInput, moveObjects: boolean) => Promise<void>;
   onCancel: () => void;
@@ -50,6 +54,14 @@ type Draft = {
   maxSpeed: string;
   presets: { name: string; value: string }[];
   consoleLabel: string;
+  /** 對開（兩邊往反方向）：開 / 關、每個物件在哪一邊（沒寫 = A 邊）、B 邊的控台編號 */
+  split: boolean;
+  sides: Record<string, MechanismSide>;
+  consoleLabelB: string;
+  /** 旋轉怎麼翻：'custom' = 自己設轉軸（轉台）；其他 = 沿著物件的哪一個邊緣翻（轉軸從外框算） */
+  hinge: FlipHinge | 'custom';
+  /** 翻轉選了「正的角度」的第一個選項 */
+  flipFirst: boolean;
 };
 
 const num = (s: string) => parseNumberInput(s);
@@ -61,6 +73,7 @@ function initialDraft(m: Mechanism | null, front: MechVec3, scale: number): Draf
   const rot = matchRotaryAxis(base.axis, front);
   const exact = base.kind === 'linear' ? lin.exact : rot.exact;
   const p = base.pivot ?? { x: 0, y: 0, z: 0 };
+  const flip = base.kind === 'rotary' ? flipSetupOf(base.metadata) : null;
   return {
     name: base.name,
     kind: base.kind,
@@ -78,13 +91,20 @@ function initialDraft(m: Mechanism | null, front: MechVec3, scale: number): Draf
     maxSpeed: base.maxSpeed === null ? '' : fmt(base.maxSpeed),
     presets: base.presets.map(x => ({ name: x.name, value: fmt(x.value) })),
     consoleLabel: base.consoleLabel ?? '',
+    split: base.variant === 'split',
+    sides: { ...base.objectSides },
+    consoleLabelB: base.mirror?.consoleLabel ?? '',
+    hinge: flip ? flip.hinge : 'custom',
+    flipFirst: flip ? flip.positive !== 'second' : true,
   };
 }
 
 export default function MechanismSetupForm({
-  editing, mechanisms, stageObjects, selectedObjectIds, scaleCorrection, front, groupCenter, busy, onSave, onCancel, onDelete, onConvert,
+  editing, mechanisms, stageObjects, selectedObjectIds, scaleCorrection, front, groupCenter, groupBox, busy, onSave, onCancel, onDelete, onConvert,
 }: SetupFormProps) {
   const [d, setD] = useState<Draft>(() => initialDraft(editing, front, scaleCorrection));
+  // 進階（轉軸 / 轉軸中心）：自己設轉軸時展開；沿著邊緣翻時收起來（照外框自動算）
+  const [advOpen, setAdvOpen] = useState(() => d.hinge === 'custom');
   const [search, setSearch] = useState('');
   const [errors, setErrors] = useState<Partial<Record<MechanismField, string>>>({});
   const [moveConfirmed, setMoveConfirmed] = useState<Set<string>>(new Set());
@@ -103,15 +123,19 @@ export default function MechanismSetupForm({
 
   // 可以裝上去的機關：不是自己、不是裝在自己底下的
   const parentOptions = useMemo(() => {
-    if (!editing) return mechanisms;
+    // 對開的機關不能當別的機關的上層
+    const all = mechanisms.filter(m => m.variant !== 'split');
+    if (!editing) return all;
     const below = new Set<string>([editing.id]);
     let grew = true;
     while (grew) {
       grew = false;
       for (const m of mechanisms) if (m.parentId && below.has(m.parentId) && !below.has(m.id)) { below.add(m.id); grew = true; }
     }
-    return mechanisms.filter(m => !below.has(m.id));
+    return all.filter(m => !below.has(m.id));
   }, [mechanisms, editing]);
+  // 已經有機關裝在它上面 → 不能改成對開
+  const hasKids = !!editing && mechanisms.some(m => m.parentId === editing.id);
 
   const name = d.name.trim() || '這個機關';
   const toggleObject = async (id: string, on: boolean) => {
@@ -132,7 +156,9 @@ export default function MechanismSetupForm({
     });
   };
   const pivotFrom = (ids: string[]): Partial<Draft> => {
-    const c = ids.length ? groupCenter(ids) : null;
+    // 對開：轉軸中心用 A 邊物件的中心（B 邊自動鏡像過去）
+    const mine = d.split ? ids.filter(id => (d.sides[id] ?? 'a') === 'a') : ids;
+    const c = (mine.length ? mine : ids).length ? groupCenter(mine.length ? mine : ids) : null;
     if (!c) return {};
     return { pivotM: [fmt(sceneToMeters(c.x, scaleCorrection)), fmt(sceneToMeters(c.y, scaleCorrection)), fmt(sceneToMeters(c.z, scaleCorrection))] };
   };
@@ -165,15 +191,38 @@ export default function MechanismSetupForm({
     return [...by.entries()];
   }, [stageObjects, search]);
 
+  const sideOf = (id: string): MechanismSide => (d.sides[id] === 'b' ? 'b' : 'a');
+  const idsOn = (side: MechanismSide) => d.objectIds.filter(id => sideOf(id) === side);
+
+  /** 翻轉：轉軸從 A 邊（沒對開 = 全部）物件的外框算；找不到外框就沿用原本存的（編輯時） */
+  function hingeGeometry(): { axis: MechVec3; pivot: MechVec3 } | null {
+    if (d.kind !== 'rotary' || d.hinge === 'custom') return null;
+    const ids = d.split ? idsOn('a') : d.objectIds;
+    const box = ids.length ? groupBox(ids) : null;
+    if (box) return hingeFromBox(box, d.hinge, front, d.flipFirst);
+    return null;
+  }
+
   function buildInput(): unknown {
-    const axis = d.kind === 'linear'
+    const hingeGeo = hingeGeometry();
+    const keep = editing && editing.kind === 'rotary' && d.hinge !== 'custom' && !hingeGeo ? editing : null;   // 外框找不到：沿用原本存的
+    const axis = keep ? keep.axis : hingeGeo ? hingeGeo.axis : d.kind === 'linear'
       ? (d.keepAxis && d.kind === editing?.kind ? d.keepAxis : linearDirectionVector(d.dir, front))
       : (d.keepAxis && d.kind === editing?.kind ? d.keepAxis : rotaryAxisVector(d.rotAxis, d.rotPositiveFirst, front));
     const pm = d.pivotM.map(num);
     const pivot = d.kind === 'rotary'
-      ? (pm.every(v => v !== null) ? { x: metersToScene(pm[0]!, scaleCorrection), y: metersToScene(pm[1]!, scaleCorrection), z: metersToScene(pm[2]!, scaleCorrection) } : { x: 'x', y: 0, z: 0 })
+      ? (keep ? keep.pivot : hingeGeo ? hingeGeo.pivot
+        : pm.every(v => v !== null) ? { x: metersToScene(pm[0]!, scaleCorrection), y: metersToScene(pm[1]!, scaleCorrection), z: metersToScene(pm[2]!, scaleCorrection) } : { x: 'x', y: 0, z: 0 })
       : null;
     const n = (s: string) => (s.trim() === '' ? NaN : num(s) ?? NaN);
+    // 對開：B 邊 = A 邊的鏡像（直線 = 反方向；旋轉 = 鏡射到另一邊的轉軸中心），控台編號各自的
+    let mirror: unknown = null;
+    if (d.split) {
+      const a = idsOn('a'), b = idsOn('b');
+      const m = mirrorForSplit(d.kind, axis as MechVec3, (pivot as MechVec3 | null), a.length ? groupCenter(a) : null, b.length ? groupCenter(b) : null);
+      mirror = { axis: m.axis, pivot: m.pivot, consoleLabel: d.consoleLabelB.trim() || null };
+    }
+    const setup = d.kind === 'rotary' && d.hinge !== 'custom' ? { hinge: d.hinge, positive: d.flipFirst ? 'first' as const : 'second' as const } : null;
     return {
       name: d.name,
       kind: d.kind,
@@ -187,14 +236,22 @@ export default function MechanismSetupForm({
       parentId: d.parentId || null,
       objectIds: d.objectIds,
       consoleLabel: d.consoleLabel,
-      metadata: editing?.metadata ?? null,
+      metadata: withFlipSetup(editing?.metadata, setup),
+      variant: d.split ? 'split' : null,
+      mirror,
+      objectSides: d.split ? Object.fromEntries(d.objectIds.map(id => [id, sideOf(id)])) : {},
     };
   }
 
   async function save() {
+    // 沿著邊緣翻：要有物件的外框才算得出轉軸（編輯時外框暫時找不到會沿用原本存的）
+    if (d.kind === 'rotary' && d.hinge !== 'custom' && !hingeGeometry() && !(editing && editing.kind === 'rotary')) {
+      setErrors({ objectIds: '沿著邊緣翻要先選好「帶動的物件」，轉軸會照它們的外框自動算' });
+      return;
+    }
     const r = normalizeMechanismInput(buildInput(), {
       selfId: editing?.id ?? null,
-      siblings: mechanisms.map(m => ({ id: m.id, name: m.name, parentId: m.parentId })),
+      siblings: mechanisms.map(m => ({ id: m.id, name: m.name, parentId: m.parentId, variant: m.variant ?? null })),
       projectObjectIds: new Set(stageObjects.map(o => o.id)),
     });
     if (!r.ok) { setErrors(r.errors); return; }
@@ -203,9 +260,25 @@ export default function MechanismSetupForm({
     await onSave(r.value, moving);
   }
 
+  // 對開
+  const objName = (id: string) => stageObjects.find(o => o.id === id)?.displayName || id;
+  const autoSplit = (ids = d.objectIds, kind = d.kind) => {
+    const centers: Record<string, MechVec3 | undefined> = {};
+    for (const id of ids) centers[id] = groupCenter([id]) ?? undefined;
+    const axisA = kind === 'linear' ? (d.keepAxis && editing?.kind === 'linear' ? d.keepAxis : linearDirectionVector(d.dir, front)) : { x: 0, y: 1, z: 0 };
+    return autoSplitSides(ids, centers, kind, axisA, front);
+  };
+  const toggleSplit = (on: boolean) => setD(prev => (on
+    ? { ...prev, split: true, sides: { ...autoSplit(prev.objectIds, prev.kind), ...(prev.objectIds.length < 2 ? prev.sides : {}) } }
+    : { ...prev, split: false }));
+  const sideCount = countSides(d.objectIds, d.sides);
+  // 翻轉：現在選的邊緣算出來的轉軸中心（只用來顯示）
+  const hingeNow = hingeGeometry();
+
   const err = (f: MechanismField) => errors[f] ? <div className="field-error small" role="alert">{errors[f]}</div> : null;
   const tMin = num(d.travelMin), tMax = num(d.travelMax);
   const rotAxis = ROTARY_AXES.find(a => a.key === d.rotAxis)!;
+  const split = d.split;
 
   return (
     <form ref={formRef} className="mech-form" onSubmit={(e) => { e.preventDefault(); void save(); }}>
@@ -220,10 +293,22 @@ export default function MechanismSetupForm({
         <span className="mech-form__label">動作</span>
         <div className="mech-seg" role="radiogroup" aria-label="動作">
           <button type="button" role="radio" aria-checked={d.kind === 'linear'} className={d.kind === 'linear' ? 'is-active' : ''}
-            onClick={() => set({ kind: 'linear', keepAxis: null })}><Icon icon={MoveVertical} /> 直線移動</button>
+            onClick={() => set({ kind: 'linear', keepAxis: null, hinge: 'custom' })}><Icon icon={MoveVertical} /> 直線移動</button>
           <button type="button" role="radio" aria-checked={d.kind === 'rotary'} className={d.kind === 'rotary' ? 'is-active' : ''}
             onClick={() => set({ kind: 'rotary', keepAxis: null, ...(d.pivotTouched ? {} : pivotFrom(d.objectIds)), ...(d.kind === 'linear' && tMin === 0 && tMax === 1 ? { travelMin: '-180', travelMax: '180' } : {}) })}><Icon icon={RotateCw} /> 旋轉</button>
         </div>
+      </div>
+
+      <div className="mech-form__row">
+        <label className="mech-speed-toggle" title={hasKids ? '有機關裝在它上面，不能改成對開' : '兩邊用同一個數字，往反方向動'}>
+          <input type="checkbox" checked={d.split} disabled={hasKids} onChange={e => toggleSplit(e.target.checked)} />
+          <Icon icon={ArrowLeftRight} size="sm" />
+          <span>對開（兩邊往反方向）</span>
+        </label>
+        <small className="muted">{hasKids
+          ? '有機關裝在它上面，不能改成對開'
+          : '例：左右兩排 LED 往兩邊打開。A 邊照下面的方向動，B 邊自動往鏡像的方向動，兩邊用同一個數字'}</small>
+        {err('variant')}
       </div>
 
       {d.kind === 'linear' ? (
@@ -238,35 +323,73 @@ export default function MechanismSetupForm({
       ) : (
         <>
           <div className="mech-form__row">
-            <label htmlFor="mech-axis">轉軸</label>
+            <label htmlFor="mech-hinge">怎麼轉</label>
             <div className="mech-form__pair">
-              <select id="mech-axis" value={d.rotAxis} onChange={e => set({ rotAxis: e.target.value as RotaryAxisKind, keepAxis: null })}>
-                {ROTARY_AXES.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
+              <select id="mech-hinge" value={d.hinge} onChange={e => {
+                const hinge = e.target.value as FlipHinge | 'custom';
+                set({ hinge, keepAxis: null });
+                setAdvOpen(hinge === 'custom');
+              }}>
+                <option value="custom">轉台，或自己設定轉軸（進階）</option>
+                {FLIP_HINGES.map(h => <option key={h.key} value={h.key}>{h.label}</option>)}
               </select>
-              <select aria-label="正的角度" value={d.rotPositiveFirst ? '1' : '0'} onChange={e => set({ rotPositiveFirst: e.target.value === '1', keepAxis: null })}>
-                <option value="1">正的角度：{rotAxis.positive[0]}</option>
-                <option value="0">正的角度：{rotAxis.positive[1]}</option>
-              </select>
+              {d.hinge !== 'custom' && (() => {
+                const info = FLIP_HINGES.find(h => h.key === d.hinge)!;
+                return (
+                  <select aria-label="正的角度" value={d.flipFirst ? '1' : '0'} onChange={e => set({ flipFirst: e.target.value === '1' })}>
+                    <option value="1">正的角度：{info.positive[0]}</option>
+                    <option value="0">正的角度：{info.positive[1]}</option>
+                  </select>
+                );
+              })()}
             </div>
+            <small className="muted">{d.hinge === 'custom'
+              ? '像轉台那樣繞著一個點轉；轉軸和轉軸中心在下面「進階」設定'
+              : '轉軸會照「帶動的物件」的外框自動放在選的邊緣，不用自己量'}</small>
             {err('axis')}
           </div>
-          <div className="mech-form__row">
-            <span className="mech-form__label">轉軸中心</span>
-            <div className="mech-form__pair">
-              {(['X', 'Y', 'Z'] as const).map((ax, i) => (
-                <label key={ax} className="num-field">
-                  <span className="num-field__axis">{ax}</span>
-                  <input type="text" inputMode="decimal" aria-label={`轉軸中心 ${ax}（m）`} value={d.pivotM[i]}
-                    onChange={e => { const p = [...d.pivotM] as Draft['pivotM']; p[i] = e.target.value; set({ pivotM: p, pivotTouched: true }); }} />
-                  <span className="num-field__unit" aria-hidden="true">m</span>
-                </label>
-              ))}
-              <button type="button" className="btn btn--ghost btn--sm" disabled={d.objectIds.length === 0}
-                title={d.objectIds.length === 0 ? '先選要帶的物件' : '轉軸中心放在選的物件的正中間'}
-                onClick={() => setD(prev => ({ ...prev, ...pivotFrom(prev.objectIds), pivotTouched: true }))}><Icon icon={Crosshair} /> 用物件中心</button>
-            </div>
-            {err('pivot')}
-          </div>
+          <details className="mech-advanced" open={advOpen} onToggle={e => setAdvOpen((e.currentTarget as HTMLDetailsElement).open)}>
+            <summary>進階</summary>
+            {d.hinge !== 'custom' && (
+              <div className="mech-form__row">
+                <span className="mech-form__label">轉軸中心（自動）</span>
+                <small className="muted">{hingeNow
+                  ? `X ${fmt(sceneToMeters(hingeNow.pivot.x, scaleCorrection))} m、Y ${fmt(sceneToMeters(hingeNow.pivot.y, scaleCorrection))} m、Z ${fmt(sceneToMeters(hingeNow.pivot.z, scaleCorrection))} m；要自己設定的話，把上面「怎麼轉」改成「轉台，或自己設定轉軸」`
+                  : '選好「帶動的物件」就會自動算出來；要自己設定的話，把上面「怎麼轉」改成「轉台，或自己設定轉軸」'}</small>
+              </div>
+            )}
+            <fieldset className="mech-fieldset" disabled={d.hinge !== 'custom'}>
+              <div className="mech-form__row">
+                <label htmlFor="mech-axis">轉軸</label>
+                <div className="mech-form__pair">
+                  <select id="mech-axis" value={d.rotAxis} onChange={e => set({ rotAxis: e.target.value as RotaryAxisKind, keepAxis: null })}>
+                    {ROTARY_AXES.map(x => <option key={x.key} value={x.key}>{x.label}</option>)}
+                  </select>
+                  <select aria-label="正的角度" value={d.rotPositiveFirst ? '1' : '0'} onChange={e => set({ rotPositiveFirst: e.target.value === '1', keepAxis: null })}>
+                    <option value="1">正的角度：{rotAxis.positive[0]}</option>
+                    <option value="0">正的角度：{rotAxis.positive[1]}</option>
+                  </select>
+                </div>
+              </div>
+              <div className="mech-form__row">
+                <span className="mech-form__label">轉軸中心</span>
+                <div className="mech-form__pair">
+                  {(['X', 'Y', 'Z'] as const).map((ax, i) => (
+                    <label key={ax} className="num-field">
+                      <span className="num-field__axis">{ax}</span>
+                      <input type="text" inputMode="decimal" aria-label={`轉軸中心 ${ax}（m）`} value={d.pivotM[i]}
+                        onChange={e => { const p = [...d.pivotM] as Draft['pivotM']; p[i] = e.target.value; set({ pivotM: p, pivotTouched: true }); }} />
+                      <span className="num-field__unit" aria-hidden="true">m</span>
+                    </label>
+                  ))}
+                  <button type="button" className="btn btn--ghost btn--sm" disabled={d.objectIds.length === 0}
+                    title={d.objectIds.length === 0 ? '先選要帶的物件' : d.split ? '轉軸中心放在 A 邊物件的正中間' : '轉軸中心放在選的物件的正中間'}
+                    onClick={() => setD(prev => ({ ...prev, ...pivotFrom(prev.objectIds), pivotTouched: true }))}><Icon icon={Crosshair} /> 用物件中心</button>
+                </div>
+                {err('pivot')}
+              </div>
+            </fieldset>
+          </details>
         </>
       )}
 
@@ -305,6 +428,42 @@ export default function MechanismSetupForm({
         {err('objectIds')}
       </div>
 
+      {d.split && (
+        <div className="mech-form__row mech-sides">
+          <div className="mech-form__pair">
+            <span className="mech-form__label">哪些在 A 邊、哪些在 B 邊</span>
+            <button type="button" className="btn btn--ghost btn--sm" disabled={d.objectIds.length < 2}
+              title="找出物件散得最開的方向，從中間切成兩邊"
+              onClick={() => setD(prev => ({ ...prev, sides: autoSplit(prev.objectIds, prev.kind) }))}><Icon icon={Wand2} /> 照位置自動分兩邊</button>
+          </div>
+          {d.objectIds.length === 0 ? <small className="muted">先在上面選好要帶動的物件，再分 A 邊、B 邊</small> : (
+            <div className="mech-sides__cols">
+              {(['a', 'b'] as const).map(side => (
+                <div key={side} className="mech-sides__col">
+                  <div className="mech-sides__title">{side === 'a' ? 'A 邊' : 'B 邊'}<span className="muted">（{sideCount[side]} 個）</span></div>
+                  {idsOn(side).map(id => {
+                    const other = side === 'a' ? 'B 邊' : 'A 邊';
+                    return (
+                      <div key={id} className="mech-sides__item">
+                        <span className="mech-sides__name">{objName(id)}</span>
+                        <button type="button" className="mech-icon-btn" title={`移到${other}`} aria-label={`把「${objName(id)}」移到${other}`}
+                          onClick={() => set({ sides: { ...d.sides, [id]: side === 'a' ? 'b' : 'a' } })}><Icon icon={ArrowLeftRight} /></button>
+                      </div>
+                    );
+                  })}
+                  {sideCount[side] === 0 && <div className="muted small">還沒有物件</div>}
+                </div>
+              ))}
+            </div>
+          )}
+          <small className="muted">A 邊照上面的方向動；B 邊自動往鏡像的方向動（直線 = 反方向，旋轉 = 轉軸鏡射到另一邊），兩邊用同一個數字</small>
+          {d.objectIds.length > 0 && (sideCount.a === 0 || sideCount.b === 0) && (
+            <div className="field-error small" role="status">兩邊都要有物件，只有一邊的話跟一般機關一樣</div>
+          )}
+          {err('mirror')}
+        </div>
+      )}
+
       <div className="mech-form__row">
         <label htmlFor="mech-parent">跟著另一個機關動（選填）</label>
         <select id="mech-parent" value={d.parentId} onChange={e => set({ parentId: e.target.value })}>
@@ -325,6 +484,7 @@ export default function MechanismSetupForm({
             <input type="text" inputMode="decimal" aria-label={`行程最高（${unit}）`} value={d.travelMax} onChange={e => set({ travelMax: e.target.value })} />
             <span className="num-field__unit" aria-hidden="true">{unit}</span></label>
         </div>
+        {split && <small className="muted">行程是每一邊走的{d.kind === 'rotary' ? '角度' : '距離'}{d.kind === 'linear' && tMax !== null && tMax > 0 ? `（每邊最多 ${fmt(tMax)} m，中間最多開 ${fmt(tMax * 2)} m）` : ''}</small>}
         {err('travel')}
       </div>
 
@@ -375,9 +535,17 @@ export default function MechanismSetupForm({
       </div>
 
       <div className="mech-form__row">
-        <label htmlFor="mech-console">控台編號（選填）</label>
+        <label htmlFor="mech-console">{d.split ? '控台編號（A 邊）' : '控台編號（選填）'}</label>
         <input id="mech-console" type="text" value={d.consoleLabel} maxLength={MECH_LIMITS.consoleLabelMax} onChange={e => set({ consoleLabel: e.target.value })} />
-        <small className="muted">自動化控台上這個軸的名字，例：Axis 12。匯出機關總表時一起列出</small>
+        {d.split && (
+          <>
+            <label htmlFor="mech-console-b">控台編號（B 邊）</label>
+            <input id="mech-console-b" type="text" value={d.consoleLabelB} maxLength={MECH_LIMITS.consoleLabelMax} onChange={e => set({ consoleLabelB: e.target.value })} />
+          </>
+        )}
+        <small className="muted">{d.split
+          ? '自動化控台上兩邊各自的軸名，例：Axis 7、Axis 8（選填）。匯出機關總表時兩邊各寫一行'
+          : '自動化控台上這個軸的名字，例：Axis 12。匯出機關總表時一起列出'}</small>
       </div>
 
       {errors.kind && err('kind')}

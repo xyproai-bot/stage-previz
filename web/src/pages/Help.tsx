@@ -84,6 +84,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
           { id: A.prodMechSetup, label: '設定機關' },
           { id: A.prodMechCue, label: '每個 cue 的機關位置' },
           { id: A.prodMechSpeed, label: '來不及到位、照機器速度' },
+          { id: A.prodMechSplit, label: '對開和翻轉' },
           { id: A.prodMechTiming, label: '延遲、走幾秒、機關時間軸' },
           { id: A.prodMechSheet, label: '機關總表' },
           { id: A.prodMechConvert, label: '把現有 cue 的位置轉成機關位置' },
@@ -1226,7 +1227,8 @@ function ProducerChapter() {
             <li><strong>名稱</strong>：例：中央升降台。</li>
             <li><strong>動作</strong>：「<Ui>直線移動</Ui>」或「<Ui>旋轉</Ui>」。</li>
             <li>直線：「<Ui>數字變大時往</Ui>」往上、往下、往觀眾、往舞台後方、往左、往右（左右是觀眾看過去的左右）。<br />
-              旋轉：「<Ui>轉軸</Ui>」水平轉（像轉台）、前後翻、左右翻，和正的角度往哪邊轉；「<Ui>轉軸中心</Ui>」可以按「<Ui>用物件中心</Ui>」。</li>
+              旋轉：「<Ui>怎麼轉</Ui>」選「<Ui>沿著上緣翻</Ui>」「<Ui>下緣</Ui>」「<Ui>左緣</Ui>」「<Ui>右緣</Ui>」「<Ui>前緣</Ui>」「<Ui>後緣</Ui>」（轉軸會照物件的外框自動放好），或選「<Ui>轉台，或自己設定轉軸</Ui>」，再到「<Ui>進階</Ui>」選轉軸（水平轉、前後翻、左右翻）和轉軸中心，可以按「<Ui>用物件中心</Ui>」。都要再選正的角度往哪邊轉。<br />
+              左右兩邊要往反方向動：勾「<Ui>對開（兩邊往反方向）</Ui>」，看<Go to={A.prodMechSplit}>對開和翻轉</Go>。</li>
             <li><strong>帶動的物件</strong>：勾要一起動的東西，例如升降台本體、前緣 LED、站在上面的主唱。也可以在 3D 畫面按住 Shift 點好幾個，再按「<Ui>用 3D 畫面選取的物件</Ui>」。</li>
             <li><strong>跟著另一個機關動</strong>（選填）：例如裝在轉台上的升降台，選「旋轉舞台」，轉台轉的時候會一起轉。</li>
             <li><strong>行程</strong>：最低、最高（公尺或度）。<strong>預設位置</strong>：沒有 cue 設定時停在這裡。</li>
@@ -1276,6 +1278,23 @@ function ProducerChapter() {
             <li>不勾（預設）：在編輯頁換 cue 時，機關照轉場秒數走，跟物件一起到，編輯比較快。提醒照樣會出現。</li>
             <li>勾了：換 cue 時機關照最高速度走，跟導演、客戶看到的一樣。</li>
             <li>這個勾選只記在你這台電腦。</li>
+          </ul>
+        </Section>
+
+        <Section id={A.prodMechSplit} level={3} title="對開和翻轉">
+          <p><strong>對開</strong>：兩邊的東西用<strong>同一個數字</strong>往反方向動，例如左右兩排 LED 往兩邊打開，一個位置就能叫兩邊。<strong>翻轉</strong>：板子沿著某個邊緣翻起來，例如上緣固定、下緣翻出來的 LED 板，或前緣固定、後面抬高的斜板。</p>
+          <ol className="help-steps">
+            <li>新增機關時「<Ui>動作</Ui>」下面勾「<Ui>對開（兩邊往反方向）</Ui>」。</li>
+            <li>「<Ui>帶動的物件</Ui>」選好之後，下面分成「<Ui>A 邊</Ui>」和「<Ui>B 邊</Ui>」兩欄。按「<Ui>照位置自動分兩邊</Ui>」會從物件最中間切開；每個物件旁邊的按鈕可以移到另一邊。</li>
+            <li>方向（或旋轉的轉軸）是設定 <strong>A 邊</strong> 的：數字變大時 A 邊往哪裡動。<strong>B 邊自動鏡像</strong>：直線 = 反方向；旋轉 = 轉軸鏡射到另一邊，不用自己算。</li>
+            <li>「<Ui>控台編號（A 邊）</Ui>」「<Ui>控台編號（B 邊）</Ui>」各填各的，機關總表兩邊各寫一行（「名稱（A 邊）」「名稱（B 邊）」）。</li>
+            <li>每個 cue 設的數字是<strong>每一邊</strong>走的：直線寫成「<Ui>每邊 2 m（中間開 4 m）</Ui>」。</li>
+          </ol>
+          <ul className="help-list">
+            <li>翻轉：「<Ui>動作</Ui>」選「<Ui>旋轉</Ui>」，「<Ui>怎麼轉</Ui>」選沿著哪一個邊緣翻，再選正的角度（例：沿著上緣翻 → 下緣往觀眾翻出來）。轉軸中心放在那個邊緣，高度和深度的正中間；前緣 / 後緣是斜板，轉軸中心在邊緣的最下面。</li>
+            <li>翻轉和對開可以一起用：例如兩扇門各自沿著外緣翻開，勾「<Ui>對開</Ui>」再選「<Ui>沿著左緣翻</Ui>」（A 邊的左緣，B 邊自動變右緣）。</li>
+            <li>對開的機關不能當別的機關的上層，但可以裝在轉台上（選「<Ui>跟著另一個機關動</Ui>」）。對開不能用「把現有 cue 的位置轉成機關位置」。</li>
+            <li>導演頁、工作站、分享連結都照 A、B 兩邊的方向動。還沒更新的舊版畫面看到的對開零件是不動的（不會往錯的方向動）；翻轉照樣會動。</li>
           </ul>
         </Section>
 

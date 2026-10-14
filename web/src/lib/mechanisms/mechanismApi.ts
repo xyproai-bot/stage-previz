@@ -5,7 +5,7 @@
 
 import { apiBase, getSessionToken, type ShareRef } from '../api';
 import { saveStatus } from '../saveStatus';
-import type { CueMechanismPosition, Mechanism, MechanismInput, MechanismPreset, MechanismValues, MechVec3 } from './model';
+import type { CueMechanismPosition, Mechanism, MechanismInput, MechanismMirror, MechanismPreset, MechanismSide, MechanismValues, MechVec3 } from './model';
 
 /** 後台回的錯誤：message 是中文、可以直接顯示；data 是整個錯誤內容 */
 export interface MechanismApiError extends Error {
@@ -41,6 +41,11 @@ export interface ConvertResult {
 
 const enc = encodeURIComponent;
 const base = (projectId: string) => `/api/projects/${enc(projectId)}`;
+/**
+ * 機關 v2 第 2 階段起，讀機關和位置的網址要帶這個：新版畫面看得懂對開，才給對開的機關；
+ * 沒帶（還在跑的舊版前端）後台就不給，對開的零件在舊版畫面是靜止的，不會往錯的方向動
+ */
+export const MECH_V2 = 'mech=2';
 
 async function toError(resp: Response): Promise<MechanismApiError> {
   let data: MechanismApiError['data'] = {};
@@ -95,11 +100,31 @@ export function parseMechanism(raw: unknown): Mechanism {
       .map(p => ({ name: p.name as string, value: p.value as number }))
       .sort((a, b) => a.value - b.value)
     : [];
+  const objectIds = Array.isArray(r.objectIds) ? (r.objectIds as unknown[]).filter((x): x is string => typeof x === 'string') : [];
+  const axis = vec(r.axis, { x: 0, y: 1, z: 0 });
+  // 對開（v2）：舊後台沒有這三欄 → 一般機關；B 邊的方向壞掉 → 直線用反方向、旋轉當一般機關
+  const mraw = (r.mirror && typeof r.mirror === 'object' ? r.mirror : null) as Record<string, unknown> | null;
+  let variant: 'split' | null = r.variant === 'split' ? 'split' : null;
+  let mirror: MechanismMirror | null = null;
+  if (variant === 'split') {
+    if (mraw) {
+      mirror = {
+        axis: vec(mraw.axis, { x: -axis.x || 0, y: -axis.y || 0, z: -axis.z || 0 }),
+        pivot: kind === 'rotary' ? vec(mraw.pivot, { x: 0, y: 0, z: 0 }) : null,
+        consoleLabel: typeof mraw.consoleLabel === 'string' && mraw.consoleLabel ? mraw.consoleLabel : null,
+      };
+    } else if (kind === 'linear') {
+      mirror = { axis: { x: -axis.x || 0, y: -axis.y || 0, z: -axis.z || 0 }, pivot: null, consoleLabel: null };
+    } else variant = null;
+  }
+  const sidesRaw = (r.objectSides && typeof r.objectSides === 'object' ? r.objectSides : {}) as Record<string, unknown>;
+  const objectSides: Record<string, MechanismSide> = {};
+  if (variant === 'split') for (const id of objectIds) objectSides[id] = sidesRaw[id] === 'b' ? 'b' : 'a';
   return {
     id: String(r.id ?? ''),
     name: typeof r.name === 'string' ? r.name : '',
     kind,
-    axis: vec(r.axis, { x: 0, y: 1, z: 0 }),
+    axis,
     pivot: kind === 'rotary' ? vec(r.pivot, { x: 0, y: 0, z: 0 }) : null,
     travelMin,
     travelMax,
@@ -107,12 +132,15 @@ export function parseMechanism(raw: unknown): Mechanism {
     maxSpeed: typeof r.maxSpeed === 'number' && r.maxSpeed > 0 ? r.maxSpeed : null,
     presets,
     parentId: typeof r.parentId === 'string' && r.parentId ? r.parentId : null,
-    objectIds: Array.isArray(r.objectIds) ? (r.objectIds as unknown[]).filter((x): x is string => typeof x === 'string') : [],
+    objectIds,
     consoleLabel: typeof r.consoleLabel === 'string' && r.consoleLabel ? r.consoleLabel : null,
     order: finite(r.order, 0),
     metadata: r.metadata && typeof r.metadata === 'object' && !Array.isArray(r.metadata) ? r.metadata as Record<string, unknown> : null,
     cueCount: finite(r.cueCount, 0),
     updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : '',
+    variant,
+    mirror,
+    objectSides,
   };
 }
 
@@ -136,7 +164,7 @@ export const parseMechanisms = (raw: unknown): Mechanism[] => (Array.isArray(raw
 // ─── 機關 ───
 
 export async function listMechanisms(projectId: string): Promise<Mechanism[]> {
-  const d = await call<{ mechanisms: unknown }>(`${base(projectId)}/mechanisms`);
+  const d = await call<{ mechanisms: unknown }>(`${base(projectId)}/mechanisms?${MECH_V2}`);
   return parseMechanisms(d.mechanisms);
 }
 
@@ -168,7 +196,7 @@ export async function reorderMechanisms(projectId: string, ids: string[]): Promi
 // ─── 每個 cue 的位置 ───
 
 export async function listSongPositions(projectId: string, songId: string): Promise<CueMechanismPosition[]> {
-  const d = await call<{ positions: unknown }>(`${base(projectId)}/songs/${enc(songId)}/mechanism-positions`);
+  const d = await call<{ positions: unknown }>(`${base(projectId)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}`);
   return parsePositions(d.positions);
 }
 
@@ -212,7 +240,7 @@ export function withMechanismSnapshot<T extends object>(input: T, values: Mechan
 // ─── 機關總表 / 轉換 ───
 
 export async function getMechanismSheet(projectId: string): Promise<MechanismSheetData> {
-  const d = await call<{ songs?: MechanismSheetData['songs']; positions?: unknown; mechanisms?: unknown }>(`${base(projectId)}/mechanism-sheet`);
+  const d = await call<{ songs?: MechanismSheetData['songs']; positions?: unknown; mechanisms?: unknown }>(`${base(projectId)}/mechanism-sheet?${MECH_V2}`);
   return {
     songs: Array.isArray(d.songs) ? d.songs : [],
     positions: parsePositions(d.positions),
@@ -232,7 +260,7 @@ function shareApiPath(ref: ShareRef): string {
 }
 
 export async function getShareSongPositions(ref: ShareRef, songId: string, access?: string): Promise<CueMechanismPosition[]> {
-  const resp = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${enc(songId)}/mechanism-positions`, {
+  const resp = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}`, {
     headers: access ? { 'x-share-access': access } : {},
   });
   if (!resp.ok) throw await toError(resp);

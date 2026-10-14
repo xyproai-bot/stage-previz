@@ -32,13 +32,34 @@ async function readJson(request) {
 // 資料庫一列 ↔ API 格式（純函式，有測）
 // ─────────────────────────────────────────────
 
-/** mechanisms 一列 → API 的 Mechanism */
-export function rowToMechanism(row, objectIds = [], cueCount = 0) {
+/**
+ * mechanisms 一列 → API 的 Mechanism
+ * sides：{ [物件 id]: 'a' | 'b' }（mechanism_objects.side；只有對開的機關用，沒寫 = A 邊）
+ */
+export function rowToMechanism(row, objectIds = [], cueCount = 0, sides = {}) {
   const vec = (v, fb) => {
-    const o = parseJson(v, null);
+    const o = typeof v === 'string' ? parseJson(v, null) : v;
     return o && Number.isFinite(Number(o.x)) && Number.isFinite(Number(o.y)) && Number.isFinite(Number(o.z))
       ? { x: Number(o.x), y: Number(o.y), z: Number(o.z) } : fb;
   };
+  // 對開（0030）：B 邊的方向 / 轉軸中心 / 控台編號；壞掉的 mirror → 直線用反方向，旋轉當一般機關
+  const isRotary = row.kind === 'rotary';
+  const axisA = vec(row.axis, { x: 0, y: 1, z: 0 });
+  const mraw = row.variant === 'split' ? parseJson(row.mirror, null) : null;
+  let variant = row.variant === 'split' ? 'split' : null;
+  let mirror = null;
+  if (variant === 'split') {
+    const mAxis = mraw ? vec(mraw.axis, null) : null;
+    const mPivot = mraw ? vec(mraw.pivot, null) : null;
+    if (!isRotary) {
+      mirror = { axis: mAxis ?? { x: -axisA.x || 0, y: -axisA.y || 0, z: -axisA.z || 0 }, pivot: null, consoleLabel: null };
+    } else if (mAxis && mPivot) {
+      mirror = { axis: mAxis, pivot: mPivot, consoleLabel: null };
+    } else variant = null;
+    if (mirror && mraw && typeof mraw.consoleLabel === 'string' && mraw.consoleLabel.trim()) mirror.consoleLabel = mraw.consoleLabel.trim();
+  }
+  const objectSides = {};
+  if (variant === 'split') for (const id of objectIds) objectSides[id] = sides[id] === 'b' ? 'b' : 'a';
   const presets = parseJson(row.presets, []);
   const metadata = parseJson(row.metadata, null);
   return {
@@ -63,6 +84,9 @@ export function rowToMechanism(row, objectIds = [], cueCount = 0) {
     metadata: metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : null,
     cueCount: Number(cueCount) || 0,
     updatedAt: row.updated_at,
+    variant,
+    mirror,
+    objectSides,
   };
 }
 
@@ -81,6 +105,8 @@ export function inputToColumns(v) {
     parent_id: v.parentId,
     console_label: v.consoleLabel,
     metadata: v.metadata ? JSON.stringify(v.metadata) : null,
+    variant: v.variant === 'split' ? 'split' : null,
+    mirror: v.variant === 'split' && v.mirror ? JSON.stringify(v.mirror) : null,
   };
 }
 
@@ -111,9 +137,13 @@ export function conflictMessage(c) {
 // 讀
 // ─────────────────────────────────────────────
 
-/** 這個專案的機關（照順序；含帶哪些物件、幾個 cue 有設定） */
-export async function loadMechanisms(env, projectId, onlyId = null) {
-  const where = onlyId ? 'm.project_id = ? AND m.id = ?' : 'm.project_id = ?';
+/**
+ * 這個專案的機關（照順序；含帶哪些物件、幾個 cue 有設定）
+ * mech2：呼叫的畫面看得懂機關 v2（網址帶 ?mech=2）。false（還在跑的舊版前端）→ 不給對開這類 variant 不是空的機關，
+ *   它帶的零件在舊版畫面是靜止的，不會往錯的方向動；只查一個 id（新增 / 修改後回傳）一律給
+ */
+export async function loadMechanisms(env, projectId, onlyId = null, { mech2 = true } = {}) {
+  const where = (onlyId ? 'm.project_id = ? AND m.id = ?' : 'm.project_id = ?') + (mech2 || onlyId ? '' : ' AND m.variant IS NULL');
   const binds = onlyId ? [projectId, onlyId] : [projectId];
   const [mr, or] = await env.DB.batch([
     env.DB.prepare(
@@ -121,7 +151,7 @@ export async function loadMechanisms(env, projectId, onlyId = null) {
          FROM mechanisms m WHERE ${where} ORDER BY m."order" ASC, m.created_at ASC, m.id ASC`
     ).bind(...binds),
     env.DB.prepare(
-      `SELECT mo.mechanism_id, mo.stage_object_id
+      `SELECT mo.mechanism_id, mo.stage_object_id, mo.side
          FROM mechanism_objects mo
          JOIN mechanisms m ON m.id = mo.mechanism_id
          JOIN stage_objects o ON o.id = mo.stage_object_id
@@ -130,24 +160,36 @@ export async function loadMechanisms(env, projectId, onlyId = null) {
     ).bind(...binds),
   ]);
   const objs = new Map();
+  const sides = new Map();
   for (const r of or.results || []) {
     const list = objs.get(r.mechanism_id) || [];
     list.push(r.stage_object_id);
     objs.set(r.mechanism_id, list);
+    if (r.side === 'b') {
+      const m = sides.get(r.mechanism_id) || {};
+      m[r.stage_object_id] = 'b';
+      sides.set(r.mechanism_id, m);
+    }
   }
-  return (mr.results || []).map(r => rowToMechanism(r, objs.get(r.id) || [], r.cue_count));
+  return (mr.results || []).map(r => rowToMechanism(r, objs.get(r.id) || [], r.cue_count, sides.get(r.id) || {}));
 }
 
-export async function listMechanisms(env, ctx) {
-  return ok({ mechanisms: await loadMechanisms(env, ctx.projectId) });
+/** 網址帶 ?mech=2 → 這個畫面看得懂機關 v2（對開…） */
+export function wantsMech2(request) {
+  try { return Number(new URL(request.url).searchParams.get('mech')) >= 2; } catch { return false; }
+}
+
+export async function listMechanisms(env, ctx, { mech2 = true } = {}) {
+  return ok({ mechanisms: await loadMechanisms(env, ctx.projectId, null, { mech2 }) });
 }
 
 /** 一首歌每個 cue 自己設的機關位置；masterOnly = 分享連結（只看得到正式 cue） */
-export async function loadSongPositions(env, songId, { masterOnly = false } = {}) {
+export async function loadSongPositions(env, songId, { masterOnly = false, mech2 = true } = {}) {
   const r = await env.DB.prepare(
     `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec, p.updated_at
        FROM cue_mechanism_positions p
        JOIN cues c ON c.id = p.cue_id
+       ${mech2 ? '' : 'JOIN mechanisms m ON m.id = p.mechanism_id AND m.variant IS NULL'}
       WHERE c.song_id = ?${masterOnly ? ` AND c.status = 'master'` : ''}
       ORDER BY c."order" ASC`
   ).bind(songId).all();
@@ -164,12 +206,12 @@ function rowToPosition(r) {
   };
 }
 
-export async function listSongPositions(env, ctx, songId) {
-  return ok({ positions: await loadSongPositions(env, songId) });
+export async function listSongPositions(env, ctx, songId, { mech2 = true } = {}) {
+  return ok({ positions: await loadSongPositions(env, songId, { mech2 }) });
 }
 
 /** 機關總表：整個專案每首歌的正式 cue + 每個 cue 自己設的位置（一次拿完） */
-export async function mechanismSheet(env, ctx) {
+export async function mechanismSheet(env, ctx, { mech2 = true } = {}) {
   const pid = ctx.projectId;
   const [songsR, cuesR, posR] = await env.DB.batch([
     env.DB.prepare(`SELECT id, name, code, "order" FROM songs WHERE project_id = ? ORDER BY "order" ASC, created_at ASC`).bind(pid),
@@ -183,6 +225,7 @@ export async function mechanismSheet(env, ctx) {
       `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec, p.updated_at
          FROM cue_mechanism_positions p
          JOIN cues c ON c.id = p.cue_id JOIN songs s ON s.id = c.song_id
+         ${mech2 ? '' : 'JOIN mechanisms m ON m.id = p.mechanism_id AND m.variant IS NULL'}
         WHERE s.project_id = ? AND c.status = 'master'`
     ).bind(pid),
   ]);
@@ -199,7 +242,7 @@ export async function mechanismSheet(env, ctx) {
   return ok({
     songs: (songsR.results || []).map(s => ({ id: s.id, name: s.name, code: s.code || null, order: s.order, cues: bySong.get(s.id) || [] })),
     positions: (posR.results || []).map(rowToPosition),
-    mechanisms: await loadMechanisms(env, pid),
+    mechanisms: await loadMechanisms(env, pid, null, { mech2 }),
   });
 }
 
@@ -209,7 +252,7 @@ export async function mechanismSheet(env, ctx) {
 
 async function projectFacts(env, projectId) {
   const [sibR, objR, memR] = await env.DB.batch([
-    env.DB.prepare(`SELECT id, name, parent_id FROM mechanisms WHERE project_id = ?`).bind(projectId),
+    env.DB.prepare(`SELECT id, name, parent_id, variant FROM mechanisms WHERE project_id = ?`).bind(projectId),
     env.DB.prepare(`SELECT id, display_name, mesh_name FROM stage_objects WHERE project_id = ?`).bind(projectId),
     env.DB.prepare(
       `SELECT mo.stage_object_id, mo.mechanism_id, m.name AS mechanism_name
@@ -219,7 +262,7 @@ async function projectFacts(env, projectId) {
   ]);
   const objects = objR.results || [];
   return {
-    siblings: (sibR.results || []).map(s => ({ id: s.id, name: s.name, parentId: s.parent_id || null })),
+    siblings: (sibR.results || []).map(s => ({ id: s.id, name: s.name, parentId: s.parent_id || null, variant: s.variant === 'split' ? 'split' : null })),
     projectObjectIds: new Set(objects.map(o => o.id)),
     objectNames: new Map(objects.map(o => [o.id, (o.display_name && String(o.display_name).trim()) || o.mesh_name])),
     memberships: memR.results || [],
@@ -227,7 +270,7 @@ async function projectFacts(env, projectId) {
 }
 
 /** 新增或修改共用：檢查 → 物件衝突 → 寫進資料庫的語句 */
-function membershipStatements(env, mechId, objectIds, conflicts) {
+function membershipStatements(env, mechId, objectIds, conflicts, sides = {}) {
   const stmts = [];
   // 從別的機關移過來：那些機關算「在新介面改過」（舊滑桿不會再把物件放回去）
   const fromMechs = [...new Set(conflicts.map(c => c.mechanismId))];
@@ -239,7 +282,8 @@ function membershipStatements(env, mechId, objectIds, conflicts) {
   }
   stmts.push(env.DB.prepare(`DELETE FROM mechanism_objects WHERE mechanism_id = ?`).bind(mechId));
   for (const oid of objectIds) {
-    stmts.push(env.DB.prepare(`INSERT INTO mechanism_objects (mechanism_id, stage_object_id) VALUES (?, ?)`).bind(mechId, oid));
+    // side：只有對開的機關有（'a' / 'b'）；一般機關 NULL
+    stmts.push(env.DB.prepare(`INSERT INTO mechanism_objects (mechanism_id, stage_object_id, side) VALUES (?, ?, ?)`).bind(mechId, oid, sides[oid] ?? null));
   }
   return stmts;
 }
@@ -262,14 +306,14 @@ export async function createMechanism(request, env, ctx, log) {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
-                               presets, parent_id, console_label, "order", metadata, edited_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+                               presets, parent_id, console_label, "order", metadata, variant, mirror, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
     ).bind(id, ctx.projectId, c.name, c.kind, c.axis, c.pivot, c.travel_min, c.travel_max, c.default_value, c.max_speed,
-      c.presets, c.parent_id, c.console_label, order, c.metadata),
-    ...membershipStatements(env, id, v.objectIds, conflicts),
+      c.presets, c.parent_id, c.console_label, order, c.metadata, c.variant, c.mirror),
+    ...membershipStatements(env, id, v.objectIds, conflicts, v.variant === 'split' ? v.objectSides : {}),
   ];
   await env.DB.batch(stmts);
-  await log?.('create', 'mechanism', id, { name: v.name, objects: v.objectIds.length, moved: conflicts.length || undefined });
+  await log?.('create', 'mechanism', id, { name: v.name, objects: v.objectIds.length, moved: conflicts.length || undefined, variant: v.variant || undefined });
   const [mechanism] = await loadMechanisms(env, ctx.projectId, id);
   return ok({ mechanism }, 201);
 }
@@ -285,7 +329,8 @@ export async function updateMechanism(request, env, ctx, mechId, log) {
   });
   if (!n.ok) return bad(n.error, 400, { field: n.field });
   const v = n.value;
-  const touchesObjects = Array.isArray(body.objectIds);
+  // 換成對開 / 改回一般 / 換邊，也要重寫物件那一列（side 在 mechanism_objects 上）
+  const touchesObjects = Array.isArray(body.objectIds) || body.objectSides !== undefined || body.variant !== undefined;
   const conflicts = touchesObjects ? findObjectConflicts(v.objectIds, facts.memberships, facts.objectNames, mechId) : [];
   if (conflicts.length && body.moveObjects !== true) return bad(conflictMessage(conflicts[0]), 409, { conflicts });
 
@@ -293,12 +338,12 @@ export async function updateMechanism(request, env, ctx, mechId, log) {
   const stmts = [
     env.DB.prepare(
       `UPDATE mechanisms SET name = ?, kind = ?, axis = ?, pivot = ?, travel_min = ?, travel_max = ?, default_value = ?,
-              max_speed = ?, presets = ?, parent_id = ?, console_label = ?, metadata = ?,
+              max_speed = ?, presets = ?, parent_id = ?, console_label = ?, metadata = ?, variant = ?, mirror = ?,
               edited_at = datetime('now'), updated_at = datetime('now')
         WHERE id = ? AND project_id = ?`
     ).bind(c.name, c.kind, c.axis, c.pivot, c.travel_min, c.travel_max, c.default_value, c.max_speed, c.presets,
-      c.parent_id, c.console_label, c.metadata, mechId, ctx.projectId),
-    ...(touchesObjects ? membershipStatements(env, mechId, v.objectIds, conflicts) : []),
+      c.parent_id, c.console_label, c.metadata, c.variant, c.mirror, mechId, ctx.projectId),
+    ...(touchesObjects ? membershipStatements(env, mechId, v.objectIds, conflicts, v.variant === 'split' ? v.objectSides : {}) : []),
   ];
   await env.DB.batch(stmts);
   const out = await env.DB.prepare(
@@ -415,7 +460,7 @@ export async function exportMechanisms(env, projectId) {
   const [mr, or, pr] = await env.DB.batch([
     env.DB.prepare(`SELECT * FROM mechanisms WHERE project_id = ? ORDER BY "order" ASC`).bind(projectId),
     env.DB.prepare(
-      `SELECT mo.mechanism_id, mo.stage_object_id FROM mechanism_objects mo
+      `SELECT mo.mechanism_id, mo.stage_object_id, mo.side FROM mechanism_objects mo
          JOIN mechanisms m ON m.id = mo.mechanism_id WHERE m.project_id = ?`
     ).bind(projectId),
     env.DB.prepare(
@@ -439,6 +484,7 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
   if (!mechs.length) return { mechanisms: 0, objects: 0, positions: 0 };
   const idMap = new Map();
   const rows = [];
+  const splitIds = new Set();   // 新 id：對開的機關（帶的物件要記哪一邊）
   mechs.forEach((raw, i) => {
     if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string') return;
     const m = rowToMechanism(raw);
@@ -450,6 +496,7 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     const id = legacyObj ? (raw.legacy_axis === 'x' ? 'mlx_' : 'mly_') + legacyObj : newId('mech_', i + 1);
     if (legacyObj && rows.some(r => r.id === id)) return;
     idMap.set(raw.id, id);
+    if (n.value.variant === 'split') splitIds.add(id);
     rows.push({
       id, c: inputToColumns(n.value), order: m.order, parentOld: m.parentId,
       legacyObj, legacyAxis: legacyObj ? raw.legacy_axis : null,
@@ -459,10 +506,10 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
   });
   const stmts = rows.map(r => env.DB.prepare(
     `INSERT OR IGNORE INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
-                             presets, parent_id, console_label, "order", metadata, legacy_object_id, legacy_axis, edited_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
+                             presets, parent_id, console_label, "order", metadata, variant, mirror, legacy_object_id, legacy_axis, edited_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
   ).bind(r.id, projectId, r.c.name, r.c.kind, r.c.axis, r.c.pivot, r.c.travel_min, r.c.travel_max, r.c.default_value,
-    r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
+    r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata, r.c.variant, r.c.mirror, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
   for (const r of rows) {
     const p = r.parentOld ? idMap.get(r.parentOld) : null;
     if (p && p !== r.id) stmts.push(env.DB.prepare(`UPDATE mechanisms SET parent_id = ? WHERE id = ?`).bind(p, r.id));
@@ -474,7 +521,8 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     const oid = objIdMap.get(mo?.stage_object_id);
     if (!mid || !oid || seenObj.has(oid)) continue;
     seenObj.add(oid);
-    stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO mechanism_objects (mechanism_id, stage_object_id) VALUES (?, ?)`).bind(mid, oid));
+    stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO mechanism_objects (mechanism_id, stage_object_id, side) VALUES (?, ?, ?)`)
+      .bind(mid, oid, splitIds.has(mid) ? (mo?.side === 'b' ? 'b' : 'a') : null));
     objects++;
   }
   for (const p of Array.isArray(data.cueMechanismPositions) ? data.cueMechanismPositions : []) {
@@ -596,6 +644,7 @@ export async function convertCuePositions(request, env, ctx, mechId, log) {
   const dryRun = body.dryRun === true;
   const [mech] = await loadMechanisms(env, ctx.projectId, mechId);
   if (!mech) return bad('這個專案裡找不到這個機關', 404);
+  if (mech.variant === 'split') return bad(MECH_MESSAGES.splitConvert, 400);
   if (mech.cueCount > 0) return bad('這個機關已經有 cue 設了位置，只有還沒在 cue 裡設過位置的機關可以轉', 409);
   if (!mech.objectIds.length) return bad('這個機關還沒有選要帶的物件', 400);
   const pid = ctx.projectId;

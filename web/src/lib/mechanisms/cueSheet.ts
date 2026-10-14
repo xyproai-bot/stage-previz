@@ -6,9 +6,10 @@
 // 數字：公尺 3 位小數（毫米）、度 1 位、秒 1 位、速度 m/秒 3 位 / °/秒 1 位；時間用影片時間 m:ss.s。
 
 import {
-  LINEAR_DIRECTIONS, ROTARY_AXES, matchLinearDirection, matchRotaryAxis, presetAt, unitOf,
-  type CueMechanismPosition, type Mechanism, type MechVec3,
+  LINEAR_DIRECTIONS, ROTARY_AXES, matchLinearDirection, matchRotaryAxis, presetAt, splitConsoleLabel, splitSideGeometry, splitSideName, unitOf,
+  type CueMechanismPosition, type Mechanism, type MechanismSide, type MechVec3,
 } from './model';
+import { FLIP_HINGES, flipSetupOf } from './flip';
 import { ownTimingsByCue, ownValuesByCue, resolveSongMechanisms } from './track';
 import { checkSongMechanisms, cueGoTimes, formatSeconds, type MechCheck, type MotionCue } from './motion';
 
@@ -92,15 +93,16 @@ export function sheetRows(input: SheetInput): Cell[][] {
         const preset = presetAt(m.presets, c.to);
         const speed = moving && c.available && c.available > 0
           ? fixed(c.distance / c.available, m.kind === 'rotary' ? 1 : 3) : null;
-        rows.push([
+        // 對開：A 邊、B 邊各一行（數字、檢查都一樣，名稱和控台編號各自的）
+        for (const side of m.variant === 'split' ? (['a', 'b'] as const) : [null]) rows.push([
           text(songLabel),
           numCell(String(i + 1)),
           text(cue.name),
           text(times ? sheetTime(times.go) : null),
           text(times ? sheetTime(times.arrive) : null),
           numCell(formatSeconds(cue.crossfadeSeconds || 0)),
-          text(m.name),
-          text(m.consoleLabel),
+          text(side ? splitSideName(m.name, side) : m.name),
+          text(side ? splitConsoleLabel(m, side) : m.consoleLabel),
           numCell(c.from === null ? null : valueText(c.from, m.kind)),
           numCell(valueText(c.to, m.kind)),
           text(unitOf(m.kind)),
@@ -120,6 +122,38 @@ export function sheetRows(input: SheetInput): Cell[][] {
   return rows;
 }
 
+/** 「直線，0 = …正的數字往上」「旋轉・…」（對開的 B 邊用鏡像的方向，後面註明兩邊往反方向） */
+function directionText(m: Mechanism, side: MechanismSide | null, f: MechVec3): string {
+  const geo = side ? splitSideGeometry(m, side) : { axis: m.axis, pivot: m.pivot };
+  let dir: string;
+  if (m.kind === 'linear') {
+    const d = matchLinearDirection(geo.axis, f).dir;
+    const label = LINEAR_DIRECTIONS.find(x => x.key === d)!.label;
+    dir = `直線，0 = cue 裡原本的位置，正的數字${label}${d === 'left' || d === 'right' ? '（觀眾看過去）' : ''}`;
+  } else {
+    const flip = side === 'b' ? null : flipSetupOf(m.metadata);
+    if (flip) {
+      const h = FLIP_HINGES.find(x => x.key === flip.hinge)!;
+      dir = `旋轉・${h.label}，0 = 模型原本的方向，正的角度${h.positive[flip.positive === 'second' ? 1 : 0]}`;
+    } else {
+      const r = matchRotaryAxis(geo.axis, f);
+      const axis = ROTARY_AXES.find(x => x.key === r.kind)!;
+      // 「旋轉・水平轉（像轉台）」：轉軸的名字本身有括號，外面不再包一層（以前會變成「旋轉（水平轉（像轉台））」）
+      dir = `旋轉・${axis.label}，0 = 模型原本的方向，正的角度${axis.positive[r.positiveFirst ? 0 : 1]}`;
+    }
+  }
+  return m.variant === 'split' ? `${dir}（對開：A 邊、B 邊同一個數字，往反方向動）` : dir;
+}
+
+function limitParts(m: Mechanism, u: (v: number) => string, unit: string): string[] {
+  const parts = [
+    `行程 ${u(m.travelMin)} ~ ${u(m.travelMax)}`,
+    m.maxSpeed !== null ? `最高 ${trimNum(m.maxSpeed)}${unit === '°' ? '°' : ' m'}/秒` : '沒填最高速度（不檢查）',
+  ];
+  if (m.presets.length) parts.push(`常用位置 ${m.presets.map(p => `${p.name} ${trimNum(p.value)}`).join(' / ')}`);
+  return parts;
+}
+
 /** 機關說明（表格下面） */
 export function sheetLegend(mechanisms: Mechanism[], front?: MechVec3 | null): string[] {
   const f = front ?? { x: 0, y: 0, z: 1 };
@@ -127,25 +161,12 @@ export function sheetLegend(mechanisms: Mechanism[], front?: MechVec3 | null): s
   for (const m of [...mechanisms].sort((a, b) => a.order - b.order)) {
     const unit = unitOf(m.kind);
     const u = (v: number) => (unit === '°' ? `${trimNum(v)}°` : `${trimNum(v)} m`);
-    const head = m.consoleLabel ? `${m.name}（${m.consoleLabel}）` : m.name;
-    let dir: string;
-    if (m.kind === 'linear') {
-      const d = matchLinearDirection(m.axis, f).dir;
-      const label = LINEAR_DIRECTIONS.find(x => x.key === d)!.label;
-      dir = `直線，0 = cue 裡原本的位置，正的數字${label}${d === 'left' || d === 'right' ? '（觀眾看過去）' : ''}`;
-    } else {
-      const r = matchRotaryAxis(m.axis, f);
-      const axis = ROTARY_AXES.find(x => x.key === r.kind)!;
-      // 「旋轉・水平轉（像轉台）」：轉軸的名字本身有括號，外面不再包一層（以前會變成「旋轉（水平轉（像轉台））」）
-      dir = `旋轉・${axis.label}，0 = 模型原本的方向，正的角度${axis.positive[r.positiveFirst ? 0 : 1]}`;
+    for (const side of m.variant === 'split' ? (['a', 'b'] as const) : [null]) {
+      const label = side ? splitConsoleLabel(m, side) : m.consoleLabel;
+      const name = side ? splitSideName(m.name, side) : m.name;
+      const head = label ? `${name}（${label}）` : name;
+      lines.push(`# ${[`${head}：${directionText(m, side, f)}`, ...limitParts(m, u, unit)].join('；')}`);
     }
-    const parts = [
-      `${head}：${dir}`,
-      `行程 ${u(m.travelMin)} ~ ${u(m.travelMax)}`,
-      m.maxSpeed !== null ? `最高 ${trimNum(m.maxSpeed)}${unit === '°' ? '°' : ' m'}/秒` : '沒填最高速度（不檢查）',
-    ];
-    if (m.presets.length) parts.push(`常用位置 ${m.presets.map(p => `${p.name} ${trimNum(p.value)}`).join(' / ')}`);
-    lines.push(`# ${parts.join('；')}`);
   }
   lines.push('# 註：需要秒數 = 行程 ÷ 最高速度，以等速計算、沒有算加減速，實際會再久一點。GO 時間 = 到位時間 − 轉場（不會早於上一個 cue 到位）；開始時間 = GO 時間 + 延遲；走幾秒沒另外設 = 跟著 cue 的轉場。沒有影片時間的 cue 由現場叫 GO。');
   return lines;

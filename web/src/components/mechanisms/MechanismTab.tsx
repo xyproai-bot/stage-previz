@@ -9,6 +9,8 @@ import type { Cue, StageObject } from '../../lib/api';
 import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
 import { formatMechValue } from '../../lib/mechanisms/motion';
 import { speedUnitOf, type Mechanism, type MechanismInput, type MechVec3 } from '../../lib/mechanisms/model';
+import { flipLabel } from '../../lib/mechanisms/flip';
+import { countSides } from '../../lib/mechanisms/split';
 import * as mapi from '../../lib/mechanisms/mechanismApi';
 import { buildMechanismSheetCsv, downloadMechanismSheet, sheetFileName } from '../../lib/mechanisms/cueSheet';
 import { toast } from '../../lib/toast';
@@ -186,11 +188,12 @@ export default function MechanismTab({
       scaleCorrection={scaleCorrection}
       front={front ?? { x: 0, y: 0, z: 1 }}
       groupCenter={(ids) => mech.sceneQueryRef.current?.groupCenter(ids) ?? null}
+      groupBox={(ids) => mech.sceneQueryRef.current?.groupBox(ids) ?? null}
       busy={busy}
       onSave={(input, moving) => save(m, input, moving)}
       onCancel={() => setEditingId(null)}
       onDelete={m ? () => void remove(m) : undefined}
-      onConvert={m && m.cueCount === 0 && m.objectIds.length > 0 ? () => void convert(m) : undefined}
+      onConvert={m && m.variant !== 'split' && m.cueCount === 0 && m.objectIds.length > 0 ? () => void convert(m) : undefined}
     />
   );
 
@@ -316,7 +319,10 @@ export default function MechanismTab({
                       <span className="muted small">
                         {formatMechValue(m.travelMin, m.kind, false)} ~ {formatMechValue(m.travelMax, m.kind)}
                         {speed && ` · ${speed}`}
-                        {` · ${m.objectIds.length} 個物件 · ${m.cueCount} 個 cue 有設定`}
+                        {flipLabel(m.metadata) && ` · ${flipLabel(m.metadata)}`}
+                        {m.variant === 'split'
+                          ? ` · 對開：A 邊 ${countSides(m.objectIds, m.objectSides ?? {}).a} 個、B 邊 ${countSides(m.objectIds, m.objectSides ?? {}).b} 個 · ${m.cueCount} 個 cue 有設定`
+                          : ` · ${m.objectIds.length} 個物件 · ${m.cueCount} 個 cue 有設定`}
                       </span>
                       {kids.length > 0 && <span className="muted small">帶動：{kids.join('、')}</span>}
                     </div>

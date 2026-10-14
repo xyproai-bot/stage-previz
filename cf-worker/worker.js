@@ -522,7 +522,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         : deleteCueState(request, env, projectId, cueId, objId);
 
     // 機關（mechanisms.mjs）
-    case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx));
+    case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx, { mech2: mech.wantsMech2(request) }));
     case 'mechanisms.create':     return mechResp(mech.createMechanism(request, env, ctx, mechLog(request, env, projectId)));
     case 'mechanisms.reorder':    return mechResp(mech.reorderMechanisms(request, env, ctx, mechLog(request, env, projectId)));
     case 'mechanisms.item':
@@ -530,8 +530,8 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         ? mech.updateMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId))
         : mech.deleteMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
     case 'mechanisms.convert':    return mechResp(mech.convertCuePositions(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
-    case 'mechanisms.sheet':      return mechResp(mech.mechanismSheet(env, ctx));
-    case 'mechPositions.list':    return mechResp(mech.listSongPositions(env, ctx, songId));
+    case 'mechanisms.sheet':      return mechResp(mech.mechanismSheet(env, ctx, { mech2: mech.wantsMech2(request) }));
+    case 'mechPositions.list':    return mechResp(mech.listSongPositions(env, ctx, songId, { mech2: mech.wantsMech2(request) }));
     case 'mechPositions.item':
       return mechResp(request.method === 'PUT'
         ? mech.putCuePosition(request, env, ctx, cueId)
@@ -5956,7 +5956,7 @@ async function handleShareRouter(request, env, url, ref) {
       // 舊的全專案機關滑桿：新前端不讀了；正式站還在跑的舊版前端讀機關時會先用它（只讀，後台不再收修改）
       mechanismOffsets: safeJsonObj(proj.mechanism_offsets, {}),
       // 機關（定義）；每個 cue 的位置：GET songs/:songId/mechanism-positions
-      mechanisms: await mech.loadMechanisms(env, link.project_id).catch(() => []),
+      mechanisms: await mech.loadMechanisms(env, link.project_id, null, { mech2: mech.wantsMech2(request) }).catch(() => []),
       lookSettings: safeJsonObj(proj.look_settings, {}),
       materialOverrides: safeJsonObj(proj.material_overrides, {}),
       homeView: proj.home_view ? safeJsonObj(proj.home_view, null) : null,
@@ -6055,7 +6055,7 @@ async function handleShareRouter(request, env, url, ref) {
     }
     if (wantMechPositions) {
       // 每個 cue 自己設的機關位置（只有正式 cue；跟管理頁同一套沿用規則在前端算）
-      return jsonResp({ positions: await mech.loadSongPositions(env, songId, { masterOnly: true }) });
+      return jsonResp({ positions: await mech.loadSongPositions(env, songId, { masterOnly: true, mech2: mech.wantsMech2(request) }) });
     }
     if (wantStates) {
       // 跟管理頁 / 導演頁同一份計算（loadCueStates）→ 沒改的物件一樣沿用前面 cue 的位置
