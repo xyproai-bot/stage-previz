@@ -129,6 +129,17 @@ test('團隊留言：記住 3D 視角、畫記、區段、cue、縮圖；縮圖�
   assert.equal((await call(null, 'GET', c.thumbUrl)).status, 404);
 });
 
+test('刪歌：那首歌留言的縮圖一起清掉', async () => {
+  const { call, r2 } = await setup();
+  const r = await call('u_admin', 'POST', '/api/comments?session=p1-s2', { comment: { id: cid(), text: '安可這裡', thumbnail: JPEG_URL } });
+  assert.equal(r.status, 200, r.data?.error);
+  assert.equal(r2.keys().filter(k => k.startsWith('comment-thumbs/')).length, 1);
+  const d = await call('u_admin', 'DELETE', '/api/projects/p1/songs/s2');
+  assert.equal(d.status, 200, d.data?.error);
+  await new Promise(res => setTimeout(res, 20));
+  assert.equal(r2.keys().filter(k => k.startsWith('comment-thumbs/')).length, 0);
+});
+
 test('團隊留言：區段 / 畫記 / 縮圖不對 → 說清楚哪裡不對；舊版前端（沒有新欄位）照樣能留', async () => {
   const { call } = await setup();
   let r = await call('u_dir', 'POST', COMMENTS, { comment: { id: cid(), text: 'x', time: 20, timeEnd: 10 } });

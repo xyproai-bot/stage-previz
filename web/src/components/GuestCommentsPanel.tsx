@@ -4,7 +4,7 @@
 //   點一則 = 換到那一格、攝影機飛到當時的視角、疊上畫記（跟導演頁一樣）
 // 留言串的畫面跟導演頁共用 CommentThreadList（訪客只有「回覆」）。
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronUp, MessageSquareText, UserRound } from 'lucide-react';
 import Icon from './Icon';
 import CommentThreadList from './CommentThreadList';
@@ -66,30 +66,35 @@ export default function GuestCommentsPanel({
   // 手機 / iPad：可以收起來，舞台大一點
   const [collapsed, setCollapsed] = useState(false);
 
+  // 頁面傳進來的 callback 每次 render 都是新的 → 用 ref 接（不然讀留言的 effect 會一直重跑、打到一半的字被清掉）
+  const cbRef = useRef({ onComments, onAuthError, onDisabled });
+  cbRef.current = { onComments, onAuthError, onDisabled };
+
   const apply = useCallback((rows: GuestComment[]) => {
     const next = rows.map(guestToComment);
     setList(next);
-    onComments(next);
-  }, [onComments]);
+    cbRef.current.onComments(next);
+  }, []);
 
   const handleError = useCallback((e: unknown, quiet = false) => {
     const err = e as GuestError;
-    if (err.status === 401) { onAuthError(e); return; }
-    if (err.status === 403 && err.commentsDisabled) { onDisabled(); return; }
+    if (err.status === 401) { cbRef.current.onAuthError(e); return; }
+    if (err.status === 403 && err.commentsDisabled) { cbRef.current.onDisabled(); return; }
     if (!quiet) toast.error(err.message || '留言沒有送出');
-  }, [onAuthError, onDisabled]);
+  }, []);
 
   const load = useCallback(async (quiet: boolean) => {
     try { apply(await listGuestComments(shareRef, songId, accessToken ?? undefined)); }
     catch (e) { handleError(e, quiet); }
   }, [shareRef, songId, accessToken, apply, handleError]);
 
+  // 換歌：清掉打到一半的、重新讀（通行證換新的時候只重新讀，不清掉打到一半的字）
   useEffect(() => {
     setList(null);
     setText('');
     setAttachTime(null);
-    void load(true);
-  }, [load]);
+  }, [songId]);
+  useEffect(() => { void load(true); }, [load]);
   // 團隊回覆了 → 25 秒內看得到
   useLiveRefresh(() => load(true));
 

@@ -21,6 +21,8 @@
   -webkit-user-select: none;
   user-select: none;
 }
+/* 畫的時候 3D 工具列先藏起來（反正不能按），上面只剩畫記的工具列 */
+.stage-scene:has(> .ann-layer.is-drawing) > .stage-scene__toolbar-row { visibility: hidden; }
 .ann-layer.is-showing .ann-layer__svg { animation: ann-fade-in 0.28s ease-out; }
 @keyframes ann-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .ann-layer.is-showing .ann-layer__svg { animation: none; } }

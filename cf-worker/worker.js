@@ -1735,10 +1735,15 @@ async function deleteSong(request, env, projectId, songId) {
   const videoFiles = (await env.DB.prepare(
     `SELECT r2_key, upload_id FROM song_videos WHERE song_id = ? AND project_id = ?`
   ).bind(songId, projectId).all()).results || [];
+  // 留言的縮圖（0026）：留言跟著歌一起刪，R2 的縮圖也清掉
+  const thumbKeys = ((await env.DB.prepare(
+    `SELECT thumb_key FROM comments WHERE song_id = ? AND thumb_key IS NOT NULL`
+  ).bind(songId).all().catch(() => ({ results: [] }))).results || []).map(r => r.thumb_key);
   const result = await env.DB.prepare(`DELETE FROM songs WHERE id = ? AND project_id = ?`).bind(songId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   // 歌的影片版本跟著歌一起刪（資料庫那邊 ON DELETE CASCADE），R2 的檔案也清掉
   if (videoFiles.length) runInBackground(request, cleanupSongVideoFiles(env, videoFiles));
+  if (thumbKeys.length) runInBackground(request, reviews.deleteCommentThumbs(env.MODELS, thumbKeys));
   await logActivity(request, env, projectId, 'delete', 'song', songId, { name: before?.name });
   return jsonResp({ ok: true });
 }

@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { X } from 'lucide-react';
 import Icon from './Icon';
+import { REVIEW_SHORTCUTS } from '../lib/review/reviewShortcuts';
 import { helpUrl } from '../lib/helpLinks';
 import './HelpModal.css';
 
@@ -128,6 +129,17 @@ export default function HelpModal({ open, onClose }: { open: boolean; onClose: (
             <dl>
               <dt><kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd></dt>
               <dd>切 cue（在歌曲頁裡）</dd>
+              <dt>播放器</dt>
+              <dd>
+                {REVIEW_SHORTCUTS.filter(s => !s.pages || s.pages.includes('preview')).filter(s => s.action !== 'nextCue' && s.action !== 'prevCue')
+                  .map((s, i) => <span key={s.keys.join('+')}>{i > 0 && '、'}{s.keys.map((k, j) => <span key={k}>{j > 0 && '+'}<kbd>{k}</kbd></span>)} {s.label}</span>)}
+              </dd>
+              <dt>「畫記」</dt>
+              <dd>暫停在這一格，在 3D 畫面上畫筆 / 箭頭 / 方框 / 圓圈；跟留言一起存，也會記住你的 3D 視角和一張縮圖</dd>
+              <dt>點一則留言</dt>
+              <dd>換到那一版、跳到那一格、攝影機飛到留言時的視角、疊上畫記；區段留言（I / O 標的）會一直循環</dd>
+              <dt>「匯出留言」</dt>
+              <dd>列印 / 存成 PDF（含每則的畫面）、下載 CSV</dd>
               <dt>「整場串播」</dt>
               <dd>從目前的歌開始依序自動播放，每個 cue 停幾秒可以選</dd>
               <dt>「比較」（小播放器）</dt>

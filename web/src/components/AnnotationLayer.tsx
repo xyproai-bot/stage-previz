@@ -242,7 +242,8 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
       )}
 
       {!drawing && showing && (
-        <div className="ann-badge" style={{ left: box.left + 8, top: box.top + 8 }}>
+        // 3D 工具列在上面 → 小標放在工具列下面，不會疊在一起
+        <div className="ann-badge" style={{ left: box.left + 8, top: Math.max(box.top + 8, 58) }}>
           <Icon icon={Pencil} size="xs" />
           <span>{showingLabel ? `畫記 · ${showingLabel}` : '畫記'}</span>
           {onHideShowing && (

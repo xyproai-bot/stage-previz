@@ -322,6 +322,8 @@
 }
 
 @media (hover: none) and (pointer: coarse) {
+  /* 觸控的按鈕比較大 → 審片的小播放器寬一點，一排放得下播放、逐格、時間、速度、循環、聲音 */
+  .mini-player.has-review:not(.is-collapsed) { width: min(396px, calc(100% - 16px)); }
   .mini-player__btn { min-width: 36px; height: 36px; }
   .mini-player__btn--play { min-width: 36px; height: 36px; }
   .mini-player__pin { width: 12px; height: 12px; top: -6px; }

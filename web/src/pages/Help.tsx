@@ -16,6 +16,7 @@ import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } f
 import { NDI_AUTOSTART_NOTE, OLD_HELPER_HINT, PERMISSION_PROMPT_TEXT, permissionFixSteps } from '../lib/ndiSteps';
 import { DRIVE_MATCH_RULE } from '../lib/songCode';
 import { FIGS, type FigKey, type HelpFig } from './helpFigures';
+import { REVIEW_SHORTCUTS } from '../lib/review/reviewShortcuts';
 import Icon from '../components/Icon';
 import {
   Check, ChevronDown, CircleHelp, Clapperboard, ClipboardList, Copy, Download, Ellipsis, ExternalLink, Eye, FolderOpen, Globe,
@@ -149,9 +150,13 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.dirBoard, label: '總覽和狀態' },
       { id: A.dirPlay, label: '在 LED 上看某一版' },
       { id: A.dirComment, label: '留言、@ 提及' },
+      { id: A.dirAnnotate, label: '畫記、記住視角、區段' },
+      { id: A.dirOpen, label: '打開留言（飛到那個視角）' },
+      { id: A.dirPlayer, label: '播放器和快捷鍵' },
       { id: A.dirDecide, label: '通過 / 需修改' },
       { id: A.dirHistory, label: '審片紀錄' },
       { id: A.dirCompare, label: '比較兩版' },
+      { id: A.dirExport, label: '匯出留言（PDF、CSV）' },
     ],
   },
   {
@@ -159,6 +164,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.clientOpen, label: '打開連結、輸入密碼' },
       { id: A.clientCamera, label: '轉動視角、重置攝影機' },
       { id: A.clientPlay, label: '看影片' },
+      { id: A.clientComment, label: '留言（製作有開的連結）' },
       { id: A.clientLocal, label: '本地檔案' },
       { id: A.clientMobile, label: '手機和 iPad' },
     ],
@@ -438,6 +444,26 @@ function Lightbox({ k, onClose }: { k: FigKey; onClose: () => void }) {
 }
 
 /** 對話框裡的原文 */
+/** 播放器的快捷鍵（導演頁、動畫師工作站、分享連結）：直接用程式裡的那一份（lib/review/reviewShortcuts.ts），不會對不上 */
+const PAGE_NAME = { preview: '導演頁', studio: '動畫師工作站', share: '分享連結' } as const;
+function ReviewKeysTable() {
+  return (
+    <div className="help-table-wrap">
+      <table className="help-table">
+        <caption>播放器的快捷鍵（導演頁、動畫師工作站、分享連結）</caption>
+        <tbody>
+          {REVIEW_SHORTCUTS.map(s => (
+            <tr key={s.keys.join('+')}>
+              <td>{s.keys.map((k, i) => <span key={k}>{i > 0 && '+'}<kbd>{k}</kbd></span>)}</td>
+              <td>{s.label}{s.pages ? `（只有${s.pages.map(p => PAGE_NAME[p]).join('、')}）` : ''}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function Quote({ children }: { children: ReactNode }) {
   return <span className="help-quote">{children}</span>;
 }
@@ -1282,7 +1308,7 @@ function ProducerChapter() {
       </Section>
 
       <Section id={A.prodShare} title="分享連結和密碼">
-        <p>分享連結給<strong>客戶或外部的人</strong>：不用帳號就能看 3D 舞台、每首歌最新的一版影片和 cue。只能看，不能改，看不到留言。</p>
+        <p>分享連結給<strong>客戶或外部的人</strong>：不用帳號就能看 3D 舞台、每首歌最新的一版影片和 cue。只能看，不能改，看不到團隊的留言。</p>
         <ol className="help-steps">
           <li>編輯頁上方按「<Ui>分享</Ui>」。</li>
           <li><strong>範圍</strong>：整個專案，或只給某一首歌。</li>
@@ -1296,6 +1322,8 @@ function ProducerChapter() {
           <li><strong>密碼另外告訴對方</strong>，不要跟連結放在同一則訊息比較安全。</li>
           <li>每條連結看得到瀏覽次數、上次什麼時候被看。</li>
           <li>刪除：已經傳出去的連結馬上打不開。改好讀網址：舊的好讀網址打不開，下面那串舊式網址照樣能用。</li>
+          <li><strong>名稱</strong>（可選）：給誰看的，例：給經紀人。只有團隊看得到，連結清單上和訪客的留言上會寫。</li>
+          <li><strong>允許看的人留言</strong>（只有製作能打開，預設關）：對方寫一個名字，就能在影片上留言、畫記、標區段。他們只看得到從這條連結留的留言、和你們在底下的回覆；團隊每個人會收到通知（小鈴鐺），留言寫「<Ui>訪客：小李（給經紀人）</Ui>」。連結清單上的對話圖示可以隨時打開 / 關掉（關掉之後之前的留言還在）。</li>
           <li>客戶怎麼看：<Go to={A.client}>客戶（分享連結）</Go>。</li>
         </ul>
       </Section>
@@ -1390,7 +1418,7 @@ function AnimatorChapter() {
           <li>⑤ <strong>cue 列</strong>：點一個 cue 看那個舞台畫面（有放影片的話，影片跳到那個 cue 的時間）。</li>
           <li>⑥ 右邊：<strong>Cue</strong> 清單、<strong>審查 / 留言</strong>、<strong>活動</strong>（專案最近的修改）。</li>
         </ul>
-        <p>鍵盤：<kbd>J</kbd> / <kbd>K</kbd> 切歌，<kbd>Shift</kbd>+<kbd>J</kbd> / <kbd>K</kbd> 切 cue。3D 畫面拖拉旋轉、滾輪縮放；轉亂了按攝影機圖示「重置攝影機」。</p>
+        <p>鍵盤：<kbd>[</kbd> / <kbd>]</kbd> 切歌（以前是 J / K，現在 J / K / L 給播放用），<kbd>Shift</kbd>+<kbd>J</kbd> / <kbd>K</kbd> 切 cue；播放的快捷鍵看 <Go to={A.dirPlayer}>播放器和快捷鍵</Go>。3D 畫面拖拉旋轉、滾輪縮放；轉亂了按攝影機圖示「重置攝影機」。</p>
       </Section>
 
       <Section id={A.animSource} title="LED 畫面來源：影片 / AE 即時 / 本地檔案">
@@ -1474,6 +1502,8 @@ function AnimatorChapter() {
           <li>「<Ui>這一版（V2）</Ui>」只看這一版的留言和之前版本還沒改好的；「<Ui>全部</Ui>」看所有版本。</li>
           <li><strong>回覆</strong>：按留言下面的「<Ui>回覆</Ui>」，對方會收到通知。打 <strong>@</strong> 加名字可以提及某人。</li>
           <li><strong>改好了</strong>：按「<Ui>已改好（V2）</Ui>」，會記下是哪一版改好的，留言變灰。導演覺得還沒好可以按「<Ui>重新打開</Ui>」。</li>
+          <li><strong>點一則留言</strong>：換到那一版、跳到那一格，攝影機飛到導演留言時的 3D 視角，導演的畫記疊上去；區段留言（0:12–0:18）會一直循環那一段。看 <Go to={A.dirOpen}>打開留言</Go>。</li>
+          <li>你也可以畫記、標區段，跟導演一樣（看 <Go to={A.dirAnnotate}>畫記、記住視角、區段</Go>）。分享連結的訪客留的寫「<Ui>訪客：名字（連結名稱）</Ui>」，在底下回覆訪客也看得到。</li>
           <li>「<Ui>審片紀錄</Ui>」：每次通過、需修改的紀錄。</li>
           <li>留言、狀態大約 25 秒自動更新，切回分頁也會馬上更新。</li>
         </ul>
@@ -1806,7 +1836,7 @@ function DirectorChapter() {
         <ul className="help-list">
           <li>③ <strong>版本</strong>：點 V2、V1…，LED 就放那一版。預設是最新一版。</li>
           <li>舞台跟著影片時間切 cue，機關照真的速度動。點 ⑤ cue 列的某個 cue，影片跳到那個 cue 的時間。</li>
-          <li>④ <strong>小播放器</strong>：播放 / 暫停、拉時間、循環、聲音。時間軸上的小圓點是留言的時間點，點一下跳到那則留言。按住上面那條可以拖到別的地方，右上角可以收起來。</li>
+          <li>④ <strong>小播放器</strong>：播放 / 暫停、往前 / 往後一格、時間（點一下換成時間碼）、速度、循環、聲音。時間軸上的小圓點是留言的時間點、上面那一條是區段留言，點一下打開那則留言。按住上面那條可以拖到別的地方，右上角可以收起來。快捷鍵看 <Go to={A.dirPlayer}>播放器和快捷鍵</Go>。</li>
           <li>① 上一首 / 下一首；左上角「<Ui>回總覽</Ui>」。</li>
           <li>3D 畫面：拖拉旋轉、滾輪縮放；轉亂了按工具列的攝影機圖示「<Ui>重置攝影機</Ui>」。</li>
           <li>cue 列最左邊的播放鍵：沒有影片時每 2 秒自動切下一個 cue。<kbd>Shift</kbd>+<kbd>J</kbd> / <kbd>K</kbd> 切 cue。</li>
@@ -1828,8 +1858,47 @@ function DirectorChapter() {
         <ul className="help-list">
           <li>不綁時間：直接在留言框寫。留言會記在你正在看的那一版（例：V2 的留言）。</li>
           <li><strong>3D 留言</strong>：工具列「<Ui>3D 留言</Ui>」→ 點 3D 畫面的某個物件或位置，留言會釘在那裡，轉視角也跟著。</li>
-          <li>篩選、排序：還沒改好 / 已改好、角色、依影片時間排。勾選好幾則可以一次標成已改好或刪除。</li>
+          <li>篩選：「<Ui>未解決 / 已解決 / 全部</Ui>」、「<Ui>這一版 / 全部</Ui>」、角色（含訪客）、依影片時間排。勾選好幾則可以一次標成已改好或刪除。</li>
           <li>動畫師改好會按「已改好（V2）」；你覺得還沒好，按「<Ui>重新打開</Ui>」。</li>
+          <li>分享連結的<strong>訪客</strong>（製作有打開「允許看的人留言」的連結）留的，寫「<Ui>訪客：小李（給經紀人）</Ui>」，你會收到通知；在底下回覆，訪客也看得到。</li>
+          <li>想更清楚：<Go to={A.dirAnnotate}>在畫面上畫出來、標一段時間</Go>。</li>
+        </ul>
+      </Section>
+
+      <Section id={A.dirAnnotate} title="畫記、記住視角、區段">
+        <ol className="help-steps">
+          <li>停在要講的那一格（暫停，或按 <kbd>,</kbd> / <kbd>.</kbd> 一格一格找）。</li>
+          <li>小播放器或留言框上面按「<Ui>畫記</Ui>」：3D 畫面外框變紅，上面出現畫記工具。</li>
+          <li>選<strong>筆、箭頭、方框、圓圈</strong>和顏色（預設紅色），在畫面上拖拉。畫錯按「<Ui>復原</Ui>」（或 <kbd>Ctrl</kbd>+<kbd>Z</kbd>），垃圾桶 = 全部擦掉。</li>
+          <li>寫留言 → 「<Ui>送出</Ui>」。畫記、這一格、你現在的 3D 視角會一起存起來，還會存一張小縮圖。</li>
+        </ol>
+        <F k="annotate" />
+        <ul className="help-list">
+          <li><strong>視角</strong>：每則新留言都會記住送出時的 3D 視角（留言框上面寫「<Ui>記住這個視角</Ui>」）。想讓動畫師從某個角度看，先把 3D 畫面轉到那裡再留言。</li>
+          <li>畫的時候 3D 畫面不能轉（畫記才對得準）。要換角度：先按右上角的叉叉（不要畫記了），轉好再按「<Ui>畫記</Ui>」。</li>
+          <li><strong>區段</strong>（一段時間，例：0:12–0:18 升降台太快）：開始的地方按 <kbd>I</kbd>、結束的地方按 <kbd>O</kbd>；或在小播放器時間軸上面那一條拖一段；手機、iPad 按「<Ui>標區段</Ui>」兩次。留言框上面會寫「<Ui>區段 0:12–0:18</Ui>」。</li>
+          <li>iPad 可以用手指或 Apple Pencil 畫（用筆畫的時候手掌碰到螢幕不算）。手機、iPad 直放時畫記工具收成一顆按鈕，點開換工具和顏色。</li>
+        </ul>
+      </Section>
+
+      <Section id={A.dirOpen} title="打開留言：攝影機飛到那個視角">
+        <F k="commentOpen" />
+        <ul className="help-list">
+          <li><strong>點一則留言</strong>（或時間軸上的點、區段條）：換到留言的那一版、跳到那一格、攝影機繞著舞台飛到留言時的視角，畫記疊上去。</li>
+          <li>區段留言會一直<strong>循環那一段</strong>；拉到區段外面、或按 <kbd>Esc</kbd> 就不循環了。</li>
+          <li>按播放、或自己轉視角，畫記就收起來（留言還是選著）。畫記旁邊的叉叉也可以收起來。</li>
+          <li>舊的留言沒有記視角：只會跳到那一秒。</li>
+          <li><strong>跟著播放</strong>：播放時，離播放頭最近的那則會亮起來，清單自己捲過去；不想它捲，把「<Ui>跟著播放</Ui>」取消。</li>
+        </ul>
+      </Section>
+
+      <Section id={A.dirPlayer} title="播放器和快捷鍵">
+        <p>小播放器：播放、往前 / 往後一格、時間（點一下換成時間碼「時:分:秒:格」）、速度 0.5× / 1× / 2×、循環、聲音、比較。</p>
+        <ReviewKeysTable />
+        <ul className="help-list">
+          <li>在留言框打字的時候，快捷鍵不會作用。</li>
+          <li>逐格照影片的格數（播一下就量得到）；還不知道時一格算 1/30 秒。</li>
+          <li>這幾頁的 <kbd>L</kbd> 給播放用，3D 畫面的「物件名稱」改從工具列開。</li>
         </ul>
       </Section>
 
@@ -1857,6 +1926,16 @@ function DirectorChapter() {
         </ol>
         <F k="dirCompare" />
       </Section>
+
+      <Section id={A.dirExport} title="匯出留言（PDF、CSV）">
+        <ol className="help-steps">
+          <li>留言上面按「<Ui>匯出留言</Ui>」。</li>
+          <li>選版本（這一版 / 全部版本）和狀態（全部 / 未解決 / 已解決）。</li>
+          <li>「<Ui>列印 / 存成 PDF</Ui>」：瀏覽器的列印視窗選「<Ui>儲存為 PDF</Ui>」。每則有時間碼、誰、內容、狀態、留言時的畫面（含畫記）和回覆。</li>
+          <li>「<Ui>下載 CSV</Ui>」：Excel 打得開，一則一行，回覆接在下面。</li>
+        </ol>
+        <p className="help-muted">舊的留言沒有縮圖（那時候還沒有這個功能）。</p>
+      </Section>
     </Chapter>
   );
 }
@@ -1865,7 +1944,7 @@ function DirectorChapter() {
 
 function ClientChapter() {
   return (
-    <Chapter id={A.client} lead="製作傳給你一個分享連結，點開就能看 3D 舞台和每首歌最新的影片。不用帳號、不用裝軟體，只能看不能改。">
+    <Chapter id={A.client} lead="製作傳給你一個分享連結，點開就能看 3D 舞台和每首歌最新的影片。不用帳號、不用裝軟體，只能看不能改（製作有打開的話可以留言）。">
       <Section id={A.clientOpen} title="打開連結、輸入密碼">
         <ol className="help-steps">
           <li>點製作傳給你的連結（例：<code>https://previz.haimiaan.com/s/…</code>）。</li>
@@ -1903,6 +1982,23 @@ function ClientChapter() {
         <p>3D 工具列最右邊的「<Ui><Icon icon={Ellipsis} /></Ui>」：LED 對位圖、LED 顯示測試圖，最下面的「<Ui>說明</Ui>」會打開這份使用說明。</p>
         <F k="shareMenu" />
         <p className="help-muted">「AE 即時」是給動畫師用的（在跑 AE 的電腦上看），看 <Go to={A.aeLive}>AE 即時預覽</Go>。</p>
+      </Section>
+
+      <Section id={A.clientComment} title="留言（製作有開的連結）">
+        <p>製作有打開「允許看的人留言」的連結，右邊（手機在舞台下面）會有「<Ui>留言</Ui>」。</p>
+        <ol className="help-steps">
+          <li>第一次先寫你的名字（只要寫一次，製作團隊會看到）。</li>
+          <li>小播放器停在要講的地方，按「<Ui>在 0:12 加留言</Ui>」，或直接在留言框寫。</li>
+          <li>想圈出來：按「<Ui>畫記</Ui>」，在畫面上畫箭頭、圈圈（手機用手指畫）。講一段時間：按「<Ui>標區段</Ui>」兩次，或拖時間軸上面那一條。</li>
+          <li>按「<Ui>送出</Ui>」。會記住你現在的 3D 視角，團隊點開就是你看到的畫面。</li>
+        </ol>
+        <F k="guestComment" />
+        <ul className="help-list">
+          <li>你只看得到從這條連結留的留言，和製作團隊在底下的回覆。</li>
+          <li>點一則留言：跳到那一格、攝影機飛到留言時的視角、畫記疊上去。</li>
+          <li>送出後不能改、不能刪；要補充就按「<Ui>回覆</Ui>」。只收文字，一則最多 1000 字。</li>
+          <li>一直送出會請你等幾分鐘再留。</li>
+        </ul>
       </Section>
 
       <Section id={A.clientLocal} title="本地檔案（放自己電腦裡的影片）">

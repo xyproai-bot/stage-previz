@@ -44,7 +44,7 @@ export const REVIEW_SHORTCUTS: readonly ShortcutDef[] = [
   { keys: ['Shift', 'K'], label: '上一個 cue', action: 'prevCue' },
   { keys: ['['], label: '上一首歌', action: 'prevSong', pages: ['studio'] },
   { keys: [']'], label: '下一首歌', action: 'nextSong', pages: ['studio'] },
-  { keys: ['Esc'], label: '收起畫記、不再循環選的留言', action: 'escape' },
+  { keys: ['Esc'], label: '收起畫記、停止循環、清掉標的區段', action: 'escape' },
 ];
 
 /** 某一頁有哪些快捷鍵（說明表） */

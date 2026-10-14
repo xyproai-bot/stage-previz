@@ -86,6 +86,10 @@ export const HELP_ANCHORS = {
   dirDecide: 'dir-decide',
   dirHistory: 'dir-history',
   dirCompare: 'dir-compare',
+  dirAnnotate: 'dir-annotate',
+  dirOpen: 'dir-open',
+  dirPlayer: 'dir-player',
+  dirExport: 'dir-export',
 
   // ─── 客戶（分享連結）───
   client: 'client',
@@ -94,6 +98,7 @@ export const HELP_ANCHORS = {
   clientPlay: 'client-play',
   clientLocal: 'client-local',
   clientMobile: 'client-mobile',
+  clientComment: 'client-comment',
 
   // ─── 常見問題 ───
   questions: 'questions',
