@@ -10,7 +10,7 @@
 // 回應：handler 回傳 { status, body }（worker.js 包成 JSON 回應），不直接 new Response → 這裡不用知道 CORS。
 
 import {
-  normalizeMechanismInput, mechanismToInput, parseCueValue, clampValue,
+  normalizeMechanismInput, mechanismToInput, parseCuePositionBody, parseTimingSeconds, clampValue, MECH_MESSAGES,
 } from '../web/src/lib/mechanisms/model.ts';
 import { planCueConversion } from '../web/src/lib/mechanisms/convert.ts';
 
@@ -145,7 +145,7 @@ export async function listMechanisms(env, ctx) {
 /** 一首歌每個 cue 自己設的機關位置；masterOnly = 分享連結（只看得到正式 cue） */
 export async function loadSongPositions(env, songId, { masterOnly = false } = {}) {
   const r = await env.DB.prepare(
-    `SELECT p.cue_id, p.mechanism_id, p.value, p.updated_at
+    `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec, p.updated_at
        FROM cue_mechanism_positions p
        JOIN cues c ON c.id = p.cue_id
       WHERE c.song_id = ?${masterOnly ? ` AND c.status = 'master'` : ''}
@@ -154,8 +154,14 @@ export async function loadSongPositions(env, songId, { masterOnly = false } = {}
   return (r.results || []).map(rowToPosition);
 }
 
+const secOrNull = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
+
+/** 一列 → API（v2：多 delaySec / durationSec，null = 跟著 cue） */
 function rowToPosition(r) {
-  return { cueId: r.cue_id, mechanismId: r.mechanism_id, value: Number(r.value), updatedAt: r.updated_at };
+  return {
+    cueId: r.cue_id, mechanismId: r.mechanism_id, value: Number(r.value),
+    delaySec: secOrNull(r.delay_sec), durationSec: secOrNull(r.duration_sec), updatedAt: r.updated_at,
+  };
 }
 
 export async function listSongPositions(env, ctx, songId) {
@@ -174,7 +180,7 @@ export async function mechanismSheet(env, ctx) {
         ORDER BY c."order" ASC, c.created_at ASC`
     ).bind(pid),
     env.DB.prepare(
-      `SELECT p.cue_id, p.mechanism_id, p.value, p.updated_at
+      `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec, p.updated_at
          FROM cue_mechanism_positions p
          JOIN cues c ON c.id = p.cue_id JOIN songs s ON s.id = c.song_id
         WHERE s.project_id = ? AND c.status = 'master'`
@@ -333,22 +339,56 @@ export async function reorderMechanisms(request, env, ctx, log) {
 // 每個 cue 的機關位置（不寫活動紀錄：拖滑桿不洗版，跟物件位置一樣）
 // ─────────────────────────────────────────────
 
-/** ctx.mechanism = { id, kind, travel_min, travel_max }（router 已經確認屬於這個專案） */
+/**
+ * PUT …/cues/:c/mechanisms/:m  body: { value?, delaySec?, durationSec? }
+ *   value 有送 → 存位置（夾進行程）；沒送的欄位不動（舊版前端只送 value → 時間照舊）
+ *   只送時間 → 這個 cue 要已經有自己的位置（不然 400，前端會一起送位置）
+ * ctx.mechanism = { id, kind, travel_min, travel_max }（router 已經確認屬於這個專案）
+ */
 export async function putCuePosition(request, env, ctx, cueId) {
   const body = await readJson(request);
   if (!body) return bad('Invalid JSON');
-  const p = parseCueValue(body.value);
-  if (!p.ok) return bad(p.error);
+  const p = parseCuePositionBody(body);
+  if (!p.ok) return bad(p.error, 400, { field: p.field });
   const m = ctx.mechanism;
-  const value = clampValue(p.value, Number(m.travel_min), Number(m.travel_max));
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT INTO cue_mechanism_positions (cue_id, mechanism_id, value, updated_at) VALUES (?, ?, ?, datetime('now'))
-       ON CONFLICT(cue_id, mechanism_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
-    ).bind(cueId, m.id, value),
-    env.DB.prepare(`UPDATE mechanisms SET edited_at = datetime('now') WHERE id = ?`).bind(m.id),
-  ]);
-  return ok({ ok: true, value, clamped: value !== p.value });
+  const setDelay = p.delaySec !== undefined ? 1 : 0;
+  const setDuration = p.durationSec !== undefined ? 1 : 0;
+  const delay = p.delaySec ?? null, duration = p.durationSec ?? null;
+  const touch = env.DB.prepare(`UPDATE mechanisms SET edited_at = datetime('now') WHERE id = ?`).bind(m.id);
+  let value = null;
+  if (p.value !== undefined) {
+    value = clampValue(p.value, Number(m.travel_min), Number(m.travel_max));
+    await env.DB.batch([
+      env.DB.prepare(
+        `INSERT INTO cue_mechanism_positions (cue_id, mechanism_id, value, delay_sec, duration_sec, updated_at)
+         VALUES (?, ?, ?, ?, ?, datetime('now'))
+         ON CONFLICT(cue_id, mechanism_id) DO UPDATE SET value = excluded.value,
+           delay_sec = CASE WHEN ? THEN excluded.delay_sec ELSE delay_sec END,
+           duration_sec = CASE WHEN ? THEN excluded.duration_sec ELSE duration_sec END,
+           updated_at = excluded.updated_at`
+      ).bind(cueId, m.id, value, delay, duration, setDelay, setDuration),
+      touch,
+    ]);
+  } else {
+    const [r] = await env.DB.batch([
+      env.DB.prepare(
+        `UPDATE cue_mechanism_positions SET
+           delay_sec = CASE WHEN ? THEN ? ELSE delay_sec END,
+           duration_sec = CASE WHEN ? THEN ? ELSE duration_sec END,
+           updated_at = datetime('now')
+         WHERE cue_id = ? AND mechanism_id = ?`
+      ).bind(setDelay, delay, setDuration, duration, cueId, m.id),
+      touch,
+    ]);
+    if (!(r?.meta?.changes > 0)) return bad(MECH_MESSAGES.timingNeedsValue, 400, { field: 'value' });
+  }
+  const row = await env.DB.prepare(
+    `SELECT value, delay_sec, duration_sec FROM cue_mechanism_positions WHERE cue_id = ? AND mechanism_id = ?`
+  ).bind(cueId, m.id).first();
+  return ok({
+    ok: true, value: Number(row?.value), clamped: p.value !== undefined && value !== p.value,
+    delaySec: secOrNull(row?.delay_sec), durationSec: secOrNull(row?.duration_sec),
+  });
 }
 
 export async function deleteCuePosition(request, env, ctx, cueId) {
@@ -379,7 +419,7 @@ export async function exportMechanisms(env, projectId) {
          JOIN mechanisms m ON m.id = mo.mechanism_id WHERE m.project_id = ?`
     ).bind(projectId),
     env.DB.prepare(
-      `SELECT p.cue_id, p.mechanism_id, p.value FROM cue_mechanism_positions p
+      `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec FROM cue_mechanism_positions p
          JOIN mechanisms m ON m.id = p.mechanism_id WHERE m.project_id = ?`
     ).bind(projectId),
   ]);
@@ -442,18 +482,25 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     const cid = cueIdMap.get(p?.cue_id);
     const v = Number(p?.value);
     if (!mid || !cid || !Number.isFinite(v)) continue;
-    stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO cue_mechanism_positions (cue_id, mechanism_id, value) VALUES (?, ?, ?)`).bind(cid, mid, v));
+    stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO cue_mechanism_positions (cue_id, mechanism_id, value, delay_sec, duration_sec) VALUES (?, ?, ?, ?, ?)`)
+      .bind(cid, mid, v, timingOrNull(p?.delay_sec), timingOrNull(p?.duration_sec)));
     positions++;
   }
   for (let i = 0; i < stmts.length; i += 200) await env.DB.batch(stmts.slice(i, i + 200));
   return { mechanisms: rows.length, objects, positions };
 }
 
-/** 新 cue「沿用」另一個 cue：複製來源 cue 自己設的機關位置（同一個專案） */
+/** 匯入 / 常用擺位的秒數：不合法 → null（跟著 cue） */
+function timingOrNull(v) {
+  const t = parseTimingSeconds(v);
+  return t.ok ? t.value : null;
+}
+
+/** 新 cue「沿用」另一個 cue：複製來源 cue 自己設的機關位置和時間（同一個專案） */
 export async function cloneCuePositions(env, fromCueId, toCueId) {
   const r = await env.DB.prepare(
-    `INSERT OR IGNORE INTO cue_mechanism_positions (cue_id, mechanism_id, value)
-     SELECT ?, mechanism_id, value FROM cue_mechanism_positions WHERE cue_id = ?`
+    `INSERT OR IGNORE INTO cue_mechanism_positions (cue_id, mechanism_id, value, delay_sec, duration_sec)
+     SELECT ?, mechanism_id, value, delay_sec, duration_sec FROM cue_mechanism_positions WHERE cue_id = ?`
   ).bind(toCueId, fromCueId).run();
   return r?.meta?.changes || 0;
 }
@@ -479,12 +526,17 @@ export async function snapshotCuePositions(env, projectId, cueId, snapshot) {
   return stmts.length;
 }
 
-/** 存成常用擺位：這個 cue 自己設的機關位置（用機關名稱存 → 別的專案也套得上） */
+/** 存成常用擺位：這個 cue 自己設的機關位置和時間（用機關名稱存 → 別的專案也套得上；沒設時間就不放） */
 export async function templateMechanismPositions(env, cueId) {
   const r = await env.DB.prepare(
-    `SELECT m.name, p.value FROM cue_mechanism_positions p JOIN mechanisms m ON m.id = p.mechanism_id WHERE p.cue_id = ?`
+    `SELECT m.name, p.value, p.delay_sec, p.duration_sec FROM cue_mechanism_positions p JOIN mechanisms m ON m.id = p.mechanism_id WHERE p.cue_id = ?`
   ).bind(cueId).all();
-  return (r.results || []).map(x => ({ name: x.name, value: Number(x.value) }));
+  return (r.results || []).map(x => {
+    const o = { name: x.name, value: Number(x.value) };
+    if (secOrNull(x.delay_sec) !== null) o.delaySec = Number(x.delay_sec);
+    if (secOrNull(x.duration_sec) !== null) o.durationSec = Number(x.duration_sec);
+    return o;
+  });
 }
 
 /** 套用常用擺位 / 從別的專案匯入 cue：用機關名稱對到這個專案的機關（夾進行程）；對不到的略過 */
@@ -497,8 +549,8 @@ export async function applyNamedPositions(env, projectId, cueId, list) {
     const m = byName.get(String(p?.name ?? '').trim());
     const v = Number(p?.value);
     if (!m || !Number.isFinite(v)) continue;
-    stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO cue_mechanism_positions (cue_id, mechanism_id, value) VALUES (?, ?, ?)`)
-      .bind(cueId, m.id, clampValue(v, Number(m.travel_min), Number(m.travel_max))));
+    stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO cue_mechanism_positions (cue_id, mechanism_id, value, delay_sec, duration_sec) VALUES (?, ?, ?, ?, ?)`)
+      .bind(cueId, m.id, clampValue(v, Number(m.travel_min), Number(m.travel_max)), timingOrNull(p?.delaySec), timingOrNull(p?.durationSec)));
   }
   if (stmts.length) await env.DB.batch(stmts);
   return stmts.length;

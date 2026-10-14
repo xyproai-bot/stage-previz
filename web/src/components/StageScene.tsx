@@ -14,7 +14,7 @@ import { fitFov } from '../lib/review/annotations';
 import { computeFrontView } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
-import type { Mechanism, MechanismValues, MechVec3 } from '../lib/mechanisms/model';
+import type { Mechanism, MechanismTimings, MechanismValues, MechVec3 } from '../lib/mechanisms/model';
 import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type RigMechanism } from '../lib/mechanisms/pose';
 import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
 import { stageFrontDirection } from '../lib/stageCamera';
@@ -154,6 +154,10 @@ interface Props {
   mechanismTargets?: MechanismValues;
   /** 跟著影片時間：只在 poseAtFrame 有回傳位置的那幾幀才問；回傳 null = 用 mechanismTargets */
   mechanismAtFrame?: () => MechanismValues | null;
+  /** 目前這個 cue 自己設的延遲 / 走幾秒（換 cue 時先等延遲、照走幾秒走；沒有的機關跟著轉場） */
+  mechanismTimings?: MechanismTimings;
+  /** true = 每幀都問 mechanismAtFrame（管理頁的機關時間軸拉 / 播時；回傳 null = 照點 cue 走） */
+  mechanismFrameAlways?: boolean;
   /** 換 cue 時機關怎麼走：'real'（預設）= 照機器速度；'transition' = 照轉場秒數（管理頁編輯時）；'instant' = 直接到位（分鏡縮圖） */
   mechanismMotion?: MechanismMotion;
   /** 查舞台：舞台正面方向、一組物件的中心（設定機關用） */
@@ -256,7 +260,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -358,6 +362,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   mechAtFrameRef.current = mechanismAtFrame;
   const mechMotionRef = useRef(mechanismMotion);
   mechMotionRef.current = mechanismMotion;
+  const mechTimingsRef = useRef(mechanismTimings);
+  mechTimingsRef.current = mechanismTimings;
+  const mechFrameAlwaysRef = useRef(mechanismFrameAlways);
+  mechFrameAlwaysRef.current = mechanismFrameAlways;
   /** 套上機關、寫到 mesh（render loop 每幀最後一次；states 換了也馬上一次） */
   const commitPosesRef = useRef<(nowTs: number, timelineActive: boolean) => void>(() => {});
   // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；選取 / 校準變了照舊直接套
@@ -976,7 +984,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const shown = displayedMechRef.current;
       if (rigNow.mechanisms.length === 0) return EMPTY_VALUES;
       const tweener = mechTweenerRef.current;
-      let v: MechanismValues | null = timelineActive ? (mechAtFrameRef.current?.() ?? null) : null;
+      let v: MechanismValues | null = timelineActive || mechFrameAlwaysRef.current ? (mechAtFrameRef.current?.() ?? null) : null;
       if (v) {
         mechTimelineActiveRef.current = true;
       } else {
@@ -986,6 +994,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           tweener.setCurrent(shown, nowTs);
           tweener.retarget(rigNow.mechanisms, mechTargetsRef.current || EMPTY_VALUES, nowTs, {
             animate: mechMotionRef.current !== 'instant', minSeconds: crossfadeRef.current, motion: mechMotionRef.current,
+            timings: mechTimingsRef.current,
           });
         }
         v = tweener.valuesAt(nowTs);
@@ -1609,11 +1618,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const animate = mechanismMotion !== 'instant' && prev !== UNSET_CUE && cueKey !== prev;
     const now = performance.now();
     mechTweenerRef.current.retarget(rig.mechanisms, mechanismTargets || EMPTY_VALUES, now, {
-      animate, minSeconds: crossfadeSeconds, motion: mechanismMotion,
+      animate, minSeconds: crossfadeSeconds, motion: mechanismMotion, timings: mechanismTimings,
     });
     lastMechCueKeyRef.current = cueKey;
     commitPosesRef.current(now, timelineActiveRef.current);
-  }, [rig, mechanismTargets, cueKey, crossfadeSeconds, mechanismMotion]);
+  }, [rig, mechanismTargets, cueKey, crossfadeSeconds, mechanismMotion, mechanismTimings]);
 
   // ── 設定機關時問舞台：正面朝哪、一組物件的中心（cue 位置，沒加機關）──
   useEffect(() => {

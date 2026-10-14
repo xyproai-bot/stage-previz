@@ -34,8 +34,13 @@ describe('讀回來的資料補預設值', () => {
     expect(parseMechanism(null).id).toBe('');
   });
   it('位置：不是數字的略過', () => {
-    expect(parsePositions([{ cueId: 'c', mechanismId: 'm', value: 1 }, { cueId: 'c', mechanismId: 'm', value: 'x' }, null])).toEqual([
-      { cueId: 'c', mechanismId: 'm', value: 1, updatedAt: '' },
+    // 舊後台沒有延遲 / 走幾秒 → null（跟著 cue）；負的 / 不是數字 → null
+    expect(parsePositions([
+      { cueId: 'c', mechanismId: 'm', value: 1 }, { cueId: 'c', mechanismId: 'm', value: 'x' }, null,
+      { cueId: 'd', mechanismId: 'm', value: 2, delaySec: 2, durationSec: -1 },
+    ])).toEqual([
+      { cueId: 'c', mechanismId: 'm', value: 1, delaySec: null, durationSec: null, updatedAt: '' },
+      { cueId: 'd', mechanismId: 'm', value: 2, delaySec: 2, durationSec: null, updatedAt: '' },
     ]);
     expect(parsePositions('nope')).toEqual([]);
   });

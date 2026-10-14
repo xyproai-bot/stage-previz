@@ -11,9 +11,9 @@ import type { HistoryStep } from '../editHistory';
 import { historyScope } from '../editHistory';
 import { STOP_LIVE_REFRESH, isProjectGoneError, useLiveRefresh } from '../liveRefresh';
 import { toast } from '../toast';
-import { clampValue, type CueMechanismPosition, type Mechanism, type MechanismValues } from './model';
-import { defaultRow, ownValuesByCue, resolveSongMechanisms, valuesOf, type ResolvedRow } from './track';
-import { buildMechanismTimeline, checkSongMechanisms, sortMasters, type MechanismMotion, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
+import { clampValue, type CueMechanismPosition, type Mechanism, type MechanismTimings, type MechanismValues } from './model';
+import { defaultRow, ownTimingsByCue, ownValuesByCue, resolveSongMechanisms, valuesOf, type ResolvedRow } from './track';
+import { buildMechanismTimeline, checkSongMechanisms, ownMoveFor, sortMasters, type MechanismMotion, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
 import * as mapi from './mechanismApi';
 import type { StageSceneQuery } from '../../components/StageScene';
 
@@ -21,6 +21,10 @@ export interface MechanismSceneProps {
   mechanisms: Mechanism[] | null;
   mechanismTargets: MechanismValues;
   mechanismAtFrame?: () => MechanismValues | null;
+  /** 目前這個 cue 自己設的延遲 / 走幾秒（換 cue 時用） */
+  mechanismTimings?: MechanismTimings;
+  /** 管理頁：機關時間軸拉 / 播的時候每幀都問 mechanismAtFrame（不用等影片） */
+  mechanismFrameAlways?: boolean;
   /** 管理頁：預設 'transition'（照轉場秒數）；其他頁不給 = 照機器速度 */
   mechanismMotion?: MechanismMotion;
   focusedMechanismId?: string | null;
@@ -46,6 +50,11 @@ function usePlayback(
     return (selectedCueId && resolved.get(selectedCueId)) || defaultRow(mechanisms);
   }, [mechanisms, resolved, selectedCueId]);
   const targets = useMemo(() => valuesOf(selectedRow), [selectedRow]);
+  // 每個 cue 自己設的延遲 / 走幾秒（不沿用）
+  const timings = useMemo(() => ownTimingsByCue(positions), [positions]);
+  const selectedTimings = useMemo<MechanismTimings>(
+    () => (selectedCueId && timings.get(selectedCueId)) || EMPTY_TIMINGS, [timings, selectedCueId],
+  );
 
   // 影片時間軸（只有正式 cue、有設影片時間的）；每幀 StageScene 問 mechanismAtFrame
   const timeline = useMemo<MechanismTimeline | null>(() => {
@@ -54,8 +63,8 @@ function usePlayback(
     return buildMechanismTimeline(mechanisms, masters, id => {
       const row = resolved.get(id);
       return row ? valuesOf(row) : null;
-    });
-  }, [mechanisms, cues, resolved]);
+    }, ownMoveFor(resolved, timings));
+  }, [mechanisms, cues, resolved, timings]);
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
   const videoRef = useRef(video);
@@ -65,8 +74,10 @@ function usePlayback(
     const v = videoRef.current;
     return tl && v ? tl.valuesAt(v.currentTime) : null;
   }, []);
-  return { resolved, selectedRow, targets, timeline, mechanismAtFrame };
+  return { resolved, selectedRow, targets, timings, selectedTimings, timeline, timelineRef, mechanismAtFrame };
 }
+
+const EMPTY_TIMINGS: MechanismTimings = {};
 
 // ─────────────────────────────────────────────
 // 導演頁 / 動畫師工作站（只看）
@@ -119,8 +130,8 @@ export function useStageMechanisms(o: {
   const list = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
   const pb = usePlayback(mechanisms, list, o.cues, o.selectedCueId, o.video);
   const sceneProps: MechanismSceneProps = useMemo(() => ({
-    mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame,
-  }), [mechanisms, pb.targets, pb.mechanismAtFrame]);
+    mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame, mechanismTimings: pb.selectedTimings,
+  }), [mechanisms, pb.targets, pb.mechanismAtFrame, pb.selectedTimings]);
   return { mechanisms, sceneProps, timeline: pb.timeline };
 }
 
@@ -159,8 +170,8 @@ export function useShareMechanisms(o: {
   const list = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
   const pb = usePlayback(mechanisms, list, o.cues, o.selectedCueId, o.video);
   const sceneProps: MechanismSceneProps = useMemo(() => ({
-    mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame,
-  }), [mechanisms, pb.targets, pb.mechanismAtFrame]);
+    mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame, mechanismTimings: pb.selectedTimings,
+  }), [mechanisms, pb.targets, pb.mechanismAtFrame, pb.selectedTimings]);
   return { mechanisms, sceneProps, timeline: pb.timeline };
 }
 
@@ -176,6 +187,8 @@ export function readRealSpeedPref(storage: Pick<Storage, 'getItem'> | null | und
 export function writeRealSpeedPref(storage: Pick<Storage, 'setItem' | 'removeItem'> | null | undefined, on: boolean): void {
   try { if (on) storage?.setItem(REAL_SPEED_PREF_KEY, '1'); else storage?.removeItem(REAL_SPEED_PREF_KEY); } catch { /* 無痕模式 / 不能存 → 這次有效就好 */ }
 }
+/** 機關時間軸開著還是收起來（記在這台電腦；預設開） */
+export const TIMELINE_PREF_KEY = 'sp_mech_timeline';
 const localStore = (): Storage | null => { try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; } };
 
 export interface EditorHistory {
@@ -202,6 +215,11 @@ export function useEditorMechanisms(o: {
   // 換 cue 時：預設照轉場秒數（跟物件一起到，編輯不用等機器）；開了「照機器速度播放」才照機器速度
   const [realSpeed, setRealSpeedState] = useState(() => readRealSpeedPref(localStore()));
   const setRealSpeed = useCallback((on: boolean) => { setRealSpeedState(on); writeRealSpeedPref(localStore(), on); }, []);
+  const [timelineOpen, setTimelineOpenState] = useState(() => { try { return localStore()?.getItem(TIMELINE_PREF_KEY) !== '0'; } catch { return true; } });
+  const setTimelineOpen = useCallback((on: boolean) => {
+    setTimelineOpenState(on);
+    try { if (on) localStore()?.removeItem(TIMELINE_PREF_KEY); else localStore()?.setItem(TIMELINE_PREF_KEY, '0'); } catch { /* 不能存 → 這次有效就好 */ }
+  }, []);
   const sceneQueryRef = useRef<StageSceneQuery | null>(null);
   const mechsRef = useRef<Mechanism[] | null>(null);
   mechsRef.current = mechanisms;
@@ -244,18 +262,23 @@ export function useEditorMechanisms(o: {
     return keys.length ? { ...pb.targets, ...preview } : pb.targets;
   }, [pb.targets, preview]);
   const check = useMemo<SongCheck | null>(
-    () => (mechanisms && mechanisms.length ? checkSongMechanisms(mechanisms, o.cues, pb.resolved) : null),
-    [mechanisms, o.cues, pb.resolved],
+    () => (mechanisms && mechanisms.length ? checkSongMechanisms(mechanisms, o.cues, pb.resolved, pb.timings) : null),
+    [mechanisms, o.cues, pb.resolved, pb.timings],
   );
 
   // ── 本地更新（存成功後先套到畫面上） ──
-  const putLocal = (sid: string, cueId: string, mechId: string, value: number | null) => {
+  /** value = null → 刪掉這一列（時間一起清掉）；timing 沒給 → 照舊 */
+  const putLocal = (sid: string, cueId: string, mechId: string, value: number | null, timing?: { delaySec: number | null; durationSec: number | null }) => {
     setPositions(prev => {
       const base = prev && prev.songId === sid ? prev.list : [];
-      const rest = base.filter(p => !(p.cueId === cueId && p.mechanismId === mechId));
-      return { songId: sid, list: value === null ? rest : [...rest, { cueId, mechanismId: mechId, value, updatedAt: '' }] };
+      const old = base.find(p => p.cueId === cueId && p.mechanismId === mechId);
+      const rest = base.filter(p => p !== old);
+      if (value === null) return { songId: sid, list: rest };
+      const t = timing ?? { delaySec: old?.delaySec ?? null, durationSec: old?.durationSec ?? null };
+      return { songId: sid, list: [...rest, { cueId, mechanismId: mechId, value, ...t, updatedAt: '' }] };
     });
   };
+  const ownEntry = (cueId: string, mechId: string) => posRef.current?.list.find(x => x.cueId === cueId && x.mechanismId === mechId) ?? null;
   const ownValue = (cueId: string, mechId: string): number | null => {
     const p = posRef.current;
     return p?.list.find(x => x.cueId === cueId && x.mechanismId === mechId)?.value ?? null;
@@ -339,6 +362,55 @@ export function useEditorMechanisms(o: {
     }
   }, [projectId, songId, selectedCueId, o.canEdit, writeCue, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /**
+   * 存某個 cue 某個機關的延遲 / 走幾秒（機關時間軸拖完、這個 cue 的欄位打完）。null = 跟著 cue；沒放的欄位不改。
+   * 這個 cue 還沒有自己的位置 → 用沿用來的值一起存（畫面不會變）；復原時整列刪掉回到沿用。
+   */
+  const commitTiming = useCallback(async (cueId: string, mechId: string, patch: { delaySec?: number | null; durationSec?: number | null }) => {
+    const sid = songId;
+    if (!projectId || !sid || !o.canEdit) return;
+    const own = ownEntry(cueId, mechId);
+    const before = { delaySec: own?.delaySec ?? null, durationSec: own?.durationSec ?? null };
+    const after = {
+      delaySec: patch.delaySec !== undefined ? patch.delaySec : before.delaySec,
+      durationSec: patch.durationSec !== undefined ? patch.durationSec : before.durationSec,
+    };
+    if (own && after.delaySec === before.delaySec && after.durationSec === before.durationSec) return;
+    const inherited = pb.resolved.get(cueId)?.[mechId]?.value;
+    if (!own && inherited === undefined) return;
+    const write = async (t: { delaySec: number | null; durationSec: number | null }) => {
+      const body = ownEntry(cueId, mechId) ? t : { ...t, value: inherited };
+      const r = await mapi.setCueTiming(projectId, sid, cueId, mechId, body);
+      putLocal(sid, cueId, mechId, r.value, { delaySec: r.delaySec, durationSec: r.durationSec });
+    };
+    const bumpCount = (d: number) => setMechanisms(prev => prev && prev.map(x => (x.id === mechId ? { ...x, cueCount: Math.max(0, x.cueCount + d) } : x)));
+    try {
+      if (!own) bumpCount(1);
+      await write(after);
+      historyRef.current?.push(historyScope(cueId), {
+        undo: async () => {
+          if (own) await write(before);
+          else { await mapi.clearCuePosition(projectId, sid, cueId, mechId); putLocal(sid, cueId, mechId, null); bumpCount(-1); }
+        },
+        redo: async () => { if (!own) bumpCount(1); await write(after); },
+      });
+      historyRef.current?.bump();
+    } catch (e) {
+      toast.error('機關的時間沒有存到：' + (e instanceof Error ? e.message : String(e)));
+      void refreshPositions();
+    }
+  }, [projectId, songId, o.canEdit, pb.resolved, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 機關時間軸：拉時間尺 / 播放時，3D 畫面的機關跟著時間軸（照機器速度；物件停在目前選的 cue）──
+  // 只寫 ref，不重畫 React；StageScene 每幀問 mechanismAtFrame
+  const previewTimeRef = useRef<number | null>(null);
+  const setPreviewTime = useCallback((t: number | null) => { previewTimeRef.current = t; }, []);
+  const editorAtFrame = useCallback((): MechanismValues | null => {
+    const t = previewTimeRef.current;
+    const tl = pb.timelineRef.current;
+    return t !== null && tl ? tl.valuesAt(t) : null;
+  }, [pb.timelineRef]);
+
   /** 拖滑桿時邊拖邊看（不存）；null = 取消預覽 */
   const previewValue = useCallback((mechId: string, value: number | null) => {
     setPreview(p => {
@@ -378,12 +450,15 @@ export function useEditorMechanisms(o: {
   const sceneProps: MechanismSceneProps = useMemo(() => ({
     mechanisms, mechanismTargets: targets, focusedMechanismId: focusedId, sceneQueryRef,
     mechanismMotion: (realSpeed ? 'real' : 'transition') as MechanismMotion,
-  }), [mechanisms, targets, focusedId, realSpeed]);
+    mechanismTimings: pb.selectedTimings, mechanismAtFrame: editorAtFrame, mechanismFrameAlways: true,
+  }), [mechanisms, targets, focusedId, realSpeed, pb.selectedTimings, editorAtFrame]);
 
   return {
     status, mechanisms: mechanisms || EMPTY_MECHS, positions: list, resolved: pb.resolved, selectedRow: pb.selectedRow,
     targets, check, preview, focusedId, setFocusedId, sceneQueryRef,
     commitValue, clearValue, previewValue, create, update, remove, reorder,
+    /** 延遲 / 走幾秒（v2）、機關時間軸 */
+    commitTiming, timings: pb.timings, timeline: pb.timeline, setPreviewTime, previewTimeRef, timelineOpen, setTimelineOpen,
     /** 「照機器速度播放」：換 cue 時照機器速度（預設關 = 照轉場秒數） */
     realSpeed, setRealSpeed,
     refreshDefs, refreshPositions, sceneProps,

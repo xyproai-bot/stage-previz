@@ -3,7 +3,7 @@
 //   下面：設定機關（新增 / 編輯 / 刪除 / 排序；表單直接展開在這裡，3D 畫面照樣能轉、能選物件）
 //   匯出機關總表（CSV，用 Excel 打開）
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Cog, FileSpreadsheet, LoaderCircle, Pencil, Plus, TriangleAlert } from 'lucide-react';
+import { ArrowDown, ArrowUp, ChartGantt, Cog, FileSpreadsheet, LoaderCircle, Pencil, Plus, TriangleAlert } from 'lucide-react';
 import Icon from '../Icon';
 import type { Cue, StageObject } from '../../lib/api';
 import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
@@ -51,6 +51,10 @@ export default function MechanismTab({
     const byId = new Map(cues.map(c => [c.id, c.name]));
     return (id: string) => byId.get(id) || '前面的 cue';
   }, [cues]);
+  const cueLabel = useMemo(() => {
+    const no = new Map(cues.filter(c => c.status === 'master').sort((a, b) => a.order - b.order).map((c, i) => [c.id, i + 1]));
+    return (id: string) => (no.has(id) ? `Cue ${no.get(id)}「${cueName(id)}」` : `「${cueName(id)}」`);
+  }, [cues, cueName]);
 
   // 舞台正面（「往觀眾」「往左」、方向字）：模型讀好之後問一次；打開設定時再問一次
   useEffect(() => {
@@ -230,6 +234,13 @@ export default function MechanismTab({
           <span>照機器速度播放</span>
           <small className="muted">{mech.realSpeed ? '換 cue 時機關照最高速度走，跟導演、客戶看到的一樣' : '換 cue 時機關照轉場秒數走（編輯比較快）；提醒照樣會出現'}</small>
         </label>
+        {mechanisms.length > 0 && (
+          <label className="mech-speed-toggle" title="開了：3D 畫面下面排出這首歌每個機關什麼時候動，可以拖色塊改延遲和走幾秒">
+            <input type="checkbox" checked={mech.timelineOpen} onChange={e => mech.setTimelineOpen(e.target.checked)} />
+            <Icon icon={ChartGantt} size="sm" />
+            <span>顯示機關時間軸</span>
+          </label>
+        )}
         {cues.length > 0 && (
           <label className="mech-cue-pick">
             <span className="muted small">換 cue</span>
@@ -266,6 +277,11 @@ export default function MechanismTab({
                 onPreview={(v) => mech.previewValue(m.id, v)}
                 onClear={() => void mech.clearValue(m.id)}
                 onFix={(s) => void onSetCrossfade(s)}
+                timing={selectedCue ? mech.timings.get(selectedCue.id)?.[m.id] ?? null : null}
+                showTiming={!!selectedCue && mech.selectedRow[m.id]?.source === 'own' && !!cueCheck?.items[m.id]?.prevCueId}
+                cueSpan={cueCheck?.items[m.id]?.span ?? null}
+                cueLabel={cueLabel}
+                onTiming={selectedCue ? (patch) => void mech.commitTiming(selectedCue.id, m.id, patch) : undefined}
               />
             ))}
           </ul>

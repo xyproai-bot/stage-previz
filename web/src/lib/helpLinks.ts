@@ -32,6 +32,7 @@ export const HELP_ANCHORS = {
   prodMechSetup: 'prod-mech-setup',
   prodMechCue: 'prod-mech-cue',
   prodMechSpeed: 'prod-mech-speed',
+  prodMechTiming: 'prod-mech-timing',
   prodMechSheet: 'prod-mech-sheet',
   prodMechConvert: 'prod-mech-convert',
   prodLedCanvas: 'prod-led-canvas',

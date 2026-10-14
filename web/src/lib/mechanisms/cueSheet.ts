@@ -9,7 +9,7 @@ import {
   LINEAR_DIRECTIONS, ROTARY_AXES, matchLinearDirection, matchRotaryAxis, presetAt, unitOf,
   type CueMechanismPosition, type Mechanism, type MechVec3,
 } from './model';
-import { ownValuesByCue, resolveSongMechanisms } from './track';
+import { ownTimingsByCue, ownValuesByCue, resolveSongMechanisms } from './track';
 import { checkSongMechanisms, cueGoTimes, formatSeconds, type MechCheck, type MotionCue } from './motion';
 
 export interface SheetSong {
@@ -34,7 +34,7 @@ const numCell = (v: string | null): Cell => (v === null ? null : { t: 'num', v }
 
 export const SHEET_HEADER = [
   '歌曲 Song', 'Cue #', 'Cue 名稱 Cue name', 'GO 時間 GO', '到位時間 Arrive', '轉場(秒) Move s', '機關 Axis', '控台編號 Console',
-  '起點 From', '目標 Target', '單位 Unit', '常用位置 Preset', '行程 Distance', '可用(秒) Avail s', '需要(秒) Need s',
+  '起點 From', '目標 Target', '單位 Unit', '常用位置 Preset', '行程 Distance', '延遲(秒) Delay s', '開始時間 Start', '走幾秒 Axis s', '需要(秒) Need s',
   '速度(單位/秒) Speed', '最高速度 Max', '檢查 Check',
 ];
 
@@ -50,13 +50,19 @@ const fixed = (v: number, d: number) => { const s = v.toFixed(d); return /^-0(\.
 const valueText = (v: number, kind: Mechanism['kind']) => fixed(v, kind === 'rotary' ? 1 : 3);
 const trimNum = (v: number) => String(Math.round(v * 1000) / 1000);
 
-function checkText(c: MechCheck): string {
+function checkText(c: MechCheck, cueNo: (id: string) => number, kind: Mechanism['kind']): string {
+  const cut = c.cut
+    ? (c.cut.started
+      ? `被 Cue ${cueNo(c.cut.byCueId)} 接手，只走到 ${valueText(c.cut.reached, kind)}`
+      : `還沒動就被 Cue ${cueNo(c.cut.byCueId)} 接手`)
+    : null;
   switch (c.status) {
     case 'start': return '起始位置';
     case 'still': return c.lateBy ? `會晚 ${formatSeconds(c.lateBy)} 秒到位` : '不動';
-    case 'noSpeed': return '沒填最高速度';
-    case 'ok': return c.lateBy ? `會晚 ${formatSeconds(c.lateBy)} 秒到位` : 'OK';
+    case 'noSpeed': return cut ?? '沒填最高速度';
+    case 'ok': return cut ?? (c.lateBy ? `會晚 ${formatSeconds(c.lateBy)} 秒到位` : 'OK');
     case 'tooFast':
+      if (c.explicitDuration) return `太快：要走 ${formatSeconds(c.durationFix ?? 0)} 秒`;
       return c.fix !== null ? `太快：轉場要 ${formatSeconds(c.fix)} 秒` : `太快：跟上一個 cue 只隔 ${formatSeconds(c.gap ?? 0)} 秒`;
   }
 }
@@ -65,6 +71,7 @@ function checkText(c: MechCheck): string {
 export function sheetRows(input: SheetInput): Cell[][] {
   const mechs = [...input.mechanisms].sort((a, b) => a.order - b.order);
   const own = ownValuesByCue(input.positions);
+  const timings = ownTimingsByCue(input.positions);
   const rows: Cell[][] = [];
   for (const song of [...input.songs].sort((a, b) => a.order - b.order)) {
     const cues: (MotionCue & { name: string })[] = [...song.cues]
@@ -72,7 +79,8 @@ export function sheetRows(input: SheetInput): Cell[][] {
       .map(c => ({ ...c, status: 'master' }));
     if (!cues.length) continue;
     const resolved = resolveSongMechanisms(mechs, cues, own);
-    const check = checkSongMechanisms(mechs, cues, resolved);
+    const check = checkSongMechanisms(mechs, cues, resolved, timings);
+    const cueNo = (id: string) => cues.findIndex(c => c.id === id) + 1;
     const go = cueGoTimes(cues);
     const songLabel = song.code ? `${song.code} ${song.name}` : song.name;
     cues.forEach((cue, i) => {
@@ -98,11 +106,13 @@ export function sheetRows(input: SheetInput): Cell[][] {
           text(unitOf(m.kind)),
           text(preset?.name),
           numCell(c.status === 'start' ? null : valueText(c.distance, m.kind)),
+          numCell(moving ? fixed(c.delay, 1) : null),
+          text(moving && c.startAt !== null ? sheetTime(c.startAt) : null),
           numCell(moving && c.available !== null ? fixed(c.available, 1) : null),
           numCell((c.status === 'ok' || c.status === 'tooFast') && c.need !== null ? fixed(c.need, 1) : null),
           numCell(speed),
           numCell(m.maxSpeed === null ? null : trimNum(m.maxSpeed)),
-          text(checkText(c)),
+          text(checkText(c, cueNo, m.kind)),
         ]);
       }
     });
@@ -137,7 +147,7 @@ export function sheetLegend(mechanisms: Mechanism[], front?: MechVec3 | null): s
     if (m.presets.length) parts.push(`常用位置 ${m.presets.map(p => `${p.name} ${trimNum(p.value)}`).join(' / ')}`);
     lines.push(`# ${parts.join('；')}`);
   }
-  lines.push('# 註：需要秒數 = 行程 ÷ 最高速度，以等速計算、沒有算加減速，實際會再久一點。GO 時間 = 到位時間 − 可用秒數；沒有影片時間的 cue 由現場叫 GO。');
+  lines.push('# 註：需要秒數 = 行程 ÷ 最高速度，以等速計算、沒有算加減速，實際會再久一點。GO 時間 = 到位時間 − 轉場（不會早於上一個 cue 到位）；開始時間 = GO 時間 + 延遲；走幾秒沒另外設 = 跟著 cue 的轉場。沒有影片時間的 cue 由現場叫 GO。');
   return lines;
 }
 

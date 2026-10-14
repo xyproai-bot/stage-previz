@@ -49,7 +49,24 @@ export interface Mechanism {
 /** mechanismId → 位置 */
 export type MechanismValues = Record<string, number>;
 
-export interface CueMechanismPosition { cueId: string; mechanismId: string; value: number; updatedAt: string }
+/**
+ * 一個 cue 自己設的機關位置（沒有 = 沿用前面的 cue）。
+ * delaySec / durationSec（v2，0027）：這個 cue 這個機關「GO 之後延遲幾秒開始動、走幾秒」；
+ * null / 沒有 = 跟著 cue（延遲 0、走 = 轉場）。不會沿用到下一個 cue（時間是這一段移動自己的）。
+ */
+export interface CueMechanismPosition {
+  cueId: string;
+  mechanismId: string;
+  value: number;
+  delaySec?: number | null;
+  durationSec?: number | null;
+  updatedAt: string;
+}
+
+/** 這個 cue 這個機關的時間（null = 跟著 cue） */
+export interface MechanismTiming { delaySec: number | null; durationSec: number | null }
+/** mechanismId → 這個 cue 自己設的時間（只有這個 cue 自己有設位置的機關才有） */
+export type MechanismTimings = Record<string, MechanismTiming>;
 
 /** 新增 / 修改機關時送的內容（檢查完的樣子） */
 export interface MechanismInput {
@@ -83,6 +100,8 @@ export const MECH_LIMITS = {
   linearSpeedMax: 100,
   rotarySpeedMax: 3600,
   pivotAbs: 1e5,
+  /** 每個 cue 的延遲 / 走幾秒：0 ~ 3600 秒（存到 0.001 秒） */
+  timingMaxSec: 3600,
 } as const;
 
 /** 給畫面用：單位 */
@@ -145,6 +164,9 @@ export const MECH_MESSAGES = {
   parentDepth: '機關一層套一層最多 4 層',
   parentMissing: '找不到要裝上去的機關',
   value: '位置要是數字',
+  delay: '延遲要是 0 到 3600 秒，或留空跟著 cue',
+  duration: '走幾秒要是 0 到 3600 秒，或留空跟著轉場',
+  timingNeedsValue: '這個 cue 還沒有設定這個機關的位置，要一起送位置',
 } as const;
 
 /** 專案裡其他機關（檢查名稱重複、裝在哪個機關上） */
@@ -366,6 +388,48 @@ function subtreeHeight(rootId: string, siblings: MechanismSibling[]): number {
 export function parseCueValue(raw: unknown): { ok: true; value: number } | { ok: false; error: string } {
   const v = num(raw);
   return Number.isFinite(v) ? { ok: true, value: v } : { ok: false, error: MECH_MESSAGES.value };
+}
+
+/** 延遲 / 走幾秒的一格：null / 空白 = 跟著 cue；0 ~ 3600 秒（存到 0.001 秒）；其他 = 不合法 */
+export function parseTimingSeconds(raw: unknown): { ok: true; value: number | null } | { ok: false } {
+  if (raw === null || raw === undefined || (typeof raw === 'string' && raw.trim() === '')) return { ok: true, value: null };
+  const v = num(raw);
+  if (!Number.isFinite(v) || v < 0 || v > MECH_LIMITS.timingMaxSec) return { ok: false };
+  const r = Math.round(v * 1000) / 1000;
+  return { ok: true, value: Object.is(r, -0) ? 0 : r };
+}
+
+export type CuePositionField = 'value' | 'delaySec' | 'durationSec';
+
+/**
+ * PUT …/cues/:c/mechanisms/:m 的內容：
+ *   value       有送 → 改位置（後台夾進行程）；沒送 → 只改時間（這個 cue 要已經有自己的位置）
+ *   delaySec    沒送 = 不改；null = 跟著 cue（0）；數字 = GO 之後幾秒開始動
+ *   durationSec 沒送 = 不改；null = 跟著轉場；數字 = 走幾秒（0 = 直接切換）
+ * 舊版前端只送 { value } → 時間不會被動到。
+ */
+export function parseCuePositionBody(raw: unknown):
+  | { ok: true; value?: number; delaySec?: number | null; durationSec?: number | null }
+  | { ok: false; error: string; field: CuePositionField } {
+  const r: Record<string, unknown> = isObj(raw) ? raw : {};
+  const has = (k: string) => Object.prototype.hasOwnProperty.call(r, k) && r[k] !== undefined;
+  const out: { ok: true; value?: number; delaySec?: number | null; durationSec?: number | null } = { ok: true };
+  if (has('delaySec')) {
+    const d = parseTimingSeconds(r.delaySec);
+    if (!d.ok) return { ok: false, error: MECH_MESSAGES.delay, field: 'delaySec' };
+    out.delaySec = d.value;
+  }
+  if (has('durationSec')) {
+    const d = parseTimingSeconds(r.durationSec);
+    if (!d.ok) return { ok: false, error: MECH_MESSAGES.duration, field: 'durationSec' };
+    out.durationSec = d.value;
+  }
+  if (has('value') || (!has('delaySec') && !has('durationSec'))) {
+    const v = parseCueValue(r.value);
+    if (!v.ok) return { ok: false, error: v.error, field: 'value' };
+    out.value = v.value;
+  }
+  return out;
 }
 
 // ─────────────────────────────────────────────

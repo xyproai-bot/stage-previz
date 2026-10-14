@@ -2,10 +2,12 @@
 //   名稱 · 方向字 · 現在的值 · 來源（這個 cue 設定 / 沿用「…」/ 預設位置）
 //   常用位置（點一下就存）、滑桿（拖的時候 3D 邊拖邊看、放手才存；離常用位置很近會吸過去，按住 Alt 不吸）、
 //   數字欄位（Enter 或點別的地方就存）、回到沿用上一個 cue；來不及到位 / 超出行程的提醒
+//   v2：這個 cue 自己設的「延遲 N 秒、走 N 秒」（空白 = 跟著 cue；只有這個 cue 自己設了位置才有）
 import { useEffect, useRef, useState } from 'react';
-import { CornerDownRight, Gauge, Move3d, MoveHorizontal, MoveVertical, RotateCcw, RotateCw, TriangleAlert } from 'lucide-react';
+import { CornerDownRight, Gauge, Move3d, MoveHorizontal, MoveVertical, RotateCcw, RotateCw, TimerReset, TriangleAlert } from 'lucide-react';
 import Icon from '../Icon';
-import { directionWord, presetAt, snapToPreset, unitOf, valueDecimals, type Mechanism, type MechVec3 } from '../../lib/mechanisms/model';
+import { directionWord, parseTimingSeconds, presetAt, snapToPreset, unitOf, valueDecimals, type Mechanism, type MechanismTiming, type MechVec3 } from '../../lib/mechanisms/model';
+import { sheetTime } from '../../lib/mechanisms/cueSheet';
 import type { Resolved } from '../../lib/mechanisms/track';
 import { formatMechValue, formatSeconds, type MechCheck } from '../../lib/mechanisms/motion';
 import { formatFieldNumber, parseNumberInput } from '../../lib/numberField';
@@ -28,10 +30,19 @@ interface Props {
   onPreview: (value: number | null) => void;
   onClear: () => void;
   onFix: (seconds: number) => void;
+  /** v2：這個 cue 自己設的時間（沒設 = null）；showTiming = 這個 cue 自己設了位置、不是第一個 cue */
+  timing?: MechanismTiming | null;
+  showTiming?: boolean;
+  /** 跟著 cue 時走幾秒（欄位空白時的提示） */
+  cueSpan?: number | null;
+  /** 「Cue 4「間奏」」（被接手的提醒） */
+  cueLabel?: (cueId: string) => string;
+  onTiming?: (patch: { delaySec?: number | null; durationSec?: number | null }) => void;
 }
 
 export default function MechanismCueRow({
   mech, resolved, editingDefault, cueName, check, cueFix, front, focused, disabled, onFocus, onCommit, onPreview, onClear, onFix,
+  timing = null, showTiming = false, cueSpan = null, cueLabel = (id) => cueName(id), onTiming,
 }: Props) {
   const unit = unitOf(mech.kind);
   const dec = valueDecimals(mech.kind);
@@ -39,6 +50,8 @@ export default function MechanismCueRow({
   const [drag, setDrag] = useState<number | null>(null);   // 拖滑桿 / 按方向鍵中的值（還沒存）
   const [draft, setDraft] = useState<string | null>(null); // 數字欄位打到一半
   const [fieldMsg, setFieldMsg] = useState<string | null>(null);
+  const [delayDraft, setDelayDraft] = useState<string | null>(null);
+  const [durDraft, setDurDraft] = useState<string | null>(null);
   const altRef = useRef(false);
   const dragRef = useRef<number | null>(null);
   dragRef.current = drag;
@@ -48,7 +61,19 @@ export default function MechanismCueRow({
   const step = mech.kind === 'rotary' ? 0.5 : 0.01;
 
   // 拖到一半換 cue / 機關被改 → 放掉預覽
-  useEffect(() => { setDrag(null); setDraft(null); }, [mech.id, resolved.fromCueId, editingDefault]);
+  useEffect(() => { setDrag(null); setDraft(null); setDelayDraft(null); setDurDraft(null); }, [mech.id, resolved.fromCueId, editingDefault]);
+
+  // 延遲 / 走幾秒：空白 = 跟著 cue；Enter 或點別的地方就存
+  const commitTimingField = (which: 'delaySec' | 'durationSec', text: string | null) => {
+    if (text === null) return;
+    if (which === 'delaySec') setDelayDraft(null); else setDurDraft(null);
+    const r = parseTimingSeconds(text);
+    if (!r.ok) { setFieldMsg('秒數要是 0 到 3600，已還原'); return; }
+    setFieldMsg(null);
+    const cur = timing?.[which] ?? null;
+    if (r.value === cur) return;
+    onTiming?.({ [which]: r.value });
+  };
 
   const finishDrag = () => {
     const v = dragRef.current;
@@ -93,17 +118,56 @@ export default function MechanismCueRow({
   const fmt = (v: number) => formatMechValue(v, mech.kind);
   const speed = mech.maxSpeed !== null ? fmt(mech.maxSpeed) : '';
 
-  const warnings: { key: string; text: string; fix?: boolean }[] = [];
+  type Action = { label: string; title: string; run: () => void };
+  const warnings: { key: string; text: string; actions?: Action[] }[] = [];
+  const onlyThis = (sec: number): Action => ({
+    label: `只改這個機關（走 ${formatSeconds(sec)} 秒）`,
+    title: `只讓「${mech.name}」在這個 cue 走 ${formatSeconds(sec)} 秒；轉場和其他物件不變`,
+    run: () => onTiming?.({ durationSec: sec }),
+  });
   if (check && !editingDefault) {
-    if (check.status === 'tooFast' && check.reason === 'gap') {
-      warnings.push({ key: 'gap', text: `跟上一個 cue 只隔 ${formatSeconds(check.gap ?? 0)} 秒，機器需要 ${formatSeconds(check.need ?? 0)} 秒：把這個 cue 的影片時間往後挪，或減少行程` });
-    } else if (check.status === 'tooFast') {
+    const verb = mech.kind === 'rotary' ? '轉' : '走';
+    if (check.status === 'tooFast' && check.explicitDuration) {
       warnings.push({
-        key: 'fast', fix: true,
-        text: `轉場 ${formatSeconds(check.available ?? 0)} 秒太快：這段要${mech.kind === 'rotary' ? '轉' : '走'} ${fmt(check.distance)}（最高 ${speed}/秒），需要 ${formatSeconds(check.need ?? 0)} 秒`,
+        key: 'fast',
+        text: `走 ${formatSeconds(check.available ?? 0)} 秒太快：這段要${verb} ${fmt(check.distance)}（最高 ${speed}/秒），需要 ${formatSeconds(check.need ?? 0)} 秒`,
+        actions: check.durationFix !== null && onTiming ? [{
+          label: `照機器速度（走 ${formatSeconds(check.durationFix)} 秒）`,
+          title: `只改「${mech.name}」：在這個 cue 走 ${formatSeconds(check.durationFix)} 秒（轉場和其他物件不變）`,
+          run: () => onTiming({ durationSec: check.durationFix }),
+        }] : [],
+      });
+    } else if (check.status === 'tooFast' && check.reason === 'gap') {
+      warnings.push({
+        key: 'gap',
+        text: `跟上一個 cue 只隔 ${formatSeconds(check.gap ?? 0)} 秒，機器需要 ${formatSeconds(check.need ?? 0)} 秒：把這個 cue 的影片時間往後挪，或減少行程`,
+        actions: check.durationFix !== null && onTiming && showTiming ? [onlyThis(check.durationFix)] : [],
+      });
+    } else if (check.status === 'tooFast') {
+      const actions: Action[] = [];
+      if (cueFix !== null) {
+        actions.push({
+          label: `照機器速度（${formatSeconds(cueFix)} 秒）`,
+          title: `把這個 cue 的轉場改成 ${formatSeconds(cueFix)} 秒；這個 cue 的其他物件也會用 ${formatSeconds(cueFix)} 秒移動`,
+          run: () => onFix(cueFix),
+        });
+      }
+      if (check.durationFix !== null && onTiming && showTiming) actions.push(onlyThis(check.durationFix));
+      warnings.push({
+        key: 'fast', actions,
+        text: `轉場 ${formatSeconds(check.available ?? 0)} 秒太快：這段要${verb} ${fmt(check.distance)}（最高 ${speed}/秒），需要 ${formatSeconds(check.need ?? 0)} 秒`,
       });
     } else if (check.lateBy !== null) {
       warnings.push({ key: 'late', text: `上一段還沒走完，會晚 ${formatSeconds(check.lateBy)} 秒到位` });
+    }
+    if (check.cut) {
+      const who = `${cueLabel(check.cut.byCueId)} ${sheetTime(check.cut.at)}`;
+      warnings.push({
+        key: 'cut',
+        text: check.cut.started
+          ? `還沒走完，${who} 就接手了：只走到 ${fmt(check.cut.reached)}`
+          : `還沒開始動，${who} 就接手了`,
+      });
     }
   }
   if (!editingDefault && resolved.clamped) {
@@ -192,19 +256,75 @@ export default function MechanismCueRow({
       </div>
       {fieldMsg && <div className="field-error small" role="alert">{fieldMsg}</div>}
 
+      {showTiming && !editingDefault && (
+        <div className="mech-row__timing">
+          <label className="mech-row__tfield">
+            <span className="mech-row__tlabel">延遲</span>
+            <span className="num-field">
+              <input
+                type="text"
+                inputMode="decimal"
+                value={delayDraft ?? (timing?.delaySec != null ? formatSeconds(timing.delaySec) : '')}
+                placeholder="0"
+                disabled={disabled}
+                aria-label={`「${mech.name}」延遲幾秒開始動`}
+                onChange={(e) => setDelayDraft(e.target.value)}
+                onBlur={() => commitTimingField('delaySec', delayDraft)}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') setDelayDraft(null); }}
+              />
+              <span className="num-field__unit" aria-hidden="true">秒</span>
+            </span>
+          </label>
+          <label className="mech-row__tfield">
+            <span className="mech-row__tlabel">走</span>
+            <span className="num-field">
+              <input
+                type="text"
+                inputMode="decimal"
+                value={durDraft ?? (timing?.durationSec != null ? formatSeconds(timing.durationSec) : '')}
+                placeholder={cueSpan !== null ? formatSeconds(cueSpan) : ''}
+                disabled={disabled}
+                aria-label={`「${mech.name}」走幾秒`}
+                onChange={(e) => setDurDraft(e.target.value)}
+                onBlur={() => commitTimingField('durationSec', durDraft)}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') setDurDraft(null); }}
+              />
+              <span className="num-field__unit" aria-hidden="true">秒</span>
+            </span>
+          </label>
+          <button
+            type="button"
+            className="mech-icon-btn"
+            disabled={disabled || (timing?.delaySec == null && timing?.durationSec == null)}
+            onClick={() => onTiming?.({ delaySec: null, durationSec: null })}
+            title="延遲和走幾秒改回跟著 cue"
+            aria-label="延遲和走幾秒改回跟著 cue"
+          ><Icon icon={TimerReset} /></button>
+          {check && check.available !== null && (
+            <small className="muted mech-row__tsum">
+              {check.startAt !== null
+                ? `${sheetTime(check.startAt)} 開始動，${sheetTime(check.startAt + check.available)} 到位`
+                : `GO 後 ${formatSeconds(check.delay)} 秒開始動，走 ${formatSeconds(check.available)} 秒`}
+              {!check.explicitDuration && '（走幾秒跟著轉場）'}
+            </small>
+          )}
+        </div>
+      )}
+
       {warnings.map(w => (
         <div key={w.key} className="mech-warn" role="status">
           <Icon icon={TriangleAlert} size="sm" className="mech-warn__icon" />
           <span>{w.text}</span>
-          {w.fix && cueFix !== null && (
+          {w.actions?.map(a => (
             <button
+              key={a.label}
               type="button"
               className="btn btn--ghost btn--sm mech-warn__fix"
               disabled={disabled}
-              title={`把這個 cue 的轉場改成 ${formatSeconds(cueFix)} 秒；這個 cue 的其他物件也會用 ${formatSeconds(cueFix)} 秒移動`}
-              onClick={() => onFix(cueFix)}
-            ><Icon icon={Gauge} /> 照機器速度（{formatSeconds(cueFix)} 秒）</button>
-          )}
+              title={a.title}
+              onClick={a.run}
+            ><Icon icon={Gauge} /> {a.label}</button>
+          ))}
         </div>
       ))}
     </li>

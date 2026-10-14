@@ -164,6 +164,8 @@ test('小工具：資料庫一列 ↔ API、物件衝突', () => {
 function apiEnv() {
   const db = freshDb(22);
   apply0023(db);
+  // 0023 之後的也跑（0027 = 每個 cue 的延遲 / 走幾秒）
+  for (const f of migrationFiles.filter(f => Number(f.slice(0, 4)) > 23)) db.exec(readFileSync(join(MIGRATIONS, f), 'utf8'));
   seedProject(db, 'p1');
   seedObject(db, 'lift', 'p1', 'mechanism', 0, '升降台');
   seedObject(db, 'led', 'p1', 'led_panel', 1, 'LED');
@@ -232,7 +234,7 @@ test('API：每個 cue 的位置（夾進行程、回到沿用、算改過）、
   db.prepare(`UPDATE mechanisms SET edited_at = NULL WHERE id = ?`).run(lift.id);
   ctx.mechanism = { id: lift.id, kind: 'linear', travel_min: 0, travel_max: 3.5 };
   const put = await putCuePosition(req({ value: 9 }), env, ctx, 'c2');
-  assert.deepEqual(put.body, { ok: true, value: 3.5, clamped: true });
+  assert.deepEqual(put.body, { ok: true, value: 3.5, clamped: true, delaySec: null, durationSec: null });
   assert.ok(db.prepare(`SELECT edited_at FROM mechanisms WHERE id = ?`).get(lift.id).edited_at);
   assert.equal((await putCuePosition(req({ value: 'abc' }), env, ctx, 'c2')).body.error, '位置要是數字');
   await putCuePosition(req({ value: 1 }), env, ctx, 'p1c');

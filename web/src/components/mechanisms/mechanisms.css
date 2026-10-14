@@ -215,3 +215,66 @@
   align-items: flex-start;
 }
 .mech-object-hint .ui-icon { margin-top: 2px; flex-shrink: 0; }
+
+/* 每個 cue 的延遲 / 走幾秒（v2） */
+.mech-row__timing { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mech-row__tfield { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-dim); }
+.mech-row__tfield .num-field { width: 72px; }
+.mech-row__tfield input { text-align: right; }
+.mech-row__tlabel { white-space: nowrap; }
+.mech-row__tsum { flex-basis: 100%; font-size: 11px; line-height: 1.4; }
+
+/* 機關時間軸（3D 畫面下面） */
+.mech-tl {
+  flex-shrink: 0;
+  border-top: 1px solid var(--border);
+  background: var(--surface-1);
+  display: flex;
+  flex-direction: column;
+  max-height: 46%;
+  min-height: 120px;
+  position: relative;
+}
+.mech-tl__bar { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 12px; min-width: 0; }
+.mech-tl__title { font-size: 12.5px; white-space: nowrap; }
+.mech-tl__hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mech-tl__clock { font-family: var(--font-mono); font-size: 12px; color: var(--accent); min-width: 48px; text-align: right; }
+.mech-tl__empty { padding: 14px 12px; }
+.mech-tl__body { display: flex; min-height: 0; overflow-y: auto; }
+.mech-tl__labels { flex-shrink: 0; border-right: 1px solid var(--border); }
+.mech-tl__ruler-pad { height: 30px; border-bottom: 1px solid var(--border); padding: 4px 6px; font-size: 10.5px; white-space: nowrap; overflow: hidden; }
+.mech-tl__label {
+  display: block; width: 100%; height: 28px; text-align: left; padding: 0 8px; font-size: 12px; color: var(--text-dim);
+  background: transparent; border: none; border-bottom: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.mech-tl__label.is-focused { color: var(--warn); }
+.mech-tl__scroll { flex: 1; overflow-x: auto; overflow-y: hidden; min-width: 0; }
+.mech-tl__content { position: relative; }
+.mech-tl__ruler { position: relative; height: 30px; border-bottom: 1px solid var(--border); cursor: col-resize; user-select: none; touch-action: none; }
+.mech-tl__tick { position: absolute; top: 0; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); transform: translateX(-2px); border-left: 1px solid var(--border); padding-left: 3px; height: 13px; line-height: 13px; }
+.mech-tl__go { position: absolute; bottom: 0; height: 5px; background: rgba(255, 255, 255, 0.12); border-radius: 2px; }
+.mech-tl__cue {
+  position: absolute; top: 14px; transform: translateX(-50%); font-size: 10px; font-weight: 700; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 3px; padding: 0 4px; line-height: 14px;
+}
+.mech-tl__cue.is-selected { border-color: var(--accent); color: var(--accent); }
+.mech-tl__row { position: relative; height: 28px; border-bottom: 1px solid var(--border); }
+.mech-tl__row.is-focused { background: rgba(255, 170, 68, 0.05); }
+.mech-tl__gridline { position: absolute; top: 0; bottom: 0; border-left: 1px dashed rgba(255, 255, 255, 0.1); }
+.mech-tl__move {
+  position: absolute; top: 5px; height: 18px; padding: 0; border-radius: 4px; cursor: grab; touch-action: none;
+  background: rgba(16, 199, 138, 0.55); border: 1px solid var(--accent); overflow: hidden;
+}
+.mech-tl__move:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.mech-tl__move.is-dragging { cursor: grabbing; }
+.mech-tl__move.is-selected { box-shadow: 0 0 0 2px var(--text); }
+.mech-tl__move.is-fast { background: rgba(255, 69, 58, 0.6); border-color: var(--danger); }
+.mech-tl__movelabel { position: absolute; left: 5px; top: 0; font-size: 10px; line-height: 16px; color: #fff; pointer-events: none; }
+.mech-tl__handle { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: ew-resize; background: rgba(255, 255, 255, 0.25); }
+.mech-tl__cutrest { position: absolute; top: 0; bottom: 0; right: 0; background: var(--surface-1); border-left: 2px dashed var(--warn); opacity: 0.85; pointer-events: none; }
+.mech-tl__late {
+  position: absolute; top: 8px; height: 12px; pointer-events: none;
+  background: repeating-linear-gradient(135deg, rgba(255, 69, 58, 0.55) 0 4px, transparent 4px 8px);
+}
+.mech-tl__head { position: absolute; top: 0; bottom: 0; left: 8px; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
+.mech-tl__drag { position: absolute; right: 10px; bottom: 6px; background: var(--surface-2); border-radius: 4px; padding: 2px 8px; }

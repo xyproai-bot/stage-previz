@@ -116,12 +116,19 @@ export function parseMechanism(raw: unknown): Mechanism {
   };
 }
 
+/** 延遲 / 走幾秒：舊後台沒有這兩欄 → null（跟著 cue） */
+const secOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : null);
+
 export function parsePositions(raw: unknown): CueMechanismPosition[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map(p => p as Partial<CueMechanismPosition>)
     .filter(p => p && typeof p.cueId === 'string' && typeof p.mechanismId === 'string' && typeof p.value === 'number' && Number.isFinite(p.value))
-    .map(p => ({ cueId: p.cueId!, mechanismId: p.mechanismId!, value: p.value!, updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : '' }));
+    .map(p => ({
+      cueId: p.cueId!, mechanismId: p.mechanismId!, value: p.value!,
+      delaySec: secOrNull(p.delaySec), durationSec: secOrNull(p.durationSec),
+      updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : '',
+    }));
 }
 
 export const parseMechanisms = (raw: unknown): Mechanism[] => (Array.isArray(raw) ? raw.map(parseMechanism) : []);
@@ -172,6 +179,21 @@ export async function setCuePosition(projectId: string, songId: string, cueId: s
     { method: 'PUT', body: JSON.stringify({ value }) },
   );
   return { value: finite(d.value, value), clamped: !!d.clamped };
+}
+
+/**
+ * 存這個 cue 這個機關的延遲 / 走幾秒（null = 跟著 cue；沒放的欄位不改）。
+ * 這個 cue 還沒有自己的位置 → 一定要一起給 value（沿用來的值），不然後台 400
+ */
+export async function setCueTiming(
+  projectId: string, songId: string, cueId: string, mechId: string,
+  timing: { delaySec?: number | null; durationSec?: number | null; value?: number },
+): Promise<{ value: number; delaySec: number | null; durationSec: number | null }> {
+  const d = await call<{ value: number; delaySec?: unknown; durationSec?: unknown }>(
+    `${base(projectId)}/songs/${enc(songId)}/cues/${enc(cueId)}/mechanisms/${enc(mechId)}`,
+    { method: 'PUT', body: JSON.stringify(timing) },
+  );
+  return { value: finite(d.value, timing.value ?? 0), delaySec: secOrNull(d.delaySec), durationSec: secOrNull(d.durationSec) };
 }
 
 /** 回到沿用上一個 cue */

@@ -21,7 +21,7 @@ import Icon from '../components/Icon';
 import {
   Check, ChevronDown, CircleHelp, Clapperboard, ClipboardList, Copy, Download, Ellipsis, ExternalLink, Eye, FolderOpen, Globe,
   Image, Info, Laptop, Lightbulb, Link, Menu, Monitor, Palette, Puzzle, Radio, RadioTower, Rocket, Scan, Search, SearchX, Square,
-  SquareCheck, TriangleAlert, Video, X,
+  Play, SquareCheck, TimerReset, TriangleAlert, Video, X,
 } from 'lucide-react';
 import './Help.css';
 
@@ -84,6 +84,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
           { id: A.prodMechSetup, label: '設定機關' },
           { id: A.prodMechCue, label: '每個 cue 的機關位置' },
           { id: A.prodMechSpeed, label: '來不及到位、照機器速度' },
+          { id: A.prodMechTiming, label: '延遲、走幾秒、機關時間軸' },
           { id: A.prodMechSheet, label: '機關總表' },
           { id: A.prodMechConvert, label: '把現有 cue 的位置轉成機關位置' },
         ],
@@ -1275,13 +1276,32 @@ function ProducerChapter() {
           </ul>
         </Section>
 
+        <Section id={A.prodMechTiming} level={3} title="延遲、走幾秒、機關時間軸">
+          <p>機器不一定跟著 cue 一起動。例如 cue 叫 GO 之後過 2 秒升降台才開始升、升 8 秒：每個 cue 的每個機關可以自己設時間。</p>
+          <ol className="help-steps">
+            <li>選 cue，在那個機關那一行填「<Ui>延遲</Ui>」（GO 之後幾秒開始動）和「<Ui>走</Ui>」（走幾秒，0 = 直接切換）。</li>
+            <li>空白 = 跟著 cue：延遲 0、走的秒數 = 這個 cue 的轉場。旁邊的「<Icon icon={TimerReset} />」改回跟著 cue。</li>
+            <li>只有這個 cue 自己設了位置的機關才有這兩格（沿用的不會動，不用設）；時間不會沿用到下一個 cue。</li>
+          </ol>
+          <F k="mechTimeline" />
+          <p><strong>機關時間軸</strong>：開「機關」分頁時排在 3D 畫面下面（分頁上面可以勾掉「<Ui>顯示機關時間軸</Ui>」）。</p>
+          <ul className="help-list">
+            <li>每個機關一行，橫的是影片時間，上面的數字是 cue（只排有設「對應影片時間」的 cue）。</li>
+            <li>拖整條色塊 = 改延遲；拖色塊右邊 = 改走幾秒；按住 Alt 不吸到 0.1 秒。點色塊會選到那個 cue 和機關。</li>
+            <li><strong>紅色</strong> = 照最高速度來不及，後面的斜線是實際會走到哪。提醒裡的「<Ui>照機器速度（走 N 秒）</Ui>」只改這個機關，轉場和其他物件不變。</li>
+            <li>虛線 = 還沒走完，下一個 cue 就叫這個機關往別的地方走（「<Ui>還沒走完，Cue N … 就接手了</Ui>」）。</li>
+            <li>點時間尺或按「<Icon icon={Play} />」：3D 畫面的機關跟著時間軸動（照機器速度，物件停在目前選的 cue）；「<Icon icon={Square} />」停止。</li>
+          </ul>
+          <p>導演頁、工作站、分享連結播放時都照這些時間動；機關總表多了「延遲」「開始時間」「走幾秒」三欄。</p>
+        </Section>
+
         <Section id={A.prodMechSheet} level={3} title="機關總表（給自動化控台操作員）">
           <ol className="help-steps">
             <li>機關分頁上面按「<Ui>匯出機關總表</Ui>」。</li>
             <li>下載一個 CSV 檔（<code>機關總表-專案名稱-日期.csv</code>），用 Excel 打開。</li>
           </ol>
           <ul className="help-list">
-            <li>整個專案每首歌、每個 cue、每個機關一行：GO 時間、到位時間、轉場、控台編號、起點、目標、常用位置、行程、可用秒數、需要秒數、速度、檢查（OK、太快…）。</li>
+            <li>整個專案每首歌、每個 cue、每個機關一行：GO 時間、到位時間、轉場、控台編號、起點、目標、常用位置、行程、延遲、開始時間、走幾秒、需要秒數、速度、檢查（OK、太快、被接手…）。</li>
             <li>可以在 Excel 篩選、排序、加自己的欄位，也可以印成 PDF。下面有每個機關的說明。</li>
             <li>只列正式的 cue。需要秒數用等速計算，沒有算加減速，實際會再久一點。</li>
           </ul>

@@ -5,6 +5,7 @@ import type { Song, Cue, CueState, StageObject, StageObjectCategory, MaterialPro
 import { useAuth } from '../lib/auth';
 import StageScene from '../components/StageScene';
 import MechanismTab from '../components/mechanisms/MechanismTab';
+import MechanismTimeline from '../components/mechanisms/MechanismTimeline';
 import MechanismObjectHint, { MechanismHintProvider } from '../components/mechanisms/MechanismObjectHint';
 import { useEditorMechanisms } from '../lib/mechanisms/useMechanisms';
 import { withMechanismSnapshot } from '../lib/mechanisms/mechanismApi';
@@ -1181,6 +1182,10 @@ export default function ProjectEditor() {
               ledCanvas={view.ledCanvas}
               onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
             />
+          )}
+          {/* 機關時間軸：開「機關」分頁時排在 3D 畫面下面（右邊欄太窄） */}
+          {rightTab === 'mechanisms' && mech.timelineOpen && mech.mechanisms.length > 0 && selectedSongId && stageObjects.length > 0 && (
+            <MechanismTimeline mech={mech} cues={cues} selectedCueId={selectedCueId} onSelectCue={setSelectedCueId} onClose={() => mech.setTimelineOpen(false)} />
           )}
         </section>
 

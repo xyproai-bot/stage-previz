@@ -248,6 +248,11 @@ export const FIGS = {
     alt: '3D 畫面：升降台升到全開，前緣 LED 和主唱一起上去',
     caption: '升降台在這個 cue 升到「全開」：帶動的物件（前緣 LED、主唱）一起上去',
   }),
+  mechTimeline: fig({
+    src: '/help/producer/mech-timeline.png', w: 880, h: 120, width: 880,
+    alt: '機關時間軸：中央升降台在 Cue 2 延遲 5 秒、走 6 秒，紅色代表照最高速度來不及，後面的斜線是實際會走到哪',
+    caption: '機關時間軸：上面的數字是 cue，色塊是每一段移動；紅色 = 照最高速度來不及（斜線 = 實際會走到哪）',
+  }),
   ledMenu: fig({
     src: '/help/producer/led-menu.webp', w: 1000, h: 390, width: 600,
     alt: '3D 工具列的更多選單：LED 對位圖、LED 顯示測試圖、設定畫布大小',

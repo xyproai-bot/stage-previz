@@ -7,7 +7,7 @@
 // 行程改窄了：存的值不改，算出來的值夾在行程內（clamped = true，畫面上會說）。
 // 管理頁、導演頁、工作站、分享頁、機關總表都用這一個函式 → 大家看到的一樣。
 
-import type { CueMechanismPosition, Mechanism, MechanismValues } from './model';
+import type { CueMechanismPosition, Mechanism, MechanismTimings, MechanismValues } from './model';
 
 export type ResolvedSource = 'own' | 'inherited' | 'default';
 
@@ -48,6 +48,19 @@ export function ownValuesByCue(positions: Pick<CueMechanismPosition, 'cueId' | '
     let row = out.get(p.cueId);
     if (!row) { row = {}; out.set(p.cueId, row); }
     row[p.mechanismId] = p.value;
+  }
+  return out;
+}
+
+/** API 回的位置 → cueId → { mechanismId: 延遲 / 走幾秒 }（只放有設時間的；時間不沿用） */
+export function ownTimingsByCue(positions: Pick<CueMechanismPosition, 'cueId' | 'mechanismId' | 'delaySec' | 'durationSec'>[]): Map<string, MechanismTimings> {
+  const out = new Map<string, MechanismTimings>();
+  for (const p of positions) {
+    const delaySec = p.delaySec ?? null, durationSec = p.durationSec ?? null;
+    if (delaySec === null && durationSec === null) continue;
+    let row = out.get(p.cueId);
+    if (!row) { row = {}; out.set(p.cueId, row); }
+    row[p.mechanismId] = { delaySec, durationSec };
   }
   return out;
 }
