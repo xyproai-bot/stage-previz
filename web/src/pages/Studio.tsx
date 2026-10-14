@@ -4,6 +4,7 @@ import * as api from '../lib/api';
 import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import type { ProjectMember, ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
+import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
 import StageScene from '../components/StageScene';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
@@ -81,7 +82,10 @@ export default function Studio() {
 
 function StudioInner({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
+  // 製作用「動畫師畫面」預覽時：user / 角色換成那個動畫師，寫入的按鈕按不下去（lib/viewAsContext.tsx）
+  const user = useViewAsUser();
+  const va = useViewAs();
   // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，動畫師這邊只看）
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
@@ -100,14 +104,16 @@ function StudioInner({ projectId }: { projectId: string }) {
   const [songsLoading, setSongsLoading] = useState(true);
   const [songsError, setSongsError] = useState<string | null>(null);
 
-  const projectRole: ProjectRole | null = myRole === undefined ? (user?.role ?? null) : myRole;
+  const projectRole: ProjectRole | null = va.projectRole(myRole === undefined ? (user?.role ?? null) : myRole);
   // 動畫師只看：3D 工具列只剩重置攝影機、燈光照專案預設（不能自己調）
   const isAnimatorViewer = projectRole === 'animator';
 
+  // 預覽某個動畫師 → 先看「我的」（指派給他的歌），也不記到這台電腦
   const [songFilter, setSongFilter] = useState<SongFilter>(() => {
+    if (va.active) return 'mine';
     try { return (localStorage.getItem('sp_studio_filter') as SongFilter) || 'mine'; } catch { return 'mine'; }
   });
-  useEffect(() => { try { localStorage.setItem('sp_studio_filter', songFilter); } catch {} }, [songFilter]);
+  useEffect(() => { if (va.active) return; try { localStorage.setItem('sp_studio_filter', songFilter); } catch {} }, [songFilter, va.active]);
   const [songSearch, setSongSearch] = useState('');
   // 手機上的歌單：平常收成一行，點開才是整個清單（點外面或選了歌就收起來）
   const [songsSheetOpen, setSongsSheetOpen] = useState(false);
@@ -630,7 +636,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   // 上傳停住的那一版（傳的分頁關掉了）：每一段都傳上來了 → 有權限的人打開就自動完成；還有段沒傳 → 選同一個檔案接著傳
   const trackedIds = useMemo(() => trackedVideoIds(songJobs), [songJobs]);
   const stalled = useStalledUploads({
-    projectId, songId: goneMessage ? null : selectedSongId, pending: versions.pending, trackedIds, canModify: canModifyPending,
+    // 預覽（只能看）不幫人完成上傳
+    projectId, songId: goneMessage ? null : selectedSongId, pending: versions.pending, trackedIds, canModify: (v) => !va.readOnly && canModifyPending(v),
     onFinished: (video) => {
       if (video) toast.success(`「${video.title || (selectedSong ? songTitle(selectedSong) : '影片')}」上傳完成，變成 ${video.label || '新的一版'}`);
       void reloadVersions();
@@ -1050,7 +1057,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     {canAdd ? (
                       <>
                         <span>交一版影片，導演就能在 LED 上看到（V1、V2… 會自動編號）。</span>
-                        <button type="button" className="btn btn--primary" onClick={() => setAddOpen(true)} style={{ alignSelf: 'flex-start' }}>加影片</button>
+                        <button type="button" className="btn btn--primary" onClick={() => setAddOpen(true)} style={{ alignSelf: 'flex-start' }} {...va.ro()}>加影片</button>
                       </>
                     ) : (
                       <span>負責這首歌的動畫師交了影片之後，這裡會自動出現。</span>
@@ -1342,6 +1349,8 @@ function ReviewTab({
   const canSubmit = actions.some(a => a.to === 'in_review');
   const canPost = canPostComment({ role: projectRole, userId: user.id, song });
   const reviewSentence = lastReviewSentence(song.lastReview);
+  // 預覽模式（製作用其他身分看）：提交 / 撤回、留言照樣出現但不能用
+  const { ro, readOnly } = useViewAs();
 
   // 切歌時清空 note、回到預設的「這一版 / 全部」
   const lastSongIdRef = useRef(song.id);
@@ -1444,6 +1453,7 @@ function ReviewTab({
               className={'btn ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
               onClick={() => handleAction(a.to)}
               disabled={posting}
+              {...ro()}
             >
               {a.label}
             </button>
@@ -1493,9 +1503,11 @@ function ReviewTab({
               value={note}
               onChange={e => setNote(e.target.value)}
               rows={3}
+              readOnly={readOnly}
+              {...ro()}
             />
             <div className="studio-review__compose-actions">
-              <button className="btn btn--ghost" onClick={handlePost} disabled={posting || !note.trim()}>
+              <button className="btn btn--ghost" onClick={handlePost} disabled={posting || !note.trim()} {...ro()}>
                 送出留言
               </button>
             </div>

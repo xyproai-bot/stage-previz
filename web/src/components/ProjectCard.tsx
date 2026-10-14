@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Project, SongStatus, SongStatusCounts } from '../lib/mockData';
 import { formatRelativeTime } from '../lib/serverTime';
 import { Archive, Copy, Download, Ellipsis, Tag, Ticket } from 'lucide-react';
 import Icon from './Icon';
+import { useViewAsMenu, VIEW_AS_MENU_LABEL } from './ViewAsMenu';
+import { editorPath } from '../lib/viewAs';
 import './ProjectCard.css';
 
 const STATUS_LABELS: Record<Project['status'], { label: string; cls: string }> = {
@@ -34,7 +37,7 @@ const SONG_STATUS_LABEL: Record<SongStatus, string> = {
 
 export default function ProjectCard({
   project, showName, onDuplicate, onArchive, onExport, onEditTags,
-  selected, onToggleSelect,
+  selected, onToggleSelect, showViewAs,
 }: {
   project: Project;
   showName?: string | null;
@@ -44,20 +47,62 @@ export default function ProjectCard({
   onEditTags?: (project: Project) => void;
   selected?: boolean;
   onToggleSelect?: (project: Project) => void;
+  /** 選單裡加「用其他身分看」：導演畫面 / 動畫師畫面 / 客戶畫面（管理頁給製作用） */
+  showViewAs?: boolean;
 }) {
   const navigate = useNavigate();
   const status = STATUS_LABELS[project.status];
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  // 選單放在 body 底下（卡片會裁掉超出的部分、滑鼠移上去還會位移），用按鈕的位置定位
+  const listRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
-    function onClick(e: MouseEvent) {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
+    function onClick(e: MouseEvent | TouchEvent) {
+      const t = e.target as Node;
+      if (menuRef.current?.contains(t) || listRef.current?.contains(t)) return;
+      setMenuOpen(false);
     }
+    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setMenuOpen(false); }
+    // 捲動 / 縮放 → 關掉（位置對不上了）；捲的是選單自己就不用
+    function onScroll(e: Event) { if (!listRef.current?.contains(e.target as Node)) setMenuOpen(false); }
+    const onResize = () => setMenuOpen(false);
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('touchstart', onClick);
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('scroll', onScroll, true);
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('touchstart', onClick);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('scroll', onScroll, true);
+      window.removeEventListener('resize', onResize);
+    };
   }, [menuOpen]);
+
+  useLayoutEffect(() => {
+    if (!menuOpen) { setMenuPos(null); return; }
+    const r = triggerRef.current?.getBoundingClientRect();
+    if (!r) return;
+    const width = 220;
+    const left = Math.max(8, Math.min(Math.round(r.left), window.innerWidth - width - 8));
+    const top = Math.round(r.bottom + 4);
+    setMenuPos({ top, left, maxHeight: Math.max(160, window.innerHeight - top - 8) });
+  }, [menuOpen]);
+
+  // 「用其他身分看」：選單打開時才去讀分享連結
+  const animators = useMemo(() => project.members.filter(m => m.role === 'animator'), [project.members]);
+  const viewAsMenu = useViewAsMenu({
+    projectId: project.id,
+    animators,
+    onCreateShare: () => navigate(editorPath(project.id), { state: { openShare: true } }),
+  });
+  const { load: loadViewAs } = viewAsMenu;
+  useEffect(() => { if (menuOpen && showViewAs) loadViewAs(); }, [menuOpen, showViewAs, loadViewAs]);
 
   const visibleMembers = project.members.slice(0, 5);
   const overflow = project.members.length - visibleMembers.length;
@@ -97,16 +142,27 @@ export default function ProjectCard({
           <div className="project-card__thumb-placeholder">16:9</div>
         )}
         <span className={`project-card__status ${status.cls}`}>{status.label}</span>
-        {(onDuplicate || onArchive || onExport) && (
-          <div className="project-card__menu" ref={menuRef} onClick={(e) => e.stopPropagation()}>
+        {(onDuplicate || onArchive || onExport || showViewAs) && (
+          // 鍵盤（Enter / 空白鍵）按選單不要變成「進入專案」
+          <div className={'project-card__menu' + (menuOpen ? ' is-open' : '')} ref={menuRef} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <button
+              ref={triggerRef}
               className="project-card__menu-trigger"
               onClick={() => setMenuOpen(o => !o)}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
               aria-label="更多動作"
               title="更多動作"
             ><Icon icon={Ellipsis} size="md" /></button>
-            {menuOpen && (
-              <div className="project-card__menu-list">
+            {menuOpen && menuPos && createPortal(
+              <div
+                className="project-card__menu-list"
+                ref={listRef}
+                role="menu"
+                style={{ position: 'fixed', top: menuPos.top, left: menuPos.left, maxHeight: menuPos.maxHeight }}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+              >
                 {onDuplicate && (
                   <button
                     className="project-card__menu-item"
@@ -131,7 +187,31 @@ export default function ProjectCard({
                     onClick={() => { setMenuOpen(false); onArchive(project); }}
                   ><Icon icon={Archive} /> 封存</button>
                 )}
-              </div>
+                {showViewAs && (
+                  <>
+                    <div className="project-card__menu-sep" role="separator" />
+                    <div className="project-card__menu-section">{VIEW_AS_MENU_LABEL}</div>
+                    {viewAsMenu.items.map(it => (it.href && !it.disabled ? (
+                      <a
+                        key={it.key}
+                        className="project-card__menu-item"
+                        href={it.href}
+                        target="_blank"
+                        rel="noopener"
+                        onClick={() => setMenuOpen(false)}
+                      >{it.icon && <Icon icon={it.icon} />} {it.label}</a>
+                    ) : (
+                      <button
+                        key={it.key}
+                        className="project-card__menu-item"
+                        disabled={it.disabled}
+                        onClick={() => { setMenuOpen(false); it.onSelect?.(); }}
+                      >{it.icon && <Icon icon={it.icon} />} {it.label}</button>
+                    )))}
+                  </>
+                )}
+              </div>,
+              document.body,
             )}
           </div>
         )}

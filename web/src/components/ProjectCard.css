@@ -106,6 +106,7 @@
   transition: opacity 0.12s;
 }
 .project-card:hover .project-card__menu,
+.project-card__menu.is-open,
 .project-card__menu:focus-within {
   opacity: 1;
 }
@@ -134,11 +135,11 @@
   border-color: var(--accent);
 }
 .project-card__menu-list {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin-top: 4px;
-  min-width: 160px;
+  /* 放在 body 底下、position: fixed（位置由 ProjectCard 算） */
+  z-index: 950;
+  min-width: 200px;
+  max-width: calc(100vw - 16px);
+  overflow-y: auto;
   background: var(--surface-1);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
@@ -165,6 +166,16 @@
 .project-card__menu-item--danger:hover {
   background: rgba(255, 84, 112, 0.15);
   color: var(--danger);
+}
+.project-card__menu-item { text-decoration: none; white-space: nowrap; }
+.project-card__menu-item:hover { text-decoration: none; }
+.project-card__menu-item:disabled { opacity: 0.45; cursor: default; }
+.project-card__menu-item:disabled:hover { background: none; }
+.project-card__menu-sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.project-card__menu-section { padding: 4px 10px 2px; font-size: 11.5px; color: var(--text-muted); }
+/* 觸控螢幕（手機、iPad）沒有「滑鼠移上去」→ 選單按鈕一直看得到 */
+@media (hover: none) {
+  .project-card__menu { opacity: 1; }
 }
 
 .project-card__body {

@@ -21,6 +21,7 @@ import { roleLabel } from '../lib/roleLabels';
 import { friendlyError } from '../lib/songReview';
 import { toast } from '../lib/toast';
 import { confirmDialog } from './dialogs';
+import { useViewAs } from '../lib/viewAsContext';
 import './CommentThreadList.css';
 
 interface Props {
@@ -53,6 +54,8 @@ export default function CommentThreadList({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
   const replyRef = useRef<HTMLTextAreaElement>(null);
+  // 預覽模式（製作用其他身分看）：回覆、已改好、修改、刪除照樣出現但按不下去
+  const { ro } = useViewAs();
 
   // 切歌：收掉打到一半的回覆 / 修改
   useEffect(() => { setReplyTo(null); setReplyText(''); setEditingId(null); }, [song.id]);
@@ -157,21 +160,21 @@ export default function CommentThreadList({
         {!editing && user && (
           <div className="rvc-actions">
             {canPost && (
-              <button type="button" className="rvc-act" onClick={() => { setReplyTo(thread.root.id === replyTo ? null : thread.root.id); setReplyText(isReply ? `@${c.author} ` : ''); }}>
+              <button type="button" className="rvc-act" onClick={() => { setReplyTo(thread.root.id === replyTo ? null : thread.root.id); setReplyText(isReply ? `@${c.author} ` : ''); }} {...ro()}>
                 <Icon icon={CornerDownRight} size="xs" /> 回覆
               </button>
             )}
             {canToggle && (
               c.status === 'resolved'
-                ? <button type="button" className="rvc-act" onClick={() => toggleResolved(c)} disabled={busy} title="還沒改好：重新打開"><Icon icon={RotateCcw} size="xs" /> 重新打開</button>
-                : <button type="button" className="rvc-act rvc-act--fix" onClick={() => toggleResolved(c)} disabled={busy} title={latest ? `標成在 ${latest.label} 改好了` : '標成改好了'}>
+                ? <button type="button" className="rvc-act" onClick={() => toggleResolved(c)} disabled={busy} {...ro('還沒改好：重新打開')}><Icon icon={RotateCcw} size="xs" /> 重新打開</button>
+                : <button type="button" className="rvc-act rvc-act--fix" onClick={() => toggleResolved(c)} disabled={busy} {...ro(latest ? `標成在 ${latest.label} 改好了` : '標成改好了')}>
                     <Icon icon={Check} size="xs" /> 已改好{latest ? `（${latest.label}）` : ''}
                   </button>
             )}
             {mine && (
               <>
-                <button type="button" className="rvc-act" onClick={() => { setEditingId(c.id); setEditText(c.text); }} title="修改" aria-label="修改"><Icon icon={Pencil} size="xs" /></button>
-                <button type="button" className="rvc-act rvc-act--danger" onClick={() => remove(c, isReply ? 0 : thread.replies.length)} title="刪除" aria-label="刪除"><Icon icon={Trash2} size="xs" /></button>
+                <button type="button" className="rvc-act" onClick={() => { setEditingId(c.id); setEditText(c.text); }} aria-label="修改" {...ro('修改')}><Icon icon={Pencil} size="xs" /></button>
+                <button type="button" className="rvc-act rvc-act--danger" onClick={() => remove(c, isReply ? 0 : thread.replies.length)} aria-label="刪除" {...ro('刪除')}><Icon icon={Trash2} size="xs" /></button>
               </>
             )}
           </div>

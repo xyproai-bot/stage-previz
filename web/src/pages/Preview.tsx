@@ -4,6 +4,7 @@ import * as api from '../lib/api';
 import type { Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import type { ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
+import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
 import StageScene from '../components/StageScene';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
@@ -74,7 +75,10 @@ export default function Preview() {
 
 function PreviewInner({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
+  // 製作用「導演畫面」預覽時：user / 角色換成導演，寫入的按鈕按不下去（lib/viewAsContext.tsx）
+  const user = useViewAsUser();
+  const va = useViewAs();
 
   const [projectName, setProjectName] = useState<string>('');
   // 專案名讀不到時不能一直停在「…」，要顯示讀取失敗 + 重試
@@ -110,7 +114,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [target, setTarget] = useState<(DeepLink & { nonce: number }) | null>(null);
 
-  const projectRole: ProjectRole | null = myRole === undefined ? (user?.role ?? null) : myRole;
+  const projectRole: ProjectRole | null = va.projectRole(myRole === undefined ? (user?.role ?? null) : myRole);
 
   // 非同步回來時要拿「現在」的值
   const songsRef = useRef<Song[]>([]);
@@ -590,6 +594,7 @@ function StatusBoard({
   projectRole: ProjectRole | null;
   userId: string | null;
 }) {
+  const { ro } = useViewAs();
   return (
     <div className="status-board">
       {STATUS_COLUMNS.map(col => (
@@ -656,6 +661,7 @@ function StatusBoard({
                             key={a.kind}
                             className={'btn btn--sm ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
                             onClick={() => onChangeStatus(s.id, a.to)}
+                            {...ro()}
                           >{a.label}</button>
                         ))}
                       </div>
@@ -707,6 +713,7 @@ function SongDetail({
   /** 自動更新（留言、機關）要不要開：專案已封存 → false */
   live: boolean;
 }) {
+  const va = useViewAs();
   const actions = songStatusActions({ role: projectRole, userId: user?.id, song, flow: 'director' });
   const actionsHint = actions.length === 0 ? songActionsHint({ role: projectRole, userId: user?.id, song, flow: 'director' }) : null;
   // 校準倍率 + 機關滑桿位移（admin 在管理頁設的，導演這邊只看）
@@ -942,7 +949,8 @@ function SongDetail({
   // 上傳停住的那一版（傳的分頁關掉了）：每一段都傳上來了 → 有權限的人打開就自動完成；還有段沒傳 → 選同一個檔案接著傳
   const trackedIds = useMemo(() => trackedVideoIds(songJobs), [songJobs]);
   const stalled = useStalledUploads({
-    projectId, songId: song.id, pending: versions.pending, trackedIds, canModify: canModifyPending,
+    // 預覽（只能看）不幫人完成上傳
+    projectId, songId: song.id, pending: versions.pending, trackedIds, canModify: (v) => !va.readOnly && canModifyPending(v),
     onFinished: (video) => {
       if (video) toast.success(`「${video.title || songTitle(song)}」上傳完成，變成 ${video.label || '新的一版'}`);
       void reloadVersions();
@@ -975,7 +983,7 @@ function SongDetail({
                 key={a.kind}
                 className={'btn btn--sm ' + (a.primary ? 'btn--primary' : 'btn--ghost')}
                 onClick={() => onChangeStatus(song.id, a.to, viewedReview)}
-                title={(a.to === 'approved' || a.to === 'needs_changes') && viewedReview.label ? `${a.label}（記在 ${viewedReview.label}）` : undefined}
+                {...va.ro((a.to === 'approved' || a.to === 'needs_changes') && viewedReview.label ? `${a.label}（記在 ${viewedReview.label}）` : undefined)}
               >{a.label}{(a.to === 'approved' || a.to === 'needs_changes') && viewedReview.label ? ` ${viewedReview.label}` : ''}</button>
             ))}
           </div>
@@ -1051,12 +1059,12 @@ function SongDetail({
                 projectName={projectName}
                 ledCanvas={view.ledCanvas}
                 onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
-                onAddAnchoredComment={(anchor) => {
+                onAddAnchoredComment={va.guard((anchor) => {
                   // 上層存暫存的 anchor，留言區會接著用
                   pendingAnchorRef.current = anchor;
                   // 觸發留言區「需要 anchor 模式」 — 用 pendingCommentTime 0 + 一個 flag
                   setPendingCommentAnchor(anchor);
-                }}
+                })}
                 ledVideo={videoMode && player.ready ? player.video : null}
                 poseAtFrame={poseAtFrame}
               />
@@ -1069,7 +1077,7 @@ function SongDetail({
                   storageKey="sp_mini_player:preview"
                   comments={comments}
                   onCommentPinClick={handlePinClick}
-                  onAddCommentAtTime={(t) => setPendingCommentTime(t)}
+                  onAddCommentAtTime={va.guard((t: number) => setPendingCommentTime(t))}
                   onRetry={retryVersion}
                   compare={compare}
                 />
@@ -1383,6 +1391,8 @@ function SongComments({
   }, [flashId, visible.length, scope]);
 
   const canPost = canPostComment(who);
+  // 預覽模式（製作用其他身分看）：留言框、送出、批次動作照樣出現但不能用
+  const { ro, readOnly } = useViewAs();
 
   return (
     <div className="song-comments">
@@ -1411,10 +1421,10 @@ function SongComments({
         <div className="song-comments__bulk">
           <span>已選 <strong>{selectedIds.size}</strong> 則</span>
           {resolvableSelected.length > 0 && (
-            <button className="btn btn--sm btn--primary" onClick={bulkMarkResolved}>已改好{latest ? `（${latest.label}）` : ''}</button>
+            <button className="btn btn--sm btn--primary" onClick={bulkMarkResolved} {...ro()}>已改好{latest ? `（${latest.label}）` : ''}</button>
           )}
           {deletableSelected.length > 0 && (
-            <button className="btn btn--sm btn--ghost" onClick={bulkDelete}>
+            <button className="btn btn--sm btn--ghost" onClick={bulkDelete} {...ro()}>
               刪除{deletableSelected.length < selectedIds.size ? `（${deletableSelected.length} 則可刪）` : ''}
             </button>
           )}
@@ -1469,6 +1479,8 @@ function SongComments({
                 : `留言給動畫師${viewed ? `（會記在 ${viewed.label}）` : ''}，例：第 3 個 cue 機關升起來太慢；打 @ 可以提及成員`}
               value={text}
               onChange={handleTextChange}
+              readOnly={readOnly}
+              {...ro()}
               onKeyDown={(e) => {
                 if (!mentionState.open || filteredMembers.length === 0) return;
                 if (e.key === 'ArrowDown') {
@@ -1500,7 +1512,7 @@ function SongComments({
               </div>
             )}
           </div>
-          <button className="btn btn--primary btn--sm" onClick={handlePost} disabled={posting || !text.trim()}>
+          <button className="btn btn--primary btn--sm" onClick={handlePost} disabled={posting || !text.trim()} {...ro()}>
             送出
           </button>
         </div>

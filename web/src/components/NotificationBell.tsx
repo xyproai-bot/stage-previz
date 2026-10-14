@@ -2,6 +2,8 @@
 //   未讀數字；點開看清單（最新的在前，依今天 / 昨天 / 更早分組），點一則 → 到那首歌、那一版、那則留言；「全部標為已讀」
 //   每 25 秒 + 切回分頁時更新（一個請求拿清單和未讀數）；手機上打開是整個畫面高的面板
 // 只有登入的人有（分享連結的訪客沒有）。文字、連結的規則在 lib/notifications.ts。
+// 製作用「其他身分看」（預覽模式）時：鈴鐺照樣在原位，但不讀、不打開 —— 裡面是製作自己的通知，不是導演 / 動畫師的，
+// 混在預覽畫面裡會看錯；點了說一聲。
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -10,6 +12,7 @@ import type { LucideIcon } from 'lucide-react';
 import Icon from './Icon';
 import EmptyState from './EmptyState';
 import { useAuth } from '../lib/auth';
+import { useViewAs } from '../lib/viewAsContext';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { listNotifications, markNotificationsRead, type AppNotification, type NotificationKind } from '../lib/reviewApi';
 import {
@@ -35,7 +38,31 @@ interface Props {
   className?: string;
 }
 
-export default function NotificationBell({ placement = 'down-right', className }: Props) {
+const PREVIEW_BELL_TIP = '預覽時不顯示通知（小鈴鐺裡是你自己的通知，回到編輯再看）';
+
+export default function NotificationBell(props: Props) {
+  const va = useViewAs();
+  if (va.active) {
+    return (
+      <div className={`notif${props.className ? ` ${props.className}` : ''}`}>
+        <button
+          type="button"
+          className="notif__bell notif__bell--preview"
+          onClick={() => toast.info(PREVIEW_BELL_TIP)}
+          title={PREVIEW_BELL_TIP}
+          aria-label={PREVIEW_BELL_TIP}
+          aria-disabled
+          data-viewas-ro=""
+        >
+          <Icon icon={BellOff} size="md" />
+        </button>
+      </div>
+    );
+  }
+  return <NotificationBellInner {...props} />;
+}
+
+function NotificationBellInner({ placement = 'down-right', className }: Props) {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [items, setItems] = useState<AppNotification[]>([]);

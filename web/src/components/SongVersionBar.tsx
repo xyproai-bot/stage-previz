@@ -7,6 +7,7 @@ import { VIDEO_ACCEPT, videoProgressPercent, videoStatusLabel, type SongVideo } 
 import { pendingUploadText, trackedVideoIds, type StalledView } from '../lib/stalledUploads';
 import type { VideoJob } from '../lib/videoJobs';
 import type { VersionItem } from '../lib/songVersions';
+import { useViewAs } from '../lib/viewAsContext';
 import './SongVersionBar.css';
 
 interface Props {
@@ -66,6 +67,8 @@ export default function SongVersionBar({
   canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
   stalled, onResumePending, onRetryFinish,
 }: Props) {
+  // 預覽模式（製作用其他身分看）：交影片、刪除、重試…照樣出現但按不下去
+  const { ro } = useViewAs();
   // 「繼續上傳（選同一個檔案）」：一個藏起來的選檔案，記得是哪一版要接著傳
   const fileRef = useRef<HTMLInputElement>(null);
   const resumeRef = useRef<SongVideo | null>(null);
@@ -117,7 +120,7 @@ export default function SongVersionBar({
               </div>
             )}
             {selected && onDelete && canDelete?.(selected) && (
-              <button type="button" className="vbar__btn" onClick={() => onDelete(selected)} title={`刪掉 ${selected.label}`}>
+              <button type="button" className="vbar__btn" onClick={() => onDelete(selected)} {...ro(`刪掉 ${selected.label}`)}>
                 <Icon icon={Trash2} size="sm" /> 刪除 {selected.label}
               </button>
             )}
@@ -136,7 +139,7 @@ export default function SongVersionBar({
         <span className="vbar__grow" />
         {extra}
         {onAdd && (
-          <button type="button" className="btn btn--sm btn--primary vbar__add" onClick={onAdd}>
+          <button type="button" className="btn btn--sm btn--primary vbar__add" onClick={onAdd} {...ro()}>
             <Icon icon={Plus} size="sm" /> 加影片
           </button>
         )}
@@ -157,12 +160,12 @@ export default function SongVersionBar({
                   <span className="vjob__name" title={v.title || v.originalUrl || ''}>{v.title || v.originalUrl || '影片'}</span>
                   <span className="vjob__grow" />
                   {can && v.status === 'failed' && v.source !== 'upload' && onRetryPending && (
-                    <button type="button" className="vjob__btn" onClick={() => onRetryPending(v)}>
+                    <button type="button" className="vjob__btn" onClick={() => onRetryPending(v)} {...ro()}>
                       <Icon icon={RotateCcw} size="sm" /> 重試
                     </button>
                   )}
                   {can && view?.kind === 'finishFailed' && onRetryFinish && (
-                    <button type="button" className="vjob__btn" onClick={() => onRetryFinish(v)}>
+                    <button type="button" className="vjob__btn" onClick={() => onRetryFinish(v)} {...ro()}>
                       <Icon icon={RotateCcw} size="sm" /> 再試一次
                     </button>
                   )}
@@ -171,13 +174,13 @@ export default function SongVersionBar({
                       type="button"
                       className="vjob__btn"
                       onClick={() => { resumeRef.current = v; fileRef.current?.click(); }}
-                      title="選當初傳的那個檔案，會從停下來的地方接著傳"
+                      {...ro('選當初傳的那個檔案，會從停下來的地方接著傳')}
                     >
                       <Icon icon={Upload} size="sm" /> 繼續上傳（選同一個檔案）
                     </button>
                   )}
                   {can && onRemovePending && !finishing && (
-                    <button type="button" className="vjob__btn" onClick={() => onRemovePending(v)}>
+                    <button type="button" className="vjob__btn" onClick={() => onRemovePending(v)} {...ro()}>
                       {v.status === 'failed' ? '拿掉' : v.status === 'uploading' ? '取消這次上傳' : '取消'}
                     </button>
                   )}

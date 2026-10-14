@@ -357,6 +357,7 @@ function ProjectsTab() {
                   onArchive={handleArchive}
                   onExport={handleExport}
                   onEditTags={handleEditTags}
+                  showViewAs
                   selected={selectedIds.has(p.id)}
                   onToggleSelect={toggleSelect}
                 />

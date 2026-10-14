@@ -91,6 +91,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.prodView, label: '重置攝影機和現場設定' },
       { id: A.prodShare, label: '分享連結和密碼' },
       { id: A.prodInvite, label: '邀請連結' },
+      { id: A.prodViewAs, label: '用導演 / 動畫師的畫面看' },
       { id: A.prodLoginCodes, label: '用戶和登入碼' },
       { id: A.prodSystem, label: '系統狀態（備份、錯誤）' },
       { id: A.prodArchive, label: '封存和還原' },
@@ -959,6 +960,7 @@ function ProducerChapter() {
           <li><strong>複製專案</strong>：開新場次最快。會帶過去：模型（共用同一份，不用重新上傳）、物件、歌曲（代號、狀態、負責動畫師）、cue 和每個 cue 的位置、機關。<strong>不會</strong>帶過去：影片版本、留言、審片紀錄、成員和分享連結，新專案要再邀請導演和動畫師。</li>
           <li><strong>匯出 JSON</strong>：把整個專案存成一個檔案備份。要放回來：專案總覽右上角「<Ui>匯入</Ui>」，或直接把檔案拖進頁面。</li>
           <li><strong>編輯標籤</strong>、<strong>封存</strong>（看 <Go to={A.prodArchive}>封存和還原</Go>）。</li>
+          <li><strong>用其他身分看</strong>：導演、動畫師、客戶打開來看到的畫面（看 <Go to={A.prodViewAs}>用導演 / 動畫師的畫面看</Go>）。</li>
         </ul>
         <p>編輯頁長這樣：</p>
         <F k="editorOverview" />
@@ -1318,6 +1320,27 @@ function ProducerChapter() {
           <li>製作帳號不能用邀請連結，請在「用戶」頁新增、用登入碼登入。</li>
           <li>對方點開之後的樣子：<Go to={A.loginInvite}>用邀請連結進來</Go>。</li>
         </ul>
+      </Section>
+
+      <Section id={A.prodViewAs} title="用導演 / 動畫師的畫面看">
+        <p>想知道導演、動畫師打開來看到什麼：編輯頁上方按「<Ui>用其他身分看</Ui>」（手機在「<Ui>⋯</Ui>」裡；專案總覽的專案卡片「<Ui>⋯</Ui>」也有）。每一種都開新分頁，編輯頁還在原來的分頁。</p>
+        <ul className="help-list">
+          <li><strong>導演畫面</strong>：導演頁的總覽、「<Ui>通過</Ui>」/「<Ui>需修改</Ui>」、留言，跟導演看到的一樣。</li>
+          <li><strong>動畫師「小明」的畫面</strong>：動畫師工作站，「<Ui>我的</Ui>」就是指派給小明的歌。「<Ui>動畫師畫面（還沒指派歌的）</Ui>」是剛加進來、還沒有歌的動畫師看到的樣子。</li>
+          <li><strong>客戶畫面（分享連結）</strong>：打開這個專案最新的分享連結（客戶看到的就是這個）。還沒有分享連結的話，會告訴你先到「<Ui>分享</Ui>」建立一個（看 <Go to={A.prodShare}>分享連結和密碼</Go>）。</li>
+        </ul>
+        <F k="viewAsMenu" />
+        <p>預覽的時候，畫面最上面有一條橘色的「<Ui>預覽：導演看到的畫面（只能看，不會改到資料）</Ui>」：</p>
+        <ul className="help-list">
+          <li><strong>只能看</strong>：按鈕都在原來的位置，但按不下去（滑鼠移上去寫「預覽模式只能看」）。不會改到任何資料，也不會通知任何人。</li>
+          <li>只在你這台電腦的動作照常可以用：播影片、換版本、比較兩版、本地檔案、AE 即時、轉攝影機、下載 LED 對位圖。</li>
+          <li>預覽時小鈴鐺不顯示通知：裡面是你自己（製作）的通知，不是導演 / 動畫師的，回到編輯再看。</li>
+          <li>橘色那條的右邊：「<Ui>換成動畫師</Ui>」/「<Ui>換成導演</Ui>」、換看哪一個動畫師、「<Ui>回到編輯</Ui>」。</li>
+        </ul>
+        <Note title="想從頭到尾真的走一次">
+          預覽只能看。要真的試留言、提交審查、按通過：按「<Ui>邀請</Ui>」邀請一個測試用的人（例：名字寫「測試導演」），把邀請連結貼到瀏覽器的<strong>無痕視窗</strong>打開，就是另一個人登入，不會影響你自己的登入。
+          測試帳號做的事是真的（例如提交審查，專案裡的導演會收到通知），建議先「<Ui>複製專案</Ui>」出一份來試；試完在「<Ui>用戶</Ui>」頁停用這個測試帳號。
+        </Note>
       </Section>
 
       <Section id={A.prodLoginCodes} title="用戶和登入碼">

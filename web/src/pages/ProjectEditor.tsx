@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, MaterialProps, LedProps } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -23,6 +23,7 @@ import InviteDialog from '../components/InviteDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import NotificationBell from '../components/NotificationBell';
 import OverflowMenu, { type OverflowItem } from '../components/OverflowMenu';
+import { useViewAsMenu, VIEW_AS_MENU_LABEL } from '../components/ViewAsMenu';
 import DecisionDialog from '../components/DecisionDialog';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { pushRecentProject } from '../components/CommandPalette';
@@ -103,6 +104,8 @@ export default function ProjectEditor() {
   useEffect(() => { setProjectMembers([]); void refreshMembers(); }, [refreshMembers]);
   useLiveRefresh(refreshMembers, { enabled: !!projectId });
   const animatorMembers = useMemo(() => projectMembers.filter(m => m.role === 'animator'), [projectMembers]);
+  // 「用其他身分看」：導演畫面 / 動畫師畫面（每個動畫師一個）/ 客戶畫面（分享連結），開新分頁、只能看
+  const viewAsMenu = useViewAsMenu({ projectId: projectId || '', animators: animatorMembers, onCreateShare: () => setShareOpen(true) });
   // 指派的人已經不是這個專案的成員（例如複製專案後，成員不會帶過去）→ 拿全部用戶的名字，選單上才寫得出是誰
   const [userNames, setUserNames] = useState<Map<string, string> | null>(null);
   const needUserNames = useMemo(
@@ -179,6 +182,13 @@ export default function ProjectEditor() {
   const [storyboardOpen, setStoryboardOpen] = useState(false);
   useEscapeClose(storyboardOpen, () => setStoryboardOpen(false));
   const [shareOpen, setShareOpen] = useState(false);
+  // 從專案卡片的「客戶畫面」→「建立分享連結」過來 → 一進來就打開分享連結視窗
+  const location = useLocation();
+  useEffect(() => {
+    if (!(location.state as { openShare?: boolean } | null)?.openShare) return;
+    setShareOpen(true);
+    navigate(location.pathname + location.search, { replace: true, state: null });
+  }, [location.state]);  // eslint-disable-line react-hooks/exhaustive-deps
   // 邀請連結（幫這個專案加導演 / 動畫師）
   const [inviteOpen, setInviteOpen] = useState(false);
   const [commentSearchOpen, setCommentSearchOpen] = useState(false);
@@ -952,10 +962,21 @@ export default function ProjectEditor() {
               {a.key === 'drive' && projectMeta?.drive_folder_id && <span className="editor-topbar__dot" title="已設定 Drive 資料夾" />}
             </button>
           ))}
+          <OverflowMenu
+            className="ovf-hide-narrow"
+            label={VIEW_AS_MENU_LABEL}
+            trigger={{ icon: Eye, text: <span className="editor-topbar__label"> {VIEW_AS_MENU_LABEL}</span>, className: 'editor-topbar__activity' }}
+            items={viewAsMenu.items}
+            onOpen={viewAsMenu.load}
+          />
           <NotificationBell />
           <OverflowMenu
             className="ovf-only-narrow"
-            items={topbarActions.map(a => ({ key: a.key, label: a.menuLabel, icon: a.icon, disabled: a.disabled, onSelect: a.onSelect, separatorBefore: a.key === 'share' }))}
+            items={[
+              ...topbarActions.map(a => ({ key: a.key, label: a.menuLabel, icon: a.icon, disabled: a.disabled, onSelect: a.onSelect, separatorBefore: a.key === 'share' })),
+              ...viewAsMenu.items.map((it, i) => (i === 0 ? { ...it, section: VIEW_AS_MENU_LABEL } : it)),
+            ]}
+            onOpen={viewAsMenu.load}
           />
         </div>
       </header>

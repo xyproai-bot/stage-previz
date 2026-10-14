@@ -1,0 +1,79 @@
+/* 預覽模式（製作用導演 / 動畫師的身分看）最上面那一條 + 頁面往下讓 */
+.viewas-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 900;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  min-height: 36px;
+  padding: 4px 12px;
+  background: #3a2a10;
+  border-bottom: 1px solid rgba(255, 170, 68, 0.45);
+  color: #ffd9a3;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.viewas-banner__text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.viewas-banner__text .ui-icon { color: var(--warn); flex-shrink: 0; }
+.viewas-banner__short { display: none; }
+.viewas-banner__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+.viewas-banner__btn,
+.viewas-banner__who {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 170, 68, 0.45);
+  background: rgba(0, 0, 0, 0.25);
+  color: #ffe7c4;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.viewas-banner__who { max-width: 180px; padding-right: 6px; }
+.viewas-banner__who option { color: var(--text); background: var(--surface-1); }
+.viewas-banner__btn:hover,
+.viewas-banner__who:hover { border-color: var(--warn); color: #fff; }
+.viewas-banner__btn:focus-visible,
+.viewas-banner__who:focus-visible { outline: 2px solid var(--warn); outline-offset: 1px; }
+.viewas-banner__btn--primary { background: var(--warn); border-color: var(--warn); color: #1a1205; font-weight: 600; }
+.viewas-banner__btn--primary:hover { background: #ffbb66; color: #1a1205; }
+
+@media (max-width: 640px) {
+  .viewas-banner { padding: 4px 8px; gap: 4px 8px; }
+  .viewas-banner__long { display: none; }
+  .viewas-banner__short { display: inline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .viewas-banner__btn,
+  .viewas-banner__who { height: 30px; padding: 0 8px; }
+  .viewas-banner__who { max-width: 130px; }
+}
+
+/* 頁面（導演頁、工作站都是 position: fixed; inset: 0）往下讓橫幅的高度 */
+html.viewas-on .preview,
+html.viewas-on .studio {
+  top: var(--viewas-h, 36px);
+}
+
+/* 預覽時按不下去的寫入按鈕（照樣看得到真的版面） */
+html.viewas-on [data-viewas-ro] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+html.viewas-on textarea[data-viewas-ro] { opacity: 0.6; }

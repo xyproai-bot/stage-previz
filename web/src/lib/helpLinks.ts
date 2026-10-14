@@ -37,6 +37,7 @@ export const HELP_ANCHORS = {
   prodView: 'prod-view',
   prodShare: 'prod-share',
   prodInvite: 'prod-invite',
+  prodViewAs: 'prod-view-as',
   prodLoginCodes: 'prod-login-codes',
   prodSystem: 'prod-system',
   prodArchive: 'prod-archive',

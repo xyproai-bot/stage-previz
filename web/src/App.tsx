@@ -17,6 +17,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { RequireAuth, useAuth } from './lib/auth';
 import { HomeRedirect, RequireAdmin, RouteLoading } from './lib/roleRouting';
 import MyProjectsPage from './lib/MyProjectsPage';
+import ViewAsPage from './components/ViewAsPage';
 
 // Lazy-load 大頁面（含 StageScene + three.js 的）→ 不必要時不下載
 const Studio  = lazy(() => import('./pages/Studio'));
@@ -55,9 +56,10 @@ export default function App() {
             <Route path="/admin/:tab" element={<RequireAdmin><Admin /></RequireAdmin>} />
             {/* 沒指定專案 → 我的專案清單（只有我被加入的） */}
             <Route path="/studio" element={<RequireAuth><MyProjectsPage kind="studio" /></RequireAuth>} />
-            <Route path="/studio/:projectId" element={<RequireAuth><ErrorBoundary><Studio /></ErrorBoundary></RequireAuth>} />
+            {/* 製作加 ?as=animator / ?as=director → 用那個身分看、只能看（lib/viewAs.ts） */}
+            <Route path="/studio/:projectId" element={<RequireAuth><ViewAsPage><ErrorBoundary><Studio /></ErrorBoundary></ViewAsPage></RequireAuth>} />
             <Route path="/preview" element={<RequireAuth><MyProjectsPage kind="preview" /></RequireAuth>} />
-            <Route path="/preview/:projectId" element={<RequireAuth><ErrorBoundary><Preview /></ErrorBoundary></RequireAuth>} />
+            <Route path="/preview/:projectId" element={<RequireAuth><ViewAsPage><ErrorBoundary><Preview /></ErrorBoundary></ViewAsPage></RequireAuth>} />
             <Route path="/share/:token" element={<ErrorBoundary><Share /></ErrorBoundary>} />
             {/* 好讀分享網址（/s/jinma2026-k7p2），同一個分享頁 */}
             <Route path="/s/:slug" element={<ErrorBoundary><Share /></ErrorBoundary>} />

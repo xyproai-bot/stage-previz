@@ -247,6 +247,15 @@ export const FIGS = {
       { x: 2.8, y: 79.5, w: 94.4, h: 17.5, n: 5 },
     ],
   }),
+  viewAsMenu: fig({
+    src: '/help/producer/view-as-menu.webp', w: 1120, h: 640, width: 560,
+    alt: '編輯頁上方的「用其他身分看」：導演畫面、動畫師畫面、動畫師「小明」的畫面、客戶畫面（分享連結）',
+    caption: '① 編輯頁上方的「用其他身分看」② 導演、動畫師、客戶的畫面（都開新分頁、只能看）',
+    boxes: [
+      { x: 67.79, y: 1.72, w: 21.32, h: 11.25, n: 1 },
+      { x: 44.82, y: 13.13, w: 44.29, h: 68.75, n: 2, dashed: true },
+    ],
+  }),
   inviteForm: fig({
     src: '/help/producer/invite-form.webp', w: 1000, h: 1152, width: 500,
     alt: '邀請連結對話框：邀請誰、角色、有效期限',

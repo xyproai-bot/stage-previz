@@ -6,6 +6,8 @@
 //
 // 鍵盤：Enter / 空白鍵 / ↓ 打開並選第一個；↑↓ 換、Home / End 跳頭尾；Esc 關掉並回到「⋯」；Tab 離開就關。
 // 點外面也會關。選單用 fixed 定位（上方列 overflow: hidden 也不會被切掉），不會超出畫面。
+//
+// 不是「⋯」的下拉選單也可以用（例：編輯頁的「用其他身分看」）：trigger = 按鈕上的圖示 + 字 + class；onOpen = 打開時叫（例：先讀資料）
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { Ellipsis, type LucideIcon } from 'lucide-react';
 import Icon from './Icon';
@@ -28,6 +30,8 @@ export interface OverflowItem {
   separatorBefore?: boolean;
   /** 字後面的小標記（例：Drive 已設定） */
   badge?: ReactNode;
+  /** 這個項目上面的小標題（例：「用其他身分看」）；有給也會畫一條線 */
+  section?: string;
 }
 
 interface Props {
@@ -37,9 +41,13 @@ interface Props {
   /** 選單最上面的小字（例：登入的人的名字） */
   header?: ReactNode;
   className?: string;
+  /** 不用「⋯」：按鈕上的圖示、字、class（例：上方列的「用其他身分看」） */
+  trigger?: { icon?: LucideIcon; text?: ReactNode; className?: string };
+  /** 打開時叫（例：先去讀分享連結） */
+  onOpen?: () => void;
 }
 
-export default function OverflowMenu({ items, label = '更多', header, className }: Props) {
+export default function OverflowMenu({ items, label = '更多', header, className, trigger, onOpen }: Props) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -62,6 +70,12 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
     if (!open) return;
     place();
   }, [open, place]);
+
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
+  useEffect(() => {
+    if (open) onOpenRef.current?.();
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -139,7 +153,7 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
       <button
         ref={btnRef}
         type="button"
-        className={'ovf__btn' + (open ? ' is-open' : '')}
+        className={(trigger ? (trigger.className ?? 'ovf__trigger') : 'ovf__btn') + (open ? ' is-open' : '')}
         onClick={() => setOpen(o => !o)}
         onKeyDown={onButtonKey}
         title={label}
@@ -148,7 +162,9 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
       >
-        <Icon icon={Ellipsis} size="md" />
+        {trigger
+          ? <>{trigger.icon && <Icon icon={trigger.icon} />}{trigger.text}</>
+          : <Icon icon={Ellipsis} size="md" />}
       </button>
       {open && pos && (
         <div
@@ -173,7 +189,8 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
             const cls = 'ovf__item' + (it.danger ? ' is-danger' : '') + (it.active ? ' is-active' : '');
             return (
               <div key={it.key} role="none">
-                {it.separatorBefore && <div className="ovf__sep" role="separator" />}
+                {(it.separatorBefore || it.section) && <div className="ovf__sep" role="separator" />}
+                {it.section && <div className="ovf__section">{it.section}</div>}
                 {it.href && !it.disabled ? (
                   <a
                     role="menuitem"
