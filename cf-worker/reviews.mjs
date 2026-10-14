@@ -23,7 +23,8 @@ export const NOTIFICATION_LIST_MAX = 50;
 const EXCERPT_MAX = 140;
 
 // guest_comment = 分享連結的訪客留言了（0026）
-export const NOTIFICATION_KINDS = ['mention', 'needs_changes', 'new_version', 'assigned', 'approved', 'reply', 'guest_comment'];
+// director_video = 導演貼連結交了一版（通知這首歌的動畫師和製作；kind 欄位沒有限制，不用 migration）
+export const NOTIFICATION_KINDS = ['mention', 'needs_changes', 'new_version', 'assigned', 'approved', 'reply', 'guest_comment', 'director_video'];
 export const REVIEW_STATUSES = ['approved', 'needs_changes'];
 
 const ok = (body, status = 200) => ({ status, body });
@@ -551,12 +552,28 @@ async function notifyDirectorsNewVersion(db, { song, video, members, actor, now 
   })), now);
 }
 
+/** 導演貼連結交的一版好了：通知這首歌的動畫師（有指派的話）和專案的製作（不改歌的狀態、不通知導演） */
+async function notifyDirectorVideo(db, { song, video, members, actor, now }) {
+  const memberIds = new Set(members.map(m => m.user_id));
+  const wants = [];
+  if (song.animator_user_id) wants.push({ userId: song.animator_user_id, kind: 'director_video' });
+  for (const m of members) if (m.role === 'admin') wants.push({ userId: m.user_id, kind: 'director_video' });
+  const recipients = pickRecipients(wants, memberIds, actor?.id ?? null);
+  return insertNotifications(db, recipients.map(r => ({
+    userId: r.userId, kind: 'director_video', projectId: song.project_id, songId: song.id, songName: song.name,
+    videoId: video?.id ?? null, videoVersion: video?.version ?? null,
+    actorUserId: actor?.id ?? null, actorName: actor?.name || '',
+    excerpt: video?.note || video?.title || '',
+  })), now);
+}
+
 /**
  * 新的一版好了（上傳完成 / 貼連結複製完 / Drive 同步複製完都會走到這裡）：
+ *   導演自己貼連結交的 → 不改歌的狀態、不通知導演；通知這首歌的動畫師和製作「導演貼了一版」
  *   歌在「需修改」→ 自動改回「審查中」（動畫師交了新版 = 改好重新提交）
  *   歌在審查中（含剛剛自動改的）/ 已通過 → 通知導演「新版等你審」
  *   待製作 → 不動（動畫師自己按「提交審查」時才通知）
- * @returns {Promise<{autoSubmitted: boolean, notified: number, songId?: string, version?: number}>}
+ * @returns {Promise<{autoSubmitted: boolean, notified: number, byDirector?: boolean, songId?: string, version?: number}>}
  */
 export async function afterVideoReady(db, { videoId, now = new Date() }) {
   const out = { autoSubmitted: false, notified: 0 };
@@ -571,6 +588,18 @@ export async function afterVideoReady(db, { videoId, now = new Date() }) {
     if (!song) return out;
     out.songId = song.id;
     out.version = v.version;
+    // 交的人在這個專案是導演（帳號是全站 admin 的算製作）
+    if (v.created_by) {
+      const members = await projectMembers(db, song.project_id);
+      const creator = members.find(m => m.user_id === v.created_by);
+      if (creator && creator.role === 'director' && creator.global_role !== 'admin') {
+        out.byDirector = true;
+        out.notified = await notifyDirectorVideo(db, {
+          song, video: v, members, actor: { id: v.created_by, name: v.created_by_name || '' }, now,
+        });
+        return out;
+      }
+    }
     let status = song.status;
     if (status === 'needs_changes') {
       const r = await db.prepare(

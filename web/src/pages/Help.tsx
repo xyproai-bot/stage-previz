@@ -151,6 +151,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
     id: A.director, label: '導演', kicker: '導演', icon: Eye, roles: ['director'], children: [
       { id: A.dirBoard, label: '總覽和狀態' },
       { id: A.dirPlay, label: '在 LED 上看某一版' },
+      { id: A.dirAddLink, label: '貼連結加影片' },
       { id: A.dirComment, label: '留言、@ 提及' },
       { id: A.dirAnnotate, label: '畫記、記住視角、區段' },
       { id: A.dirOpen, label: '打開留言（飛到那個視角）' },
@@ -868,7 +869,7 @@ function StartChapter() {
             <tbody>
               <tr><td>製作</td><td>建專案、放 3D 模型、排歌和 cue、設定機關、邀請大家、建分享連結</td><td>登入碼</td></tr>
               <tr><td>動畫師</td><td>交影片、用 AE 即時在 LED 上看自己的動畫、看導演的意見、提交審查</td><td>邀請連結（或登入碼）</td></tr>
-              <tr><td>導演</td><td>看每首歌的影片放在 LED 上的樣子、留言、按「通過」或「需修改」</td><td>邀請連結（或登入碼）</td></tr>
+              <tr><td>導演</td><td>看每首歌的影片放在 LED 上的樣子、留言、按「通過」或「需修改」；有影片連結也可以貼上來加一版</td><td>邀請連結（或登入碼）</td></tr>
               <tr><td>客戶</td><td>看成果：3D 舞台、每首歌最新的一版影片。只能看，不能改</td><td>分享連結，不用帳號</td></tr>
             </tbody>
           </table>
@@ -1113,6 +1114,7 @@ function ProducerChapter() {
         <ul className="help-list">
           <li><strong>指派了</strong>：只有那位動畫師（和製作）可以交影片、提交審查、留言。別的動畫師只能看。</li>
           <li><strong>沒指派</strong>：專案裡的動畫師都可以交影片、提交。</li>
+          <li><strong>導演</strong>：可以用「<Ui>貼連結</Ui>」加一版（不能上傳檔案）。導演貼的不會把歌從「需修改」改回「審查中」，會通知這首歌的動畫師和製作（看 <Go to={A.dirAddLink}>貼連結加影片</Go>）。</li>
         </ul>
       </Section>
 
@@ -1534,6 +1536,7 @@ function AnimatorChapter() {
           <li>每交一次、好了就是下一個號碼：V1、V2、V3…。號碼不會變：刪掉 V2，下一版是 V3。</li>
           <li>點哪一版，LED 就放哪一版。滑鼠移上去看誰交的、什麼時候、說明。</li>
           <li>「<Ui>刪除 V2</Ui>」：只有交的人和製作可以刪。</li>
+          <li>導演也可以貼連結加一版（例如客戶給的參考影片），版本旁邊寫導演的名字；你會收到「<Ui>導演 王導 貼了一版影片 V3 到「夜曲」</Ui>」的通知。</li>
           <li>還在上傳、複製或失敗的會列在下面，可以「<Ui>取消</Ui>」或「<Ui>重試</Ui>」。</li>
           <li>交了新版：歌在「需修改」會自動回到「審查中」；歌在審查中或已通過，導演也會收到「有新版」的通知。</li>
         </ul>
@@ -1931,6 +1934,22 @@ function DirectorChapter() {
           <li>cue 列最左邊的播放鍵：沒有影片時每 2 秒自動切下一個 cue。<kbd>Shift</kbd>+<kbd>J</kbd> / <kbd>K</kbd> 切 cue。</li>
         </ul>
         <F k="songPhone" />
+      </Section>
+
+      <Section id={A.dirAddLink} title="貼連結加影片">
+        <p>手上有影片連結（例如客戶給的參考、別的版本），可以直接貼上來變成這首歌的下一版，大家都能在 LED 上看。</p>
+        <ol className="help-steps">
+          <li>打開那首歌，版本列右邊按「<Ui>＋ 加影片</Ui>」。</li>
+          <li>貼上影片連結：Google Drive 單一檔案、Dropbox、OneDrive，或 .mp4 / .mov / .webm 的直接網址。說明可以寫一句（選填）。</li>
+          <li>按「<Ui>加入</Ui>」。系統會複製一份到我們的伺服器，好了變成下一個版本（例：V3），版本旁邊寫你的名字。</li>
+        </ol>
+        <ul className="help-list">
+          <li>連結要設成「<Ui>知道連結的人都能看</Ui>」（Google Drive：共用 → 一般存取權 → 知道連結的使用者），不然系統抓不到。</li>
+          <li><strong>上傳檔案</strong>是製作和動畫師用的；導演只能貼連結。</li>
+          <li>你貼的那一版<strong>不會改歌的狀態</strong>（需修改還是需修改），也不會通知其他導演；會通知這首歌的動畫師和製作。</li>
+          <li>還在複製或失敗的那一版，你可以取消或重試；好了之後你可以刪掉自己貼的那一版。別人交的版本只有交的人和製作可以刪。</li>
+          <li>不收：資料夾、Google 文件、YouTube / Vimeo、WeTransfer。瀏覽器播不了的格式（例如 ProRes）複製好了也播不出來，版本會變紅（看 <Go to={A.animAeExport}>AE 輸出設定</Go>）。</li>
+        </ul>
       </Section>
 
       <Section id={A.dirComment} title="留言、@ 提及">

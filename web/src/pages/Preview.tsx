@@ -37,7 +37,7 @@ import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
-import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
+import { canAddVideo, canModifyVideo, canPasteVideoLink, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, videoJobs, type VideoJob } from '../lib/videoJobs';
 import { resumeFileProblem, trackedVideoIds, useStalledUploads } from '../lib/stalledUploads';
@@ -928,9 +928,10 @@ function SongDetail({
     else focusComposer();
   }, [session.draft, focusComposer]);
 
-  // ── 交影片（admin / 負責的動畫師；導演只能看）──
+  // ── 交影片：上傳檔案 = admin / 負責的動畫師；貼連結 = 再加上導演 ──
   const perm = { accountRole: user?.role ?? null, projectRole, userId: user?.id ?? null, song };
-  const canAdd = canAddVideo(perm);
+  const canUpload = canAddVideo(perm);
+  const canAdd = canPasteVideoLink(perm);
   const [addOpen, setAddOpen] = useState(false);
   const allJobs = useVideoJobs(projectId);
   const songJobs = useMemo(() => allJobs.filter(j => j.songId === song.id), [allJobs, song.id]);
@@ -959,7 +960,7 @@ function SongDetail({
       toast.error('刪除失敗：' + friendlyError(e));
     }
   }
-  const canModifyPending = (v: SongVideo) => canModifyVideo({ ...perm, item: { kind: 'version', byId: v.createdBy?.id ?? null } });
+  const canModifyPending = (v: SongVideo) => canModifyVideo({ ...perm, item: { kind: 'version', byId: v.createdBy?.id ?? null, source: v.source } });
   async function handleRetryPending(v: SongVideo) {
     try { await retrySongVideo(projectId, song.id, v.id); await versions.reload(); }
     catch (e) { toast.error('重試失敗：' + friendlyError(e)); }
@@ -1030,7 +1031,7 @@ function SongDetail({
             onRetryLoad={() => { void versions.reload(); }}
             ledCanvas={view.ledCanvas}
             onAdd={canAdd ? () => setAddOpen(true) : undefined}
-            canDelete={(it) => canModifyVideo({ ...perm, item: it })}
+            canDelete={(it) => canModifyVideo({ ...perm, item: { ...it, source: it.video?.source ?? null } })}
             onDelete={handleDeleteVersion}
             canModifyPending={canModifyPending}
             onRetryPending={handleRetryPending}
@@ -1038,7 +1039,9 @@ function SongDetail({
             stalled={stalled.views}
             onResumePending={handleResumePending}
             onRetryFinish={stalled.retryFinish}
-            emptyText={canAdd ? '這首歌還沒有影片，按右邊「加影片」交第一版' : '這首歌還沒有影片（動畫師交了之後會自動出現）'}
+            emptyText={canUpload ? '這首歌還沒有影片，按右邊「加影片」交第一版'
+              : canAdd ? '這首歌還沒有影片（動畫師交了之後會自動出現；有影片連結也可以按右邊「加影片」貼上）'
+              : '這首歌還沒有影片（動畫師交了之後會自動出現）'}
             newVersion={newVersion}
           />
 
@@ -1201,7 +1204,8 @@ function SongDetail({
           projectId={projectId}
           song={song}
           jobs={songJobs}
-          canUpload={canAdd}
+          canUpload={canUpload}
+          canLink={canAdd}
           ledCanvas={view.ledCanvas}
         />
       )}

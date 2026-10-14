@@ -24,8 +24,10 @@ interface Props {
   song: { id: string; name: string; code?: string | null };
   /** 這首歌的工作（上傳中 / 複製中…） */
   jobs: readonly VideoJob[];
-  /** 能不能交新版（不能的話只剩本地檔案） */
+  /** 能不能上傳檔案、貼連結（製作、負責的動畫師） */
   canUpload: boolean;
+  /** 只能貼連結（導演）：沒有「上傳檔案」，直接打開「貼連結」；沒給 = 跟 canUpload 一樣 */
+  canLink?: boolean;
   /** 有給才有「本地檔案」：只在這台電腦放到 LED 上，不上傳 */
   onLocalFiles?: (files: File[]) => void;
   /** 專案的 LED 畫布大小：選好檔案時跟影片比（還沒設定 = 不比） */
@@ -45,8 +47,10 @@ type FileCheck =
  *   本地檔案 —— 只在這台電腦放到 LED 上，不上傳、別人看不到
  * 上傳中可以關掉這個視窗、切到別首歌，上傳會繼續；好了會自動選到新的一版開始播。
  */
-export default function AddVideoDialog({ open, onClose, projectId, song, jobs, canUpload, onLocalFiles, ledCanvas }: Props) {
-  const [way, setWay] = useState<Way>(canUpload ? 'upload' : 'local');
+export default function AddVideoDialog({ open, onClose, projectId, song, jobs, canUpload, canLink, onLocalFiles, ledCanvas }: Props) {
+  const linkAllowed = canUpload || !!canLink;
+  const firstWay: Way = canUpload ? 'upload' : linkAllowed ? 'link' : 'local';
+  const [way, setWay] = useState<Way>(firstWay);
   const [note, setNote] = useState('');
   const [url, setUrl] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);
@@ -66,13 +70,13 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   // 打開時回到第一個方法、清掉上次的錯誤
   useEffect(() => {
     if (!open) return;
-    setWay(canUpload ? 'upload' : 'local');
+    setWay(firstWay);
     setLinkError(null);
     setFileError(null);
     setDragOver(false);
     checkTokenRef.current++;
     setFileCheck(null);
-  }, [open, song.id, canUpload]);
+  }, [open, song.id, firstWay]);
 
   // Esc 關掉
   useEffect(() => {
@@ -154,7 +158,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   const linkKind = detectVideoLink(url);
   const ways: { key: Way; label: string; icon: typeof Upload; show: boolean }[] = [
     { key: 'upload', label: '上傳檔案', icon: Upload, show: canUpload },
-    { key: 'link', label: '貼連結', icon: Link2, show: canUpload },
+    { key: 'link', label: '貼連結', icon: Link2, show: linkAllowed },
     { key: 'local', label: '本地檔案', icon: MonitorPlay, show: !!onLocalFiles },
   ];
 
@@ -188,7 +192,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
           </button>
         </header>
 
-        <div className="addvid__ways" role="tablist" aria-label="加影片的方法">
+        {ways.filter(w => w.show).length > 1 && <div className="addvid__ways" role="tablist" aria-label="加影片的方法">
           {ways.filter(w => w.show).map(w => (
             <button
               key={w.key}
@@ -201,9 +205,14 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
               <Icon icon={w.icon} size="md" /> {w.label}
             </button>
           ))}
-        </div>
+        </div>}
 
         <div className="addvid__body">
+          {way === 'link' && !canUpload && (
+            <div className="addvid__hint addvid__hint--lead">
+              上傳檔案是製作和動畫師用的；導演可以貼影片連結交一版。連結要設成「知道連結的人都能看」。
+            </div>
+          )}
           {way !== 'local' && (
             <label className="addvid__field">
               <span>說明（選填，一行）</span>

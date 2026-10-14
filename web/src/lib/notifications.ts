@@ -20,6 +20,8 @@ export function notificationTitle(n: AppNotification): string {
     case 'assigned': return `${who} 把${songOf(n)}指派給你`;
     // 分享連結的訪客留言：actorName = 「訪客：小李（給經紀人）」
     case 'guest_comment': return `${who} 在${songOf(n)}${v(n)} 留言`;
+    // 導演貼連結交了一版（通知這首歌的動畫師和製作）
+    case 'director_video': return `導演 ${who} 貼了一版影片${v(n)} 到${songOf(n)}`;
     default: return `${songOf(n)}有新動態`;
   }
 }

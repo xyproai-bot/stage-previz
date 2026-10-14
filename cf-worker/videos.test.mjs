@@ -6,7 +6,7 @@ import {
   videoMimeFor, extForMime, isDriveVideoFile, driveSourceRev, unsupportedFormatMessage, planDriveVersions, driveVersionKey,
   planParts, expectedPartSize, missingParts, nextCopyPart, UPLOAD_PART_SIZE, COPY_PART_SIZE, MIB, GIB,
   nextVideoVersion, versionLabel, videoMaxBytes, formatBytes, DEFAULT_VIDEO_MAX_BYTES, copyPartSize,
-  videoUploadDecision, videoModifyDecision,
+  videoUploadDecision, videoLinkDecision, videoModifyDecision,
   classifyVideoLink, isBlockedHost, interpretProbe, filenameFromContentDisposition, totalFromContentRange,
   signVideoPass, verifyVideoPass, VIDEO_PASS_BUCKET_MS, parseRangeHeader,
 } from './videos.mjs';
@@ -235,6 +235,25 @@ test('改 / 刪 / 繼續上傳某一版：admin 或交這一版的人', () => {
   // 歌後來指派給別人 → 原本交的人也不能再動
   assert.equal(videoModifyDecision({ role: 'animator', userId: 'u_a', song: { animator_user_id: 'u_b' }, video: { created_by: 'u_a' } }).ok, false);
   assert.equal(videoModifyDecision({ role: 'director', userId: 'u_d', song, video: { created_by: 'u_d' } }).ok, false);
+});
+
+test('貼連結：交影片的人 + 導演；導演只能動自己貼連結交的那一版', () => {
+  const song = { animator_user_id: 'u_a' };
+  assert.equal(videoLinkDecision({ role: 'director', userId: 'u_d', song }).ok, true);
+  assert.equal(videoLinkDecision({ role: 'admin', userId: 'x', song }).ok, true);
+  assert.equal(videoLinkDecision({ role: 'animator', userId: 'u_a', song }).ok, true);
+  // 指派給別人的動畫師、不是成員 → 跟上傳一樣不行
+  assert.equal(videoLinkDecision({ role: 'animator', userId: 'u_b', song }).ok, false);
+  assert.equal(videoLinkDecision({ role: null, userId: 'x', song }).ok, false);
+  // 上傳檔案還是不行
+  const up = videoUploadDecision({ role: 'director', userId: 'u_d', song });
+  assert.equal(up.ok, false);
+  assert.match(up.error, /貼連結/);
+  // 導演動自己貼的（取消複製、重試、改說明、刪掉）可以；別人交的、自己上傳的（不會有）、Drive 同步的不行
+  assert.equal(videoModifyDecision({ role: 'director', userId: 'u_d', song, video: { created_by: 'u_d', source: 'link' } }).ok, true);
+  assert.equal(videoModifyDecision({ role: 'director', userId: 'u_d', song, video: { created_by: 'u_a', source: 'link' } }).ok, false);
+  assert.equal(videoModifyDecision({ role: 'director', userId: 'u_d', song, video: { created_by: 'u_d', source: 'upload' } }).ok, false);
+  assert.equal(videoModifyDecision({ role: 'director', userId: 'u_d', song, video: { created_by: null, source: 'drive' } }).ok, false);
 });
 
 // ─── 貼連結 ───

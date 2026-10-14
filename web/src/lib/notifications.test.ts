@@ -20,6 +20,7 @@ describe('通知文字', () => {
     expect(notificationTitle(n({ kind: 'approved', versionLabel: 'V3' }))).toBe('「S01 開場」 V3 已通過（王小明）');
     expect(notificationTitle(n({ kind: 'new_version', actorName: '阿凱' }))).toBe('「S01 開場」有新版 V2 等你審（阿凱 交的）');
     expect(notificationTitle(n({ kind: 'assigned', actorName: '小花', songCode: null }))).toBe('小花 把「開場」指派給你');
+    expect(notificationTitle(n({ kind: 'director_video', actorName: '王導', versionLabel: 'V3', songCode: null, songName: '夜曲' }))).toBe('導演 王導 貼了一版影片 V3 到「夜曲」');
     expect(notificationDetail(n({ kind: 'needs_changes' }))).toBe('原因：第二段太亮');
     expect(notificationDetail(n({ excerpt: '' }))).toBe('');
   });

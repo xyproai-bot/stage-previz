@@ -141,6 +141,8 @@
 }
 
 .addvid__hint a { color: var(--accent); }
+/* 導演：只能貼連結的說明 */
+.addvid__hint--lead { color: var(--text-dim); background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 
 /* 選好檔案之後：檢查中 / 播不了（擋下來）/ 可以交但要注意 */
 .addvid__check {

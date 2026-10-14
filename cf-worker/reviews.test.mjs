@@ -410,6 +410,52 @@ test('新版好了：需修改 → 自動回到審查中 + 通知導演；待製
   assert.equal((await rv.afterVideoReady(db, { videoId: 'sv_up' })).notified, 0);
 });
 
+test('導演貼連結交的一版好了：狀態不動（需修改不會自動變審查中）、不通知導演；通知這首歌的動畫師和製作', async () => {
+  const db = await setup();
+  await db.prepare(`UPDATE songs SET status = 'needs_changes' WHERE id = 's1'`).run();
+  await addVideo(db, { id: 'sv_d', songId: 's1', version: 2, by: 'u_dir', note: '客戶給的參考' });
+  const out = await rv.afterVideoReady(db, { videoId: 'sv_d', now: T0 });
+  assert.equal(out.byDirector, true);
+  assert.equal(out.autoSubmitted, false);
+  assert.equal((await db.prepare(`SELECT status FROM songs WHERE id = 's1'`).first()).status, 'needs_changes');
+  // 這首歌的動畫師 + 製作（全站 admin）各一則；導演（自己、別的導演）、別的動畫師都沒有
+  assert.deepEqual((await notes(db, 'u_a1')).map(n => [n.kind, n.video_version, n.actor_name, n.song_id, n.excerpt]),
+    [['director_video', 2, '王小明', 's1', '客戶給的參考']]);
+  assert.deepEqual((await notes(db, 'u_admin')).map(n => n.kind), ['director_video']);
+  assert.equal((await notes(db, 'u_dir')).length, 0);
+  assert.equal((await notes(db, 'u_dir2')).length, 0);
+  assert.equal((await notes(db, 'u_a2')).length, 0);
+  // 收到的人：動畫師 + 所有製作（全站 admin；migration 也放了一個 u_phang）
+  const who = (await db.prepare(`SELECT user_id FROM notifications WHERE kind = 'director_video' ORDER BY user_id`).all()).results.map(r => r.user_id);
+  assert.deepEqual(who, ['u_a1', 'u_admin', 'u_phang']);
+  assert.equal(out.notified, 3);
+
+  // 審查中的歌：一樣不通知導演「新版等你審」
+  await db.prepare(`UPDATE songs SET status = 'in_review' WHERE id = 's1'`).run();
+  await addVideo(db, { id: 'sv_d2', songId: 's1', version: 3, by: 'u_dir2' });
+  await rv.afterVideoReady(db, { videoId: 'sv_d2', now: at(1) });
+  assert.equal((await notes(db, 'u_dir')).length, 0);
+  assert.equal((await notes(db, 'u_a1')).length, 2);
+
+  // 沒指派的歌 → 只通知製作
+  await addVideo(db, { id: 'sv_d3', songId: 's2', version: 1, by: 'u_dir' });
+  const o3 = await rv.afterVideoReady(db, { videoId: 'sv_d3', now: at(2) });
+  assert.equal(o3.notified, 2);  // u_admin、u_phang
+  assert.equal((await notes(db, 'u_a2')).length, 0);
+  assert.equal((await db.prepare(`SELECT status FROM songs WHERE id = 's2'`).first()).status, 'todo');
+});
+
+test('全站 admin 在專案裡是導演身分交的 → 算製作（照一般的新版流程）', async () => {
+  const db = await setup();
+  await db.prepare(`INSERT INTO project_members (project_id, user_id, role) VALUES ('p1', 'u_admin', 'director')`).run();
+  await db.prepare(`UPDATE songs SET status = 'needs_changes' WHERE id = 's1'`).run();
+  await addVideo(db, { id: 'sv_x', songId: 's1', version: 2, by: 'u_admin' });
+  const out = await rv.afterVideoReady(db, { videoId: 'sv_x', now: T0 });
+  assert.equal(out.byDirector, undefined);
+  assert.equal(out.autoSubmitted, true);
+  assert.deepEqual((await notes(db, 'u_dir')).map(n => n.kind), ['new_version']);
+});
+
 test('指派動畫師 → 通知被指派的人（自己指派自己、本來就是他 → 不通知）', async () => {
   const db = await setup();
   const s2 = await db.prepare(`SELECT * FROM songs WHERE id = 's2'`).first();

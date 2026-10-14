@@ -221,9 +221,21 @@ export function canAddVideo(p: PermInput): boolean {
   return false;
 }
 
-/** 能不能刪 / 取消某一版：admin；交這一版的人（而且還能交這首歌的影片） */
-export function canModifyVideo(p: PermInput & { item: Pick<VersionItem, 'kind' | 'byId'> }): boolean {
+/** 能不能貼連結交一版：能交影片的人 + 導演（導演只能貼連結，上傳檔案還是製作和動畫師；跟後台 videoLinkDecision 一樣） */
+export function canPasteVideoLink(p: PermInput): boolean {
+  if (canAddVideo(p)) return true;
+  return !!p.song && !!p.userId && effectiveRole(p) === 'director';
+}
+
+/**
+ * 能不能刪 / 取消某一版：admin；交這一版的人（而且還能交這首歌的影片）
+ * 導演：只有自己貼連結交的那一版（item.source = 'link'）
+ */
+export function canModifyVideo(p: PermInput & { item: Pick<VersionItem, 'kind' | 'byId'> & { source?: string | null } }): boolean {
   if (p.item.kind !== 'version') return false;
+  if (effectiveRole(p) === 'director') {
+    return !!p.userId && p.item.source === 'link' && !!p.item.byId && p.item.byId === p.userId;
+  }
   if (!canAddVideo(p)) return false;
   if (effectiveRole(p) === 'admin') return true;
   return !!p.item.byId && p.item.byId === p.userId;

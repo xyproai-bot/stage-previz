@@ -25,6 +25,7 @@
 //   留言縮圖（/api/comment-thumbs/…）                                          網址有 128 bits 隨機碼（跟模型檔一樣），拿得到網址的人才看得到
 //   歌曲影片：看版本、播放                                                     所有成員
 //   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
+//   歌曲影片：貼連結交一版                                                    上面的人 + 這個專案的導演（videos.mjs videoLinkDecision）
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
@@ -166,6 +167,9 @@ export function songStatusDecision({ role, userId, song, to, expected }) {
  *   'songPatch'    改歌：只改狀態看 songStatusDecision，改其他欄位要 editor（handler 裡判斷）
  *   'projectPatch' 改專案：一般欄位 editor，Drive / 狀態 / 3D 檢視設定要全站 admin（handler 裡判斷）
  *   'videoUploader' 交影片：admin 或動畫師先放行，handler 裡再看這首歌指派給誰 / 這一版是誰交的（videos.mjs）
+ *   'videoLinker'   貼連結交一版：admin、動畫師、導演先放行，handler 裡再看（videos.mjs videoLinkDecision）
+ *   'videoEditor'   取消 / 重試 / 改說明 / 刪掉某一版：admin、動畫師、導演先放行，handler 裡再看是不是交這一版的人
+ *                   （導演只能動自己貼連結交的；videos.mjs videoModifyDecision）
  *
  * @param {string} method
  * @param {string[]} segs  url.pathname.split('/').filter(Boolean)
@@ -347,17 +351,18 @@ function describeVideoRoute(m, read, songId, c, d, e) {
   const bad = (kind) => ({ kind, need: null, methodNotAllowed: true });
   if (!c) return read ? r('videos.list', 'member') : bad('videos.list');
   if (c === 'uploads' && !d) return m === 'POST' ? r('videos.createUpload', 'videoUploader') : bad('videos.createUpload');
-  if (c === 'link' && !d) return m === 'POST' ? r('videos.link', 'videoUploader') : bad('videos.link');
+  if (c === 'link' && !d) return m === 'POST' ? r('videos.link', 'videoLinker') : bad('videos.link');
   const videoId = c;
   if (!d) {
     if (read) return r('videos.get', 'member', { videoId });
-    if (m === 'PATCH') return r('videos.patch', 'videoUploader', { videoId });
-    if (m === 'DELETE') return r('videos.delete', 'videoUploader', { videoId });
+    if (m === 'PATCH') return r('videos.patch', 'videoEditor', { videoId });
+    if (m === 'DELETE') return r('videos.delete', 'videoEditor', { videoId });
     return bad('videos.item');
   }
   if (d === 'parts' && e) return m === 'PUT' ? r('videos.part', 'videoUploader', { videoId, partNumber: e }) : bad('videos.part');
-  if ((d === 'complete' || d === 'abort' || d === 'retry') && !e) {
-    return m === 'POST' ? r('videos.' + d, 'videoUploader', { videoId }) : bad('videos.' + d);
+  if (d === 'complete' && !e) return m === 'POST' ? r('videos.complete', 'videoUploader', { videoId }) : bad('videos.complete');
+  if ((d === 'abort' || d === 'retry') && !e) {
+    return m === 'POST' ? r('videos.' + d, 'videoEditor', { videoId }) : bad('videos.' + d);
   }
   if (d === 'stream' && !e) return read ? r('videos.stream', 'member', { videoId }) : bad('videos.stream');
   return null;
@@ -377,6 +382,9 @@ export function roleMeetsNeed(need, { role, globalRole }) {
       return canManageShareLinks(role);
     case 'videoUploader':
       return role === 'admin' || role === 'animator';
+    case 'videoLinker':
+    case 'videoEditor':
+      return role === 'admin' || role === 'animator' || role === 'director';
     case 'globalAdmin':
       return globalRole === 'admin';
     default:
@@ -401,7 +409,10 @@ export function needDeniedMessage(need) {
     case 'shareManager':
       return '只有製作或導演可以管理分享連結';
     case 'videoUploader':
-      return '導演可以看影片；交影片請找負責的動畫師或製作';
+      return '導演可以貼連結交一版；上傳檔案請找負責的動畫師或製作';
+    case 'videoLinker':
+    case 'videoEditor':
+      return '沒有權限交影片';
     case 'globalAdmin':
       return '只有製作可以做這件事';
     default:

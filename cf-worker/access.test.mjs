@@ -152,16 +152,20 @@ test('路由：分享連結 = shareManager；沒有的路徑 null；方法不對
   assert.equal(route('PUT', '/api/projects/p1/activity').methodNotAllowed, true);
 });
 
-test('路由：歌曲影片（看 = 成員；交 / 改 = videoUploader；網址上的 id 都要檢查）', () => {
+test('路由：歌曲影片（看 = 成員；上傳 = videoUploader；貼連結 = videoLinker；取消 / 重試 / 改 / 刪 = videoEditor；網址上的 id 都要檢查）', () => {
   const base = '/api/projects/p1/songs/s1/videos';
   assert.deepEqual(route('GET', base), { kind: 'videos.list', need: 'member', songId: 's1' });
   assert.equal(route('POST', base).methodNotAllowed, true);
   assert.deepEqual(route('POST', `${base}/uploads`), { kind: 'videos.createUpload', need: 'videoUploader', songId: 's1' });
   assert.equal(route('GET', `${base}/uploads`).methodNotAllowed, true);
-  assert.equal(route('POST', `${base}/link`).need, 'videoUploader');
+  assert.equal(route('POST', `${base}/link`).need, 'videoLinker');
   assert.deepEqual(route('GET', `${base}/sv_1`), { kind: 'videos.get', need: 'member', songId: 's1', videoId: 'sv_1' });
   assert.equal(route('PATCH', `${base}/sv_1`).kind, 'videos.patch');
-  assert.equal(route('DELETE', `${base}/sv_1`).need, 'videoUploader');
+  assert.equal(route('DELETE', `${base}/sv_1`).need, 'videoEditor');
+  assert.equal(route('PATCH', `${base}/sv_1`).need, 'videoEditor');
+  assert.equal(route('POST', `${base}/sv_1/abort`).need, 'videoEditor');
+  assert.equal(route('POST', `${base}/sv_1/retry`).need, 'videoEditor');
+  assert.equal(route('POST', `${base}/sv_1/complete`).need, 'videoUploader');
   assert.deepEqual(route('PUT', `${base}/sv_1/parts/3`), { kind: 'videos.part', need: 'videoUploader', songId: 's1', videoId: 'sv_1', partNumber: '3' });
   assert.equal(route('POST', `${base}/sv_1/parts/3`).methodNotAllowed, true);
   assert.equal(route('POST', `${base}/sv_1/complete`).kind, 'videos.complete');
@@ -178,6 +182,11 @@ test('角色 vs 需要的權限', () => {
   assert.equal(roleMeetsNeed('videoUploader', as('animator')), true);
   assert.equal(roleMeetsNeed('videoUploader', as('admin', 'director')), true);
   assert.equal(roleMeetsNeed('videoUploader', as('director')), false);
+  // 導演可以貼連結、動自己貼的那一版（handler 裡再細分）
+  assert.equal(roleMeetsNeed('videoLinker', as('director')), true);
+  assert.equal(roleMeetsNeed('videoEditor', as('director')), true);
+  assert.equal(roleMeetsNeed('videoLinker', as('animator')), true);
+  assert.equal(roleMeetsNeed('videoLinker', as(null, 'director')), false);
   assert.equal(roleMeetsNeed('member', as('animator')), true);
   assert.equal(roleMeetsNeed('editor', as('animator')), false);
   assert.equal(roleMeetsNeed('editor', as('director')), false);

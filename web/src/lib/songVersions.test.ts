@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  canAddVideo, canModifyVideo, choiceFor, deleteVersionMessage, removePendingQuestion, itemFromShareVideo, itemFromVideo,
+  canAddVideo, canModifyVideo, canPasteVideoLink, choiceFor, deleteVersionMessage, removePendingQuestion, itemFromShareVideo, itemFromVideo,
   itemsFromLegacyDrive, pendingVideos, pickVersion, readVersionChoice, readyItems, versionChoiceStorageKey,
   writeVersionChoice, type VersionItem,
 } from './songVersions';
@@ -169,6 +169,20 @@ describe('誰能加 / 刪影片（跟後台一樣）', () => {
     // 交的人後來歌被指派給別人 → 也不能刪了（跟後台一樣）
     expect(canModifyVideo({ projectRole: 'animator', userId: 'u_a', song: other, item: byA })).toBe(false);
     expect(canModifyVideo({ projectRole: 'admin', userId: 'u_x', song: mine, item: { kind: 'drive', byId: null } })).toBe(false);
+  });
+
+  it('導演：可以貼連結（不能上傳）；只能刪 / 取消自己貼連結交的那一版', () => {
+    expect(canPasteVideoLink({ projectRole: 'director', userId: 'u_d', song: other })).toBe(true);
+    expect(canPasteVideoLink({ projectRole: 'animator', userId: 'u_a', song: mine })).toBe(true);
+    expect(canPasteVideoLink({ projectRole: 'animator', userId: 'u_a', song: other })).toBe(false);
+    expect(canPasteVideoLink({ projectRole: null, userId: 'u_d', song: other })).toBe(false);
+    expect(canPasteVideoLink({ projectRole: 'director', userId: null, song: other })).toBe(false);
+    expect(canAddVideo({ projectRole: 'director', userId: 'u_d', song: other })).toBe(false);
+    const mineLink = { kind: 'version' as const, byId: 'u_d', source: 'link' };
+    expect(canModifyVideo({ projectRole: 'director', userId: 'u_d', song: other, item: mineLink })).toBe(true);
+    expect(canModifyVideo({ projectRole: 'director', userId: 'u_d2', song: other, item: mineLink })).toBe(false);
+    expect(canModifyVideo({ projectRole: 'director', userId: 'u_d', song: other, item: { ...mineLink, source: 'upload' } })).toBe(false);
+    expect(canModifyVideo({ projectRole: 'director', userId: 'u_d', song: other, item: { kind: 'version', byId: 'u_d' } })).toBe(false);
   });
 
   it('刪除確認講清楚號碼不會再用', () => {

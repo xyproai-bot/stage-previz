@@ -6,7 +6,7 @@
 //   影片格式    videoMimeFor / extForMime / isDriveVideoFile / driveSourceRev
 //   分段上傳    planParts / expectedPartSize / missingParts / nextCopyPart
 //   版本號      nextVideoVersion / versionLabel
-//   權限        videoUploadDecision / videoModifyDecision
+//   權限        videoUploadDecision / videoLinkDecision（導演也能貼連結）/ videoModifyDecision
 //   貼連結      classifyVideoLink / interpretProbe / isBlockedHost
 //   播放        signVideoPass / verifyVideoPass / parseRangeHeader
 
@@ -328,14 +328,29 @@ export function videoUploadDecision({ role, userId, song }) {
     }
     return { ok: true };
   }
-  if (role === 'director') return { ok: false, status: 403, error: '導演可以看影片；交影片請找負責的動畫師或製作' };
+  if (role === 'director') return { ok: false, status: 403, error: '導演可以貼連結交一版；上傳檔案請找負責的動畫師或製作' };
   return { ok: false, status: 403, error: '沒有權限交影片' };
 }
 
 /**
+ * 能不能貼連結交一版（Drive 單檔 / Dropbox / OneDrive / 直接網址）：
+ *   交影片的人（videoUploadDecision）都可以，另外導演也可以（導演只能貼連結，上傳檔案還是製作和動畫師）
+ * @returns {{ok: true} | {ok: false, status: number, error: string}}
+ */
+export function videoLinkDecision({ role, userId, song }) {
+  if (role === 'director') return { ok: true };
+  return videoUploadDecision({ role, userId, song });
+}
+
+/**
  * 能不能改 / 刪 / 繼續上傳這一版：admin，或交這一版的人（而且還有交影片的權限）
+ *   導演：只能動自己貼連結交的那一版（取消複製、重試、改說明、刪掉）
  */
 export function videoModifyDecision({ role, userId, song, video }) {
+  if (role === 'director') {
+    if (video?.source === 'link' && video?.created_by && video.created_by === userId) return { ok: true };
+    return { ok: false, status: 403, error: '只有交這一版的人或製作可以改它' };
+  }
   const base = videoUploadDecision({ role, userId, song });
   if (!base.ok) return base;
   if (role === 'admin') return { ok: true };

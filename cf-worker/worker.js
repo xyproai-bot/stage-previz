@@ -55,7 +55,7 @@ import {
   videoMimeFor, extForMime, isDriveVideoFile, driveSourceRev, unsupportedFormatMessage, planDriveVersions, driveVersionKey,
   planParts, expectedPartSize, missingParts, nextCopyPart, UPLOAD_PART_SIZE, copyPartSize, MIB,
   versionLabel, videoMaxBytes, formatBytes, VIDEO_TITLE_MAX, VIDEO_NOTE_MAX,
-  videoUploadDecision, videoModifyDecision,
+  videoUploadDecision, videoLinkDecision, videoModifyDecision,
   classifyVideoLink, interpretProbe,
   signVideoPass, verifyVideoPass, parseRangeHeader,
 } from './videos.mjs';
@@ -5100,7 +5100,8 @@ async function resolveVideoLinkSource(env, ctx, cls) {
 
 async function createVideoFromLink(request, env, ctx) {
   const { me, projectId, song, role } = ctx;
-  const d = videoUploadDecision({ role, userId: me.id, song });
+  // 導演也可以貼連結（上傳檔案還是只有製作和動畫師）
+  const d = videoLinkDecision({ role, userId: me.id, song });
   if (!d.ok) return jsonResp({ error: d.error }, d.status);
   if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
   let body;
