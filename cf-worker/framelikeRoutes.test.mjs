@@ -23,6 +23,7 @@ async function setup() {
   const users = [
     ['u_admin', '製作', 'admin', 'ADMIN-1'], ['u_dir', '王導', 'director', 'DIR-1'],
     ['u_a1', '阿凱', 'animator', 'ANI-1'], ['u_a2', '小美', 'animator', 'ANI-2'],
+    ['u_admin2', '另一個製作', 'admin', 'ADMIN-2'],   // 全站製作、不是專案成員、沒建連結
   ];
   await db.batch(users.map(([id, name, role, code]) => db.prepare(
     `INSERT INTO users (id, email, name, role, access_code) VALUES (?, ?, ?, ?, ?)`
@@ -219,7 +220,7 @@ test('分享連結「允許看的人留言」：只有製作能打開；導演�
   assert.equal(r.data.allowComments, false);
 });
 
-test('訪客留言：沒開的連結不行；名字一定要、HTML 拿掉；團隊看到「訪客：名字（連結名稱）」、每個成員收到通知', async () => {
+test('訪客留言：沒開的連結不行；名字一定要、HTML 拿掉；團隊看到「訪客：名字（連結名稱）」；建連結的人、導演、這首歌的動畫師收到通知', async () => {
   const { call, db, r2 } = await setup();
   const off = (await makeLink(call, 'u_admin', {})).data.token;
   let r = await guestCall(call, `/api/share/${off}`, 'GET', '/songs/s1/comments');
@@ -266,20 +267,71 @@ test('訪客留言：沒開的連結不行；名字一定要、HTML 拿掉；團
   assert.equal(team.authorUserId, undefined);
   assert.equal(team.mentions, undefined);
 
-  // 小鈴鐺：每個成員都收到（導演、兩個動畫師、製作）
-  for (const u of ['u_dir', 'u_a1', 'u_a2', 'u_admin']) {
+  // 小鈴鐺：建連結的製作、導演、這首歌的動畫師（阿凱）收到；別的動畫師、另一個全站製作不收
+  for (const u of ['u_admin', 'u_dir', 'u_a1']) {
     const nr = await call(u, 'GET', '/api/notifications');
-    const item = nr.data.items.find(x => x.commentId === gid);
-    assert.ok(item, u);
-    assert.equal(item.kind, 'guest_comment');
-    assert.equal(item.actorName, '訪客：小李（給經紀人）');
-    assert.equal(item.songId, 's1');
+    const items = nr.data.items.filter(x => x.commentId === gid);
+    assert.equal(items.length, 1, u);
+    assert.equal(items[0].kind, 'guest_comment');
+    assert.equal(items[0].actorName, '訪客：小李（給經紀人）');
+    assert.equal(items[0].songId, 's1');
+  }
+  for (const u of ['u_a2', 'u_admin2']) {
+    const nr = await call(u, 'GET', '/api/notifications');
+    assert.equal(nr.data.items.filter(x => x.commentId === gid).length, 0, u);
   }
   // 留言數（連結清單上）
   r = await call('u_admin', 'GET', '/api/projects/p1/share-links');
   assert.equal(r.data.links.find(l => l.token === on).guestCommentCount, 2);
   const rows = (await db.prepare(`SELECT author_user_id, author_role, share_token FROM comments WHERE id = ?`).bind(gid).first());
   assert.deepEqual(rows, { author_user_id: null, author_role: 'guest', share_token: on });
+});
+
+test('訪客留言的通知：同一個人只收一則；訪客回覆一串 → 這串裡團隊回覆過的人也收到（reply），其他人不收', async () => {
+  const { call, db } = await setup();
+  // 導演建的連結（製作之後幫他打開留言）；安可（s2）還沒指派動畫師
+  const tk = (await makeLink(call, 'u_dir', { label: '給客戶' })).data.token;
+  assert.equal((await call('u_admin', 'PATCH', `/api/projects/p1/share-links/${tk}`, { allowComments: true })).status, 200);
+  const base = `/api/share/${tk}`;
+  const notes = async (u, commentId) => (await call(u, 'GET', '/api/notifications')).data.items.filter(x => x.commentId === commentId);
+
+  const root = cid();
+  let r = await guestCall(call, base, 'POST', '/songs/s2/comments', { guestName: '小張', comment: { id: root, text: '安可的燈可以再暖一點', time: 5 } });
+  assert.equal(r.status, 200, r.data?.error);
+  // 導演 = 建連結的人 + 導演 → 只收一則；製作（打開留言的人）、動畫師、另一個製作都不收
+  const dirNotes = await notes('u_dir', root);
+  assert.equal(dirNotes.length, 1);
+  assert.equal(dirNotes[0].kind, 'guest_comment');
+  for (const u of ['u_admin', 'u_admin2', 'u_a1', 'u_a2']) assert.equal((await notes(u, root)).length, 0, u);
+
+  // 團隊在這串回覆：小美（動畫師，不是這首的負責人）、另一個製作、導演
+  const teamReply = cid();
+  for (const [u, id, text] of [['u_a2', teamReply, '收到'], ['u_admin2', cid(), '我看一下'], ['u_dir', cid(), '下一版改']]) {
+    r = await call(u, 'POST', '/api/comments?session=p1-s2', { comment: { id, text, parentId: root } });
+    assert.equal(r.status, 200, `${u}: ${r.data?.error}`);
+  }
+  // 訪客回覆（按的是小美那則 → 掛在最上面那則）
+  const greply = cid();
+  r = await guestCall(call, base, 'POST', '/songs/s2/comments', { guestName: '小張', comment: { id: greply, text: '謝謝', parentId: teamReply } });
+  assert.equal(r.status, 200, r.data?.error);
+  for (const u of ['u_a2', 'u_admin2', 'u_dir']) {
+    const items = await notes(u, greply);
+    assert.equal(items.length, 1, u);
+    assert.equal(items[0].kind, 'reply', u);   // 在這串留過言 → 「回覆了你」（導演也是建連結的人，還是只收一則）
+    assert.equal(items[0].actorName, '訪客：小張（給客戶）');
+  }
+  for (const u of ['u_admin', 'u_a1']) assert.equal((await notes(u, greply)).length, 0, u);
+  const total = await db.prepare(`SELECT COUNT(*) AS n FROM notifications WHERE comment_id = ?`).bind(greply).first();
+  assert.equal(total.n, 3);
+
+  // 指派了動畫師、但他已經不在專案裡 → 不收
+  await db.prepare(`UPDATE songs SET animator_user_id = 'u_a1' WHERE id = 's2'`).run();
+  await db.prepare(`DELETE FROM project_members WHERE project_id = 'p1' AND user_id = 'u_a1'`).run();
+  const after = cid();
+  r = await guestCall(call, base, 'POST', '/songs/s2/comments', { guestName: '小張', comment: { id: after, text: '另一段', time: 30 } });
+  assert.equal(r.status, 200, r.data?.error);
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM notifications WHERE comment_id = ? AND user_id = 'u_a1'`).bind(after).first()).n, 0);
+  assert.equal((await notes('u_dir', after)).length, 1);
 });
 
 test('訪客只看得到同一條連結的串 + 團隊在底下的回覆；不能回覆團隊自己的留言；改 / 刪 / 已改好都不行', async () => {

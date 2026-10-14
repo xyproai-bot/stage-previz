@@ -2,7 +2,8 @@
 //
 //   訪客寫一次名字（前端記在 localStorage），就能在影片時間上留言（含區段、畫記、3D 視角、縮圖）、回覆自己連結裡的留言串。
 //   訪客看得到的（安全的預設）：從同一條連結留的留言串 + 團隊在那些串底下的回覆；看不到團隊自己的留言、別條連結的留言。
-//   團隊看到「訪客：小李（給經紀人）」，所有專案成員收到小鈴鐺通知（guest_comment）。
+//   團隊看到「訪客：小李（給經紀人）」；小鈴鐺只通知：建這條連結的人、專案的導演、這首歌的動畫師（guest_comment），
+//   訪客回覆一串留言時，這串裡團隊那邊留過言的人也收到（reply）；同一個人只收一則（guestCommentWants）。
 //   防亂發：同一條連結 + 同一個 IP 10 分鐘最多 10 則；同一張通行證（有密碼的連結）1 小時 30 則；一條連結一天 200 則。
 //   不收 HTML（名字、內容裡的標籤和角括號拿掉）；大小限制跟團隊留言一樣（畫記 / 縮圖），內容最多 1000 字。
 //   密碼 / 有效期 / 封存：路由（worker.js handleShareRouter）先檢查過了才會走到這裡。
@@ -92,6 +93,27 @@ export async function guestPassKey(accessToken) {
 }
 
 /**
+ * 訪客留言要通知誰（純函式；之後交給 reviews.mjs pickRecipients 去掉重複的、不是專案成員的、停用的）
+ *   回覆 → 先放這串裡團隊那邊留過言的人（kind = reply，跟團隊回覆的規則一樣）
+ *   然後：建這條分享連結的人、專案的導演、這首歌的動畫師（kind = guest_comment）
+ *   其他成員、全站製作（不是建連結的人）都不通知；訪客沒有帳號，不會收到
+ * @param {object} p
+ * @param {Array<string|null>} [p.threadUserIds]   這串留言（最上面那則 + 回覆）團隊那邊作者的帳號，依時間
+ * @param {string|null} [p.linkCreatorId]          share_links.created_by_user_id
+ * @param {Array<{user_id: string, role: string}>} [p.members]  reviews.mjs projectMemberIds 的 members
+ * @param {string|null} [p.animatorUserId]         songs.animator_user_id
+ * @returns {Array<{userId: string, kind: 'reply'|'guest_comment'}>}
+ */
+export function guestCommentWants({ threadUserIds = [], linkCreatorId = null, members = [], animatorUserId = null } = {}) {
+  const wants = [];
+  for (const id of threadUserIds || []) if (id) wants.push({ userId: id, kind: 'reply' });
+  if (linkCreatorId) wants.push({ userId: linkCreatorId, kind: 'guest_comment' });
+  for (const m of members || []) if (m?.role === 'director' && m.user_id) wants.push({ userId: m.user_id, kind: 'guest_comment' });
+  if (animatorUserId) wants.push({ userId: animatorUserId, kind: 'guest_comment' });
+  return wants;
+}
+
+/**
  * 建立 / 改分享連結時的「允許看的人留言」、名稱
  * @returns {{ ok: true, fields: { allow_comments?: 0|1, label?: string|null } } | { ok: false, status: number, error: string }}
  */
@@ -133,7 +155,7 @@ async function guestVisible(db, songId, linkToken) {
 async function songInScope(db, link, songId) {
   if (typeof songId !== 'string' || !ID_RE.test(songId)) return { error: fail(400, 'Missing songId') };
   if (link.song_id && link.song_id !== songId) return { error: fail(403, 'Song not in scope') };
-  const song = await db.prepare(`SELECT id, project_id, name FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
+  const song = await db.prepare(`SELECT id, project_id, name, animator_user_id FROM songs WHERE id = ? LIMIT 1`).bind(songId).first();
   if (!song || song.project_id !== link.project_id) return { error: fail(404, 'Song not found') };
   return { song };
 }
@@ -255,12 +277,27 @@ export async function postGuestComment(db, { link, songId, body, ipKey, accessTo
     guest: { name, shareToken: link.token, shareLabel: label },
   });
 
-  // 小鈴鐺：通知專案成員（和全站製作）
+  // 小鈴鐺：建這條連結的人、專案的導演、這首歌的動畫師；回覆 → 這串裡團隊那邊留過言的人也收到（guestCommentWants）
   try {
     const { members, memberIds } = await projectMemberIds(db, link.project_id);
-    const recipients = pickRecipients(members.map(m => ({ userId: m.user_id, kind: 'guest_comment' })), memberIds, null);
+    const stmts = [db.prepare(`SELECT created_by_user_id FROM share_links WHERE token = ? LIMIT 1`).bind(link.token)];
+    if (parentId) {
+      stmts.push(db.prepare(
+        `SELECT author_user_id FROM comments
+          WHERE song_id = ?1 AND (id = ?2 OR reply_to_comment_id = ?2) AND author_user_id IS NOT NULL
+          ORDER BY rowid ASC`
+      ).bind(song.id, parentId));
+    }
+    const [creatorR, threadR] = await db.batch(stmts);
+    const wants = guestCommentWants({
+      threadUserIds: (threadR?.results || []).map(r => r.author_user_id),
+      linkCreatorId: (creatorR?.results || [])[0]?.created_by_user_id ?? null,
+      members,
+      animatorUserId: song.animator_user_id ?? null,
+    });
+    const recipients = pickRecipients(wants, memberIds, null);
     await insertNotifications(db, recipients.map(r => ({
-      userId: r.userId, kind: 'guest_comment', projectId: link.project_id, songId: song.id, songName: song.name,
+      userId: r.userId, kind: r.kind, projectId: link.project_id, songId: song.id, songName: song.name,
       videoId: video?.id ?? null, videoVersion: video?.version ?? null, commentId: id,
       actorUserId: null, actorName: guestAuthorLabel(name, label), excerpt: text,
     })), now);

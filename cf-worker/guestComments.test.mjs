@@ -4,9 +4,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   stripHtml, sanitizeGuestName, sanitizeGuestText, sanitizeShareLabel, shareLinkDisplayName,
-  rateDecision, guestRateMessage, guestIpKey, guestPassKey, shareLinkCommentFields,
+  rateDecision, guestRateMessage, guestIpKey, guestPassKey, shareLinkCommentFields, guestCommentWants,
   GUEST_NAME_MAX, GUEST_TEXT_MAX, GUEST_IP_RATE,
 } from './guestComments.mjs';
+import { pickRecipients } from './reviews.mjs';
 import { canToggleShareComments, guestCommentDecision } from './access.mjs';
 import { loginClientKey, shareAttemptKey, slugMissKey } from './loginThrottle.mjs';
 
@@ -93,4 +94,29 @@ test('訪客能不能留言：連結要打開、專案沒封存', () => {
   assert.equal(off.commentsDisabled, true);
   assert.equal(guestCommentDecision({ allow_comments: 1, project_status: 'archived' }).status, 404);
   assert.equal(guestCommentDecision(null).status, 404);
+});
+
+test('訪客留言通知誰：建連結的人、導演、這首歌的動畫師；回覆再加這串裡團隊留過言的人；同一個人只收一則', () => {
+  const members = [
+    { user_id: 'u_dir', role: 'director' }, { user_id: 'u_dir2', role: 'director' },
+    { user_id: 'u_a1', role: 'animator' }, { user_id: 'u_a2', role: 'animator' },
+    { user_id: 'u_pa', role: 'admin' },                 // 專案裡的製作（不是建連結的人）
+    { user_id: 'u_site', role: 'admin' },               // 全站製作（不是專案成員）
+  ];
+  const memberIds = new Set(members.map(m => m.user_id));
+  const pick = (p) => pickRecipients(guestCommentWants({ members, ...p }), memberIds, null).map(r => `${r.userId}:${r.kind}`);
+
+  // 新的一則：建連結的人 + 兩個導演 + 這首歌的動畫師；其他動畫師、製作都不收
+  assert.deepEqual(pick({ linkCreatorId: 'u_site', animatorUserId: 'u_a1' }),
+    ['u_site:guest_comment', 'u_dir:guest_comment', 'u_dir2:guest_comment', 'u_a1:guest_comment']);
+  // 建連結的是導演、歌還沒指派 → 導演只收一則
+  assert.deepEqual(pick({ linkCreatorId: 'u_dir' }), ['u_dir:guest_comment', 'u_dir2:guest_comment']);
+  // 回覆：這串裡團隊留過言的人先收「回覆」（重複的、訪客那幾則沒有帳號的拿掉），其他照舊、不重複
+  assert.deepEqual(pick({ threadUserIds: [null, 'u_a2', 'u_dir', 'u_a2', null], linkCreatorId: 'u_dir', animatorUserId: 'u_a1' }),
+    ['u_a2:reply', 'u_dir:reply', 'u_dir2:guest_comment', 'u_a1:guest_comment']);
+  // 建連結的人 / 動畫師已經不在專案裡（或停用）→ 不收
+  assert.deepEqual(pick({ linkCreatorId: 'u_gone', animatorUserId: 'u_gone2' }), ['u_dir:guest_comment', 'u_dir2:guest_comment']);
+  // 什麼都沒有也不會壞
+  assert.deepEqual(guestCommentWants(), []);
+  assert.deepEqual(guestCommentWants({ members: null, threadUserIds: null }), []);
 });
