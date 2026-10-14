@@ -16,7 +16,7 @@
 .rv-chip strong { color: var(--text); font-family: var(--font-mono); font-weight: 600; }
 .rv-chip--range { border-style: dashed; border-color: rgba(255, 255, 255, 0.55); }
 .rv-chip--ann { border-color: rgba(255, 59, 48, 0.6); color: #ff9a92; background: rgba(255, 59, 48, 0.12); }
-.rv-chip--view { color: #c9a7ff; border-color: rgba(194, 100, 255, 0.35); background: rgba(194, 100, 255, 0.08); padding-right: 8px; }
+.rv-note { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
 .rv-chip--btn { cursor: pointer; padding-right: 8px; color: var(--text); }
 .rv-chip--btn:hover { border-color: rgba(255, 59, 48, 0.6); color: #fff; }
 .rv-chip__x {

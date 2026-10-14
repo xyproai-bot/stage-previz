@@ -14,15 +14,29 @@ export function snapFps(raw: number): number {
   return Math.abs(best - raw) / best <= 0.015 ? best : Math.round(raw * 100) / 100;
 }
 
+/** 量出來的格數要在這之間才信（電腦忙的時候畫面會掉格，量出來會偏低 → 不信，用 1/30 秒） */
+export const MIN_TRUSTED_FPS = 20;
+export const MAX_TRUSTED_FPS = 121;
+const trusted = (f: number | null) => (f != null && f >= MIN_TRUSTED_FPS && f <= MAX_TRUSTED_FPS ? f : null);
+
 /**
- * 每一格之間的時間（秒）→ fps；量得太少（< 8 格）或亂跳 → null
- * 掉格的時候間隔會是兩倍 → 用中位數不受影響
+ * 每一格之間的時間（秒）→ fps；量得太少（< 8 格）、亂跳、太低（電腦忙在掉格）→ null
+ * 掉格的時候間隔會是兩倍 → 用中位數；還是太低就不信
  */
 export function estimateFps(deltas: readonly number[]): number | null {
   const ok = deltas.filter(d => Number.isFinite(d) && d > 1 / 130 && d < 1 / 8).sort((a, b) => a - b);
   if (ok.length < 8) return null;
   const mid = ok[Math.floor(ok.length / 2)];
-  return snapFps(1 / mid);
+  return trusted(snapFps(1 / mid));
+}
+
+/**
+ * 播了一段之後：瀏覽器解碼的格數（顯示的 + 掉的，getVideoPlaybackQuality）÷ 影片走了幾秒 → fps。
+ * 3D 很忙、畫面掉格也算得準（掉的格也算在裡面）。至少要播 1.5 秒；算出來不合理 → null
+ */
+export function fpsFromFrameCount(frames: number, mediaSeconds: number): number | null {
+  if (!(mediaSeconds >= 1.5) || !(frames > 0)) return null;
+  return trusted(snapFps(frames / mediaSeconds));
 }
 
 /** 一格幾秒 */
@@ -39,7 +53,10 @@ export function stepFrameTime(current: number, dir: 1 | -1, fps: number | null |
   return (clamped + 0.5) / f;
 }
 
-/** 時間碼 HH:MM:SS:FF（29.97 / 59.94 用 30 / 60 格算，不做 drop-frame） */
+/**
+ * 時間碼 HH:MM:SS:FF（29.97 / 59.94 用 30 / 60 格算，不做 drop-frame）。
+ * 不知道幾格（fps = null）→ 一律用 30 格算（畫面上會說「還不知道幾格」）；匯出用 formatTimecodeOrMs
+ */
 export function formatTimecode(sec: number, fps: number | null | undefined): string {
   const base = Math.round(fps && fps > 0 ? fps : DEFAULT_FPS);
   const total = Math.max(0, Math.floor((Number.isFinite(sec) ? sec : 0) * base + 1e-6));
@@ -47,6 +64,15 @@ export function formatTimecode(sec: number, fps: number | null | undefined): str
   const s = Math.floor(total / base);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${p(Math.floor(s / 3600))}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}:${p(ff)}`;
+}
+
+/** 匯出用：知道幾格 → HH:MM:SS:FF；不知道 → HH:MM:SS.mmm（不寫猜的格數） */
+export function formatTimecodeOrMs(sec: number, fps: number | null | undefined): string {
+  if (fps && fps > 0) return formatTimecode(sec, fps);
+  const ms = Math.max(0, Math.round((Number.isFinite(sec) ? sec : 0) * 1000));
+  const s = Math.floor(ms / 1000);
+  const p = (n: number, w = 2) => String(n).padStart(w, '0');
+  return `${p(Math.floor(s / 3600))}:${p(Math.floor(s / 60) % 60)}:${p(s % 60)}.${p(ms % 1000, 3)}`;
 }
 
 /** 一般的時間 0:12（超過一小時 1:02:03） */

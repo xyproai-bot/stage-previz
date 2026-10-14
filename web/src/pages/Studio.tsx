@@ -9,7 +9,7 @@ import StageScene, { type StageViewApi } from '../components/StageScene';
 import AnnotationLayer from '../components/AnnotationLayer';
 import { CommentFilterBar, ReviewCompose, readFollow, saveFollow, type StatusFilter } from '../components/ReviewCompose';
 import ExportCommentsDialog from '../components/ExportCommentsDialog';
-import { useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
+import { isTouchDevice, revealStage, useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
 import { playheadCommentId } from '../lib/review/playhead';
 import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
@@ -629,9 +629,11 @@ function StudioInner({ projectId }: { projectId: string }) {
   const selectedRootComments = useMemo(() => (selectedComments ?? []).filter(c => !c.parentId), [selectedComments]);
   const activeCommentId = versionVideoMode ? playheadCommentId(selectedRootComments, player.time) : null;
   const openedComment = session.selectedId ? (selectedComments ?? []).find(c => c.id === session.selectedId) ?? null : null;
+  const stageRef = useRef<HTMLDivElement>(null);
   const openComment = useCallback((c: SongComment) => {
     setTab('review');
     void session.open(c);
+    revealStage(stageRef.current);
     requestAnimationFrame(() => {
       const el = document.getElementById(`comment-${c.id}`);
       if (el) {
@@ -642,7 +644,9 @@ function StudioInner({ projectId }: { projectId: string }) {
     });
   }, [session]);
   const startDraw = useCallback(() => {
-    if (session.draft.start()) focusComposer();
+    if (!session.draft.start()) return;
+    if (isTouchDevice()) { setTab('review'); revealStage(stageRef.current); }
+    else focusComposer();
   }, [session.draft, focusComposer]);
 
   // ── 交影片（admin / 負責這首歌的動畫師；歌沒指派人 = 專案裡的動畫師都可以）──
@@ -1030,7 +1034,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 emptyText={canAdd ? '還沒有影片，按右邊「加影片」交第一版給導演看' : '這首歌還沒有影片'}
                 newVersion={source === 'version' ? newVersion : null}
               />
-              <div className="studio-stage__scene">
+              <div className="studio-stage__scene" ref={stageRef}>
                 <StageScene
                   key={`${projectId}:${selectedSongId}`}
                   states={viewportStates}
@@ -1075,7 +1079,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   <AnnotationLayer
                     draft={session.draft}
                     showing={session.showing}
-                    showingLabel={openedComment ? `${openedComment.author}${openedComment.time > 0 ? ` · ${formatClockShort(openedComment.time)}` : ''}` : undefined}
+                    showingLabel={openedComment ? `${openedComment.author}${(openedComment.annotation?.t ?? openedComment.time) > 0 ? ` · ${formatClockShort(openedComment.annotation?.t ?? openedComment.time)}` : ''}` : undefined}
                     onHideShowing={session.clearSelection}
                     onDone={focusComposer}
                   />
@@ -1305,6 +1309,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 pendingTime={pendingCommentTime}
                 onConsumedPendingTime={() => setPendingCommentTime(null)}
                 projectName={projectName}
+                currentTime={player.time}
               />
             )}
             {tab === 'review' && !selectedSong && (
@@ -1377,7 +1382,7 @@ function CuesTab({
 function ReviewTab({
   projectId, song, user, projectRole, members, comments, onCommentsChange, onRefreshComments,
   onChangeStatus, onSubmitForReview, viewed, latest, hasVersions, focusComment, onSeek,
-  session, videoActive, playing, activeId, onOpen, onStartDraw, composerRef, pendingTime, onConsumedPendingTime, projectName,
+  session, videoActive, playing, activeId, onOpen, onStartDraw, composerRef, pendingTime, onConsumedPendingTime, projectName, currentTime,
 }: {
   projectId: string;
   song: Song;
@@ -1411,6 +1416,8 @@ function ReviewTab({
   pendingTime: number | null;
   onConsumedPendingTime: () => void;
   projectName: string;
+  /** 影片現在的時間（沒選時間時，留言綁在這裡） */
+  currentTime: number;
 }) {
   const [note, setNote] = useState('');
   const [attachTime, setAttachTime] = useState<number | null>(null);
@@ -1589,7 +1596,8 @@ function ReviewTab({
             type="button" role="tab" aria-selected={effectiveScope === 'all'}
             className={'comment-scope__btn' + (effectiveScope === 'all' ? ' is-active' : '')}
             onClick={() => chooseScope('all')}
-          >全部 {threads.length}</button>
+            title="所有版本的留言（含還沒有版本時的舊留言）"
+          >所有版本 {threads.length}</button>
         </div>
         <CommentFilterBar
           status={filterStatus}
@@ -1607,6 +1615,7 @@ function ReviewTab({
               videoActive={videoActive}
               attachTime={videoActive ? attachTime : null}
               onClearTime={() => setAttachTime(null)}
+              currentTime={currentTime}
               onStartDraw={onStartDraw}
             />
             <textarea
@@ -1653,7 +1662,7 @@ function ReviewTab({
               ? '還沒有留言'
               : visible.length === 0 && scopedThreads.length > 0
               ? `沒有符合篩選的留言（共 ${scopedThreads.length} 則）`
-              : `${viewed?.label ?? '這一版'} 沒有要改的留言（按「全部」看所有版本的 ${threads.length} 則）`}
+              : `${viewed?.label ?? '這一版'} 沒有要改的留言（按「所有版本」看全部 ${threads.length} 則）`}
           />
         )}
       </section>

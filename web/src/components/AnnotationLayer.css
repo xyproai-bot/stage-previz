@@ -100,9 +100,13 @@
 }
 .ann-toolbar__row { display: flex; align-items: center; gap: 4px; }
 
+/* 叉叉（不要畫記了）跟「畫好了」分開一點，比較不會按錯 */
+.ann-tool--cancel { margin-left: 6px; }
 @media (hover: none) and (pointer: coarse) {
   .ann-tool { min-width: 40px; height: 40px; }
   .ann-color { width: 28px; height: 28px; }
+  .ann-tool--cancel { margin-left: 12px; }
+  .ann-badge__close { width: 32px; height: 32px; }
 }
 
 /* ── 打開留言時的畫記小標 ── */

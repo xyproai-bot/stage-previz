@@ -5,7 +5,7 @@ import type { Cue, CueState, SharePublicData, ShareRef, SongComment } from '../l
 import StageScene, { type StageViewApi } from '../components/StageScene';
 import AnnotationLayer from '../components/AnnotationLayer';
 import GuestCommentsPanel from '../components/GuestCommentsPanel';
-import { useReviewSession } from '../lib/review/useReviewSession';
+import { isTouchDevice, revealStage, useReviewSession } from '../lib/review/useReviewSession';
 import { playheadCommentId } from '../lib/review/playhead';
 import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
@@ -386,8 +386,10 @@ export default function Share() {
   const guestRoots = useMemo(() => guestComments.filter(c => !c.parentId), [guestComments]);
   const activeCommentId = versionVideoMode && allowComments ? playheadCommentId(guestRoots, local.time) : null;
   const openedComment = session.selectedId ? guestComments.find(c => c.id === session.selectedId) ?? null : null;
+  const stageRef = useRef<HTMLDivElement>(null);
   const openComment = useCallback((c: SongComment) => {
     void session.open(c);
+    revealStage(stageRef.current);
     const el = document.getElementById(`comment-${c.id}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -396,7 +398,9 @@ export default function Share() {
     }
   }, [session]);
   const startDraw = useCallback(() => {
-    if (session.draft.start()) focusComposer();
+    if (!session.draft.start()) return;
+    if (isTouchDevice()) revealStage(stageRef.current);
+    else focusComposer();
   }, [session.draft, focusComposer]);
 
   if (loading) return <div className="share-loading"><Icon icon={LoaderCircle} size="lg" spin /> 載入中…</div>;
@@ -528,7 +532,7 @@ export default function Share() {
           )}
 
           {selectedSongId && data.stageObjects.length > 0 ? (
-            <div className="share-stage__scene">
+            <div className="share-stage__scene" ref={stageRef}>
               <StageScene
                 key={selectedSongId}
                 states={viewportStates}
@@ -563,7 +567,7 @@ export default function Share() {
                 <AnnotationLayer
                   draft={session.draft}
                   showing={session.showing}
-                  showingLabel={openedComment ? `${openedComment.author}${openedComment.time > 0 ? ` · ${formatClockShort(openedComment.time)}` : ''}` : undefined}
+                  showingLabel={openedComment ? `${openedComment.author}${(openedComment.annotation?.t ?? openedComment.time) > 0 ? ` · ${formatClockShort(openedComment.annotation?.t ?? openedComment.time)}` : ''}` : undefined}
                   onHideShowing={session.clearSelection}
                   onDone={focusComposer}
                 />
@@ -665,6 +669,7 @@ export default function Share() {
             pendingTime={pendingCommentTime}
             onConsumedPendingTime={() => setPendingCommentTime(null)}
             onComments={setGuestComments}
+            currentTime={local.time}
             onAuthError={onShareFetchError}
             onDisabled={() => { setData(d => (d ? { ...d, allowComments: false } : d)); toast.info('製作把這個連結的留言關掉了'); }}
           />

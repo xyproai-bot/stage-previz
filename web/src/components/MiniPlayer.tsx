@@ -99,7 +99,11 @@ export default function MiniPlayer({
   const [place, setPlace] = useState<Placement>(() => readPlacement(storageKey));
   // 沒記過要不要收起來：3D 畫面太矮（iPad 橫放、留言在下面）就先收起來
   const [autoCollapsed, setAutoCollapsed] = useState(false);
-  const collapsed = place.collapsed ?? autoCollapsed;
+  // 打開有畫記的留言、停著看畫記的時候先收起來（不然會蓋到畫記）；按播放就展開回來（不記住）
+  const showingAnnotation = !!review?.session.showing && !player.playing;
+  const collapsed = showingAnnotation || (place.collapsed ?? autoCollapsed);
+  // 畫記的時候整個藏起來：畫的地方大一點（手機），也不會畫到一半去拉時間軸（畫記是畫在按「畫記」那一格）
+  const hiddenForDrawing = !!review?.session.draft.active;
   const placeRef = useRef(place);
   placeRef.current = place;
 
@@ -166,6 +170,7 @@ export default function MiniPlayer({
   };
 
   const toggleCollapsed = () => {
+    if (showingAnnotation) { review?.session.clearSelection(); return; }
     const next = { ...placeRef.current, collapsed: !collapsed };
     setPlace(next);
     savePlacement(storageKey, next);
@@ -212,7 +217,7 @@ export default function MiniPlayer({
 
   // 時間軸上面那一條：拖 = 標區段（手指也可以）；點一下 = 跳到那裡
   const laneRef = useRef<HTMLDivElement>(null);
-  const laneDragRef = useRef<{ id: number; t0: number; moved: boolean } | null>(null);
+  const laneDragRef = useRef<{ id: number; t0: number; x0: number; moved: boolean } | null>(null);
   const laneTime = (clientX: number) => {
     const r = laneRef.current?.getBoundingClientRect();
     if (!r || !(r.width > 0) || !(duration > 0)) return 0;
@@ -222,13 +227,14 @@ export default function MiniPlayer({
     if (!session || !ready || (e.target as HTMLElement).closest('button')) return;
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    laneDragRef.current = { id: e.pointerId, t0: laneTime(e.clientX), moved: false };
+    laneDragRef.current = { id: e.pointerId, t0: laneTime(e.clientX), x0: e.clientX, moved: false };
   };
   const onLaneMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const d = laneDragRef.current;
     if (!d || d.id !== e.pointerId || !session) return;
     const t = laneTime(e.clientX);
-    if (!d.moved && Math.abs(t - d.t0) < Math.max(0.15, duration * 0.004)) return;
+    // 點 vs 拖：用手指移動了幾 px 判斷（長的歌用秒數判斷，輕點就會變成標了一小段）
+    if (!d.moved && Math.abs(e.clientX - d.x0) < (e.pointerType === 'touch' ? 10 : 5)) return;
     d.moved = true;
     session.setMarks(d.t0, t);
   };
@@ -322,6 +328,14 @@ export default function MiniPlayer({
     </button>
   );
 
+  // 正在循環（打開了區段留言）：手機、iPad 沒有 Esc → 一顆「循環 0:05–0:09 ×」可以停
+  const loopChip = session && loopRange && (
+    <span className="mini-player__range-chip mini-player__range-chip--loop" title="正在循環這一段（打開的區段留言）">
+      <Icon icon={Repeat} size="xs" /> 循環 {formatRange(loopRange.start, loopRange.end)}
+      <button type="button" className="mini-player__chip-x" onClick={session.clearSelection} title="不再循環" aria-label="不再循環"><Icon icon={X} size="xs" /></button>
+    </span>
+  );
+
   // 區段按鈕：沒有 → 「標開始」；有開始 → 「標結束」；標好了 → 「區段 0:12–0:18 ×」
   const rangeBtn = session && rangesOn && (
     pendingRange ? (
@@ -345,7 +359,8 @@ export default function MiniPlayer({
   return (
     <div
       ref={rootRef}
-      className={'mini-player' + (collapsed ? ' is-collapsed' : '') + (review ? ' has-review' : '')}
+      className={'mini-player' + (collapsed ? ' is-collapsed' : '') + (review ? ' has-review' : '') + (hiddenForDrawing ? ' is-hidden-for-drawing' : '')}
+      aria-hidden={hiddenForDrawing || undefined}
       style={{ right: place.right, bottom: place.bottom }}
       role="region"
       aria-label={`影片 ${label}`}
@@ -364,7 +379,8 @@ export default function MiniPlayer({
         {!collapsed && detail && <span className="mini-player__detail">{detail}</span>}
         {collapsed && <span className="mini-player__time">{formatClock(time)} / {formatClock(duration)}</span>}
         <span className="mini-player__grow" />
-        {collapsed && collapsedCompareBtn}
+        {collapsed && loopChip}
+        {collapsed && !loopChip && collapsedCompareBtn}
         {!collapsed && extra}
         <button
           type="button"
@@ -412,7 +428,7 @@ export default function MiniPlayer({
               <select
                 className="mini-player__rate"
                 value={String(session.speed)}
-                onChange={(e) => session.setSpeed(parseFloat(e.target.value))}
+                onChange={(e) => { session.setSpeed(parseFloat(e.target.value)); e.currentTarget.blur(); }}
                 title="播放速度"
                 aria-label="播放速度"
               >
@@ -447,7 +463,7 @@ export default function MiniPlayer({
                 <span>比較</span>
                 <select
                   value={compare!.value ?? ''}
-                  onChange={(e) => compare!.onPick(e.target.value || null)}
+                  onChange={(e) => { compare!.onPick(e.target.value || null); e.currentTarget.blur(); }}
                   aria-label="選另一個版本來比較"
                   title="選另一個版本，按右邊的按鈕（或 C）在兩版之間切換，停在同一個時間點"
                 >
@@ -458,7 +474,7 @@ export default function MiniPlayer({
               {flipBtn || <span className="mini-player__compare-hint">選一版，按 C 切換</span>}
             </div>
           )}
-          {(onAddCommentAtTime || review?.onDraw || rangesOn) && (
+          {(onAddCommentAtTime || review?.onDraw || rangesOn || loopChip) && (
             <div className="mini-player__actions">
               {onAddCommentAtTime && (
                 <button type="button" className="mini-player__action mini-player__action--main" onClick={() => onAddCommentAtTime(player.video.currentTime)} disabled={!ready}>
@@ -470,6 +486,7 @@ export default function MiniPlayer({
                   <Icon icon={Pencil} size="sm" /> 畫記
                 </button>
               )}
+              {loopChip}
               {rangeBtn}
             </div>
           )}

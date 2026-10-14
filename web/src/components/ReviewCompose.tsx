@@ -1,7 +1,8 @@
 // 留言框上面那一排（導演頁、動畫師工作站、分享連結共用）：這則留言會帶什麼
 //   時間：掛在 0:12 / 區段 0:12–0:18（I / O、拖時間軸）/ 畫記的那一格
 //   畫記：「畫記」按鈕（暫停在這一格、在 3D 畫面上畫）；畫了 → 「畫記 3 筆」
-//   視角：送出時一定會記住現在的 3D 視角（大家點這則留言時攝影機會飛過來）
+//   沒特別選時間 → 綁在影片現在的時間（「在 0:12」，按 × 不綁）
+//   視角：送出時一定會記住現在的 3D 視角（大家點這則留言時攝影機會飛過來）——只是說明，不是按鈕
 // 還有「未解決 / 已解決 / 全部」和「跟著播放」（CommentFilterBar）。
 
 import { Brackets, Clock, Download, PenLine, Pencil, Video, X } from 'lucide-react';
@@ -16,11 +17,13 @@ interface ComposeProps {
   videoActive: boolean;
   attachTime: number | null;
   onClearTime: () => void;
+  /** 影片現在的時間（沒選時間時，留言綁在這裡） */
+  currentTime: number;
   /** 沒給 = 沒有畫記按鈕 */
   onStartDraw?: () => void;
 }
 
-export function ReviewCompose({ session, videoActive, attachTime, onClearTime, onStartDraw }: ComposeProps) {
+export function ReviewCompose({ session, videoActive, attachTime, onClearTime, currentTime, onStartDraw }: ComposeProps) {
   const { draft, range } = session;
   const timeChip = range && videoActive ? (
     <span className="rv-chip rv-chip--range" title="這則留言蓋住這一段（按 I / O 或拖時間軸上面那一條可以改）">
@@ -34,6 +37,15 @@ export function ReviewCompose({ session, videoActive, attachTime, onClearTime, o
       <Icon icon={Clock} size="xs" /> 掛在 <strong>{formatClockShort(attachTime)}</strong>
       <button type="button" className="rv-chip__x" onClick={onClearTime} title="取消綁時間" aria-label="取消綁時間"><Icon icon={X} size="xs" /></button>
     </span>
+  ) : videoActive && session.bindNow ? (
+    <span className="rv-chip" title="沒有選時間的話，留言綁在影片現在停的這一秒">
+      <Icon icon={Clock} size="xs" /> 在 <strong>{formatClockShort(currentTime)}</strong>
+      <button type="button" className="rv-chip__x" onClick={() => session.setBindNow(false)} title="不綁時間（整首歌的意見）" aria-label="不綁時間"><Icon icon={X} size="xs" /></button>
+    </span>
+  ) : videoActive ? (
+    <button type="button" className="rv-chip rv-chip--btn" onClick={() => session.setBindNow(true)} title="綁在影片現在的時間">
+      <Icon icon={Clock} size="xs" /> 不綁時間
+    </button>
   ) : null;
 
   return (
@@ -49,8 +61,8 @@ export function ReviewCompose({ session, videoActive, attachTime, onClearTime, o
           <Icon icon={Pencil} size="xs" /> 畫記
         </button>
       ) : null}
-      <span className="rv-chip rv-chip--view" title="送出時會記住現在的 3D 視角；大家點這則留言時，攝影機會飛到這裡">
-        <Icon icon={Video} size="xs" /> 記住這個視角
+      <span className="rv-note" title="送出時會記住現在的 3D 視角；大家點這則留言時，攝影機會飛到這裡">
+        <Icon icon={Video} size="xs" /> 會記住現在的視角
       </span>
     </div>
   );
@@ -70,19 +82,20 @@ interface FilterProps {
 }
 
 export function CommentFilterBar({ status, onStatus, counts, follow, onFollow, onExport }: FilterProps) {
-  const btn = (s: StatusFilter, label: string) => (
+  const btn = (s: StatusFilter, label: string, title: string) => (
     <button
       type="button" role="tab" aria-selected={status === s}
       className={'comment-scope__btn' + (status === s ? ' is-active' : '')}
       onClick={() => onStatus(s)}
+      title={title}
     >{label}{counts ? ` ${counts[s]}` : ''}</button>
   );
   return (
     <div className="comment-filterbar">
       <div className="comment-scope" role="tablist" aria-label="未解決 / 已解決">
-        {btn('open', '未解決')}
-        {btn('resolved', '已解決')}
-        {btn('all', '全部')}
+        {btn('open', '未解決', '還沒改好的留言')}
+        {btn('resolved', '已解決', '已經標「已改好」的留言')}
+        {btn('all', '全部', '不管改好了沒')}
       </div>
       <label className="comment-follow" title="播放時，清單自己捲到離播放頭最近的那則留言">
         <input type="checkbox" checked={follow} onChange={e => onFollow(e.target.checked)} /> 跟著播放

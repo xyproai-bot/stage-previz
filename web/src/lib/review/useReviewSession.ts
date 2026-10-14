@@ -12,7 +12,7 @@ import type { StageViewApi } from '../../components/StageScene';
 import { versionKey } from '../songVersions';
 import { toast } from '../toast';
 import { nextShuttle, reviewActionFor, type Shuttle } from './reviewShortcuts';
-import { estimateFps, stepFrameTime } from './timecode';
+import { estimateFps, fpsFromFrameCount, stepFrameTime } from './timecode';
 import { loopSeekTarget, normalizeRange, seekLeavesRange } from './playhead';
 import {
   DEFAULT_ANN_COLOR, parseAnnotation, serializeAnnotation, type AnnShape, type AnnTool, type Annotation,
@@ -57,7 +57,9 @@ export interface AnnotationDraft {
   setColor: (c: string) => void;
   add: (s: AnnShape) => void;
   undo: () => void;
+  /** 全部擦掉（按復原可以拿回來） */
   clear: () => void;
+  canUndo: boolean;
   /** 開始畫：先暫停、記下這一格的畫面和視角 */
   start: () => boolean;
   /** 不要了 */
@@ -89,8 +91,11 @@ export interface ReviewSession {
   clearSelection: () => void;
   // 畫記草稿
   draft: AnnotationDraft;
-  /** 送出留言時要帶的：時間（區段 / 畫的那一秒 / attachTime）、視角、cue、畫記、縮圖 */
+  /** 送出留言時要帶的：時間（區段 / 畫的那一秒 / attachTime / 現在的時間）、視角、cue、畫記、縮圖 */
   collect: (attachTime: number | null) => CommentExtras & { time: number };
+  /** 沒特別選時間時，留言綁在影片現在的時間（預設要；留言框上面的 × 可以取消） */
+  bindNow: boolean;
+  setBindNow: (on: boolean) => void;
   /** 送出之後：清掉區段、畫記 */
   afterSend: () => void;
 }
@@ -109,9 +114,36 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
   // ── 影片幾格（播放時量） ──
   const [fps, setFps] = useState<number | null>(null);
   useEffect(() => { setFps(null); }, [player.srcKey]);
+  // 解碼的格數（顯示的 + 掉的）÷ 影片走了幾秒：3D 很忙、畫面掉格也量得準（中間拉時間軸就重新量）
+  useEffect(() => {
+    if (fps != null || !player.playing || typeof video.getVideoPlaybackQuality !== 'function') return;
+    let base: { frames: number; t: number } | null = null;
+    const reset = () => { base = null; };
+    const onTime = () => {
+      if (video.playbackRate !== 1 || video.paused) { base = null; return; }
+      const frames = video.getVideoPlaybackQuality().totalVideoFrames;
+      if (!base) { base = { frames, t: video.currentTime }; return; }
+      const dt = video.currentTime - base.t;
+      if (dt < 0) { base = null; return; }
+      if (dt >= 2) {
+        const f = fpsFromFrameCount(frames - base.frames, dt);
+        if (f) setFps(f);
+        base = { frames, t: video.currentTime };
+      }
+    };
+    video.addEventListener('timeupdate', onTime);
+    video.addEventListener('seeking', reset);
+    video.addEventListener('ratechange', reset);
+    return () => {
+      video.removeEventListener('timeupdate', onTime);
+      video.removeEventListener('seeking', reset);
+      video.removeEventListener('ratechange', reset);
+    };
+  }, [video, player.playing, fps]);
   useEffect(() => {
     type RVFC = (cb: (now: number, meta: { mediaTime: number }) => void) => number;
     const v = video as HTMLVideoElement & { requestVideoFrameCallback?: RVFC; cancelVideoFrameCallback?: (h: number) => void };
+    if (typeof video.getVideoPlaybackQuality === 'function') return;  // 上面那個量得比較準
     if (!v.requestVideoFrameCallback || fps != null || !player.playing) return;
     const deltas: number[] = [];
     let last: number | null = null;
@@ -261,13 +293,19 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
   }, [loop, video]);
 
   const open = useCallback(async (c: SongComment | OpenableComment) => {
+    if (drawActiveRef.current) {
+      toast.warn('正在畫記：先送出留言，或按畫記工具列的叉叉不要畫記，再打開別的留言');
+      return;
+    }
     const seq = ++openSeqRef.current;
     const opts = optsRef.current;
     setSelectedId(c.id);
     setShowing(null);
     const hasRange = c.timeEnd != null && c.timeEnd > c.time;
-    const hasTime = c.time > 0 || hasRange;
     const ann = parseAnnotation(c.annotation);
+    // 停在哪一格：有畫記 → 畫的那一格（區段留言常常是先標 I / O 再畫，畫的不是區段開頭）；沒有 → 留言的時間
+    const at = ann?.t != null && (!hasRange || (ann.t >= c.time - 0.5 && ann.t <= (c.timeEnd as number) + 0.5)) ? ann.t : c.time;
+    const hasTime = at > 0 || hasRange;
     setLoop(hasRange ? { start: c.time, end: c.timeEnd as number } : null);
     // 有區段、沒有畫記 → 直接開始循環；有畫記 → 先停在那一格給你看
     const autoplay = hasRange && !ann;
@@ -282,7 +320,7 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
       } else {
         if (player.getSrcKey() !== key) {
           opts.beforeOpenVersion?.();
-          player.loadUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin, startAt: hasTime ? c.time : 0, autoplay });
+          player.loadUrl(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin, startAt: hasTime ? at : 0, autoplay });
           switched = true;
         }
         if (key !== opts.versions.currentKey) {
@@ -294,8 +332,8 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     if (!switched && hasTime) {
       const go = () => {
         selfSeekRef.current = true;
-        if (autoplay) { player.seek(c.time); player.play(); }
-        else { player.pause(); player.seek(c.time); }
+        if (autoplay) { player.seek(at); player.play(); }
+        else { player.pause(); player.seek(at); }
       };
       if (player.ready) go();
       else player.video.addEventListener('loadedmetadata', go, { once: true });
@@ -319,7 +357,13 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
   const [drawTime, setDrawTime] = useState<number | null>(null);
   const drawFrameRef = useRef<HTMLCanvasElement | null>(null);
   const drawViewRef = useRef<CameraView | null>(null);
+  const drawActiveRef = useRef(false);
+  drawActiveRef.current = drawActive;
+  // 「全部擦掉」可以復原：擦掉前的那些筆畫留著，按復原拿回來
+  const clearedRef = useRef<AnnShape[] | null>(null);
   const startDraw = useCallback(() => {
+    // 已經在畫了 → 不要重新開始（畫好的筆畫不會不見）
+    if (drawActiveRef.current) return true;
     const api = viewApiRef.current;
     if (!api) return false;
     if (!video.paused) video.pause();
@@ -336,6 +380,7 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
   const cancelDraw = useCallback(() => {
     setDrawActive(false);
     setShapes([]);
+    clearedRef.current = null;
     drawFrameRef.current = null;
     drawViewRef.current = null;
     setDrawTime(null);
@@ -343,9 +388,13 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
   const draft: AnnotationDraft = {
     active: drawActive, shapes, tool, color, aspect: drawAspect, time: drawTime,
     setTool, setColor,
-    add: (s) => setShapes(list => [...list, s]),
-    undo: () => setShapes(list => list.slice(0, -1)),
-    clear: () => setShapes([]),
+    add: (s) => { clearedRef.current = null; setShapes(list => [...list, s]); },
+    undo: () => {
+      if (shapes.length === 0 && clearedRef.current) { const back = clearedRef.current; clearedRef.current = null; setShapes(back); return; }
+      setShapes(list => list.slice(0, -1));
+    },
+    clear: () => { if (shapes.length) clearedRef.current = shapes; setShapes([]); },
+    canUndo: shapes.length > 0 || !!clearedRef.current,
     start: startDraw,
     cancel: cancelDraw,
   };
@@ -357,25 +406,29 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     cancelDraw();
     stopReverse();
     setShuttle({ dir: 0, rate: 1 });
+    setBindNow(true);
   }, [resetKey, clearSelection, clearMarks, cancelDraw, stopReverse]);
 
+  const [bindNow, setBindNow] = useState(true);
   const collect = useCallback((attachTime: number | null): CommentExtras & { time: number } => {
     const api = viewApiRef.current;
-    const ann = drawActive ? serializeAnnotation(shapes, drawAspect) : null;
+    const ann = drawActive ? serializeAnnotation(shapes, drawAspect, drawTime) : null;
     const view = (drawActive ? drawViewRef.current : null) ?? api?.getView() ?? null;
     let time = 0;
     let timeEnd: number | null = null;
     if (range && optsRef.current.videoActive) { time = range.start; timeEnd = range.end; }
     else if (drawActive && drawTime != null) time = drawTime;
     else if (attachTime != null) time = attachTime;
+    else if (bindNow && optsRef.current.videoActive) time = video.currentTime;
     const frame = (drawActive ? drawFrameRef.current : null) ?? api?.capture(THUMB_MAX_WIDTH) ?? null;
     const thumbnail = composeThumbnail(frame, ann);
     return { time: Math.round(time * 1000) / 1000, timeEnd, view, cueId: optsRef.current.cueId, annotation: ann, thumbnail };
-  }, [viewApiRef, drawActive, shapes, drawAspect, drawTime, range]);
+  }, [viewApiRef, drawActive, shapes, drawAspect, drawTime, range, bindNow, video]);
 
   const afterSend = useCallback(() => {
     clearMarks();
     cancelDraw();
+    setBindNow(true);
   }, [clearMarks, cancelDraw]);
 
   // ── 鍵盤 ──
@@ -386,6 +439,8 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     if (o.keyboard === false) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.defaultPrevented) return;
+      // 對話框開著（匯出、分享、確認…）→ 快捷鍵一律不處理（空白鍵是按對話框的按鈕、Esc 是關對話框）
+      if (dialogOpen(e.target)) return;
       const action = reviewActionFor(e, { pointerLocked: !!document.pointerLockElement });
       if (!action) return;
       const st = stateRef.current;
@@ -399,6 +454,7 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
       if (action === 'prevSong' || action === 'nextSong') {
         if (!oo.onSongStep) return;
         e.preventDefault();
+        if (st.drawActive) { toast.warn('正在畫記：先送出留言，或按叉叉不要畫記，再換歌'); return; }
         oo.onSongStep(action === 'nextSong' ? 1 : -1);
         return;
       }
@@ -408,6 +464,8 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
         return;
       }
       if (!st.videoActive) return;
+      // 畫記的時候影片不要動（畫的是按「畫記」那一格）
+      if (st.drawActive) return;
       e.preventDefault();
       switch (action) {
         case 'playPause': stopReverse(); if (video.paused) video.play().catch(() => {}); else video.pause(); break;
@@ -448,6 +506,28 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     fps, frameStep, shuttle, speed: player.rate, setSpeed, timecode, toggleTimecode,
     marks, range, markIn, markOut, setMarks, clearMarks,
     loop, selectedId, showing, open, clearSelection,
-    draft, collect, afterSend,
+    draft, collect, afterSend, bindNow, setBindNow,
   };
+}
+
+/** 手機、iPad：留言清單在舞台下面 → 打開留言、開始畫記時把 3D 畫面捲回來 */
+export function revealStage(el: Element | null | undefined): void {
+  if (!el || typeof window === 'undefined') return;
+  if (!window.matchMedia('(max-width: 1024px)').matches) return;
+  const r = el.getBoundingClientRect();
+  if (r.top >= 0 && r.bottom <= window.innerHeight) return;
+  el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+/** 觸控裝置（開始畫記時不要把焦點放到留言框：鍵盤會跳出來、畫面被推走） */
+export function isTouchDevice(): boolean {
+  return typeof window !== 'undefined' && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+}
+
+/** 有沒有對話框開著（或焦點在對話框裡） */
+function dialogOpen(target: EventTarget | null): boolean {
+  const t = target as Element | null;
+  if (t && typeof t.closest === 'function' && t.closest('[role="dialog"], [aria-modal="true"]')) return true;
+  if (typeof document === 'undefined') return false;
+  return !!document.querySelector('.dialog-overlay, .dlg-overlay, .help-overlay, [aria-modal="true"]');
 }

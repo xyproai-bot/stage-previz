@@ -16,7 +16,8 @@ const str = (v, max = 200) => (typeof v === 'string') ? v.slice(0, max) : '';
 //   view             留言當下的攝影機：{ position: [x,y,z], target: [x,y,z], fov, aspect? }
 //   cueId            留言當下的 cue
 //   annotation       畫記（畫在 3D 畫面上的筆、箭頭、方框、圓圈），座標 0~1、跟螢幕大小無關：
-//                    { v: 1, aspect, shapes: [{ t: 'pen'|'arrow'|'rect'|'ellipse', c: '#ff3b30', w, p: [x0,y0,x1,y1,...] }] }
+//                    { v: 1, aspect, t?, shapes: [{ t: 'pen'|'arrow'|'rect'|'ellipse', c: '#ff3b30', w, p: [x0,y0,x1,y1,...] }] }
+//                    （最外層的 t = 畫的那一格；打開留言時先停在那一格）
 //   thumbUrl（只有讀）留言當下的畫面縮圖（含畫記），R2 comment-thumbs/…
 // 舊版前端不帶這些 → 跟以前一模一樣。規則跟 web/src/lib/annotations.ts 一樣（前端先擋，這裡最後把關）。
 // ─────────────────────────────────────────────
@@ -83,6 +84,8 @@ export function sanitizeAnnotation(a) {
     shapes.push({ t: s.t, c: color, w: round(Math.max(0.001, s.w), 4), p: s.p.map(clamp01) });
   }
   const value = { v: 1, aspect: round(a.aspect, 4), shapes };
+  // t = 畫的那一格（影片秒數）：區段留言先標 I / O 再畫時，畫的那一格不一定是區段的開頭
+  if (isNum(a.t) && a.t >= 0 && a.t <= MAX_VIDEO_SEC) value.t = round(a.t, 3);
   if (JSON.stringify(value).length > MAX_ANNOTATION_CHARS) return bad('畫記太複雜了，請擦掉一些');
   return { ok: true, value };
 }

@@ -63,6 +63,12 @@ describe('畫記：存起來 / 讀回來', () => {
     expect(a).toEqual({ v: 1, aspect: 1.7778, shapes });
     expect(parseAnnotation(JSON.parse(JSON.stringify(a)))).toEqual(a);
   });
+  it('記下畫的那一格（打開留言時先停在這裡）', () => {
+    const a = serializeAnnotation(shapes, 1.5, 9.04)!;
+    expect(a.t).toBe(9.04);
+    expect(parseAnnotation(JSON.parse(JSON.stringify(a)))!.t).toBe(9.04);
+    expect(serializeAnnotation(shapes, 1.5, null)!.t).toBeUndefined();
+  });
   it('超過上限的拿掉後面的', () => {
     const lots = Array.from({ length: MAX_SHAPES + 5 }, () => shapes[0]);
     expect(serializeAnnotation(lots, 1.5)!.shapes.length).toBe(MAX_SHAPES);

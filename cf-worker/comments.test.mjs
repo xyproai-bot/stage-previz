@@ -103,6 +103,10 @@ test('畫記：座標夾在 0~1、四捨五入、顏色只收調色盤；太多�
   assert.match(sanitizeAnnotation({ ...okAnn, shapes: [longPen] }).error, /太長/);
   const pen = { t: 'pen', c: '#ffffff', w: 0.004, p: [0.1, 0.1, 0.2, 0.2, 0.3, 0.25] };
   assert.equal(sanitizeAnnotation({ ...okAnn, shapes: [pen] }).value.shapes[0].p.length, 6);
+  // 畫的那一格（區段留言先標 I / O 再畫）
+  assert.equal(sanitizeAnnotation({ ...okAnn, t: 9.04 }).value.t, 9.04);
+  assert.equal('t' in sanitizeAnnotation({ ...okAnn, t: -1 }).value, false);
+  assert.equal('t' in sanitizeAnnotation({ ...okAnn, t: 'x' }).value, false);
   // 送到留言：畫記壞掉 → 整則擋下來
   assert.equal(commentExtrasInput({ time: 1, annotation: { ...okAnn, shapes: [{ ...arrow, c: 'red' }] } }).ok, false);
 });

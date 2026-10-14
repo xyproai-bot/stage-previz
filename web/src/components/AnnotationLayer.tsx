@@ -13,6 +13,7 @@ import {
   type AnnShape, type AnnTool, type Annotation,
 } from '../lib/review/annotations';
 import type { AnnotationDraft } from '../lib/review/useReviewSession';
+import { confirmDialog } from './dialogs';
 import './AnnotationLayer.css';
 
 const TOOL_ICON: Record<AnnTool, LucideIcon> = { pen: Pencil, arrow: MoveUpRight, rect: Square, ellipse: Circle };
@@ -139,6 +140,19 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
     return () => window.removeEventListener('keydown', onKey);
   }, [drawing, draft]);
 
+  // 已經畫了東西才按叉叉 → 先問一聲（叉叉跟「畫好了」挨在一起，手機上容易按錯）
+  async function cancelDrawing() {
+    if (!draft) return;
+    if (draft.shapes.length > 0 && !(await confirmDialog({
+      title: '不要這個畫記了？',
+      message: `畫好的 ${draft.shapes.length} 筆會不見。要留著的話按「畫好了」，再寫留言送出。`,
+      confirmLabel: '不要了',
+      cancelLabel: '繼續畫',
+      destructive: true,
+    }))) return;
+    draft.cancel();
+  }
+
   if (!drawing && !showing) return <div ref={rootRef} className="ann-layer" aria-hidden="true" />;
 
   const W = box.width, H = box.height;
@@ -221,11 +235,11 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
               <span className="ann-toolbar__sep" aria-hidden="true" />
             </>
           )}
-          <button type="button" className="ann-tool" onClick={draft.undo} disabled={draft.shapes.length === 0} title="復原一筆（Ctrl+Z）" aria-label="復原一筆">
+          <button type="button" className="ann-tool" onClick={draft.undo} disabled={!draft.canUndo} title="復原一筆（Ctrl+Z；擦掉的也拿得回來）" aria-label="復原一筆">
             <Icon icon={Undo2} size="md" />
           </button>
           {!compact && (
-            <button type="button" className="ann-tool" onClick={draft.clear} disabled={draft.shapes.length === 0} title="全部擦掉" aria-label="全部擦掉">
+            <button type="button" className="ann-tool" onClick={draft.clear} disabled={draft.shapes.length === 0} title="全部擦掉（按復原拿得回來）" aria-label="全部擦掉">
               <Icon icon={Trash2} size="md" />
             </button>
           )}
@@ -235,7 +249,7 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
               <Icon icon={Check} size="md" />{!compact && <span>畫好了</span>}
             </button>
           )}
-          <button type="button" className="ann-tool" onClick={draft.cancel} title="不要畫記了" aria-label="不要畫記了">
+          <button type="button" className="ann-tool ann-tool--cancel" onClick={() => void cancelDrawing()} title="不要畫記了" aria-label="不要畫記了">
             <Icon icon={X} size="md" />
           </button>
         </div>

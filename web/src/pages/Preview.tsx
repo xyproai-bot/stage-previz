@@ -9,7 +9,7 @@ import StageScene, { type StageViewApi } from '../components/StageScene';
 import AnnotationLayer from '../components/AnnotationLayer';
 import { CommentFilterBar, ReviewCompose, readFollow, saveFollow, type StatusFilter } from '../components/ReviewCompose';
 import ExportCommentsDialog from '../components/ExportCommentsDialog';
-import { useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
+import { isTouchDevice, revealStage, useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
 import { playheadCommentId } from '../lib/review/playhead';
 import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
@@ -909,8 +909,10 @@ function SongDetail({
   const openedComment = session.selectedId ? comments.find(c => c.id === session.selectedId) ?? null : null;
 
   // 打開一則留言：換版本、跳到那一格、攝影機飛過去、疊上畫記、區段循環；清單捲過去閃一下
+  const stageRef = useRef<HTMLDivElement>(null);
   const openComment = useCallback((c: SongComment) => {
     void session.open(c);
+    revealStage(stageRef.current);
     const el = document.getElementById(`comment-${c.id}`);
     if (el) {
       el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -920,7 +922,10 @@ function SongDetail({
   }, [session]);
   const handlePinClick = openComment;
   const startDraw = useCallback(() => {
-    if (session.draft.start()) focusComposer();
+    if (!session.draft.start()) return;
+    // 手機、iPad：先把 3D 畫面捲回來畫（不要跳鍵盤）；電腦：留言框拿到焦點，畫好直接打字
+    if (isTouchDevice()) revealStage(stageRef.current);
+    else focusComposer();
   }, [session.draft, focusComposer]);
 
   // ── 交影片（admin / 負責的動畫師；導演只能看）──
@@ -1037,7 +1042,7 @@ function SongDetail({
           />
 
           <div className="song-detail__stage">
-            <div className="song-detail__scene">
+            <div className="song-detail__scene" ref={stageRef}>
               {/* 沒有 cue 也照樣顯示舞台（物件在預設位置），導演才看得到模型 */}
               <StageScene
                 key={`${projectId}:${song.id}`}
@@ -1092,7 +1097,7 @@ function SongDetail({
                 <AnnotationLayer
                   draft={session.draft}
                   showing={session.showing}
-                  showingLabel={openedComment ? `${openedComment.author}${openedComment.time > 0 ? ` · ${formatClockShort(openedComment.time)}` : ''}` : undefined}
+                  showingLabel={openedComment ? `${openedComment.author}${(openedComment.annotation?.t ?? openedComment.time) > 0 ? ` · ${formatClockShort(openedComment.annotation?.t ?? openedComment.time)}` : ''}` : undefined}
                   onHideShowing={session.clearSelection}
                   onDone={focusComposer}
                 />
@@ -1184,6 +1189,7 @@ function SongDetail({
             onStartDraw={startDraw}
             composerRef={composerRef}
             projectName={projectName || ''}
+            currentTime={player.time}
           />
         </aside>
       </div>
@@ -1208,7 +1214,7 @@ function SongComments({
   projectId, song, user, projectRole, comments, loading, onChange, onRefresh,
   pendingTime, onConsumedPendingTime, pendingAnchor, onConsumedPendingAnchor, members,
   viewed, latest, hasVersions, focusComment, onSeek,
-  session, videoActive, playing, activeId, onOpen, onStartDraw, composerRef, projectName,
+  session, videoActive, playing, activeId, onOpen, onStartDraw, composerRef, projectName, currentTime,
 }: {
   projectId: string;
   song: Song;
@@ -1243,6 +1249,8 @@ function SongComments({
   /** 留言框（按 O、畫好畫記後拿到焦點） */
   composerRef: React.RefObject<HTMLTextAreaElement>;
   projectName: string;
+  /** 影片現在的時間（沒選時間時，留言綁在這裡） */
+  currentTime: number;
 }) {
   const [text, setText] = useState('');
   const [posting, setPosting] = useState(false);
@@ -1477,7 +1485,7 @@ function SongComments({
           className={'comment-scope__btn' + (effectiveScope === 'all' ? ' is-active' : '')}
           onClick={() => chooseScope('all')}
           title="所有版本的留言（含還沒有版本時的舊留言）"
-        >全部 {threads.length}</button>
+        >所有版本 {threads.length}</button>
       </div>
 
       {selectedIds.size > 0 && (
@@ -1526,6 +1534,7 @@ function SongComments({
             videoActive={videoActive}
             attachTime={videoActive ? attachTime : null}
             onClearTime={() => setAttachTime(null)}
+            currentTime={currentTime}
             onStartDraw={onStartDraw}
           />
           {attachAnchor && (
@@ -1618,7 +1627,7 @@ function SongComments({
           emptyText={threads.length === 0
             ? '還沒有留言'
             : effectiveScope === 'version'
-              ? `${viewed?.label ?? '這一版'} 還沒有留言（按「全部」看所有版本的 ${threads.length} 則）`
+              ? `${viewed?.label ?? '這一版'} 還沒有留言（按「所有版本」看全部 ${threads.length} 則）`
               : `沒有符合篩選的留言（共 ${threads.length} 則）`}
         />
       )}

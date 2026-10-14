@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { estimateFps, formatClockShort, formatRange, formatTimecode, frameDuration, snapFps, stepFrameTime } from './timecode';
+import { estimateFps, formatClockShort, formatRange, formatTimecode, formatTimecodeOrMs, fpsFromFrameCount, frameDuration, snapFps, stepFrameTime } from './timecode';
 
 describe('影片幾格', () => {
   it('量到的格數對到常見的格數', () => {
@@ -15,6 +15,16 @@ describe('影片幾格', () => {
     expect(estimateFps(d25)).toBe(25);
     expect(estimateFps([0.04, 0.04])).toBeNull();
     expect(estimateFps(Array.from({ length: 20 }, () => 1 / 60))).toBe(60);
+  });
+  it('電腦忙、畫面掉格量出來太低 → 不信（null）', () => {
+    expect(estimateFps(Array.from({ length: 20 }, () => 1 / 8.2))).toBeNull();
+  });
+  it('解碼的格數 ÷ 播了幾秒（掉格也算在裡面）', () => {
+    expect(fpsFromFrameCount(50, 2)).toBe(25);
+    expect(fpsFromFrameCount(59.94 * 3, 3)).toBe(59.94);
+    expect(fpsFromFrameCount(10, 1)).toBeNull();      // 播太短
+    expect(fpsFromFrameCount(16, 2)).toBeNull();      // 8 格：不合理
+    expect(fpsFromFrameCount(0, 2)).toBeNull();
   });
   it('不知道幾格 = 1/30 秒一格', () => {
     expect(frameDuration(null)).toBeCloseTo(1 / 30);
@@ -45,6 +55,11 @@ describe('時間碼和時間', () => {
     expect(formatTimecode(1.5, 29.97)).toBe('00:00:01:15');
     expect(formatTimecode(1.5, null)).toBe('00:00:01:15');
     expect(formatTimecode(-3, 25)).toBe('00:00:00:00');
+  });
+  it('匯出：不知道幾格就寫毫秒，不寫猜的格數', () => {
+    expect(formatTimecodeOrMs(12.48, 25)).toBe('00:00:12:12');
+    expect(formatTimecodeOrMs(12.48, null)).toBe('00:00:12.480');
+    expect(formatTimecodeOrMs(3725.5, undefined)).toBe('01:02:05.500');
   });
   it('0:12、超過一小時 1:02:03', () => {
     expect(formatClockShort(12.9)).toBe('0:12');

@@ -15,7 +15,7 @@ import {
   GUEST_TEXT_MAX, listGuestComments, postGuestComment, readGuestName, saveGuestName, tidyGuestName,
   type GuestComment, type GuestError,
 } from '../lib/review/guestApi';
-import type { ReviewSession } from '../lib/review/useReviewSession';
+import { isTouchDevice, type ReviewSession } from '../lib/review/useReviewSession';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { toast } from '../lib/toast';
 import './GuestCommentsPanel.css';
@@ -43,6 +43,8 @@ interface Props {
   onConsumedPendingTime: () => void;
   /** 留言清單（時間軸上的點用） */
   onComments: (list: SongComment[]) => void;
+  /** 影片現在的時間（沒選時間時，留言綁在這裡） */
+  currentTime: number;
   /** 通行證過期（401）→ 頁面重新換一張 */
   onAuthError: (e: unknown) => void;
   /** 製作把留言關掉了（403） */
@@ -51,8 +53,9 @@ interface Props {
 
 export default function GuestCommentsPanel({
   shareRef, accessToken, songId, session, videoActive, playing, videoId, activeId, onOpen, onStartDraw, composerRef,
-  pendingTime, onConsumedPendingTime, onComments, onAuthError, onDisabled,
+  pendingTime, onConsumedPendingTime, onComments, currentTime, onAuthError, onDisabled,
 }: Props) {
+  const touch = isTouchDevice();
   const [list, setList] = useState<SongComment[] | null>(null);
   const [name, setName] = useState(readGuestName);
   const [nameDraft, setNameDraft] = useState('');
@@ -201,6 +204,7 @@ export default function GuestCommentsPanel({
               videoActive={videoActive}
               attachTime={videoActive ? attachTime : null}
               onClearTime={() => setAttachTime(null)}
+              currentTime={currentTime}
               onStartDraw={onStartDraw}
             />
             <textarea
@@ -211,7 +215,7 @@ export default function GuestCommentsPanel({
               rows={3}
               placeholder={session.draft.active
                 ? '說明一下畫的是什麼（例：這塊 LED 再亮一點）'
-                : videoActive ? '在影片停到的地方留言給製作團隊（Ctrl+Enter 送出）' : '留言給製作團隊（Ctrl+Enter 送出）'}
+                : `留言給製作團隊${videoActive ? '（會綁在上面寫的時間）' : ''}${touch ? '' : '；Ctrl+Enter 送出'}`}
               aria-label="留言"
             />
             <div className="share-comments__actions">

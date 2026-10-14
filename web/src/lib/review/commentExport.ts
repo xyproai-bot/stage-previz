@@ -8,7 +8,7 @@ import type { SongComment } from '../api';
 import type { CommentThread } from '../commentThreads';
 import { roleLabel } from '../roleLabels';
 import { formatDateTime } from '../serverTime';
-import { formatRange, formatTimecode } from './timecode';
+import { formatClockShort, formatRange, formatTimecodeOrMs } from './timecode';
 import { parseAnnotation, shapePath, strokePx } from './annotations';
 
 export interface ExportMeta {
@@ -20,7 +20,7 @@ export interface ExportMeta {
   filterLabel?: string;
   /** 匯出的時間（ISO） */
   generatedAt: string;
-  /** 量到的影片格數（時間碼用；不知道 = 30） */
+  /** 量到的影片格數（時間碼用；不知道 = null → 時間碼寫到毫秒，不寫猜的格數） */
   fps?: number | null;
   /** API 網址（縮圖相對路徑前面接這個） */
   apiBase: string;
@@ -64,8 +64,8 @@ export function commentsToCsv(threads: readonly CommentThread[], meta: ExportMet
     const hasRange = c.timeEnd != null && c.timeEnd > c.time;
     lines.push([
       num, type, exportTimeLabel(c),
-      hasTime ? formatTimecode(c.time, meta.fps) : '',
-      hasRange ? formatTimecode(c.timeEnd as number, meta.fps) : '',
+      hasTime ? formatTimecodeOrMs(c.time, meta.fps) : '',
+      hasRange ? formatTimecodeOrMs(c.timeEnd as number, meta.fps) : '',
       typeof c.videoVersion === 'number' && c.videoVersion > 0 ? `V${c.videoVersion}` : '',
       c.author, exportRoleLabel(c), c.text,
       type === '留言' ? exportStatusLabel(c) : '',
@@ -125,8 +125,10 @@ export function buildPrintHtml(threads: readonly CommentThread[], meta: ExportMe
     const c = t.root;
     const time = exportTimeLabel(c);
     const tc = c.time > 0 || (c.timeEnd != null && c.timeEnd > c.time)
-      ? `${formatTimecode(c.time, meta.fps)}${c.timeEnd != null && c.timeEnd > c.time ? ` – ${formatTimecode(c.timeEnd, meta.fps)}` : ''}`
+      ? `${formatTimecodeOrMs(c.time, meta.fps)}${c.timeEnd != null && c.timeEnd > c.time ? ` – ${formatTimecodeOrMs(c.timeEnd, meta.fps)}` : ''}`
       : '';
+    // 區段留言先標 I / O 再畫：畫記（和縮圖）是另一格
+    const annT = c.annotation && typeof c.annotation.t === 'number' && Math.abs(c.annotation.t - c.time) >= 0.5 ? c.annotation.t : null;
     const ver = typeof c.videoVersion === 'number' && c.videoVersion > 0 ? `V${c.videoVersion}` : '';
     const replies = t.replies.map(r => `
         <li class="reply">
@@ -141,6 +143,7 @@ export function buildPrintHtml(threads: readonly CommentThread[], meta: ExportMe
           <span class="num">#${i + 1}</span>
           ${time ? `<span class="time">${escapeHtml(time)}</span>` : '<span class="time time--none">沒有綁時間</span>'}
           ${tc ? `<span class="tc">${escapeHtml(tc)}</span>` : ''}
+          ${annT != null ? `<span class="muted">（畫面是 ${escapeHtml(formatClockShort(annT))}）</span>` : ''}
           ${ver ? `<span class="chip">${escapeHtml(ver)}</span>` : ''}
           <span class="status status--${c.status === 'resolved' ? 'done' : 'open'}">${escapeHtml(exportStatusLabel(c))}</span>
         </div>
@@ -194,7 +197,7 @@ export function buildPrintHtml(threads: readonly CommentThread[], meta: ExportMe
 <body>
   <h1>${escapeHtml(meta.songTitle)} · 留言</h1>
   <p class="sub">${escapeHtml(meta.projectName)} · ${escapeHtml(meta.versionLabel)}${meta.filterLabel ? ` · ${escapeHtml(meta.filterLabel)}` : ''}</p>
-  <p class="meta">共 ${threads.length} 則（未解決 ${open} 則）· 匯出時間 ${escapeHtml(formatDateTime(meta.generatedAt))} · 時間碼以 ${escapeHtml(String(Math.round(meta.fps && meta.fps > 0 ? meta.fps : 30)))} 格 / 秒計</p>
+  <p class="meta">共 ${threads.length} 則（未解決 ${open} 則）· 匯出時間 ${escapeHtml(formatDateTime(meta.generatedAt))} · ${meta.fps && meta.fps > 0 ? `時間碼以 ${escapeHtml(String(meta.fps))} 格 / 秒計` : '時間碼寫到毫秒（還不知道影片幾格）'}</p>
   ${items || '<p class="empty">沒有符合的留言</p>'}
 </body>
 </html>`;

@@ -95,6 +95,17 @@ describe('匯出：列印頁', () => {
     const noThumb = buildPrintHtml(buildThreads([{ ...base, annotation: { v: 1, aspect: 2, shapes: [{ t: 'rect', c: '#ffcc00', w: 0.006, p: [0.1, 0.1, 0.5, 0.5] }] } }]), meta);
     expect(noThumb).toContain('<svg class="thumb__svg"');
   });
+  it('不知道影片幾格：時間碼寫到毫秒、不寫猜的格數', () => {
+    const h = buildPrintHtml(buildThreads(list), { ...meta, fps: null });
+    expect(h).toContain('00:00:12.000 – 00:00:18.000');
+    expect(h).toContain('時間碼寫到毫秒');
+    const csv = commentsToCsv(buildThreads(list), { ...meta, fps: null });
+    expect(csv).toContain('00:00:12.000,00:00:18.000');
+  });
+  it('區段留言先標再畫：寫出畫面是哪一格', () => {
+    const h = buildPrintHtml(buildThreads([{ ...list[0], annotation: { ...list[0].annotation!, t: 17.2 } }]), meta);
+    expect(h).toContain('（畫面是 0:17）');
+  });
   it('沒有符合的留言', () => {
     expect(buildPrintHtml([], meta)).toContain('沒有符合的留言');
   });

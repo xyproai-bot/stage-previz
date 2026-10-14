@@ -46,6 +46,7 @@ export function printHtml(html: string): void {
     img.addEventListener('error', () => res(), { once: true });
   }))));
   const timeout = new Promise<void>(res => setTimeout(res, 5000));
+  toast.info('正在準備列印頁（等縮圖載好），等一下會跳出列印視窗');
   void Promise.race([ready, timeout]).then(() => {
     try { win.focus(); win.print(); } catch { toast.error('沒辦法打開列印'); }
     // 印完（或一分鐘後）收掉

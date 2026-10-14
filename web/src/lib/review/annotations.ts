@@ -24,6 +24,8 @@ export interface Annotation {
   v: 1;
   /** 畫的時候 3D 畫面的寬 / 高 */
   aspect: number;
+  /** 畫的那一格（影片秒數；沒在放影片 = 沒有）。區段留言先標 I / O 再畫時，打開留言先停在這一格 */
+  t?: number;
   shapes: AnnShape[];
 }
 
@@ -128,8 +130,8 @@ export function makeShape(tool: AnnTool, color: string, points: readonly number[
   return { t: tool, c, w: r4(width), p: [r4(x0), r4(y0), r4(x1), r4(y1)] };
 }
 
-/** 畫好的形狀 → 要存的畫記（沒有形狀 = null；超過上限的拿掉後面的） */
-export function serializeAnnotation(shapes: readonly AnnShape[], aspect: number): Annotation | null {
+/** 畫好的形狀 → 要存的畫記（沒有形狀 = null；超過上限的拿掉後面的）；time = 畫的那一格 */
+export function serializeAnnotation(shapes: readonly AnnShape[], aspect: number, time?: number | null): Annotation | null {
   const list = shapes.filter(Boolean).slice(0, MAX_SHAPES);
   if (list.length === 0 || !(aspect > 0)) return null;
   let total = 0;
@@ -139,7 +141,10 @@ export function serializeAnnotation(shapes: readonly AnnShape[], aspect: number)
     if (total > MAX_TOTAL_POINTS) break;
     out.push({ t: s.t, c: s.c, w: r4(s.w), p: s.p.map(v => r4(clamp01(v))) });
   }
-  return out.length ? { v: 1, aspect: r4(Math.max(0.2, Math.min(6, aspect))), shapes: out } : null;
+  if (!out.length) return null;
+  const ann: Annotation = { v: 1, aspect: r4(Math.max(0.2, Math.min(6, aspect))), shapes: out };
+  if (time != null && Number.isFinite(time) && time >= 0) ann.t = Math.round(time * 1000) / 1000;
+  return ann;
 }
 
 /** 後台來的畫記（或亂掉的資料）→ 畫得出來的；不合格回 null */
@@ -158,7 +163,9 @@ export function parseAnnotation(raw: unknown): Annotation | null {
     if (x.t !== 'pen' && x.p.length !== 4) continue;
     shapes.push({ t: x.t, c: x.c.toLowerCase(), w: x.w, p: x.p.map(clamp01) });
   }
-  return shapes.length ? { v: 1, aspect: a.aspect, shapes } : null;
+  if (!shapes.length) return null;
+  const t = (raw as { t?: unknown }).t;
+  return isNum(t) && t >= 0 ? { v: 1, aspect: a.aspect, t, shapes } : { v: 1, aspect: a.aspect, shapes };
 }
 
 export interface Box { left: number; top: number; width: number; height: number }

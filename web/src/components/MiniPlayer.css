@@ -264,6 +264,10 @@
   font-family: var(--font-mono);
 }
 .mini-player.has-review { width: 344px; }
+/* 畫記的時候藏起來（畫的地方大一點；也不會畫到一半去拉時間軸） */
+.mini-player.is-hidden-for-drawing { visibility: hidden; pointer-events: none; }
+.mini-player__range-chip--loop { border-style: solid; border-color: rgba(255, 255, 255, 0.35); background: rgba(255, 255, 255, 0.08); }
+.mini-player__head .mini-player__range-chip--loop { padding-left: 6px; font-size: 11px; flex-shrink: 0; }
 .mini-player.has-review.is-collapsed { width: 300px; }
 
 .mini-player__error {
@@ -327,6 +331,10 @@
   .mini-player__btn { min-width: 36px; height: 36px; }
   .mini-player__btn--play { min-width: 36px; height: 36px; }
   .mini-player__pin { width: 12px; height: 12px; top: -6px; }
+  /* 手指：區段那一條高一點才點得到、拖得到 */
+  .mini-player__lane { height: 20px; }
+  .mini-player__bar { top: 3px; height: 14px; }
+  .mini-player__chip-x { width: 30px; height: 30px; }
 }
 
 /* 「比較」按鈕的字不換行；手機上收起來的小播放器寬一點，放得下播放、時間、比較、展開 */
