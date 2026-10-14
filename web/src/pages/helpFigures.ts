@@ -69,12 +69,43 @@ export const FIGS = {
     ],
   }),
   newProject: fig({
-    src: '/help/producer/new-project.webp', w: 960, h: 1204, width: 420,
-    alt: '新增專案對話框',
-    caption: '① 專案名稱（一定要填）② 按「建立專案」',
+    src: '/help/producer/new-project.webp', w: 1000, h: 1026, width: 440,
+    alt: '新增專案第 1 步：專案名稱、Show、描述',
+    caption: '第 1 步：① 專案名稱（一定要填）② 按「建立專案」，專案就建好了 ③ 最上面看得到在第幾步',
     boxes: [
-      { x: 4.17, y: 18.09, w: 91.67, h: 8.01, n: 1 },
-      { x: 76.25, y: 89.13, w: 19.58, h: 7.55, n: 2 },
+      { x: 2.63, y: 25.68, w: 94.74, h: 6.19, n: 1 },
+      { x: 82.63, y: 93.08, w: 15, h: 5.64, n: 2 },
+      { x: 2.37, y: 9.1, w: 95.26, h: 5.38, n: 3, dashed: true },
+    ],
+  }),
+  newProjectModel: fig({
+    src: '/help/producer/new-project-model.webp', w: 1000, h: 1026, width: 440,
+    alt: '新增專案第 2 步：模型匯入後寫找到幾片 LED、幾個機關',
+    caption: '第 2 步：① 模型裡找到什麼 ② 物件怎麼命名（開新分頁看說明）③ 下一步',
+    boxes: [
+      { x: 4.74, y: 29.01, w: 90.53, h: 3.72, n: 1 },
+      { x: 2.63, y: 22.67, w: 30.79, h: 3.27, n: 2, dashed: true },
+      { x: 84.34, y: 92.98, w: 13.29, h: 5.64, n: 3 },
+    ],
+  }),
+  newProjectSongs: fig({
+    src: '/help/producer/new-project-songs.webp', w: 1000, h: 1026, width: 440,
+    alt: '新增專案第 4 步：貼上歌單，下面列出每首歌的歌曲代號和歌名',
+    caption: '第 4 步：① 一行一首貼進來 ② 歌曲代號照順序排好，可以改 ③ 按「加入 3 首歌」',
+    boxes: [
+      { x: 2.63, y: 28.53, w: 94.74, h: 23.68, n: 1 },
+      { x: 2.63, y: 56.57, w: 12.89, h: 16.83, n: 2 },
+      { x: 83.3, y: 92.98, w: 14.34, h: 5.64, n: 3 },
+    ],
+  }),
+  newProjectDone: fig({
+    src: '/help/producer/new-project-done.webp', w: 1000, h: 1026, width: 440,
+    alt: '新增專案最後一步：做好了什麼、還沒做什麼',
+    caption: '完成：① 還沒做的可以回去設定 ② 進入編輯頁 ③ 建立分享連結、用其他身分看',
+    boxes: [
+      { x: 84.61, y: 57.6, w: 10.79, h: 4.97, n: 1 },
+      { x: 2.63, y: 66.05, w: 17.89, h: 6.54, n: 2 },
+      { x: 20.79, y: 66.4, w: 37.63, h: 5.83, n: 3 },
     ],
   }),
   projectCardMenu: fig({
@@ -90,7 +121,7 @@ export const FIGS = {
       { x: 0, y: 5.58, w: 19.44, h: 94.42, n: 1, dashed: true },
       { x: 20.96, y: 6.51, w: 53.9, h: 5.58, n: 2 },
       { x: 76.39, y: 5.58, w: 23.61, h: 94.42, n: 3, dashed: true },
-      { x: 37.76, y: 0.64, w: 10.34, h: 4.19, n: 4 },
+      { x: 29.06, y: 0.64, w: 10.33, h: 4.19, n: 4 },
     ],
   }),
   uploadModel: fig({
@@ -147,13 +178,14 @@ export const FIGS = {
     boxes: [{ x: 2.5, y: 52.86, w: 95, h: 7.26, n: 1 }],
   }),
   cueList: fig({
-    src: '/help/producer/cue-list.webp', w: 680, h: 706, width: 340,
-    alt: 'Cue 分頁：cue 清單，滑鼠移到 cue 上出現的按鈕',
-    caption: '① 轉場秒數（0 寫「直接切換」）② 存成常用擺位 ③ 重置這個 cue',
+    src: '/help/producer/cue-list.webp', w: 680, h: 960, width: 340,
+    alt: 'Cue 分頁：cue 清單，第 2 個 cue 最右邊的「⋯」打開的選單',
+    caption: '① 轉場秒數（0 寫「直接切換」）② 每個 cue 最右邊的「⋯」③ 存成常用擺位 ④ 重置這個 cue',
     boxes: [
-      { x: 14.41, y: 39.42, w: 29.71, h: 5.8, n: 1 },
-      { x: 67.06, y: 35.6, w: 7.65, h: 7.36, n: 2 },
-      { x: 74.12, y: 35.6, w: 7.65, h: 7.36, n: 3 },
+      { x: 14.41, y: 29.01, w: 16.5, h: 4.27, n: 1 },
+      { x: 87.65, y: 25.78, w: 8.82, h: 6.25, n: 2 },
+      { x: 17.06, y: 61.04, w: 77.05, h: 8.75, n: 3 },
+      { x: 17.06, y: 77.71, w: 77.05, h: 8.75, n: 4 },
     ],
   }),
   cueAdd: fig({

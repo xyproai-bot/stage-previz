@@ -972,15 +972,28 @@ function ProducerChapter() {
 
       <Section id={A.prodProject} title="建立專案">
         <F k="adminOverview" />
+        <p>左邊選「<Ui>專案</Ui>」（專案總覽），按右上角「<Ui>＋ 新增專案</Ui>」。接下來會一步一步帶你把專案準備好，最上面看得到在第幾步：</p>
         <ol className="help-steps">
-          <li>左邊選「<Ui>專案</Ui>」（專案總覽），按右上角「<Ui>＋ 新增專案</Ui>」。</li>
-          <li>填「<Ui>專案名稱</Ui>」（例：魅影巡演 2026），需要的話寫一句描述。同一場巡迴的不同場次可以選同一個「<Ui>Show</Ui>」。</li>
-          <li>按「<Ui>建立專案</Ui>」，直接進到這個專案的編輯頁。</li>
+          <li><strong>名稱</strong>：填「<Ui>專案名稱</Ui>」（例：魅影巡演 2026），同一場巡迴的不同場次可以選同一個「<Ui>Show</Ui>」，需要的話寫一句描述 → 按「<Ui>建立專案</Ui>」。按下去專案就建好了。</li>
+          <li><strong>3D 模型</strong>：按「<Ui>上傳 3D 模型</Ui>」（跟編輯頁的上傳視窗一樣，看 <Go to={A.prodModel}>匯入 3D 模型</Go>）。匯入後寫「找到 4 片 LED、2 個機關…」；名稱沒對到命名規則的會提醒你（看 <Go to={A.prodNaming}>物件怎麼命名</Go>）。</li>
+          <li><strong>LED 畫布大小</strong>：AE 合成的寬 × 高（像素），先放常用的 3840 × 2160。有模型的話下面會畫出每塊 LED 在畫布上的位置（跟 <Go to={A.prodLedCanvas}>LED 對位圖</Go> 一樣）。</li>
+          <li><strong>歌單</strong>：把歌單貼進來，一行一首。前面的編號（「1. 開場」）會拿掉、空行跳過、重複的只留一首；寫了「S01 開場」就用 S01 當歌曲代號，沒寫的照順序排 S01、S02…。下面的表格裡代號、歌名都可以改；專案裡已經有動畫師的話，可以先選負責動畫師 → 按「<Ui>加入 N 首歌</Ui>」。</li>
+          <li><strong>邀請人</strong>：建邀請連結給動畫師、導演，按「<Ui>複製訊息</Ui>」貼到 LINE / 微信（看 <Go to={A.prodInvite}>邀請連結</Go>）。</li>
+          <li><strong>完成</strong>：列出做好了什麼、還沒做什麼。按「<Ui>進入編輯頁</Ui>」繼續排 cue；也可以直接「<Ui>建立分享連結</Ui>」或「<Ui>用其他身分看</Ui>」。</li>
         </ol>
         <FigRow>
           <F k="newProject" />
-          <F k="projectCardMenu" />
+          <F k="newProjectModel" />
         </FigRow>
+        <FigRow>
+          <F k="newProjectSongs" />
+          <F k="newProjectDone" />
+        </FigRow>
+        <Note title="每一步都可以先跳過">
+          <p>除了名稱，每一步都可以按「<Ui>先跳過</Ui>」，之後在編輯頁做。按「<Ui>上一步</Ui>」或瀏覽器、手機的返回鍵回到上一步；最上面的步驟也可以直接點。</p>
+          <p>中途按右上角的叉叉或 Esc 離開也沒關係：做好的都已經存在專案上。專案總覽上面會寫「還沒設定完」，按「<Ui>繼續設定</Ui>」從還沒做的那一步接著做。</p>
+        </Note>
+        <F k="projectCardMenu" />
         <p>專案卡片右上角的「<Ui>⋯</Ui>」：</p>
         <ul className="help-list">
           <li><strong>複製專案</strong>：開新場次最快。會帶過去：模型（共用同一份，不用重新上傳）、物件、歌曲（代號、狀態、負責動畫師）、cue 和每個 cue 的位置、機關。<strong>不會</strong>帶過去：影片版本、留言、審片紀錄、成員和分享連結，新專案要再邀請導演和動畫師。</li>
