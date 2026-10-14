@@ -496,25 +496,25 @@ function ChromePromptMock() {
 /** 解析度選單的示意圖（不是真的截圖；有真的截圖 win/ae-resolution.png 時兩個都會顯示） */
 function ResolutionMock() {
   return (
-    <figure className="help-fig help-mock" aria-label="示意圖：AE 合成視窗下方的解析度選單，選 Third">
+    <figure className="help-fig help-mock" aria-label="示意圖：AE 合成視窗下方的解析度選單，選 Half">
       <div className="help-mock__frame">
         <span className="help-mock__tag">示意圖</span>
         <div className="help-mock__viewer" aria-hidden>合成視窗</div>
         <div className="help-mock__bar" aria-hidden>
           <span className="help-mock__chip">50% <Icon icon={ChevronDown} size="xs" /></span>
-          <span className="help-mock__chip is-on">Third <Icon icon={ChevronDown} size="xs" /><span className="help-num help-mock__num">1</span></span>
+          <span className="help-mock__chip is-on">Half <Icon icon={ChevronDown} size="xs" /><span className="help-num help-mock__num">1</span></span>
           <span className="help-mock__chip"><Icon icon={Scan} size="xs" /></span>
           <span className="help-mock__chip">0:00:12:05</span>
         </div>
         <ul className="help-mock__menu" aria-hidden>
           <li>Full</li>
-          <li>Half</li>
-          <li className="is-on"><Icon icon={Check} size="xs" /> Third</li>
+          <li className="is-on"><Icon icon={Check} size="xs" /> Half</li>
+          <li>Third</li>
           <li>Quarter</li>
           <li className="is-sep">Custom…</li>
         </ul>
       </div>
-      <figcaption>示意圖：① 合成視窗正下方「Full」那個選單 → 選 Third（大畫布建議）</figcaption>
+      <figcaption>示意圖：① 合成視窗正下方「Full」那個選單 → 選 Half（建議）</figcaption>
     </figure>
   );
 }
@@ -1806,11 +1806,12 @@ function AeLiveChapter() {
         <F k="aeResolutionWin" />
         <ResolutionMock />
         <ul className="help-list">
-          <li><strong>LED 畫布很大</strong>（例如 10496×5120）：建議用 <strong>Third（三分之一）</strong>，送出去大約 3499×1707。電腦和網路都比較輕，預覽也夠清楚。</li>
-          <li><strong>畫布小</strong>（1920×1080 以內）：可以用 Full 或 Half。</li>
+          <li><strong>建議用 Half（二分之一）</strong>：例如 8800×2024 的畫布送出去 4400×1012，小程序原樣送到網頁，LED 夠清楚。</li>
+          <li><strong>畫布很大</strong>（例如 10496×5120）<strong>而且 AE 預覽卡卡的</strong>：才改成 <strong>Third（三分之一）</strong>。</li>
+          <li><strong>不要用 Quarter（四分之一）</strong>：AE 只算寬、高各四分之一（像素只剩 1/16），LED 會糊、一格一格的。</li>
+          <li><strong>畫布小</strong>（1920×1080 以內）：可以用 Full。</li>
           <li>改了解析度，網頁會自動跟上，不用重新整理。</li>
-          <li>小程序還會再縮一半保持流暢，所以用 Full 不會清楚太多，反而讓 AE 變慢。</li>
-          <li>畫面卡卡的話，先降到 <strong>Quarter（四分之一）</strong>。</li>
+          <li>小程序（0.1.13 起）畫面不大就原樣送；超過 450 萬像素（例如 Full 的 8800×2024）才縮小，所以大畫布用 Full 不會比 Half 清楚多少，反而讓 AE 變慢。</li>
         </ul>
       </Section>
 

@@ -652,7 +652,7 @@ export const FIGS = {
   aeResolutionWin: fig({
     src: '/help/win/ae-resolution.png', width: 560, optional: true,
     alt: 'AE 合成視窗下方的「解析度 / 降低取樣」選單',
-    caption: '合成視窗下方的解析度選單（LED 畫布很大時選 Third）',
+    caption: '合成視窗下方的解析度選單（建議選 Half）',
   }),
   helperInstallingWin: fig({
     src: '/help/win/helper-installing.png', w: 495, h: 383, width: 420,
