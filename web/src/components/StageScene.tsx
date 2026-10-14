@@ -34,7 +34,10 @@ import { LedLightRig, type LedLightProps } from '../lib/stageLook/ledLightRig';
 import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { AdaptiveQuality, QUALITY, detectQualityProfile, type QualityLevel } from '../lib/stageLook/quality';
-import { LED_SHARED_UNIFORMS, NDI_PIXEL_DENSITY, configureLedMaterial, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { pickNdiColorCurve, type NdiColorLut } from '../lib/ndiColor';
+import { readPixels } from '../lib/ndiFrameGrab';
+import NdiColorCalibrationDialog, { colorCurveLabel, useNdiCalibration } from './NdiColorCalibration';
 import { LedOutputPass } from '../lib/stageLook/ledOutputPass';
 import { FloorReflection, applyFloorReflection, setFloorReflectionFor } from '../lib/stageLook/floorReflection';
 import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOverride, type MaterialOverrides, type ModelMaterialInfo } from '../lib/stageLook/materialOverrides';
@@ -417,6 +420,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // 本地影片 / 圖片 → LED 貼圖（ledVideo / ledImage prop 變了就重建）
   const ledMediaTextureRef = useRef<THREE.Texture | null>(null);
   const [ndiPopoverOpen, setNdiPopoverOpen] = useState(false);
+  // 「校正 AE 即時顏色」對話框
+  const [ndiColorOpen, setNdiColorOpen] = useState(false);
+  // AE 即時：小程序縮成幾分之一、專案的 LED 畫布（像素格密度用）、現在的顏色校正曲線（燈色取樣用）
+  const ndiDownscaleRef = useRef<number | null>(null);
+  const projectCanvasRef = useRef<LedCanvas | null>(null);
+  projectCanvasRef.current = normalizeLedCanvas(ledCanvas);
+  const ndiColorLutRef = useRef<NdiColorLut | null>(null);
   // 按 × 收起引導卡片：記住是哪一步收的，換到別的問題會再出現
   const [ndiCardHiddenFor, setNdiCardHiddenFor] = useState<string | null>(null);
   // Anchored-comment 加入模式：滑鼠變十字、下次點 mesh / world 觸發 onAddAnchoredComment
@@ -701,6 +711,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         // 模型 UV 是 baked 過的（top-left origin），跟 Electron 版一致 → flipY = false
         tex.flipY = false;
         tex.wrapS = tex.wrapT = LED_TEXTURE_WRAP;
+        // AE 即時的顏色校正曲線只套這張（LED shader 看這個標記）
+        tex.userData.ledColorLut = true;
         ndiLiveTextureRef.current = { texture: tex, canvas: c, ctx: cctx };
       }
     } catch (e) {
@@ -1165,12 +1177,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           for (const mat of ledMaterialsRef.current) {
             const tex = mat.emissiveMap;
             const img = tex?.image as { width?: number; height?: number; videoWidth?: number; videoHeight?: number } | undefined;
-            const density = tex && tex === liveTexture ? NDI_PIXEL_DENSITY : 1;
             const iw = img?.videoWidth || img?.width || 1;
             const ih = img?.videoHeight || img?.height || 1;
+            // AE 即時：看收到的大小跟 LED 畫布（或小程序回報縮了幾倍）算一共幾顆 LED；其他貼圖一個像素 = 一顆
+            const texels: [number, number] = tex && tex === liveTexture
+              ? ndiLedTexels({ width: iw, height: ih }, projectCanvasRef.current, ndiDownscaleRef.current)
+              : [iw, ih];
             updateLedSurface(mat, {
               on: !!tex,
-              texels: [iw * density, ih * density],
+              texels,
               gridStrength: tex && !tex.userData.ledTestPattern ? 1 : 0,
               viewFalloff: lookRef.current.ledViewFalloff,
             });
@@ -1839,8 +1854,31 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     },
   });
   const ndiGuideState = ndi.guide;
+  ndiDownscaleRef.current = ndiGuideState.helperDownscale;
   // LED 用 AE 畫面：這條連線收過畫面就用（AE 停住時留在最後一格）
   const ndiActive = enableNdi && ndiGuideState.hasFrame;
+  // AE 即時的顏色校正：新版小程序送原始像素 → 預設曲線 / 這台電腦的校正；舊版照以前
+  const ndiCalibration = useNdiCalibration();
+  const ndiColor = useMemo(
+    () => pickNdiColorCurve(ndiGuideState.colorPipeline, ndiGuideState.sourceIsAe, ndiCalibration),
+    [ndiGuideState.colorPipeline, ndiGuideState.sourceIsAe, ndiCalibration],
+  );
+  useEffect(() => {
+    // 曲線是全站共用的 uniform：只有開 AE 即時的這個 3D 畫面才動它（藏起來截圖用的那個不要蓋掉）
+    if (!enableNdi) return;
+    const lut = ndiColor.kind !== 'none' ? ndiColor.lut : null;
+    ndiColorLutRef.current = lut;
+    setLedColorLut(lut);
+    return () => {
+      ndiColorLutRef.current = null;
+      setLedColorLut(null);
+    };
+  }, [enableNdi, ndiColor]);
+  // 校正：直接量 3D 舞台正在顯示的那張（AE 停住也有最後一格）
+  const grabLiveFrame = useCallback(() => {
+    const live = ndiLiveTextureRef.current;
+    return live && ndiGuideState.hasFrame ? readPixels(live.canvas) : null;
+  }, [ndiGuideState.hasFrame]);
   useEffect(() => {
     if (enableNdi) onNdiStatus?.(ndiGuideState);
   }, [enableNdi, ndiGuideState, onNdiStatus]);
@@ -2206,7 +2244,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // 3. LED 照明：記下取色來源 / 燈參數；發光面只算一次（換模型才重算）
       if (isLed && so) {
         ledSourcesRef.current.set(id, ledTexture
-          ? { image: ledTexture.image as CanvasImageSource, flipY: ledTexture.flipY }
+          ? {
+            image: ledTexture.image as CanvasImageSource,
+            flipY: ledTexture.flipY,
+            // AE 即時：燈色跟 LED 畫面一樣先校正顏色
+            ...(ndiLiveTextureRef.current && ledTexture === ndiLiveTextureRef.current.texture ? { colorLut: () => ndiColorLutRef.current } : {}),
+          }
           : null);
         ledLightPropsRef.current.set(id, {
           brightness: ledBrightness,
@@ -2808,12 +2851,24 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       </>
     ),
   }] : [];
+  // AE 即時：顏色校正
+  const aeLiveSections: ToolMenuSection[] = enableNdi ? [{
+    id: 'aelive',
+    title: 'AE 即時',
+    items: [{
+      icon: Palette,
+      label: '校正 AE 即時顏色…',
+      hint: 'AE 經過 NDI 送過來的顏色會偏一點：放校正圖到 AE、量一次，這台電腦之後都照它校正',
+      onSelect: () => setNdiColorOpen(true),
+    }],
+  }] : [];
   // 「說明」：新分頁打開使用說明（分享頁給客戶用）
-  const menuSections: ToolMenuSection[] = helpHref ? [...ledSections, {
+  const baseSections = [...ledSections, ...aeLiveSections];
+  const menuSections: ToolMenuSection[] = helpHref ? [...baseSections, {
     id: 'help',
     title: '使用說明',
     items: [{ icon: CircleHelp, label: '說明', hint: '說明', onSelect: () => { window.open(helpHref, '_blank', 'noopener'); } }],
-  }] : ledSections;
+  }] : baseSections;
 
   return (
     <div className="stage-scene" ref={containerRef}>
@@ -2891,6 +2946,16 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                 <NdiSourcePicker guide={ndiGuideState} onSelectSource={ndi.selectSource} />
               )}
               <NdiAutostartNote guide={ndiGuideState} />
+              {ndiGuideState.helperVersion && (
+                <div className="ndi-popover__color">
+                  <span>顏色：{colorCurveLabel(ndiGuideState.colorPipeline, ndiGuideState.sourceIsAe, ndiCalibration)}</span>
+                  <button
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    onClick={() => { setNdiPopoverOpen(false); setNdiColorOpen(true); }}
+                  ><Icon icon={Palette} /> 校正 AE 即時顏色</button>
+                </div>
+              )}
               {ndiGuideState.outdated && ndiGuideState.step !== 'helper_outdated' && (
                 <p className="ndi-popover__note">
                   小程序有新版（你的是 {ndiGuideState.helperVersion}）：
@@ -2923,6 +2988,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           </div>
         )}
       </StageToolbar>
+      {enableNdi && (
+        <NdiColorCalibrationDialog
+          open={ndiColorOpen}
+          onClose={() => setNdiColorOpen(false)}
+          pipeline={ndiGuideState.colorPipeline}
+          helperConnected={!!ndiGuideState.helperVersion}
+          sourceIsAe={ndiGuideState.sourceIsAe}
+          source={ndiGuideState.source}
+          getFrame={grabLiveFrame}
+          ndiUrl={ndiUrl}
+        />
+      )}
       {forceTestPattern && testPatternTex && (
         <div className="stage-scene__testpattern-note" role="status">
           <Icon icon={MonitorCheck} /> LED 正在顯示測試圖

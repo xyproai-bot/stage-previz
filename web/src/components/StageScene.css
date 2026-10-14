@@ -306,6 +306,17 @@
 }
 .ndi-popover__close:hover { background: var(--surface-2); color: var(--text); }
 .ndi-popover__body { padding: 10px 12px; }
+/* 顏色：現在用哪條曲線 + 校正按鈕 */
+.ndi-popover__color {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 8px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.ndi-popover__color .btn { flex-shrink: 0; font-size: 11.5px; padding: 4px 8px; }
 .ndi-popover__actions {
   display: flex;
   gap: 6px;

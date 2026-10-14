@@ -2,6 +2,7 @@
 // 平均要在「線性」空間做，不然暗的顏色權重會不對。
 
 import type { UvRect } from './ledEmitters';
+import type { NdiColorLut } from '../ndiColor';
 
 const LUT = new Float32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -16,10 +17,11 @@ export function srgb8ToLinear(v: number): number {
 /**
  * pixels：RGBA、第 0 排在最上面（canvas getImageData 的排法）
  * flipY：貼圖的 flipY（NDI live 是 false → v=0 在上面；一般圖片 true → v=0 在下面）
+ * colorLut：AE 即時的顏色校正（跟 LED 畫面一樣先套曲線再平均；沒有 = 不套）
  */
 export function averageUvRect(
   pixels: ArrayLike<number>, w: number, h: number,
-  rect: UvRect, flipY: boolean, samples = 8,
+  rect: UvRect, flipY: boolean, samples = 8, colorLut: NdiColorLut | null = null,
 ): [number, number, number] {
   if (w <= 0 || h <= 0) return [0, 0, 0];
   let r = 0, g = 0, b = 0, n = 0;
@@ -33,9 +35,15 @@ export function averageUvRect(
       const fu = u - Math.floor(u);
       const x = Math.min(w - 1, Math.max(0, Math.floor(fu * w)));
       const o = (y * w + x) * 4;
-      r += LUT[pixels[o]];
-      g += LUT[pixels[o + 1]];
-      b += LUT[pixels[o + 2]];
+      if (colorLut) {
+        r += LUT[colorLut.r[pixels[o]]];
+        g += LUT[colorLut.g[pixels[o + 1]]];
+        b += LUT[colorLut.b[pixels[o + 2]]];
+      } else {
+        r += LUT[pixels[o]];
+        g += LUT[pixels[o + 1]];
+        b += LUT[pixels[o + 2]];
+      }
       n++;
     }
   }

@@ -68,6 +68,7 @@ export const HELP_ANCHORS = {
   chromeAllow: 'chrome-allow',
   use: 'use',
   resolution: 'resolution',
+  aeLiveColor: 'ae-live-color',
   chooseSource: 'choose-source',
   faq: 'faq',
   faqWaitingFrames: 'faq-waiting-frames',

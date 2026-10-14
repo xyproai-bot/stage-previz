@@ -1,20 +1,21 @@
 import { describe, it, expect } from 'vitest';
 import {
-  compareVersions, decideNdiStep, detectBrowser, detectOs, FRAME_STALE_MS, isHelperOutdated, isLoopbackHost, retryDelayMs,
+  compareVersions, decideNdiStep, detectBrowser, detectOs, FRAME_STALE_MS, helperDownscaleOf, isHelperOutdated, isLoopbackHost, retryDelayMs,
   MIN_HELPER_VERSION, NDI_AUTOSTART_NOTE, OLD_HELPER_HINT, oldHelperBlocksHost,
   ndiAutostartNote, ndiChecklist, ndiShortLabel, ndiStepMessage, parseHello, parseHelperStatus, showSourcePicker, sortSources,
   sourceLabel, sourcePickerInStep, splitSourceName,
   type NdiGuide, type NdiHello, type NdiHelperStatus, type NdiStep, type NdiStepInput,
 } from './ndiSteps';
 
-const HELLO: NdiHello = { version: '0.1.11', protocol: 2, platform: 'windows', source: null };
-const OLD_HELLO: NdiHello = { version: '0.1.8', protocol: null, platform: null, source: 'PC (Adobe After Effects)' };
+const HELLO: NdiHello = { version: '0.1.11', protocol: 2, platform: 'windows', source: null, colorPipeline: null };
+const OLD_HELLO: NdiHello = { version: '0.1.8', protocol: null, platform: null, source: 'PC (Adobe After Effects)', colorPipeline: null };
 const AE = 'ULTRA9-285K (Adobe After Effects)';
 
 const status = (patch: Partial<NdiHelperStatus> = {}): NdiHelperStatus => ({
   state: 'live', error: null, mode: 'auto', preferred: null, source: AE,
   sources: [{ name: AE, local: true, afterEffects: true }],
-  receiving: true, fps: 30, width: 1920, height: 1080, framesPaused: false,
+  receiving: true, fps: 30, width: 1920, height: 1080, outWidth: 960, outHeight: 540, downscale: null, colorPipeline: null,
+  framesPaused: false,
   autostart: { wanted: true, registered: true, error: null },
   ...patch,
 });
@@ -259,9 +260,41 @@ describe('ndiStepMessage', () => {
 describe('解析小程序訊息', () => {
   it('新版 hello / 舊版 hello', () => {
     expect(parseHello({ type: 'hello', version: '0.1.9', protocol: 2, platform: 'windows', port: 7777, source: '' }))
-      .toEqual({ version: '0.1.9', protocol: 2, platform: 'windows', source: null });
+      .toEqual({ version: '0.1.9', protocol: 2, platform: 'windows', source: null, colorPipeline: null });
     expect(parseHello({ type: 'hello', version: '0.1.8', source: 'PC (Adobe After Effects)' }))
-      .toEqual({ version: '0.1.8', protocol: null, platform: null, source: 'PC (Adobe After Effects)' });
+      .toEqual({ version: '0.1.8', protocol: null, platform: null, source: 'PC (Adobe After Effects)', colorPipeline: null });
+  });
+
+  it('0.1.13 hello / status：colorPipeline、downscale；看不懂的值當成沒有', () => {
+    expect(parseHello({ type: 'hello', version: '0.1.13', protocol: 2, source: '', colorPipeline: 'raw' }).colorPipeline).toBe('raw');
+    expect(parseHello({ type: 'hello', version: '0.1.13', colorPipeline: 'weird' }).colorPipeline).toBeNull();
+    const s = parseHelperStatus({
+      type: 'status', version: '0.1.13', state: 'live', source: AE, sources: [{ name: AE, local: true, afterEffects: true }],
+      width: 4400, height: 1012, outWidth: 4400, outHeight: 1012, downscale: 1, colorPipeline: 'raw',
+    });
+    expect([s.downscale, s.colorPipeline, s.outWidth, s.outHeight]).toEqual([1, 'raw', 4400, 1012]);
+    // 還沒收到畫面（0）→ null
+    expect(parseHelperStatus({ type: 'status', downscale: 0 }).downscale).toBeNull();
+  });
+
+  it('小程序縮了幾倍：新版直接回報；舊版用 NDI 尺寸 ÷ 送出尺寸；不知道 → null', () => {
+    expect(helperDownscaleOf({ downscale: 1, width: 4400, height: 1012, outWidth: 4400, outHeight: 1012 })).toBe(1);
+    expect(helperDownscaleOf({ downscale: null, width: 2932, height: 674, outWidth: 1466, outHeight: 337 })).toBe(2);
+    expect(helperDownscaleOf({ downscale: null, width: 0, height: 0, outWidth: 0, outHeight: 0 })).toBeNull();
+  });
+
+  it('guide：顏色處理、來源是不是 AE、縮了幾倍（舊版小程序 → null，照以前）', () => {
+    const raw = decideNdiStep(input({
+      hello: { ...HELLO, version: '0.1.13', colorPipeline: 'raw' },
+      status: status({ colorPipeline: 'raw', downscale: 1, outWidth: 1920, outHeight: 1080 }),
+    }));
+    expect([raw.colorPipeline, raw.sourceIsAe, raw.helperDownscale]).toEqual(['raw', true, 1]);
+    const old = decideNdiStep(input());
+    expect([old.colorPipeline, old.sourceIsAe, old.helperDownscale]).toEqual([null, true, 2]);
+    const other = decideNdiStep(input({ status: status({ source: 'ME (Test Pattern)', sources: [{ name: 'ME (Test Pattern)', local: true, afterEffects: false }] }) }));
+    expect(other.sourceIsAe).toBe(false);
+    const disconnected = decideNdiStep(input({ socket: 'closed', hello: null, status: null, failures: 1 }));
+    expect([disconnected.colorPipeline, disconnected.helperDownscale]).toEqual([null, null]);
   });
 
   it('新版 status', () => {
@@ -435,7 +468,7 @@ describe('來源清單', () => {
 });
 
 describe('0.1.9 小程序（使用者電腦上現在裝的）', () => {
-  const V019: NdiHello = { version: '0.1.9', protocol: 2, platform: 'windows', source: null };
+  const V019: NdiHello = { version: '0.1.9', protocol: 2, platform: 'windows', source: null, colorPipeline: null };
   const st019 = status({ autostart: null });
   const rows = (g: NdiGuide) => ndiChecklist(g).map(r => r.state[0]).join('');
   it('沒畫面 → 叫他更新', () => {

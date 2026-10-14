@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { applyLedSurface, patchLedShader, updateLedSurface, createLedSurfaceUniforms, needsVideoSrgbDecode, configureLedMaterial, LED_SHARED_UNIFORMS, LED_SURFACE } from './ledSurface';
+import { applyLedSurface, patchLedShader, updateLedSurface, createLedSurfaceUniforms, needsVideoSrgbDecode, configureLedMaterial, LED_SHARED_UNIFORMS, LED_SURFACE, ndiLedTexels, setLedColorLut, usesLedColorLut } from './ledSurface';
+import { defaultAeLut } from '../ndiColor';
 
 const FRAG = 'void main() {\n#include <emissivemap_fragment>\n#include <lights_physical_fragment>\nvec3 outgoingLight = totalEmissiveRadiance;\n#include <opaque_fragment>\n#include <tonemapping_fragment>\n}';
 const newShader = (fragmentShader = FRAG) => ({ uniforms: {} as Record<string, { value: unknown }>, fragmentShader });
@@ -193,5 +194,71 @@ describe('configureLedMaterial', () => {
     expect(m.version).toBe(v);
     configureLedMaterial(m, { mode: 'live', texture: tex() });
     expect(m.version).toBeGreaterThan(v);
+  });
+});
+
+describe('ndiLedTexels：AE 即時的貼圖上有幾顆 LED', () => {
+  const canvas = { width: 8800, height: 2024 };
+  it('知道畫布大小、畫面形狀一樣 → 畫布大小（AE Third / Half、小程序有沒有縮都對）', () => {
+    expect(ndiLedTexels({ width: 2932, height: 674 }, canvas, 1)).toEqual([8800, 2024]);
+    expect(ndiLedTexels({ width: 4400, height: 1012 }, canvas, 1)).toEqual([8800, 2024]);
+    expect(ndiLedTexels({ width: 1466, height: 337 }, canvas, 2)).toEqual([8800, 2024]); // 舊版小程序 + Third
+  });
+  it('不知道畫布 → 收到的大小 × 小程序縮的倍數', () => {
+    expect(ndiLedTexels({ width: 4400, height: 1012 }, null, 1)).toEqual([4400, 1012]); // 0.1.13 原樣送
+    expect(ndiLedTexels({ width: 4400, height: 1012 }, null, 2)).toEqual([8800, 2024]); // 整張 8800 縮一半
+  });
+  it('畫面形狀跟畫布不一樣（例：NDI Webcam 16:9）→ 不用畫布', () => {
+    expect(ndiLedTexels({ width: 1920, height: 1080 }, canvas, 1)).toEqual([1920, 1080]);
+  });
+  it('舊版小程序、什麼都不知道 → 跟以前一樣 2 倍', () => {
+    expect(ndiLedTexels({ width: 960, height: 540 }, null, null)).toEqual([1920, 1080]);
+    expect(ndiLedTexels({ width: 960, height: 540 }, undefined, undefined)).toEqual([1920, 1080]);
+  });
+});
+
+describe('AE 即時的顏色校正（shader）', () => {
+  it('只有標了 ledColorLut 的貼圖才加曲線；在 sRGB 轉換之後、乘進 totalEmissiveRadiance 之前套', () => {
+    const shader = newShader();
+    patchLedShader(shader, createLedSurfaceUniforms(), false, true);
+    const fs = shader.fragmentShader;
+    expect(fs).toContain('#define LED_COLOR_LUT');
+    expect(fs).toContain('uniform sampler2D uLedColorLut;');
+    const apply = fs.indexOf('ledApplyColorLut( emissiveColor.rgb )');
+    expect(apply).toBeGreaterThan(fs.indexOf('#ifdef LED_DECODE_VIDEO'));
+    expect(apply).toBeLessThan(fs.indexOf('totalEmissiveRadiance *= emissiveColor.rgb;'));
+    expect(shader.uniforms.uLedColorLut).toBe(LED_SHARED_UNIFORMS.uLedColorLut);
+    const plain = newShader();
+    patchLedShader(plain, createLedSurfaceUniforms());
+    expect(plain.fragmentShader).not.toContain('#define LED_COLOR_LUT');
+  });
+
+  it('AE 即時的貼圖 → cache key 不同（換一份有曲線的 shader）', () => {
+    const m = new THREE.MeshStandardMaterial();
+    applyLedSurface(m);
+    const live = new THREE.CanvasTexture({} as HTMLCanvasElement);
+    live.userData.ledColorLut = true;
+    expect(usesLedColorLut(live)).toBe(true);
+    m.emissiveMap = live;
+    expect(m.customProgramCacheKey()).toBe('led-surface-v2-lut');
+    const shader = newShader();
+    m.onBeforeCompile(shader as never, {} as THREE.WebGLRenderer);
+    expect(shader.fragmentShader).toContain('#define LED_COLOR_LUT');
+    m.emissiveMap = new THREE.Texture();
+    expect(m.customProgramCacheKey()).toBe('led-surface-v2');
+    expect(usesLedColorLut(null)).toBe(false);
+  });
+
+  it('setLedColorLut：寫進曲線貼圖、打開；null = 關掉', () => {
+    const lut = defaultAeLut();
+    setLedColorLut(lut);
+    const data = LED_SHARED_UNIFORMS.uLedColorLut.value.image.data as Uint8Array;
+    expect(data[16 * 4]).toBe(0);
+    expect(data[136 * 4 + 1]).toBe(128);
+    expect(data[255 * 4 + 2]).toBe(255);
+    expect(LED_SHARED_UNIFORMS.uLedColorLutOn.value).toBe(1);
+    expect(LED_SHARED_UNIFORMS.uLedColorLut.value.colorSpace).toBe(THREE.SRGBColorSpace);
+    setLedColorLut(null);
+    expect(LED_SHARED_UNIFORMS.uLedColorLutOn.value).toBe(0);
   });
 });

@@ -9,7 +9,8 @@
 //   2. 色卡（灰階 0…255、原色、75% 彩條、膚色、Macbeth）→ PNG；用 ffmpeg 做成 H.264（BT.709 limited，有標 / 沒標 /
 //      full range）、VP9 影片
 //   3. 另開一個「影片網站」（不同網址、CORS、可以拖拉）= R2 版本那條路；另開一個假的 NDI 小程序（WebSocket、
-//      hello / status、每 100ms 一張 JPEG，JPEG 照小程序的作法做：2 倍縮小 + limited→full + 品質 75）
+//      hello / status、每 100ms 一張 JPEG，JPEG 照小程序的作法做：0.1.12 = 2 倍縮小 + limited→full + 品質 75；
+//      0.1.13 = 色卡經過量到的 AE → NDI（黑抬到 16）原樣送、品質 90，網頁照 colorPipeline: raw 自己校正）
 //   4. Chrome（headless，預設 SwiftShader 軟體繪圖；--gpu 用顯卡）打開量測頁，每種來源 × 快速 / 現場量一次
 //   5. 結果：<out>/<label>.json、<label>.md、截圖 <label>-*.png
 //
@@ -121,10 +122,12 @@ function wsFrame(opcode, payload) {
 }
 
 function startFakeHelper() {
-  const state = { jpeg: null, clients: new Set() };
+  // pipeline：null = 0.1.12（沒回報，網頁照以前）；'raw' = 0.1.13（原始像素，網頁自己校正）
+  const state = { jpeg: null, clients: new Set(), pipeline: null };
   const SOURCE = 'HARNESS (Adobe After Effects)';
   const status = () => JSON.stringify({
-    type: 'status', version: '0.1.12', state: 'live', ndi: 'ready', error: null, lastError: null, mode: 'auto', preferred: null,
+    type: 'status', version: state.pipeline ? '0.1.13' : '0.1.12', state: 'live', ndi: 'ready', error: null, lastError: null, mode: 'auto', preferred: null,
+    ...(state.pipeline ? { colorPipeline: state.pipeline, downscale: 1 } : {}),
     source: SOURCE, sources: [{ name: SOURCE, local: true, afterEffects: true }], availableSources: [SOURCE],
     connected: true, receiving: true, fps: 10, clients: state.clients.size, framesPaused: false,
     autostart: { wanted: true, registered: true, error: null },
@@ -231,6 +234,8 @@ try {
   // 小程序的 JPEG（現在預設：limited→full 開著；另一種：關掉）
   const jpegLut = Buffer.from(await page.evaluate(() => window.__ledHarness.helperJpegBase64(true)), 'base64');
   const jpegNoLut = Buffer.from(await page.evaluate(() => window.__ledHarness.helperJpegBase64(false)), 'base64');
+  const jpegRawAe = Buffer.from(await page.evaluate(() => window.__ledHarness.helperJpegBase64('rawAe')), 'base64');
+  fs.writeFileSync(path.join(mediaDir, 'helper-raw-ae.jpg'), jpegRawAe);
   fs.writeFileSync(path.join(mediaDir, 'helper-limited-to-full.jpg'), jpegLut);
   fs.writeFileSync(path.join(mediaDir, 'helper-passthrough.jpg'), jpegNoLut);
 
@@ -247,10 +252,14 @@ try {
       ...(mainVideo ? [['localVideo', { source: 'localVideo', mediaUrl: mainVideo }], ['urlVideo', { source: 'urlVideo', mediaUrl: mainVideo }]] : []),
       ['ndi（小程序 limited→full 開，現在預設）', { source: 'ndi', ndiUrl, jpeg: 'lut' }],
       ['ndi（小程序 limited→full 關）', { source: 'ndi', ndiUrl, jpeg: 'nolut' }],
+      ['ndi（0.1.13：AE 原始像素 + 網頁預設校正）', { source: 'ndi', ndiUrl, jpeg: 'rawAe' }],
       ...(QUICK ? [] : [['testPattern', { source: 'testPattern' }]]),
     ];
     for (const [name, s] of sources) {
-      if (s.jpeg) helper.state.jpeg = s.jpeg === 'lut' ? jpegLut : jpegNoLut;
+      if (s.jpeg) {
+        helper.state.jpeg = s.jpeg === 'lut' ? jpegLut : s.jpeg === 'rawAe' ? jpegRawAe : jpegNoLut;
+        helper.state.pipeline = s.jpeg === 'rawAe' ? 'raw' : null;
+      }
       const { jpeg, ...scenario } = s;
       const info = await set({ mode, view: 'head', ...scenario });
       const patches = s.source === 'testPattern'

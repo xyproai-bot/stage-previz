@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { averageUvRect, srgb8ToLinear } from './ledColorSampler';
+import { defaultAeLut } from '../ndiColor';
 
 /** 建 w×h RGBA 影像；fill(x, y) 回傳 [r,g,b]（0~255），y = 0 是最上面一排 */
 function img(w: number, h: number, fill: (x: number, y: number) => [number, number, number]) {
@@ -45,5 +46,17 @@ describe('averageUvRect', () => {
     expect(srgb8ToLinear(0)).toBe(0);
     expect(srgb8ToLinear(255)).toBeCloseTo(1);
     expect(srgb8ToLinear(128)).toBeCloseTo(0.2158, 3);
+  });
+});
+
+describe('averageUvRect + AE 即時的顏色校正', () => {
+  it('先套曲線再平均（黑抬到 16 的畫面 → 燈是黑的）', () => {
+    const px = img(4, 2, () => [16, 136, 255]);
+    const c = averageUvRect(px, 4, 2, full, false, 8, defaultAeLut());
+    expect(c[0]).toBeCloseTo(0);
+    expect(c[1]).toBeCloseTo(srgb8ToLinear(128));
+    expect(c[2]).toBeCloseTo(1);
+    const raw = averageUvRect(px, 4, 2, full, false);
+    expect(raw[0]).toBeCloseTo(srgb8ToLinear(16));
   });
 });

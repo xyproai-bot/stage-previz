@@ -1,0 +1,76 @@
+/* 「校正 AE 即時顏色」對話框（外框用站內對話框的 .sp-dialog） */
+.ndi-cal { max-width: 560px; }
+.ndi-cal__close {
+  margin: -6px -6px 0 0;
+  padding: 6px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.ndi-cal__close:hover { background: var(--surface-2); color: var(--text); }
+.ndi-cal__lead,
+.ndi-cal__now,
+.ndi-cal__status,
+.ndi-cal__note {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.7;
+  color: var(--text-dim);
+}
+.ndi-cal__now strong { color: var(--text); }
+.ndi-cal__note { font-size: 12.5px; color: var(--text-muted); }
+.ndi-cal__status { display: flex; align-items: center; gap: 6px; }
+.ndi-cal__warn {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 170, 60, 0.12);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.ndi-cal__steps {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+.ndi-cal__steps .btn { margin-top: 6px; }
+.ndi-cal__steps kbd {
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.ndi-cal__result {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  font-size: 13.5px;
+  line-height: 1.6;
+}
+.ndi-cal__result p { margin: 0; }
+.ndi-cal__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+}
+.ndi-cal__table th,
+.ndi-cal__table td {
+  padding: 3px 6px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+.ndi-cal__table th { font-weight: 600; color: var(--text-dim); }
+.ndi-cal__actions { justify-content: space-between; }
+.ndi-cal .sp-dialog__btn:disabled { opacity: 0.45; cursor: default; }

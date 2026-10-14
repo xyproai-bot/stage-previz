@@ -3,10 +3,13 @@
 
 import { averageUvRect } from './ledColorSampler';
 import type { UvRect } from './ledEmitters';
+import type { NdiColorLut } from '../ndiColor';
 
 export interface LedColorSource {
   image: CanvasImageSource;
   flipY: boolean;
+  /** AE 即時：現在的顏色校正曲線（燈色跟 LED 畫面一樣先校正）；null = 不套 */
+  colorLut?: () => NdiColorLut | null;
 }
 
 export class TextureColorReader {
@@ -40,6 +43,6 @@ export class TextureColorReader {
       this.cache.set(source.image, data);
     }
     if (!data) return null;
-    return averageUvRect(data.data, this.w, this.h, rect, source.flipY);
+    return averageUvRect(data.data, this.w, this.h, rect, source.flipY, 8, source.colorLut?.() ?? null);
   }
 }

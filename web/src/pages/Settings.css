@@ -71,6 +71,16 @@
   flex-wrap: wrap;
   margin-bottom: 16px;
 }
+/* AE 即時的顏色（校正） */
+.settings-ndi-color {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+  font-size: 13.5px;
+}
+.settings-ndi-color > span { display: inline-flex; flex-direction: column; gap: 2px; }
 .settings-status {
   display: inline-flex;
   flex-direction: column;

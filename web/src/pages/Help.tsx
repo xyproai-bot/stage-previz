@@ -20,7 +20,7 @@ import { REVIEW_SHORTCUTS } from '../lib/review/reviewShortcuts';
 import Icon from '../components/Icon';
 import {
   Check, ChevronDown, CircleHelp, Clapperboard, ClipboardList, Copy, Download, Ellipsis, ExternalLink, Eye, FolderOpen, Globe,
-  Image, Info, Laptop, Lightbulb, Link, Menu, Monitor, Puzzle, Radio, RadioTower, Rocket, Scan, Search, SearchX, Square,
+  Image, Info, Laptop, Lightbulb, Link, Menu, Monitor, Palette, Puzzle, Radio, RadioTower, Rocket, Scan, Search, SearchX, Square,
   SquareCheck, TriangleAlert, Video, X,
 } from 'lucide-react';
 import './Help.css';
@@ -131,6 +131,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       },
       { id: A.use, label: '每次使用' },
       { id: A.resolution, label: '建議的預覽解析度' },
+      { id: A.aeLiveColor, label: 'AE 即時的顏色（校正）' },
       { id: A.chooseSource, label: '有好幾台 AE：選來源' },
       {
         id: A.faq, label: 'AE 即時的問題', children: [
@@ -1811,6 +1812,19 @@ function AeLiveChapter() {
           <li>小程序還會再縮一半保持流暢，所以用 Full 不會清楚太多，反而讓 AE 變慢。</li>
           <li>畫面卡卡的話，先降到 <strong>Quarter（四分之一）</strong>。</li>
         </ul>
+      </Section>
+
+      <Section id={A.aeLiveColor} title="AE 即時的顏色（校正）">
+        <p>AE 經過 NDI 送過來的顏色會偏一點（黑色變灰、亮的地方不準）。小程序 0.1.13 起，網頁會<strong>自動校正</strong>，LED 的顏色就跟 AE 裡一樣，不用做任何事。</p>
+        <p>想要更準（例如換了電腦、AE 版本），可以用你這台電腦量一次：</p>
+        <ol className="help-steps">
+          <li>按 3D 畫面上方的 NDI 標示 →「<Ui><Icon icon={Palette} /> 校正 AE 即時顏色</Ui>」（也在「<Ui><Icon icon={Ellipsis} /></Ui>」選單、設定頁的「NDI 小程序」裡）。</li>
+          <li>按「<Ui>下載校正圖（PNG）</Ui>」，把它拖進 AE 的合成，放大到差不多填滿（選圖層按 <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>F</kbd>，Mac 是 <kbd>Cmd</kbd>+<kbd>Option</kbd>+<kbd>F</kbd>）。不要加效果、不要調顏色。</li>
+          <li>解析度選 <strong>Full</strong>，按空白鍵播放，確認 LED 上看得到校正圖（四個角有方形記號、中間是灰階和紅綠藍的色塊）。</li>
+          <li>按「<Ui>校正</Ui>」。會顯示校正前、校正後差幾階，並存在<strong>這台電腦的這個瀏覽器</strong>。</li>
+        </ol>
+        <p>量完把校正圖從合成拿掉就好。想回到網頁內建的校正，按「<Ui>回到預設</Ui>」；之後想再量一次，按「<Ui>重新校正</Ui>」。</p>
+        <p className="help-muted">小程序是 0.1.12 以前的版本時，顏色照以前顯示（不另外校正），校正按鈕也不能按：請下載最新版。只有 After Effects 的畫面會校正，其他 NDI 程式送的畫面照原樣顯示。</p>
       </Section>
 
       <Section id={A.chooseSource} title="有好幾台 AE：選來源">

@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth';
 import { useNdiConnection } from '../lib/ndiConnection';
 import { ndiAutostartNote, ndiStepMessage, showSourcePicker, type NdiBrowser, type NdiGuide } from '../lib/ndiSteps';
 import { NdiSourcePicker } from '../components/NdiGuide';
+import NdiColorCalibrationDialog, { colorCurveLabel, useNdiCalibration } from '../components/NdiColorCalibration';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
 import { HELP_ANCHORS, helpUrl, ndiHelpAnchor, type HelpAnchor } from '../lib/helpLinks';
 import { clearPersonalLooks, countPersonalLooks } from '../lib/localPrefs';
@@ -13,7 +14,7 @@ import { confirmDialog } from '../components/dialogs';
 import { version as APP_VERSION } from '../../package.json';
 import { ROLE_LABEL } from '../lib/roleLabels';
 import Icon from '../components/Icon';
-import { BookOpen, Download, ExternalLink, TriangleAlert } from 'lucide-react';
+import { BookOpen, Download, ExternalLink, Palette, TriangleAlert } from 'lucide-react';
 import SystemStatusSection from '../components/SystemStatusSection';
 import './Settings.css';
 
@@ -70,8 +71,10 @@ function AccountSection() {
  */
 function NdiSection() {
   const [checking, setChecking] = useState(false);
+  const [colorOpen, setColorOpen] = useState(false);
   const ndi = useNdiConnection({ enabled: checking, wantFrames: false, userInitiated: true });
   const g = ndi.guide;
+  const calibration = useNdiCalibration();
   const busy = checking && (g.step === 'connecting' || (g.step === 'need_permission' && g.pending));
   const mac = ndi.env.os === 'mac';
   const winLink = (
@@ -102,6 +105,25 @@ function NdiSection() {
           <NdiSourcePicker guide={g} onSelectSource={ndi.selectSource} />
         </div>
       )}
+
+      <div className="settings-ndi-color">
+        <span>
+          AE 即時的顏色：{calibration ? '這台電腦校正過' : '預設（AE 量好的曲線）'}
+          {checking && g.helperVersion && <span className="settings-status__sub">現在用：{colorCurveLabel(g.colorPipeline, g.sourceIsAe, calibration)}</span>}
+        </span>
+        <button className="btn btn--ghost" onClick={() => { setChecking(true); setColorOpen(true); }}>
+          <Icon icon={Palette} /> 校正 AE 即時顏色
+        </button>
+        <a className="settings-help-link" href={helpUrl(HELP_ANCHORS.aeLiveColor)} target="_blank" rel="noopener">看說明</a>
+      </div>
+      <NdiColorCalibrationDialog
+        open={colorOpen}
+        onClose={() => setColorOpen(false)}
+        pipeline={g.colorPipeline}
+        helperConnected={!!g.helperVersion}
+        sourceIsAe={g.sourceIsAe}
+        source={g.source}
+      />
 
       <div className="settings-links">
         {mac ? [macLink, winLink] : [winLink, macLink]}

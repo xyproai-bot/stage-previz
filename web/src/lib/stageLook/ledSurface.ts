@@ -1,5 +1,5 @@
 // LED 面板表面質感 + 顏色照原檔：在 MeshStandardMaterial 的 shader 裡插 GLSL
-//   0. 影片貼圖補做 sRGB 轉換（見 needsVideoSrgbDecode）
+//   0. 影片貼圖補做 sRGB 轉換（見 needsVideoSrgbDecode）；AE 即時的貼圖套顏色校正曲線（見 setLedColorLut）
 //   1. 像素格：依貼圖解析度畫出一顆顆 LED（螢幕上太小就淡出，避免摩爾紋）；一格的平均亮度 = 原檔（亮的畫面縫裡補光，不會被截掉）
 //   2. 側看變暗：法線跟視線夾角越大越暗（ledViewFalloff 可調；正面 ±20° 以內不變）
 //   3. 顏色照原檔（uLedMode）：
@@ -10,6 +10,7 @@
 
 import * as THREE from 'three';
 import { VIEW_FALLOFF_FLAT_COS2 } from './ledColorMath';
+import type { NdiColorLut } from '../ndiColor';
 
 export const LED_SURFACE = {
   /** 畫面暗的地方：接近黑、會反光的 LED 面板 */
@@ -20,8 +21,29 @@ export const LED_SURFACE = {
   gridFill: 0.72,
 };
 
-/** NDI helper 預設縮小一半送出 → 收到的一個像素 = 2×2 顆 LED */
+/** 0.1.12 以前的 NDI 小程序固定縮一半送出 → 不知道畫布大小、小程序也沒回報時：收到的一個像素 = 2×2 顆 LED */
 export const NDI_PIXEL_DENSITY = 2;
+
+/**
+ * AE 即時的貼圖上一共有幾顆 LED（像素格的密度用）：
+ *   1. 知道 LED 畫布大小（專案設定 / 影片大小），而且收到的畫面形狀一樣（寬高比差 3% 以內）→ 就是畫布大小
+ *      （AE 用 Half / Third、小程序有沒有縮都對）
+ *   2. 小程序有回報縮成幾分之一（0.1.13 起；舊版用 NDI 尺寸 ÷ 送出尺寸）→ 收到的大小 × 那個倍數
+ *   3. 都不知道 → 舊版的固定 2 倍
+ */
+export function ndiLedTexels(
+  frame: { width: number; height: number },
+  canvas: { width: number; height: number } | null | undefined,
+  helperDownscale: number | null | undefined,
+): [number, number] {
+  const fw = Math.max(1, frame.width), fh = Math.max(1, frame.height);
+  if (canvas && canvas.width > 0 && canvas.height > 0) {
+    const ratio = (canvas.width / canvas.height) / (fw / fh);
+    if (Math.abs(ratio - 1) <= 0.03) return [canvas.width, canvas.height];
+  }
+  const d = helperDownscale != null && helperDownscale >= 1 ? helperDownscale : NDI_PIXEL_DENSITY;
+  return [fw * d, fh * d];
+}
 
 /** off = 一般材質（不是 LED、沒有改）；quick = 快速模式；live = 現場模式 */
 export type LedMode = 'off' | 'quick' | 'live';
@@ -66,7 +88,51 @@ export function createLedSurfaceUniforms(): LedSurfaceUniforms {
 export const LED_SHARED_UNIFORMS = {
   uLedMaskOut: { value: 0 },
   uLedExposure: { value: 1 },
+  /** AE 即時的顏色校正曲線（256×1；值是 sRGB 8-bit → 顯卡讀出來就是 linear）；只有標了 ledColorLut 的貼圖用 */
+  uLedColorLut: { value: createColorLutTexture() },
+  /** 1 = 套曲線；0 = 不套（舊版小程序 / 不是 AE 的來源） */
+  uLedColorLutOn: { value: 0 },
 };
+
+function createColorLutTexture(): THREE.DataTexture {
+  const data = new Uint8Array(256 * 4);
+  for (let i = 0; i < 256; i++) data.set([i, i, i, 255], i * 4);
+  const t = new THREE.DataTexture(data, 256, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.minFilter = THREE.LinearFilter;
+  t.magFilter = THREE.LinearFilter;
+  t.generateMipmaps = false;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.needsUpdate = true;
+  return t;
+}
+
+/**
+ * 換 AE 即時的顏色校正曲線（null = 不套）。曲線只套在 userData.ledColorLut = true 的貼圖（AE 即時那張），
+ * 影片 / 圖片 / 測試圖不受影響。
+ */
+export function setLedColorLut(lut: NdiColorLut | null): void {
+  const u = LED_SHARED_UNIFORMS;
+  if (!lut) {
+    u.uLedColorLutOn.value = 0;
+    return;
+  }
+  const tex = u.uLedColorLut.value;
+  const data = tex.image.data as Uint8Array;
+  for (let i = 0; i < 256; i++) {
+    data[i * 4] = lut.r[i];
+    data[i * 4 + 1] = lut.g[i];
+    data[i * 4 + 2] = lut.b[i];
+    data[i * 4 + 3] = 255;
+  }
+  tex.needsUpdate = true;
+  u.uLedColorLutOn.value = 1;
+}
+
+/** 這張貼圖要不要套 AE 即時的顏色校正（StageScene 建 NDI 貼圖時標） */
+export function usesLedColorLut(tex: THREE.Texture | null | undefined): boolean {
+  return !!tex && tex.userData?.ledColorLut === true;
+}
 
 const LED_UNIFORM_DECL = /* glsl */`
 uniform float uLedOn;
@@ -121,12 +187,27 @@ export function needsVideoSrgbDecode(tex: THREE.Texture | null | undefined): boo
     && THREE.ColorManagement.getTransfer(tex.colorSpace) === THREE.SRGBTransfer;
 }
 
-// 取代 three 的 <emissivemap_fragment>：一樣讀 emissiveMap，影片貼圖多做一次 sRGB → linear（公式同 three 的 map_fragment）
+// AE 即時的顏色校正：linear → sRGB 8-bit 的值 → 查曲線（曲線貼圖是 sRGB，顯卡讀出來就是 linear）
+const LED_COLOR_LUT_DECL = /* glsl */`
+uniform sampler2D uLedColorLut;
+uniform float uLedColorLutOn;
+vec3 ledApplyColorLut( vec3 lin ) {
+  vec3 s = clamp( mix( 1.055 * pow( max( lin, vec3( 0.0 ) ), vec3( 1.0 / 2.4 ) ) - 0.055, lin * 12.92, vec3( lessThanEqual( lin, vec3( 0.0031308 ) ) ) ), 0.0, 1.0 );
+  vec3 u = ( s * 255.0 + 0.5 ) / 256.0;
+  return vec3( texture2D( uLedColorLut, vec2( u.r, 0.5 ) ).r, texture2D( uLedColorLut, vec2( u.g, 0.5 ) ).g, texture2D( uLedColorLut, vec2( u.b, 0.5 ) ).b );
+}
+`;
+
+// 取代 three 的 <emissivemap_fragment>：一樣讀 emissiveMap，影片貼圖多做一次 sRGB → linear（公式同 three 的 map_fragment）；
+// AE 即時的貼圖（LED_COLOR_LUT）套顏色校正
 const LED_EMISSIVE_MAP = /* glsl */`
 #ifdef USE_EMISSIVEMAP
   vec4 emissiveColor = texture2D( emissiveMap, vEmissiveMapUv );
   #ifdef LED_DECODE_VIDEO
   emissiveColor.rgb = mix( pow( emissiveColor.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), emissiveColor.rgb * 0.0773993808, vec3( lessThanEqual( emissiveColor.rgb, vec3( 0.04045 ) ) ) );
+  #endif
+  #ifdef LED_COLOR_LUT
+  if ( uLedColorLutOn > 0.5 ) emissiveColor.rgb = ledApplyColorLut( emissiveColor.rgb );
   #endif
   totalEmissiveRadiance *= emissiveColor.rgb;
 #endif
@@ -187,9 +268,12 @@ export function patchLedShader(
   shader: { uniforms: Record<string, { value: unknown }>; fragmentShader: string },
   uniforms: LedSurfaceUniforms,
   decodeVideo = false,
+  colorLut = false,
 ) {
   Object.assign(shader.uniforms, uniforms, LED_SHARED_UNIFORMS);
-  shader.fragmentShader = (decodeVideo ? '#define LED_DECODE_VIDEO\n' : '') + LED_UNIFORM_DECL + shader.fragmentShader
+  shader.fragmentShader = (decodeVideo ? '#define LED_DECODE_VIDEO\n' : '')
+    + (colorLut ? '#define LED_COLOR_LUT\n' + LED_COLOR_LUT_DECL : '')
+    + LED_UNIFORM_DECL + shader.fragmentShader
     .replace('#include <emissivemap_fragment>', LED_EMISSIVE_MAP + LED_FRAGMENT)
     .replace('#include <opaque_fragment>', LED_OUTPUT + '#include <opaque_fragment>' + LED_MASK);
 }
@@ -201,10 +285,11 @@ export function applyLedSurface(material: THREE.MeshStandardMaterial) {
   // 用 this（不是 material）：淡入淡出的材質複本會沿用這兩個函式，要看的是複本自己的貼圖
   // 換成 / 換掉影片貼圖時 StageScene 會設 needsUpdate → cache key 不同 → 換一份有 / 沒有轉換的 shader
   material.onBeforeCompile = function (this: THREE.MeshStandardMaterial, shader) {
-    patchLedShader(shader, uniforms, needsVideoSrgbDecode(this.emissiveMap));
+    patchLedShader(shader, uniforms, needsVideoSrgbDecode(this.emissiveMap), usesLedColorLut(this.emissiveMap));
   };
   material.customProgramCacheKey = function (this: THREE.MeshStandardMaterial) {
-    return needsVideoSrgbDecode(this.emissiveMap) ? 'led-surface-v2-video' : 'led-surface-v2';
+    return (needsVideoSrgbDecode(this.emissiveMap) ? 'led-surface-v2-video' : 'led-surface-v2')
+      + (usesLedColorLut(this.emissiveMap) ? '-lut' : '');
   };
   material.needsUpdate = true;
 }

@@ -33,12 +33,21 @@ export type NdiPermission = 'checking' | 'granted' | 'prompt' | 'denied' | 'unkn
 export type NdiSocketState = 'idle' | 'connecting' | 'open' | 'closed';
 export type NdiHelperState = 'starting' | 'ndi_missing' | 'ndi_error' | 'searching' | 'standby' | 'connecting' | 'live';
 
+/**
+ * 小程序送來的畫面顏色怎麼處理過（0.1.13 起回報；舊版沒有 → null = 以前的做法）
+ *   raw             NDI 給的原始像素 → 網頁自己校正 AE 即時的顏色（ndiColor.ts）
+ *   limited_to_full 小程序把 16–235 拉成 0–255（0.1.12 以前的做法）→ 照以前，不另外校正
+ */
+export type NdiColorPipeline = 'raw' | 'limited_to_full';
+
 export interface NdiHello {
   version: string;
   /** 0.1.8 以前沒有 → null */
   protocol: number | null;
   platform: string | null;
   source: string | null;
+  /** 0.1.13 起；舊版沒有 → null */
+  colorPipeline: NdiColorPipeline | null;
 }
 
 export interface NdiHelperSource {
@@ -71,6 +80,13 @@ export interface NdiHelperStatus {
   fps: number | null;
   width: number;
   height: number;
+  /** 送出來的 JPEG 尺寸（還沒收到畫面 = 0） */
+  outWidth: number;
+  outHeight: number;
+  /** 0.1.13 起：小程序縮成幾分之一（1 = 原樣送）；舊版沒有 / 還沒收到畫面 → null */
+  downscale: number | null;
+  /** 0.1.13 起；舊版沒有 → null */
+  colorPipeline: NdiColorPipeline | null;
   framesPaused: boolean;
   autostart: NdiHelperAutostart | null;
 }
@@ -136,6 +152,12 @@ export interface NdiGuide {
   autostartFailed: boolean;
   /** 連不到小程序，但也可能是裝了舊版、不認得這個網址（分不出來，兩種都要說） */
   maybeOldHelper: boolean;
+  /** 小程序的畫面顏色怎麼處理過（舊版 / 還沒連上 → null） */
+  colorPipeline: NdiColorPipeline | null;
+  /** 目前的來源是 After Effects（AE 即時的顏色校正只套在 AE 的畫面） */
+  sourceIsAe: boolean;
+  /** 小程序把 NDI 畫面縮成幾分之一（舊版用 width / outWidth 算；不知道 → null） */
+  helperDownscale: number | null;
 }
 
 // ─── 解析小程序送來的訊息 ───
@@ -146,12 +168,17 @@ const str = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const isAfterEffects = (name: string) => /after\s*effects/i.test(name);
 
+function parseColorPipeline(v: unknown): NdiColorPipeline | null {
+  return v === 'raw' || v === 'limited_to_full' ? v : null;
+}
+
 export function parseHello(msg: Record<string, unknown>): NdiHello {
   return {
     version: str(msg.version) ?? '0',
     protocol: num(msg.protocol),
     platform: str(msg.platform),
     source: str(msg.source),
+    colorPipeline: parseColorPipeline(msg.colorPipeline),
   };
 }
 
@@ -192,6 +219,10 @@ export function parseHelperStatus(msg: Record<string, unknown>): NdiHelperStatus
     fps: num(msg.fps),
     width: num(msg.width) ?? 0,
     height: num(msg.height) ?? 0,
+    outWidth: num(msg.outWidth) ?? 0,
+    outHeight: num(msg.outHeight) ?? 0,
+    downscale: (() => { const d = num(msg.downscale); return d != null && d >= 1 ? d : null; })(),
+    colorPipeline: parseColorPipeline(msg.colorPipeline),
     framesPaused: msg.framesPaused === true,
     autostart: parseAutostart(msg.autostart),
   };
@@ -213,6 +244,13 @@ export function compareVersions(a: string, b: string): number {
     if (d !== 0) return d;
   }
   return 0;
+}
+
+/** 小程序縮成幾分之一：0.1.13 起直接回報；舊版用 NDI 尺寸 ÷ 送出尺寸算（0.1.12 以前固定 2） */
+export function helperDownscaleOf(st: Pick<NdiHelperStatus, 'downscale' | 'width' | 'height' | 'outWidth' | 'outHeight'>): number | null {
+  if (st.downscale != null) return st.downscale;
+  if (st.width > 0 && st.outWidth > 0) return Math.max(1, Math.round(st.width / st.outWidth));
+  return null;
 }
 
 export function isHelperOutdated(hello: NdiHello): boolean {
@@ -300,6 +338,9 @@ export function decideNdiStep(i: NdiStepInput): NdiGuide {
     helperError: null,
     autostartFailed: false,
     maybeOldHelper: false,
+    colorPipeline: null,
+    sourceIsAe: false,
+    helperDownscale: null,
   };
   const at =(step: NdiStep, row: number): NdiGuide => ({ ...g, step, row });
 
@@ -315,6 +356,9 @@ export function decideNdiStep(i: NdiStepInput): NdiGuide {
     g.preferred = st?.preferred ?? null;
     g.helperError = st?.error?.message ?? null;
     g.autostartFailed = !!st?.autostart && st.autostart.wanted && !st.autostart.registered;
+    g.colorPipeline = st?.colorPipeline ?? i.hello.colorPipeline;
+    g.sourceIsAe = !!g.source && (st?.sources.find(s => s.name === g.source)?.afterEffects ?? isAfterEffects(g.source));
+    g.helperDownscale = st ? helperDownscaleOf(st) : null;
     g.hasFrame = i.lastFrameAt != null;
     g.hadFrames = i.lastFrameAt != null && (i.sourceSince == null || i.lastFrameAt >= i.sourceSince);
     // 剛換來源時，舊來源最後幾張不算

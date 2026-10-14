@@ -18,6 +18,7 @@ import {
   CHART_HEIGHT, CHART_PATCHES, CHART_WIDTH, averageRgb, averageRgbLinear, drawChart, patchCenterUv, patchIndex, patchUvRect,
   simulateHelperFrame, type ChartPatch, type PatchGroup,
 } from '../lib/stageLook/colorAccuracy';
+import { aeRawChain } from '../lib/ndiColor';
 import '../styles/global.css';
 
 // ─── 小舞台（場景單位 = 公尺）───
@@ -129,11 +130,20 @@ const blobToBase64 = (b: Blob) => new Promise<string>((resolve, reject) => {
 const canvasBlob = (c: HTMLCanvasElement, type: string, quality?: number) =>
   new Promise<Blob>((resolve, reject) => c.toBlob(b => (b ? resolve(b) : reject(new Error('toBlob failed'))), type, quality));
 
-/** 小程序送出的 JPEG：色卡 → 2 倍縮小（+ 選擇性 limited→full）→ JPEG（品質 75，跟小程序預設一樣） */
-async function helperJpegBase64(limitedToFull: boolean, quality = 0.75): Promise<string> {
+/**
+ * 小程序送出的 JPEG：
+ *   true / false = 0.1.12：色卡 → 2 倍縮小（+ 選擇性 limited→full）→ JPEG 品質 75
+ *   'rawAe'      = 0.1.13 + AE：色卡經過量到的 AE → NDI（黑抬到 16）→ 原樣送（不縮）→ JPEG 品質 90；網頁自己校正
+ */
+async function helperJpegBase64(limitedToFull: boolean | 'rawAe', quality?: number): Promise<string> {
   const src = chartCanvas();
   const img = src.getContext('2d')!.getImageData(0, 0, src.width, src.height);
-  const out = simulateHelperFrame(img.data, src.width, src.height, { downsample: true, limitedToFull });
+  if (limitedToFull === 'rawAe') {
+    for (let i = 0; i < img.data.length; i += 4) for (let c = 0; c < 3; c++) img.data[i + c] = Math.round(aeRawChain(img.data[i + c]));
+  }
+  const rawAe = limitedToFull === 'rawAe';
+  const out = simulateHelperFrame(img.data, src.width, src.height, { downsample: !rawAe, limitedToFull: limitedToFull === true });
+  quality ??= rawAe ? 0.9 : 0.75;
   const c = document.createElement('canvas');
   c.width = out.width;
   c.height = out.height;
@@ -342,7 +352,7 @@ interface HarnessApi {
   ready: boolean;
   error: string | null;
   chartPngBase64(): Promise<string>;
-  helperJpegBase64(limitedToFull: boolean): Promise<string>;
+  helperJpegBase64(limitedToFull: boolean | 'rawAe'): Promise<string>;
   setScenario(s: Scenario): Promise<{ texture: string; textureSize: [number, number] }>;
   measure(): MeasuredPatch[];
   measureStable(): Promise<MeasuredPatch[]>;
