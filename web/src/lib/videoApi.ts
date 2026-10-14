@@ -253,7 +253,8 @@ export const VIDEO_ACCEPT = 'video/mp4,video/quicktime,video/webm,.mp4,.m4v,.mov
 export function videoMimeForFile(file: { name: string; type?: string }): 'video/mp4' | 'video/quicktime' | 'video/webm' | null {
   const t = (file.type || '').toLowerCase();
   if (t === 'video/mp4' || t === 'video/x-m4v') return 'video/mp4';
-  if (t === 'video/quicktime') return 'video/quicktime';
+  // .mov 有的電腦 / 瀏覽器報成 video/mov、video/x-quicktime
+  if (t === 'video/quicktime' || t === 'video/mov' || t === 'video/x-quicktime') return 'video/quicktime';
   if (t === 'video/webm') return 'video/webm';
   if (t && t !== 'application/octet-stream') return null;
   const ext = /\.([a-z0-9]+)$/i.exec(file.name)?.[1]?.toLowerCase();

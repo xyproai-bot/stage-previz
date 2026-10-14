@@ -1028,6 +1028,7 @@ function SongDetail({
             pending={versions.pending}
             jobs={songJobs}
             onRetryLoad={() => { void versions.reload(); }}
+            ledCanvas={view.ledCanvas}
             onAdd={canAdd ? () => setAddOpen(true) : undefined}
             canDelete={(it) => canModifyVideo({ ...perm, item: it })}
             onDelete={handleDeleteVersion}
@@ -1201,6 +1202,7 @@ function SongDetail({
           song={song}
           jobs={songJobs}
           canUpload={canAdd}
+          ledCanvas={view.ledCanvas}
         />
       )}
     </div>

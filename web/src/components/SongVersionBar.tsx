@@ -1,7 +1,12 @@
 import { useRef } from 'react';
-import { CircleAlert, Film, LoaderCircle, Plus, RotateCcw, Trash2, Upload } from 'lucide-react';
+import { CircleAlert, Film, LoaderCircle, Plus, RotateCcw, Trash2, TriangleAlert, Upload } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
+import HelpLink from './HelpLink';
+import { HELP_ANCHORS } from '../lib/helpLinks';
+import { playCheckNotes } from '../lib/videoCheck';
+import { usePlayChecks } from '../lib/versionPlayCheck';
+import type { CanvasSize } from '../lib/ledMap';
 import { formatDateTime, formatRelativeTime } from '../lib/serverTime';
 import { VIDEO_ACCEPT, videoProgressPercent, videoStatusLabel, type SongVideo } from '../lib/videoApi';
 import { pendingUploadText, trackedVideoIds, type StalledView } from '../lib/stalledUploads';
@@ -41,6 +46,8 @@ interface Props {
   onResumePending?: (v: SongVideo, file: File) => void;
   /** 整理成一個檔案沒成功 →「再試一次」 */
   onRetryFinish?: (v: SongVideo) => void;
+  /** 專案的 LED 畫布大小：貼連結的版本第一次播之後，跟它比（還沒設定 = 不比） */
+  ledCanvas?: CanvasSize | null;
 }
 
 /** 誰交的 · 什麼時候（伺服器時間 → 本地時間） */
@@ -65,7 +72,7 @@ function versionTooltip(it: VersionItem): string {
 export default function SongVersionBar({
   status, error, items, selectedKey, onSelect, pending, jobs, onRetryLoad, onAdd,
   canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
-  stalled, onResumePending, onRetryFinish,
+  stalled, onResumePending, onRetryFinish, ledCanvas,
 }: Props) {
   // 預覽模式（製作用其他身分看）：交影片、刪除、重試…照樣出現但按不下去
   const { ro } = useViewAs();
@@ -77,6 +84,14 @@ export default function SongVersionBar({
   const tracked = trackedVideoIds(jobs);
   const others = pending.filter(v => !tracked.has(v.id));
   const shownJobs = jobs.filter(j => j.phase !== 'canceled');
+  // 這台電腦播過的結果：播不了 → 版本上標出來；貼連結的版本（交之前沒檢查過）另外列解析度、位元率、畫布的提醒
+  const playChecks = usePlayChecks();
+  const notesOf = (it: VersionItem) => playCheckNotes(it.kind === 'version' ? playChecks[it.id] : null, {
+    sizeBytes: it.video?.sizeBytes ?? null,
+    ledCanvas,
+    includeWarnings: !!it.video && it.video.source !== 'upload',
+  });
+  const selectedNotes = selected ? notesOf(selected) : null;
 
   return (
     <div className="vbar-wrap">
@@ -86,20 +101,26 @@ export default function SongVersionBar({
         {items.length > 0 ? (
           <>
             <div className="vbar__chips" role="radiogroup" aria-label="影片版本">
-              {items.map(it => (
-                <button
-                  key={it.key}
-                  type="button"
-                  role="radio"
-                  aria-checked={it.key === selectedKey}
-                  className={'vbar__chip' + (it.key === selectedKey ? ' is-active' : '') + (it.kind === 'drive' ? ' is-drive' : '')}
-                  onClick={() => onSelect(it.key)}
-                  title={versionTooltip(it)}
-                >
-                  <span className="vbar__chip-label">{it.label}</span>
-                  {versionByline(it) && <span className="vbar__chip-by">{versionByline(it)}</span>}
-                </button>
-              ))}
+              {items.map(it => {
+                const cannotPlay = notesOf(it).error;
+                return (
+                  <button
+                    key={it.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={it.key === selectedKey}
+                    className={'vbar__chip' + (it.key === selectedKey ? ' is-active' : '') + (it.kind === 'drive' ? ' is-drive' : '') + (cannotPlay ? ' has-issue' : '')}
+                    onClick={() => onSelect(it.key)}
+                    title={versionTooltip(it) + (cannotPlay ? `\n${cannotPlay}` : '')}
+                  >
+                    <span className="vbar__chip-label">
+                      {cannotPlay && <Icon icon={TriangleAlert} size="xs" label="這台電腦播不了" />}
+                      {it.label}
+                    </span>
+                    {versionByline(it) && <span className="vbar__chip-by">{versionByline(it)}</span>}
+                  </button>
+                );
+              })}
             </div>
             {newVersion && (
               <span className="vbar__new" role="status">
@@ -144,6 +165,21 @@ export default function SongVersionBar({
           </button>
         )}
       </div>
+
+      {selected && selectedNotes && (selectedNotes.error || selectedNotes.warnings.length > 0) && (
+        <div className={'vbar__check' + (selectedNotes.error ? ' is-error' : '')} role={selectedNotes.error ? 'alert' : 'status'}>
+          <Icon icon={selectedNotes.error ? CircleAlert : TriangleAlert} size="sm" />
+          <div className="vbar__check-text">
+            {selectedNotes.error
+              ? <span>{selected.label}：{selectedNotes.error}</span>
+              : <>
+                <span>{selected.label} 是{selected.video?.source === 'drive' ? ' Drive 同步進來' : '貼連結交'}的（交之前沒辦法檢查），播放時發現：</span>
+                {selectedNotes.warnings.map(w => <span key={w}>{w}</span>)}
+              </>}
+          </div>
+          <HelpLink anchor={HELP_ANCHORS.animAeExport} />
+        </div>
+      )}
 
       {(shownJobs.length > 0 || others.length > 0) && (
         <div className="vbar__jobs">

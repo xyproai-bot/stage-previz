@@ -528,6 +528,7 @@ export default function Share() {
               onSelect={versions.select}
               pending={[]}
               jobs={[]}
+              ledCanvas={ledCanvas}
             />
           )}
 

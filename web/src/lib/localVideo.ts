@@ -4,6 +4,8 @@
 //   useLocalVideo — 管這個 <video>（object URL、播放狀態、時間、循環、靜音、分頁在背景時暫停）
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { CANNOT_PLAY_TEXT, LOCAL_CANNOT_PLAY_TEXT } from './videoCheck';
+import { recordPlayCheck, versionIdFromKey } from './versionPlayCheck';
 
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|ogv)$/i;
 
@@ -102,29 +104,58 @@ export function useLocalVideo(): LocalVideoState {
 
   useEffect(() => {
     parkVideo(video);
+    // 播的是影片版本（'v:<id>'）→ 記下這台電腦播不播得了（貼連結的版本沒辦法先檢查，版本列上會寫出來）
+    const versionId = () => (kindRef.current === 'url' ? versionIdFromKey(srcKeyRef.current) : null);
     const onMeta = () => {
       // 換來源時瀏覽器會把速度改回 1 → 照使用者選的
       if (video.playbackRate !== rateRef.current) video.playbackRate = rateRef.current;
       setDuration(video.duration || 0);
       if (!video.videoWidth) {
-        setError('這個影片只有聲音、沒有畫面');
+        // ProRes 的 .mov 在 Chrome 常常只讀得到聲音
+        setError(kindRef.current === 'url' ? CANNOT_PLAY_TEXT : LOCAL_CANNOT_PLAY_TEXT);
+        const id = versionId();
+        if (id) recordPlayCheck(id, { status: 'cannotPlay', reason: 'noVideo', at: Date.now() });
         return;
       }
       setReady(true);
+    };
+    const onData = () => {
+      const id = versionId();
+      if (!id || !video.videoWidth || !video.videoHeight) return;
+      recordPlayCheck(id, {
+        status: 'ok', width: video.videoWidth, height: video.videoHeight,
+        durationSec: Number.isFinite(video.duration) && video.duration > 0 ? video.duration : null, at: Date.now(),
+      });
     };
     const onDuration = () => setDuration(Number.isFinite(video.duration) ? video.duration : 0);
     const onTime = () => setTime(video.currentTime);
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
+    let reachCheck: AbortController | null = null;
     const onError = () => {
-      if (!video.getAttribute('src')) return;
+      const src = video.getAttribute('src');
+      if (!src) return;
       setReady(false);
       setPlaying(false);
-      setError(kindRef.current === 'url'
-        ? '影片載入失敗：可能是網路斷了，或播放網址過期了，請按「重新載入」'
-        : '瀏覽器播不了這個影片：可能是編碼不支援（例如 ProRes / HAP）或解析度太大。請轉成 H.264 MP4，寬度在 8192 以內再試');
+      if (kindRef.current !== 'url') { setError(LOCAL_CANNOT_PLAY_TEXT); return; }
+      setError('影片載入失敗：可能是網路斷了，或播放網址過期了，請按「重新載入」');
+      // 網址拿得到檔案（不是過期、不是斷網）→ 是瀏覽器解不開這個影片
+      reachCheck?.abort();
+      const ctrl = new AbortController();
+      reachCheck = ctrl;
+      const key = srcKeyRef.current;
+      fetch(src, { signal: ctrl.signal, credentials: video.crossOrigin === 'use-credentials' ? 'include' : 'omit' })
+        .then((resp) => {
+          ctrl.abort();  // 只要看回應，不用下載整支
+          if (!resp.ok || video.getAttribute('src') !== src || srcKeyRef.current !== key) return;
+          setError(CANNOT_PLAY_TEXT);
+          const id = versionIdFromKey(key);
+          if (id) recordPlayCheck(id, { status: 'cannotPlay', reason: 'decode', at: Date.now() });
+        })
+        .catch(() => { /* 真的是網路 / 過期 → 照原本的說明 */ });
     };
     video.addEventListener('loadedmetadata', onMeta);
+    video.addEventListener('loadeddata', onData);
     video.addEventListener('durationchange', onDuration);
     video.addEventListener('timeupdate', onTime);
     video.addEventListener('seeked', onTime);
@@ -146,6 +177,8 @@ export function useLocalVideo(): LocalVideoState {
     document.addEventListener('visibilitychange', onVisibility);
     return () => {
       video.removeEventListener('loadedmetadata', onMeta);
+      video.removeEventListener('loadeddata', onData);
+      reachCheck?.abort();
       video.removeEventListener('durationchange', onDuration);
       video.removeEventListener('timeupdate', onTime);
       video.removeEventListener('seeked', onTime);

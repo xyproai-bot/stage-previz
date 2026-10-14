@@ -140,6 +140,43 @@
   line-height: 1.5;
 }
 
+.addvid__hint a { color: var(--accent); }
+
+/* 選好檔案之後：檢查中 / 播不了（擋下來）/ 可以交但要注意 */
+.addvid__check {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg);
+  line-height: 1.5;
+}
+.addvid__check.is-block { border-color: var(--danger); background: rgba(255, 84, 112, 0.08); }
+.addvid__check.is-warn { border-color: var(--warn); background: var(--warn-dim); }
+.addvid__check-head { display: flex; align-items: flex-start; gap: 8px; font-size: 13.5px; }
+.addvid__check-head > .ui-icon { flex-shrink: 0; margin-top: 2px; }
+.addvid__check.is-block .addvid__check-head { color: var(--danger); }
+.addvid__check.is-warn .addvid__check-head { color: var(--warn); }
+.addvid__check-head strong { color: var(--text); }
+.addvid__check-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.addvid__check-file > .ui-icon { flex-shrink: 0; }
+.addvid__check-detail { margin: 0; color: var(--text-dim); font-size: 12.5px; }
+.addvid__check-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; color: var(--text); font-size: 12.5px; }
+.addvid__check-help { color: var(--accent); font-size: 12.5px; align-self: flex-start; }
+.addvid__check-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.addvid__check-actions .btn { display: inline-flex; align-items: center; gap: 6px; }
+.addvid__force { color: var(--text-dim); }
+
 .addvid__jobs {
   display: flex;
   flex-direction: column;

@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { FolderOpen, Link2, LoaderCircle, MonitorPlay, Upload, X } from 'lucide-react';
+import { CircleAlert, FileVideo, FolderOpen, Link2, LoaderCircle, MonitorPlay, TriangleAlert, Upload, X } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
 import HelpLink from './HelpLink';
-import { HELP_ANCHORS } from '../lib/helpLinks';
+import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import { VIDEO_ACCEPT, videoMimeForFile, type VideoApiError } from '../lib/videoApi';
+import { checkVideoFile } from '../lib/videoProbe';
+import type { VideoCheck } from '../lib/videoCheck';
+import type { CanvasSize } from '../lib/ledMap';
+import { useAuth } from '../lib/auth';
 import { isJobActive, useVideoJobDone, videoJobs, type VideoJob } from '../lib/videoJobs';
 import { detectVideoLink, videoLinkHint } from '../lib/videoLink';
 import { songTitle } from '../lib/songCode';
@@ -24,16 +28,24 @@ interface Props {
   canUpload: boolean;
   /** 有給才有「本地檔案」：只在這台電腦放到 LED 上，不上傳 */
   onLocalFiles?: (files: File[]) => void;
+  /** 專案的 LED 畫布大小：選好檔案時跟影片比（還沒設定 = 不比） */
+  ledCanvas?: CanvasSize | null;
 }
+
+/** 選好檔案、還沒開始傳：先在這台電腦試播 */
+type FileCheck =
+  | { phase: 'checking'; file: File }
+  | { phase: 'checked'; file: File; check: VideoCheck };
 
 /**
  * 「＋加影片」：三種方法
- *   上傳檔案 —— 拖進來或選檔案，分段上傳（可以續傳），好了變成新的 V 號碼
+ *   上傳檔案 —— 拖進來或選檔案，先在這台電腦試播（lib/videoProbe.ts）：播不了（ProRes / HAP…）擋下來，
+ *              太大、位元率太高、跟 LED 畫布不一樣大 → 提醒、可以照交；沒問題直接分段上傳（可以續傳），好了變成新的 V 號碼
  *   貼連結   —— Google Drive 單檔 / Dropbox / OneDrive / 直接網址，後台複製一份
  *   本地檔案 —— 只在這台電腦放到 LED 上，不上傳、別人看不到
  * 上傳中可以關掉這個視窗、切到別首歌，上傳會繼續；好了會自動選到新的一版開始播。
  */
-export default function AddVideoDialog({ open, onClose, projectId, song, jobs, canUpload, onLocalFiles }: Props) {
+export default function AddVideoDialog({ open, onClose, projectId, song, jobs, canUpload, onLocalFiles, ledCanvas }: Props) {
   const [way, setWay] = useState<Way>(canUpload ? 'upload' : 'local');
   const [note, setNote] = useState('');
   const [url, setUrl] = useState('');
@@ -41,9 +53,15 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   const [fileError, setFileError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [fileCheck, setFileCheck] = useState<FileCheck | null>(null);
+  /** 每選一次檔案 +1：檢查到一半換檔案 / 關掉視窗，舊的結果不要用 */
+  const checkTokenRef = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const localRef = useRef<HTMLInputElement>(null);
   const label = songTitle(song);
+  // 播不了也硬要傳：只有製作可以（有些瀏覽器播得了，例如 Mac 的 Safari）
+  const { user } = useAuth();
+  const canForce = user?.role === 'admin';
 
   // 打開時回到第一個方法、清掉上次的錯誤
   useEffect(() => {
@@ -52,6 +70,8 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
     setLinkError(null);
     setFileError(null);
     setDragOver(false);
+    checkTokenRef.current++;
+    setFileCheck(null);
   }, [open, song.id, canUpload]);
 
   // Esc 關掉
@@ -72,18 +92,38 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   }, [open, song.id, projectId, onClose]);
   useVideoJobDone(onDone);
 
-  const startUpload = (files: FileList | File[] | null | undefined) => {
+  const beginUpload = (file: File) => {
+    checkTokenRef.current++;
+    setFileCheck(null);
+    videoJobs.startUpload({ projectId, songId: song.id, songLabel: label, file, note });
+    setNote('');
+  };
+
+  // 選好檔案 → 先試播（不上傳）→ 沒問題直接傳；有問題先給他看
+  const pickUpload = (files: FileList | File[] | null | undefined) => {
     const list = files ? Array.from(files) : [];
     if (list.length === 0) return;
     setFileError(null);
     const file = list[0];
     if (!videoMimeForFile(file)) {
-      setFileError(`「${file.name}」不是 MP4 / MOV / WebM 影片。其他格式請先轉成 H.264 MP4 再上傳`);
+      checkTokenRef.current++;
+      setFileCheck(null);
+      setFileError(`「${file.name}」不是 MP4 / MOV / WebM 影片。請在 AE 輸出 H.264 MP4 再交`);
       return;
     }
-    videoJobs.startUpload({ projectId, songId: song.id, songLabel: label, file, note });
-    setNote('');
-    if (list.length > 1) setFileError(`一次交一個檔案：先上傳「${file.name}」，其他的請再拖一次`);
+    if (list.length > 1) setFileError(`一次交一個檔案：先交「${file.name}」，其他的請再拖一次`);
+    const token = ++checkTokenRef.current;
+    setFileCheck({ phase: 'checking', file });
+    void checkVideoFile(file, ledCanvas).then(({ check }) => {
+      if (checkTokenRef.current !== token) return;
+      if (!check.block && check.warnings.length === 0) beginUpload(file);
+      else setFileCheck({ phase: 'checked', file, check });
+    });
+  };
+
+  const cancelCheck = () => {
+    checkTokenRef.current++;
+    setFileCheck(null);
   };
 
   const submitLink = async () => {
@@ -137,7 +177,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
           e.preventDefault();
           setDragOver(false);
           if (way === 'local') pickLocal(e.dataTransfer.files);
-          else if (way === 'upload') startUpload(e.dataTransfer.files);
+          else if (way === 'upload') pickUpload(e.dataTransfer.files);
         }}
       >
         <header className="addvid__head">
@@ -179,25 +219,42 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
 
           {way === 'upload' && (
             <>
-              <div
-                className="addvid__drop"
-                role="button"
-                tabIndex={0}
-                onClick={() => fileRef.current?.click()}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileRef.current?.click(); } }}
-              >
-                <Icon icon={Upload} size="xl" />
-                <strong>把影片拖到這裡，或點這裡選檔案</strong>
-                <span>MP4 / MOV / WebM，最大 4 GB。好了會變成這首歌的下一個版本（V1、V2…）</span>
-              </div>
+              {fileCheck ? (
+                <FileCheckPanel
+                  state={fileCheck}
+                  canForce={canForce}
+                  onPickAnother={() => fileRef.current?.click()}
+                  onUpload={() => beginUpload(fileCheck.file)}
+                  onCancel={cancelCheck}
+                />
+              ) : (
+                <div
+                  className="addvid__drop"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => fileRef.current?.click()}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileRef.current?.click(); } }}
+                >
+                  <Icon icon={Upload} size="xl" />
+                  <strong>把影片拖到這裡，或點這裡選檔案</strong>
+                  <span>MP4 / MOV / WebM，最大 4 GB。好了會變成這首歌的下一個版本（V1、V2…）</span>
+                  <span>傳之前會先在這台電腦試播一下：瀏覽器播不了的（例如 ProRes、HAP）不會傳出去</span>
+                </div>
+              )}
               <input
                 ref={fileRef}
                 type="file"
                 accept={VIDEO_ACCEPT}
                 hidden
-                onChange={(e) => { startUpload(e.target.files); e.target.value = ''; }}
+                onChange={(e) => { pickUpload(e.target.files); e.target.value = ''; }}
               />
               {fileError && <div className="addvid__error" role="alert">{fileError}</div>}
+              {!fileCheck && (
+                <div className="addvid__hint">
+                  AE 請輸出 H.264 的 MP4，大小跟 LED 畫布一樣{ledCanvas ? `（${ledCanvas.width}×${ledCanvas.height}）` : ''}。
+                  {' '}<a href={helpUrl(HELP_ANCHORS.animAeExport)} target="_blank" rel="noopener">AE 輸出設定</a>
+                </div>
+              )}
             </>
           )}
 
@@ -260,6 +317,75 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
             </section>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** 選好檔案之後：檢查中 / 播不了（擋下來）/ 可以交但要注意 */
+function FileCheckPanel({ state, canForce, onPickAnother, onUpload, onCancel }: {
+  state: FileCheck;
+  canForce: boolean;
+  onPickAnother: () => void;
+  onUpload: () => void;
+  onCancel: () => void;
+}) {
+  const name = state.file.name;
+  if (state.phase === 'checking') {
+    return (
+      <div className="addvid__check is-checking" role="status">
+        <div className="addvid__check-head">
+          <Icon icon={LoaderCircle} spin size="md" />
+          <strong>正在檢查影片能不能在瀏覽器播…</strong>
+        </div>
+        <div className="addvid__check-file"><Icon icon={FileVideo} size="sm" /> {name}</div>
+        <div className="addvid__hint">在這台電腦試播一下，檔案還沒有傳出去。最多十幾秒。</div>
+        <div className="addvid__check-actions">
+          <button type="button" className="btn btn--ghost" onClick={onCancel}>取消</button>
+        </div>
+      </div>
+    );
+  }
+  const { check } = state;
+  const help = (
+    <a className="addvid__check-help" href={helpUrl(HELP_ANCHORS.animAeExport)} target="_blank" rel="noopener">
+      AE 怎麼輸出 H.264 MP4（使用說明）
+    </a>
+  );
+  if (check.block) {
+    return (
+      <div className="addvid__check is-block" role="alert">
+        <div className="addvid__check-head">
+          <Icon icon={CircleAlert} size="md" />
+          <strong>{check.block.text}</strong>
+        </div>
+        <div className="addvid__check-file"><Icon icon={FileVideo} size="sm" /> {name}{check.summary ? ` · ${check.summary}` : ''}</div>
+        {check.block.detail && <p className="addvid__check-detail">{check.block.detail}</p>}
+        {help}
+        <div className="addvid__check-actions">
+          {canForce && (
+            <button type="button" className="btn btn--ghost addvid__force" onClick={onUpload}>還是要上傳</button>
+          )}
+          <button type="button" className="btn btn--primary" onClick={onPickAnother}>換一個檔案</button>
+        </div>
+        {canForce && <div className="addvid__hint">「還是要上傳」只有製作看得到：有些瀏覽器播得了（例如 Mac 的 Safari），確定導演、客戶那邊看得到再傳。</div>}
+      </div>
+    );
+  }
+  return (
+    <div className="addvid__check is-warn" role="status">
+      <div className="addvid__check-head">
+        <Icon icon={TriangleAlert} size="md" />
+        <strong>可以交，但先看一下：</strong>
+      </div>
+      <div className="addvid__check-file"><Icon icon={FileVideo} size="sm" /> {name}{check.summary ? ` · ${check.summary}` : ''}</div>
+      <ul className="addvid__check-list">
+        {check.warnings.map(w => <li key={w.kind}>{w.text}</li>)}
+      </ul>
+      {help}
+      <div className="addvid__check-actions">
+        <button type="button" className="btn btn--ghost" onClick={onPickAnother}>換一個檔案</button>
+        <button type="button" className="btn btn--primary" onClick={onUpload}><Icon icon={Upload} /> 照樣上傳</button>
       </div>
     </div>
   );

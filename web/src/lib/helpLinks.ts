@@ -47,11 +47,13 @@ export const HELP_ANCHORS = {
   animStudio: 'anim-studio',
   animSource: 'anim-source',
   animAddVideo: 'anim-add-video',
+  animAeExport: 'anim-ae-export',
   animVersions: 'anim-versions',
   animSubmit: 'anim-submit',
   animFeedback: 'anim-feedback',
   animCompare: 'anim-compare',
   animLedMap: 'anim-led-map',
+  animAeScript: 'anim-ae-script',
   animTestPattern: 'anim-test-pattern',
 
   // ─── AE 即時預覽（動畫師；這一章的 id 很多頁面直接連，不能改）───

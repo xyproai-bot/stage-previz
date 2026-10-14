@@ -87,6 +87,8 @@ describe('小工具', () => {
   it('檔案類型：類型寫清楚看類型，沒寫看副檔名；mkv 不收', () => {
     expect(videoMimeForFile({ name: 'a.mp4', type: 'video/mp4' })).toBe('video/mp4');
     expect(videoMimeForFile({ name: 'a.MOV', type: '' })).toBe('video/quicktime');
+    expect(videoMimeForFile({ name: 'a.mov', type: 'video/mov' })).toBe('video/quicktime');
+    expect(videoMimeForFile({ name: 'a.mov', type: 'video/x-quicktime' })).toBe('video/quicktime');
     expect(videoMimeForFile({ name: 'a.webm', type: 'application/octet-stream' })).toBe('video/webm');
     expect(videoMimeForFile({ name: 'a.m4v', type: 'video/x-m4v' })).toBe('video/mp4');
     expect(videoMimeForFile({ name: 'a.mkv', type: 'video/x-matroska' })).toBeNull();

@@ -103,11 +103,13 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.animStudio, label: '工作站畫面' },
       { id: A.animSource, label: '影片 / AE 即時 / 本地檔案' },
       { id: A.animAddVideo, label: '交影片（加影片）' },
+      { id: A.animAeExport, label: 'AE 輸出設定（交影片前）' },
       { id: A.animVersions, label: '版本 V1、V2' },
       { id: A.animSubmit, label: '提交審查' },
       { id: A.animFeedback, label: '看意見、回覆、已改好' },
       { id: A.animCompare, label: '比較兩版（C 鍵）' },
       { id: A.animLedMap, label: 'LED 對位圖（做 AE 合成）' },
+      { id: A.animAeScript, label: '用 AE 腳本建合成' },
       { id: A.animTestPattern, label: 'LED 顯示測試圖' },
     ],
   },
@@ -1464,6 +1466,7 @@ function AnimatorChapter() {
           <li>選歌，按「<Ui>＋ 加影片</Ui>」。</li>
           <li>「說明」寫一句話（選填），例：修了第二段的轉場。</li>
           <li>把影片拖到框裡，或點框選檔案。MP4 / MOV / WebM，最大 4 GB。</li>
+          <li>會先在你的電腦<strong>試播一下</strong>（幾秒鐘，檔案還沒傳出去）：沒問題就直接開始傳；瀏覽器播不了的（例如 ProRes、HAP）會擋下來，不會白傳好幾 GB。看 <Go to={A.animAeExport}>AE 輸出設定</Go>。</li>
           <li>進度條跑完會寫「<Ui>完成，變成 V3</Ui>」，LED 自動開始播新的一版。</li>
         </ol>
         <F k="uploading" />
@@ -1480,6 +1483,49 @@ function AnimatorChapter() {
         <F k="addVideoLink" />
         <p><strong>本地檔案</strong>：只在這台電腦放到 LED 上，不會交出去（上一段）。</p>
         <p className="help-muted">對話框右上角的「<Icon icon={CircleHelp} />」打開這一段說明。</p>
+      </Section>
+
+      <Section id={A.animAeExport} title="AE 輸出設定（交影片前）">
+        <p>交給導演看的影片請用 <strong>H.264 的 MP4</strong>：每台電腦、每個瀏覽器都播得了，檔案也不會太大。</p>
+        <Note kind="warn" title="為什麼 ProRes、HAP 不行">
+          ProRes、HAP（還有 DNxHD、Animation、沒有壓縮的 .mov）是給剪接、媒體伺服器用的格式，畫質好、檔案很大，
+          但 <strong>Chrome、Edge、Firefox 都播不了</strong>：只有聲音、一片黑，或根本打不開。
+          交影片時會先在你的電腦試播，播不了的會直接擋下來，寫「<Ui>這個影片瀏覽器播不了（可能是 ProRes / HAP 編碼）</Ui>」。
+        </Note>
+        <div className="help-table-wrap">
+          <table className="help-table help-table--wide">
+            <caption>建議的設定</caption>
+            <tbody>
+              <tr><td>格式</td><td><strong>H.264</strong>（.mp4）</td></tr>
+              <tr><td>大小</td><td>跟 <strong>LED 畫布</strong>一樣：3D 工具列最右邊「<Ui>⋯</Ui>」選單最下面寫的「畫布 寬 × 高」。比例不一樣，放到 LED 上會被拉長；比較小會比較糊</td></tr>
+              <tr><td>影格速率</td><td>固定，跟合成一樣（例：30 fps）。不要用「可變影格速率」</td></tr>
+              <tr><td>位元速率</td><td>VBR、1 次。4K（3840 × 2160）大約 <strong>20–40 Mbps</strong>；1920 × 1080 大約 10–15 Mbps。超過 80 Mbps 筆電播起來會卡</td></tr>
+              <tr><td>寬度</td><td>8192 px 以內最穩；更寬的很多電腦（筆電、iPad）播不動</td></tr>
+              <tr><td>色彩</td><td>Rec.709、8-bit；「HDR」不要勾</td></tr>
+              <tr><td>聲音</td><td>AAC 48 kHz（有沒有聲音都可以）</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p><strong>用 Adobe Media Encoder</strong>（建議）</p>
+        <ol className="help-steps">
+          <li>AE 選好合成 → <Ui>Composition 合成</Ui> → <Ui>Add to Adobe Media Encoder Queue… 新增至 Adobe Media Encoder 佇列</Ui>。</li>
+          <li>Media Encoder 裡「<Ui>Format 格式</Ui>」選 <Ui>H.264</Ui>，「<Ui>Preset 預設集</Ui>」選 <Ui>Match Source - High bitrate</Ui>。</li>
+          <li>點藍色的預設集名稱打開「<Ui>Export Settings 匯出設定</Ui>」→「<Ui>Video 視訊</Ui>」：寬、高跟 LED 畫布一樣，<Ui>Frame Rate</Ui> 跟合成一樣；<Ui>Bitrate Encoding</Ui> 選 <Ui>VBR, 1 pass</Ui>，<Ui>Target Bitrate</Ui> 4K 填 30 左右。</li>
+          <li>按右上角綠色的開始按鈕。</li>
+        </ol>
+        <p><strong>直接用 AE 的轉譯佇列</strong>（AE 2023 以後）</p>
+        <ol className="help-steps">
+          <li><Ui>Composition 合成</Ui> → <Ui>Add to Render Queue 新增至轉譯佇列</Ui>。</li>
+          <li>點「<Ui>Output Module 輸出模組</Ui>」：<Ui>Format</Ui> 選 <Ui>H.264</Ui>；「<Ui>Format Options…</Ui>」裡 <Ui>Bitrate Encoding</Ui> 選 VBR、1 pass，<Ui>Target Bitrate</Ui> 4K 填 30 左右。</li>
+          <li>「<Ui>Output To</Ui>」選存檔的地方 → <Ui>Render 轉譯</Ui>。</li>
+        </ol>
+        <p className="help-muted">AE 2022 以前的轉譯佇列沒有 H.264，請用 Media Encoder。</p>
+        <ul className="help-list">
+          <li><strong>HEVC（H.265）</strong>：檔案比較小，但不是每台電腦的瀏覽器都播得了（要看顯示卡）。交給導演、客戶看還是用 H.264。</li>
+          <li>選好檔案後寫「<Ui>可以交，但先看一下</Ui>」：例如大小跟 LED 畫布不一樣（「影片是 1920×1080，LED 畫布是 3840×2160，比例對，但會比較糊」）、位元速率太高、寬度超過 8192。可以按「<Ui>照樣上傳</Ui>」，但最好照上面的設定重新輸出。</li>
+          <li>擋下來的影片：照上面重新輸出 H.264 MP4 再交。製作看得到「<Ui>還是要上傳</Ui>」可以硬傳（例：Mac 的 Safari 播得了 ProRes，但導演用 Chrome 就看不到）。</li>
+          <li><strong>貼連結</strong>交的影片沒辦法在複製前檢查：第一次播的時候檢查，有問題會寫在版本列下面（例：「<Ui>V3：這個影片瀏覽器播不了…</Ui>」），版本號碼也會變紅、多一個警告圖示。</li>
+        </ul>
       </Section>
 
       <Section id={A.animVersions} title="版本 V1、V2…">
@@ -1539,6 +1585,7 @@ function AnimatorChapter() {
           <li>把 PNG 拖進 AE，放在最上面當參考（設成導引圖層就不會算圖出去）。</li>
           <li>AE 合成大小照選單最下面寫的「畫布 寬 × 高」，以製作給的為準。</li>
         </ol>
+        <p>想省掉這些步驟：用「<Ui>下載 AE 合成腳本（.jsx）</Ui>」，AE 自動建好合成、外框和名字（下一段）。</p>
         <FigRow>
           <F k="animLedMenu" />
           <F k="ledMapSample" />
@@ -1547,6 +1594,35 @@ function AnimatorChapter() {
           <li>「<Ui>下載位置表（CSV / JSON）</Ui>」：每塊 LED 的名字和 x、y、w、h，Excel 或 AE 腳本可以讀。</li>
           <li>位置一樣的 LED 名字會寫在一起；壓在畫布邊上的 LED 兩邊都會畫。</li>
           <li>畫布大小不對：請製作改（<Go to={A.prodLedCanvas}>LED 畫布大小</Go>）。</li>
+        </ul>
+      </Section>
+
+      <Section id={A.animAeScript} title="用 AE 腳本建合成">
+        <p>不用自己對位置：下載一個 AE 腳本，跑一下就建好 LED 畫布大小的合成，每塊 LED 的外框和名字都放好了。</p>
+        <ol className="help-steps">
+          <li>3D 工具列最右邊按「<Ui>⋯</Ui>」→「<Ui>下載 AE 合成腳本（.jsx）</Ui>」。</li>
+          <li>打開 After Effects（2020 以後的版本，Windows、Mac 都可以）。</li>
+          <li><Ui>File 檔案</Ui> → <Ui>Scripts 指令碼</Ui> → <Ui>Run Script File… 執行指令碼檔案</Ui>，選剛剛下載的 .jsx。</li>
+          <li>問「合成多長？」：寫 分:秒（預設 3:00）→ <Ui>OK</Ui>。按 <Ui>Cancel</Ui> 什麼都不會建。</li>
+          <li>跑完會跳一個說明，寫建了什麼；合成會自己打開。</li>
+        </ol>
+        <F k="aeScriptMenu" />
+        <F k="aeScriptResult" />
+        <F k="aeScriptLayers" />
+        <p>建出來的東西都放在專案面板的「<Ui>Stage Previz LED 對位</Ui>」資料夾：</p>
+        <ul className="help-list">
+          <li><strong>合成</strong>：名字像「<Ui>Stage Previz – 示範專案 – 3840x2160</Ui>」，大小 = LED 畫布，30 fps（要別的影格速率，到 <Ui>Composition Settings</Ui> 改）。</li>
+          <li><strong>每塊 LED 一個外框</strong>（形狀圖層，名字 = LED 的名字，每塊不同顏色）。不是長方形的 LED 照實際形狀；壓在畫布邊上的兩邊都畫。</li>
+          <li><strong>名字標籤</strong>（文字圖層）：LED 的名字、像素大小、位置 x y。位置一樣的 LED 寫在同一個標籤。</li>
+          <li><strong>LED 對位圖</strong>：夾在腳本裡的參考圖，放在外框下面（濾色、不透明度 60%）。</li>
+          <li>全部是<strong>導引圖層</strong>（Guide Layer）而且<strong>鎖住</strong>：算圖時不會出現，也不會不小心拖到。</li>
+        </ul>
+        <ul className="help-list">
+          <li>把你的素材放在這些導引圖層<strong>下面</strong>，外框留在最上面當參考。</li>
+          <li>全部不要了：跑完馬上按 Ctrl+Z（Mac 是 Cmd+Z）一次就復原。只想關掉外框：把那幾個圖層的眼睛關掉。</li>
+          <li>說明裡寫「<Ui>沒有放：AE 現在不允許腳本存檔</Ui>」：<Ui>Edit</Ui> → <Ui>Preferences</Ui> → <Ui>Scripting &amp; Expressions</Ui>（Mac：<Ui>After Effects</Ui> → <Ui>Settings</Ui> → <Ui>Scripting &amp; Expressions</Ui>），勾「<Ui>Allow Scripts to Write Files and Access Network</Ui>」再跑一次。外框和名字不用這個設定。</li>
+          <li>對位圖存在 .jsx 旁邊（同一個資料夾）。搬走的話 AE 會說找不到檔案，重新連結或再跑一次就好。</li>
+          <li>模型或 LED 畫布大小改了：重新下載腳本再跑一次（會建一個新的合成，不會動到舊的）。</li>
         </ul>
       </Section>
 
@@ -2063,7 +2139,7 @@ function QuestionsChapter() {
           <li>小播放器說出錯了：按「<Ui>重新載入</Ui>」。頁面開了很久（幾個小時）播放網址會過期，按一下就好。</li>
           <li>版本旁邊寫「複製中」：貼連結、Drive 的影片還在複製到我們的伺服器，等它好。</li>
           <li>寫「失敗」：看紅字的原因。例如 Drive 檔案沒有設「知道連結的使用者都能查看」→ 改好按「<Ui>重試</Ui>」。</li>
-          <li>檔案格式：<strong>H.264 的 MP4</strong> 最穩。ProRes 的 .mov、.mkv、某些 HEVC 影片有些電腦播不了 → 轉成 H.264 MP4 再交一次。</li>
+          <li>檔案格式：<strong>H.264 的 MP4</strong> 最穩。ProRes 的 .mov、.mkv、某些 HEVC 影片有些電腦播不了 → 轉成 H.264 MP4 再交一次（看 <Go to={A.animAeExport}>AE 輸出設定</Go>）。版本號碼變紅、寫「這個影片瀏覽器播不了」就是這個原因。</li>
           <li>公司或學校網路可能擋影片：換個網路（例如手機熱點）試試。</li>
         </ol>
       </Section>

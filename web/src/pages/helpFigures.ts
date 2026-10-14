@@ -430,14 +430,30 @@ export const FIGS = {
     ],
   }),
   animLedMenu: fig({
-    src: '/help/animator/led-menu.webp', w: 568, h: 522, width: 284,
-    alt: '動畫師的更多選單：LED 對位圖、LED 顯示測試圖',
+    src: '/help/animator/led-menu.webp', w: 600, h: 604, width: 300,
+    alt: '動畫師的更多選單：LED 對位圖、AE 合成腳本、位置表、LED 顯示測試圖',
     caption: '工具列最右邊「⋯」：LED 對位圖',
+  }),
+  aeScriptMenu: fig({
+    src: '/help/animator/led-menu.webp', w: 600, h: 604, width: 300,
+    alt: '更多選單裡的「下載 AE 合成腳本（.jsx）」',
+    caption: '「⋯」→ ① 下載 AE 合成腳本（.jsx）',
+    boxes: [{ x: 7.67, y: 41.23, w: 84.67, h: 10.6, n: 1 }],
   }),
   ledMapSample: fig({
     src: '/help/animator/led-map-sample.webp', w: 1200, h: 450, width: 820,
     alt: '下載的 LED 對位圖：每塊 LED 在 AE 畫布上的位置、名字、x y w h、格線',
     caption: '下載的 LED 對位圖（示範專案，3840 × 1440）：放進 AE 當參考圖層',
+  }),
+  aeScriptResult: fig({
+    src: '/help/animator/ae-script-result.webp', w: 1544, h: 744, width: 820,
+    alt: 'After Effects 跑完腳本：LED 畫布大小的合成，每塊 LED 的外框和名字都是導引圖層',
+    caption: '跑完腳本的 AE（示範專案）：每塊 LED 一個外框（不同顏色）和名字標籤，都是導引圖層、鎖住',
+  }),
+  aeScriptLayers: fig({
+    src: '/help/animator/ae-script-layers.webp', w: 858, h: 296, width: 820,
+    alt: 'AE 時間軸：名字標籤、每塊 LED 的外框、LED 對位圖，都鎖住、都是導引圖層',
+    caption: '時間軸：上面是名字標籤（T）、接著每塊 LED 的外框、最下面對位圖；鎖頭 = 鎖住，名字前面的格子圖示 = 導引圖層',
   }),
   testPattern: fig({
     src: '/help/animator/test-pattern.webp', w: 1100, h: 886, width: 560,

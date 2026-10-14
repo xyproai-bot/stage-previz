@@ -118,6 +118,34 @@
 }
 .vbar__jobs > .vjob { flex: 1 1 260px; max-width: 420px; }
 
+/* 這台電腦播過才知道的：播不了（紅）/ 貼連結的版本解析度、位元率、畫布的提醒（黃） */
+.vbar__chip.has-issue:not(.is-active) { border-color: var(--danger); }
+.vbar__chip.has-issue .vbar__chip-label { display: inline-flex; align-items: center; gap: 3px; }
+.vbar__chip.has-issue:not(.is-active) .vbar__chip-label { color: var(--danger); }
+.vbar__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 12px 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  background: var(--warn-dim);
+  color: var(--warn);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.vbar__check > .ui-icon { flex-shrink: 0; margin-top: 2px; }
+.vbar__check.is-error {
+  border-color: var(--danger);
+  background: rgba(255, 84, 112, 0.1);
+  color: var(--danger);
+}
+.vbar__check-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vbar__check-text span { color: var(--text); }
+.vbar__check-text span:first-child { color: inherit; font-weight: 600; }
+.vbar__check .help-link { flex-shrink: 0; }
+
 @media (max-width: 640px) {
   .vbar { flex-wrap: wrap; row-gap: 6px; }
   .vbar__chips { max-width: 100%; order: 3; flex-basis: 100%; }
