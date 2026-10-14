@@ -1,0 +1,260 @@
+/* 留言的參考圖片和連結（CommentAttachments.tsx） */
+
+/* 留言框：拖圖片進來 */
+.att-drop { position: relative; }
+.att-drop.is-over > textarea { border-color: var(--accent); }
+.att-drop__hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 2px dashed var(--accent);
+  border-radius: 6px;
+  background: rgba(16, 199, 138, 0.14);
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* 「圖片」按鈕 */
+.att-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim);
+  border-radius: 5px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  min-height: 28px;
+  cursor: pointer;
+}
+.att-add:hover:not(:disabled) { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+.att-add:disabled { opacity: 0.45; cursor: not-allowed; }
+.att-add--compact { padding: 4px 7px; }
+
+/* 還沒送出的圖片 */
+.att-tray { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.att-tray__item {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  border-radius: 5px;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  background: var(--bg);
+}
+.att-tray__item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.att-tray__item.is-preparing img,
+.att-tray__item.is-uploading img { opacity: 0.5; }
+.att-tray__item.is-error { border-color: var(--danger); }
+.att-tray__blank { display: block; width: 100%; height: 100%; background: var(--surface-1); }
+.att-tray__state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  color: #fff;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+.att-tray__retry {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 84, 112, 0.35);
+  border: none;
+  color: #fff;
+  cursor: pointer;
+}
+.att-tray__remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: none;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  cursor: pointer;
+  padding: 0;
+}
+.att-tray__remove:hover:not(:disabled) { background: var(--danger); }
+
+/* 留言裡的連結 */
+.att-link { color: #7cc4ff; text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+.att-link:hover { color: #a9d8ff; }
+
+.att-cards { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+.att-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 340px;
+  padding: 5px 8px 5px 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  text-decoration: none;
+  min-width: 0;
+}
+.att-card:hover { border-color: rgba(255, 255, 255, 0.32); background: var(--surface-1); }
+.att-card__media {
+  position: relative;
+  flex: 0 0 auto;
+  width: 64px;
+  height: 36px;
+  border-radius: 4px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.att-card--youtube .att-card__media { color: #ff6b6b; }
+.att-card--vimeo .att-card__media { color: #5cc8ff; }
+.att-card--bilibili .att-card__media { color: #ff8bb5; }
+.att-card--youku .att-card__media { color: #5ab0ff; }
+.att-card--drive .att-card__media { color: #ffd166; }
+.att-card--dropbox .att-card__media { color: #6ea8ff; }
+.att-card--instagram .att-card__media { color: #e58bff; }
+.att-card__media img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.2s; }
+.att-card__media img.is-loaded { opacity: 1; }
+.att-card__text { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.att-card__host { font-size: 12px; font-weight: 600; }
+.att-card__what { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.att-card__go { flex: 0 0 auto; color: var(--text-muted); }
+
+/* 留言裡的參考圖片 */
+.att-grid { display: grid; gap: 4px; margin-top: 6px; max-width: 360px; }
+.att-grid--1 { grid-template-columns: minmax(0, 1fr); max-width: 260px; }
+.att-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.att-grid--3, .att-grid--4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.att-grid__item {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+  background: #000;
+  aspect-ratio: 4 / 3;
+  cursor: zoom-in;
+}
+.att-grid--1 .att-grid__item { aspect-ratio: auto; max-height: 220px; }
+.att-grid--1 .att-grid__item img { max-height: 220px; object-fit: contain; }
+.att-grid__item img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.att-grid__item:hover { border-color: rgba(255, 255, 255, 0.4); }
+.att-grid__item:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.att-grid__badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+}
+
+/* 大圖 */
+.att-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(8, 9, 11, 0.94);
+  display: flex;
+  flex-direction: column;
+}
+.att-lightbox__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  color: var(--text);
+}
+.att-lightbox__count { margin-right: auto; font-size: 13px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.att-lightbox__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 13px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.att-lightbox__btn:hover { background: rgba(255, 255, 255, 0.1); }
+.att-lightbox__btn--icon { padding: 6px 8px; }
+.att-lightbox__stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 56px 16px;
+}
+.att-lightbox__stage img { max-width: 100%; max-height: 100%; object-fit: contain; opacity: 0; transition: opacity 0.15s; }
+.att-lightbox__stage img.is-loaded { opacity: 1; }
+.att-lightbox__spin { position: absolute; color: var(--text-dim); }
+.att-lightbox__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+  cursor: pointer;
+}
+.att-lightbox__nav:hover { background: rgba(255, 255, 255, 0.16); }
+.att-lightbox__nav--prev { left: 6px; }
+.att-lightbox__nav--next { right: 6px; }
+
+@media (max-width: 640px) {
+  .att-lightbox__stage { padding: 0 4px 70px; }
+  .att-lightbox__nav { top: auto; bottom: 12px; transform: none; height: 48px; width: 56px; }
+  .att-lightbox__nav--prev { left: calc(50% - 64px); }
+  .att-lightbox__nav--next { right: calc(50% - 64px); }
+  .att-card { max-width: 100%; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .att-tray__remove { width: 26px; height: 26px; }
+  .att-add { min-height: 36px; padding: 6px 12px; }
+}
+
+/* 回覆 / 修改框：「圖片」按鈕靠左，取消 / 送出靠右 */
+.rvc-row-end { align-items: center; }
+.rvc-row-gap { flex: 1 1 auto; }
+
+/* 留言框底下：「圖片」靠左、「送出」靠右 */
+.att-compose-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

@@ -30,6 +30,9 @@ import { useNewVersionHint } from '../lib/newVersionHint';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
 import { CommentSkeleton } from '../components/Skeleton';
+import { AttachButton, AttachmentDropZone, AttachmentTray } from '../components/CommentAttachments';
+import { memberUploader } from '../lib/review/attachmentsApi';
+import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachmentDraft';
 import { toast } from '../lib/toast';
 import { confirmDialog, splitQuestion } from '../components/dialogs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
@@ -1262,6 +1265,9 @@ function SongComments({
   currentTime: number;
 }) {
   const [text, setText] = useState('');
+  // 參考圖片（貼上 / 拖進來 / 選檔案；換歌時還沒送出的拿掉）
+  const uploader = useMemo(() => (user ? memberUploader(projectId, song.id) : null), [projectId, song.id, !!user]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const draft = useAttachmentDraft(uploader, song.id);
   const [posting, setPosting] = useState(false);
   // 用戶可以「掛在某個時間」留言（從 timeline 來、或自己 toggle）
   const [attachTime, setAttachTime] = useState<number | null>(null);
@@ -1363,7 +1369,8 @@ function SongComments({
   async function handlePost() {
     if (!user) return;
     const t = text.trim();
-    if (!t) return;
+    if (!t && !draft.ids.length) return;
+    if (draftBlocksSend(draft)) return;
     setPosting(true);
     try {
       // 作者 / 身分由後台依登入的人填；綁正在看的那一版；
@@ -1373,6 +1380,7 @@ function SongComments({
         text: t,
         anchor: attachAnchor ?? undefined,
         mentions: extractMentions(t, members),
+        attachmentIds: draft.ids,
         videoId: viewed?.id ?? null,
         ...extras,
       });
@@ -1380,6 +1388,7 @@ function SongComments({
       setText('');
       setAttachTime(null);
       setAttachAnchor(null);
+      draft.clear(false);
       session.afterSend();
     } catch (e) {
       toast.error('留言失敗：' + friendlyError(e));
@@ -1558,7 +1567,7 @@ function SongComments({
               <button className="link-btn" onClick={() => setAttachAnchor(null)} title="取消 3D 位置" aria-label="取消 3D 位置"><Icon icon={X} /></button>
             </div>
           )}
-          <div style={{ position: 'relative' }}>
+          <AttachmentDropZone draft={draft} disabled={readOnly}>
             <textarea
               ref={textareaRef}
               placeholder={session.draft.active
@@ -1601,10 +1610,14 @@ function SongComments({
                 ))}
               </div>
             )}
+          </AttachmentDropZone>
+          <AttachmentTray draft={draft} />
+          <div className="att-compose-row">
+            <AttachButton draft={draft} disabled={readOnly} />
+            <button className="btn btn--primary btn--sm" onClick={handlePost} disabled={posting || draft.busy || (!text.trim() && !draft.ids.length)} {...ro()}>
+              送出
+            </button>
           </div>
-          <button className="btn btn--primary btn--sm" onClick={handlePost} disabled={posting || !text.trim()} {...ro()}>
-            送出
-          </button>
         </div>
       )}
       {user && !canPost && (

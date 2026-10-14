@@ -22,6 +22,9 @@ import OverflowMenu from '../components/OverflowMenu';
 import EmptyState from '../components/EmptyState';
 import ReviewHistory from '../components/ReviewHistory';
 import CommentThreadList from '../components/CommentThreadList';
+import { AttachButton, AttachmentDropZone, AttachmentTray } from '../components/CommentAttachments';
+import { memberUploader } from '../lib/review/attachmentsApi';
+import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachmentDraft';
 import { buildThreads, canPostComment, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, type CommentScope } from '../lib/commentThreads';
 import { lastReviewSentence, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
@@ -752,7 +755,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   }
 
   /** 提交審查（附一段話給導演）；成功回 true */
-  async function handleSubmitForReview(song: Song, note: string): Promise<boolean> {
+  async function handleSubmitForReview(song: Song, note: string, attachmentIds: string[] = []): Promise<boolean> {
     if (!user) return false;
 
     // 先確認這首歌有影片：有交過版本（V1、V2…）就好；沒有的話看舊的 Drive 影片（先同步一次）
@@ -780,11 +783,11 @@ function StudioInner({ projectId }: { projectId: string }) {
     const ok = await changeStatus(song, 'in_review');
     if (!ok) return false;
 
-    if (note.trim()) {
-      const text = `[提交審查] ${note.trim()}`;
+    if (note.trim() || attachmentIds.length) {
+      const text = note.trim() ? `[提交審查] ${note.trim()}` : '[提交審查]';
       try {
         // 記在交上去的那一版（最新一版）：導演在「這一版」就看得到，不會變成「舊留言」
-        const updated = await api.postSongComment(projectId, song.id, { text, mentions: extractMentions(text, members), videoId: song.latestVideoId ?? null });
+        const updated = await api.postSongComment(projectId, song.id, { text, mentions: extractMentions(text, members), videoId: song.latestVideoId ?? null, attachmentIds });
         setSongComments(song.id, updated);
       } catch (e) {
         toast.warn('已提交審查，但附的那段話沒送出去：' + friendlyError(e));
@@ -1285,7 +1288,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 onCommentsChange={(list) => setSongComments(selectedSong.id, list)}
                 onRefreshComments={() => refreshSongComments(selectedSong.id)}
                 onChangeStatus={(to) => changeStatus(selectedSong, to)}
-                onSubmitForReview={(note) => handleSubmitForReview(selectedSong, note)}
+                onSubmitForReview={(note, ids) => handleSubmitForReview(selectedSong, note, ids)}
                 viewed={(() => {
                   // 正在 LED 上放的那一版；沒在放影片（AE 即時 / 本地檔案）→ 最新一版
                   const it = (source === 'version' && versions.selected?.kind === 'version' ? versions.selected : null)
@@ -1395,7 +1398,7 @@ function ReviewTab({
   onCommentsChange: (list: SongComment[]) => void;
   onRefreshComments: () => Promise<void>;
   onChangeStatus: (status: Song['status']) => Promise<boolean>;
-  onSubmitForReview: (note: string) => Promise<boolean>;
+  onSubmitForReview: (note: string, attachmentIds: string[]) => Promise<boolean>;
   /** 正在看的那一版（沒在放影片 = 最新一版）：留言綁這一版、「這一版」篩選 */
   viewed: { id: string; version: number; label: string } | null;
   /** 最新一版（「已改好（V3）」） */
@@ -1421,6 +1424,9 @@ function ReviewTab({
   currentTime: number;
 }) {
   const [note, setNote] = useState('');
+  // 參考圖片（貼上 / 拖進來 / 選檔案；換歌時還沒送出的拿掉）
+  const uploader = useMemo(() => memberUploader(projectId, song.id), [projectId, song.id]);
+  const draft = useAttachmentDraft(uploader, song.id);
   const [attachTime, setAttachTime] = useState<number | null>(null);
   const [filterStatus, setFilterStatus] = useState<StatusFilter>(() => {
     try { return (localStorage.getItem('sp_comment_filter_studio') as StatusFilter) || 'all'; } catch { return 'all'; }
@@ -1463,16 +1469,18 @@ function ReviewTab({
 
   async function handlePost() {
     const text = note.trim();
-    if (!text) return;
+    if (!text && !draft.ids.length) return;
+    if (draftBlocksSend(draft)) return;
     setPosting(true);
     try {
-      // 帶上區段、3D 視角、cue、畫記、縮圖（縮圖在按送出時抓一次；有畫記就用畫的那一格）
+      // 帶上區段、3D 視角、cue、畫記、縮圖（縮圖在按送出時抓一次；有畫記就用畫的那一格）、參考圖片
       const extras = session.collect(videoActive ? attachTime : null);
       const updated = await api.postSongComment(projectId, song.id, {
-        text, mentions: extractMentions(text, members), videoId: viewed?.id ?? null, ...extras,
+        text, mentions: extractMentions(text, members), videoId: viewed?.id ?? null, attachmentIds: draft.ids, ...extras,
       });
       onCommentsChange(updated);
       setNote('');
+      draft.clear(false);
       setAttachTime(null);
       session.afterSend();
     } catch (e) {
@@ -1491,8 +1499,9 @@ function ReviewTab({
           message: '狀態會改成「審查中」，留言框裡的話會一起送出，導演會收到通知。',
           confirmLabel: '提交審查',
         }))) return;
-        const ok = await onSubmitForReview(note);
-        if (ok) setNote('');
+        if (draftBlocksSend(draft)) return;
+        const ok = await onSubmitForReview(note, draft.ids);
+        if (ok) { setNote(''); draft.clear(false); }
       } else {
         await onChangeStatus(to);
       }
@@ -1619,19 +1628,23 @@ function ReviewTab({
               currentTime={currentTime}
               onStartDraw={onStartDraw}
             />
-            <textarea
-              ref={composerRef}
-              placeholder={canSubmit
-                ? '寫一段給導演 / 製作的話，按「提交審查」會一起送出'
-                : `在這裡留言${viewed ? `（會記在 ${viewed.label}）` : ''}；打 @ 加名字可以提及成員`}
-              value={note}
-              onChange={e => setNote(e.target.value)}
-              rows={3}
-              readOnly={readOnly}
-              {...ro()}
-            />
-            <div className="studio-review__compose-actions">
-              <button className="btn btn--ghost" onClick={handlePost} disabled={posting || !note.trim()} {...ro()}>
+            <AttachmentDropZone draft={draft} disabled={readOnly}>
+              <textarea
+                ref={composerRef}
+                placeholder={canSubmit
+                  ? '寫一段給導演 / 製作的話，按「提交審查」會一起送出（可以貼上參考圖片）'
+                  : `在這裡留言${viewed ? `（會記在 ${viewed.label}）` : ''}；打 @ 加名字可以提及成員；可以貼上參考圖片`}
+                value={note}
+                onChange={e => setNote(e.target.value)}
+                rows={3}
+                readOnly={readOnly}
+                {...ro()}
+              />
+            </AttachmentDropZone>
+            <AttachmentTray draft={draft} />
+            <div className="studio-review__compose-actions att-compose-row">
+              <AttachButton draft={draft} disabled={readOnly} />
+              <button className="btn btn--ghost" onClick={handlePost} disabled={posting || draft.busy || (!note.trim() && !draft.ids.length)} {...ro()}>
                 送出留言
               </button>
             </div>

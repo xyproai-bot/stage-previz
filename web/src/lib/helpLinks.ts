@@ -89,6 +89,7 @@ export const HELP_ANCHORS = {
   dirPlay: 'dir-play',
   dirAddLink: 'dir-add-link',
   dirComment: 'dir-comment',
+  dirAttach: 'dir-attach',
   dirDecide: 'dir-decide',
   dirHistory: 'dir-history',
   dirCompare: 'dir-compare',

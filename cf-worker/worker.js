@@ -49,6 +49,8 @@ import { sanitizeComment, rowToComment, COMMENT_ID_RE, thumbKeyFromPath } from '
 import * as guest from './guestComments.mjs';
 // 審片 v2：留言綁版本 / 回覆 / 已改好、通過・需修改的審片紀錄、站內通知（直接用 D1，回傳 { status, body }）
 import * as reviews from './reviews.mjs';
+// 留言的參考圖片（0028）：上傳、掛到留言上、刪留言 / 刪歌時清 R2、排程清掉沒送出的
+import * as attachments from './commentAttachments.mjs';
 // 歌曲影片版本（純判斷：代號對歌、版本號、連結、權限、播放通行證）
 import {
   normalizeSongCodeInput, nextSongCode, fillMissingSongCodes, songCodeTakenBy, matchSongByFilename,
@@ -125,6 +127,8 @@ export default {
       await runVideoCopyJobs(env, step).catch(e => console.error('[cron video copy]', e?.message || e));
       await cleanupStaleVideoUploads(env).catch(e => console.error('[cron video cleanup]', e?.message || e));
       await reviews.pruneNotifications(env.DB).catch(e => console.error('[cron notifications prune]', e?.message || e));
+      // 留言的參考圖片：上傳了一天都沒送出的清掉（0028）
+      await attachments.cleanupPendingAttachments(env.DB, env.MODELS).catch(e => console.error('[cron attachments cleanup]', e?.message || e));
     })());
     // 資料庫每天備份到 R2、NDI 小程序檢查新版、清掉 30 天以前的前端錯誤（ops.mjs）
     ctx.waitUntil(runOpsCron(env).catch(e => console.error('[cron ops]', e?.message || e)));
@@ -179,6 +183,13 @@ async function routeRequest(request, env) {
   }
   if (url.pathname.startsWith('/api/comment-thumbs/')) {
     return handleCommentThumb(request, env, url);
+  }
+  // 留言的參考圖片（0028）：上傳 / 拿掉還沒送出的（要登入）、看圖（不用登入，網址猜不到）
+  if (url.pathname === '/api/comment-attachments') {
+    return handleCommentAttachments(request, env, url);
+  }
+  if (url.pathname.startsWith('/api/comment-attachments/')) {
+    return attachments.serveCommentAttachment(request, env.MODELS, url.pathname, corsHeaders());
   }
   // 站內通知（只看自己的；要登入）
   if (url.pathname === '/api/notifications' || url.pathname.startsWith('/api/notifications/')) {
@@ -1720,11 +1731,14 @@ async function deleteSong(request, env, projectId, songId) {
   const thumbKeys = ((await env.DB.prepare(
     `SELECT thumb_key FROM comments WHERE song_id = ? AND thumb_key IS NOT NULL`
   ).bind(songId).all().catch(() => ({ results: [] }))).results || []).map(r => r.thumb_key);
+  // 留言的參考圖片（0028，含還沒送出的）
+  const imageKeys = await attachments.songAttachmentKeys(env.DB, songId);
   const result = await env.DB.prepare(`DELETE FROM songs WHERE id = ? AND project_id = ?`).bind(songId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   // 歌的影片版本跟著歌一起刪（資料庫那邊 ON DELETE CASCADE），R2 的檔案也清掉
   if (videoFiles.length) runInBackground(request, cleanupSongVideoFiles(env, videoFiles));
   if (thumbKeys.length) runInBackground(request, reviews.deleteCommentThumbs(env.MODELS, thumbKeys));
+  if (imageKeys.length) runInBackground(request, attachments.deleteAttachmentObjects(env.MODELS, imageKeys));
   await logActivity(request, env, projectId, 'delete', 'song', songId, { name: before?.name });
   return jsonResp({ ok: true });
 }
@@ -2737,7 +2751,7 @@ async function handleComments(request, env, url) {
       if (body.error) return jsonResp({ error: body.error }, body.status);
       return await reviewsResp(request.method === 'POST'
         ? reviews.postComment(env.DB, { me, thread, body: body.value, r2: env.MODELS || null })
-        : reviews.patchComment(env.DB, { me, thread, body: body.value }));
+        : reviews.patchComment(env.DB, { me, thread, body: body.value, r2: env.MODELS || null }));
     }
     if (request.method === 'DELETE') {
       return await reviewsResp(reviews.deleteComment(env.DB, { me, thread, id: url.searchParams.get('id'), r2: env.MODELS || null }));
@@ -2798,8 +2812,33 @@ async function commentsSummary(env, ctx) {
 }
 
 async function listThreadComments(env, songId) {
-  const r = await env.DB.prepare(`SELECT * FROM comments WHERE song_id = ? ORDER BY rowid ASC`).bind(songId).all();
-  return (r.results || []).map(rowToComment);
+  return reviews.listSongComments(env.DB, songId);   // 含參考圖片（0028）
+}
+
+// /api/comment-attachments?session=…（0028）：POST 上傳一張（multipart file + thumb）、DELETE &id= 拿掉還沒送出的
+//   誰可以：跟發留言一樣（commentAttachments.mjs）；登入、成員、封存檢查跟 /api/comments 一樣
+async function handleCommentAttachments(request, env, url) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '請先登入' }, 401);
+  const session = url.searchParams.get('session');
+  if (!session || !SESSION_ID_RE.test(session)) return jsonResp({ error: 'Missing or invalid session' }, 400);
+  try {
+    const thread = await resolveCommentThread(env, me, session);
+    if (!thread) return jsonResp({ error: '找不到這首歌' }, 404);
+    if (thread.archived && me.role !== 'admin') return jsonResp({ error: '找不到這個專案（可能已封存）' }, 404);
+    if (!thread.role) return jsonResp({ error: '沒有權限存取此專案' }, 403);
+    if (thread.archived) return jsonResp({ error: '這個專案已封存，請先還原再修改' }, 409);
+    if (request.method === 'POST') {
+      return await reviewsResp(attachments.uploadMemberAttachment(env.DB, env.MODELS || null, { me, thread, request }));
+    }
+    if (request.method === 'DELETE') {
+      return await reviewsResp(attachments.discardMemberAttachment(env.DB, env.MODELS || null, { me, thread, id: url.searchParams.get('id') }));
+    }
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  } catch (e) {
+    return jsonResp({ error: e.message }, 500);
+  }
 }
 
 // reviews.mjs 的結果（{ status, body }）→ Response
@@ -5887,6 +5926,18 @@ async function handleShareRouter(request, env, url, ref) {
       return await reviewsResp(guest.postGuestComment(env.DB, {
         link, songId: segs[4], body: body.value, ipKey, accessToken: access?.token ?? null, now: new Date(now), r2: env.MODELS || null,
       }));
+    }
+    return jsonResp({ error: 'Method not allowed' }, 405);
+  }
+  // 訪客的參考圖片（0028）：POST 上傳一張、DELETE /:id 拿掉還沒送出的（額度在 guestComments.mjs）
+  if (sub === 'songs' && segs[5] === 'comment-attachments' && !segs[7]) {
+    if (request.method === 'POST' && !segs[6]) {
+      return await reviewsResp(guest.uploadGuestAttachment(env.DB, env.MODELS || null, {
+        link, songId: segs[4], request, ipKey, accessToken: access?.token ?? null, now: new Date(now),
+      }));
+    }
+    if (request.method === 'DELETE' && segs[6]) {
+      return await reviewsResp(guest.discardGuestAttachment(env.DB, env.MODELS || null, { link, songId: segs[4], id: segs[6] }));
     }
     return jsonResp({ error: 'Method not allowed' }, 405);
   }

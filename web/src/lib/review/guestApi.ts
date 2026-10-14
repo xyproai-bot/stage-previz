@@ -22,7 +22,7 @@ export function tidyGuestName(raw: string): string {
 
 /** 訪客看到的留言（後台不給 email、帳號 id、@ 誰） */
 export type GuestComment = Pick<SongComment, 'id' | 'time' | 'text' | 'author' | 'role' | 'status' | 'createdAt'>
-  & Partial<Pick<SongComment, 'timeEnd' | 'view' | 'cueId' | 'annotation' | 'thumbUrl' | 'parentId' | 'videoVersion' | 'resolvedVersion'>>;
+  & Partial<Pick<SongComment, 'timeEnd' | 'view' | 'cueId' | 'annotation' | 'thumbUrl' | 'parentId' | 'videoVersion' | 'resolvedVersion' | 'attachments' | 'noText'>>;
 
 export type GuestError = Error & { status?: number; requiresPassword?: boolean; commentsDisabled?: boolean };
 
@@ -42,7 +42,7 @@ export async function listGuestComments(ref: ShareRef, songId: string, access?: 
 
 export async function postGuestComment(
   ref: ShareRef, songId: string, access: string | undefined,
-  input: { guestName: string; text: string; time?: number; parentId?: string | null; videoId?: string | null } & CommentExtras,
+  input: { guestName: string; text: string; time?: number; parentId?: string | null; videoId?: string | null; attachmentIds?: string[] } & CommentExtras,
 ): Promise<GuestComment[]> {
   const comment: Record<string, unknown> = {
     id: 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36),
@@ -51,6 +51,7 @@ export async function postGuestComment(
     ...commentExtrasBody(input),
   };
   if (input.parentId) comment.parentId = input.parentId;
+  if (input.attachmentIds && input.attachmentIds.length) comment.attachmentIds = input.attachmentIds;
   if (input.videoId) comment.videoId = input.videoId;
   const r = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${encodeURIComponent(songId)}/comments`, {
     method: 'POST',

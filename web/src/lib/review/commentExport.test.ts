@@ -110,3 +110,29 @@ describe('匯出：列印頁', () => {
     expect(buildPrintHtml([], meta)).toContain('沒有符合的留言');
   });
 });
+
+describe('匯出：參考圖片、連結', () => {
+  const withImages: SongComment[] = [
+    { ...base, id: 'i1', text: '（圖片）', noText: true, attachments: [
+      { id: 'ca_1', url: '/api/comment-attachments/p1/aaaa.webp', thumbUrl: '/api/comment-attachments/p1/aaaa-t.webp', type: 'image/webp', size: 1000 },
+      { id: 'ca_2', url: '/api/comment-attachments/p1/bbbb.gif', type: 'image/gif', size: 2000 },
+    ] },
+    { ...base, id: 'i2', text: '參考 https://youtu.be/dQw4w9WgXcQ。<b>x</b>', createdAt: '2026-10-14T03:10:00.000Z' },
+  ];
+  const threads = buildThreads(withImages);
+
+  it('CSV 最後一欄是參考圖片的完整網址（一張一行）；只有圖片的內容寫「（圖片）」', () => {
+    expect(CSV_HEADER[CSV_HEADER.length - 1]).toBe('參考圖片');
+    const csv = commentsToCsv(threads, meta);
+    expect(csv).toContain('"https://proxy.test/api/comment-attachments/p1/aaaa.webp\nhttps://proxy.test/api/comment-attachments/p1/bbbb.gif"');
+    expect(csv.split('\r\n')[1]).toContain(',（圖片）,');
+  });
+
+  it('列印頁：參考圖片的小縮圖（沒有小縮圖用原圖）、連結點得到、其他 HTML 照樣跳脫', () => {
+    const html = buildPrintHtml(threads, meta);
+    expect(html).toContain('src="https://proxy.test/api/comment-attachments/p1/aaaa-t.webp"');
+    expect(html).toContain('src="https://proxy.test/api/comment-attachments/p1/bbbb.gif"');
+    expect(html).toContain('<a href="https://youtu.be/dQw4w9WgXcQ">https://youtu.be/dQw4w9WgXcQ</a>。&lt;b&gt;x&lt;/b&gt;');
+    expect(html).not.toContain('<b>x</b>');
+  });
+});

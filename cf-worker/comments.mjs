@@ -2,6 +2,9 @@
 // 留言現在存在 D1 的 comments 表（migrations/0019），一則一列 → 很多人同時留言不會互相蓋掉。
 // API 的格式跟以前存在 KV 時完全一樣（前端不用改）：
 //   { id, time, x, y, text, author, email, role, status, createdAt, anchor?, mentions?, resolvedBy?, resolvedAt?, authorUserId? }
+// 0028：只有圖片、沒寫字的留言 → 資料庫存空字串；API 回 text =「（圖片）」+ noText: true（舊版畫面看到「（圖片）」，新版畫面不顯示這行字）
+
+import { IMAGE_ONLY_TEXT } from '../web/src/lib/review/attachmentRules.ts';
 
 export const MAX_TEXT_LEN = 2000;
 export const MAX_COMMENTS_PER_SONG = 500;
@@ -164,14 +167,17 @@ export function guestAuthorLabel(guestName, linkLabel) {
   return `訪客：${name}${linkLabel ? `（${linkLabel}）` : ''}`;
 }
 
-/** 整理一則留言（前端送來的、或舊的 KV 資料）；不合格回 null */
-export function sanitizeComment(c) {
+/**
+ * 整理一則留言（前端送來的、或舊的 KV 資料）；不合格回 null
+ * @param {{ allowEmptyText?: boolean }} [opts]  有附圖片的留言可以不寫字（text 變成空字串）
+ */
+export function sanitizeComment(c, { allowEmptyText = false } = {}) {
   if (!c || typeof c !== 'object') return null;
   if (typeof c.id !== 'string' || !COMMENT_ID_RE.test(c.id)) return null;
-  if (typeof c.text !== 'string') return null;
+  if (typeof c.text !== 'string' && !(allowEmptyText && (c.text === undefined || c.text === null))) return null;
 
-  const text = c.text.slice(0, MAX_TEXT_LEN).trim();
-  if (!text) return null;
+  const text = String(c.text ?? '').slice(0, MAX_TEXT_LEN).trim();
+  if (!text && !allowEmptyText) return null;
 
   // 3D 錨點（可選）— anchor.type = 'world' | 'mesh' | 'screen'
   let anchor = null;
@@ -263,7 +269,7 @@ export function rowToComment(r) {
     time: num(r.time_in_video, 0),
     x: Math.max(0, Math.min(1, num(xy.x, 0.5))),
     y: Math.max(0, Math.min(1, num(xy.y, 0.5))),
-    text: r.text,
+    text: r.text || IMAGE_ONLY_TEXT,
     author: r.author_name || '匿名',
     email: r.author_email || null,
     role: r.author_role || 'director',
@@ -280,6 +286,7 @@ export function rowToComment(r) {
   }
   const mentions = parse(r.mentions);
   if (Array.isArray(mentions) && mentions.length) out.mentions = mentions;
+  if (!r.text) out.noText = true;                                   // 0028：只有圖片（text 是「（圖片）」給舊版畫面看）
   if (r.resolved_by != null) out.resolvedBy = r.resolved_by;
   if (r.resolved_at != null) out.resolvedAt = r.resolved_at;
   if (r.author_user_id) out.authorUserId = r.author_user_id;
@@ -324,7 +331,7 @@ export function rowToGuestComment(r) {
     status: c.status,
     createdAt: c.createdAt,
   };
-  for (const k of ['timeEnd', 'view', 'cueId', 'annotation', 'thumbUrl', 'parentId', 'videoVersion', 'resolvedVersion']) {
+  for (const k of ['noText', 'timeEnd', 'view', 'cueId', 'annotation', 'thumbUrl', 'parentId', 'videoVersion', 'resolvedVersion']) {
     if (c[k] !== undefined) out[k] = c[k];
   }
   return out;
@@ -334,15 +341,16 @@ export function rowToGuestComment(r) {
  * 改留言（PATCH）時，body 裡哪些欄位要改。
  * - 文字：要是留言的人或 admin（呼叫的人先檢查 canModifyComment）
  * - 已解決 / 重新打開：成員都可以；誰解決、什麼時候由後台記，不信前端
+ * @param {{ allowEmptyText?: boolean }} [opts]  改完還有圖片 → 文字可以清空
  * @returns {{ ok: true, changes: object, touchesText: boolean } | { ok: false, error: string }}
  */
-export function commentPatch(body, me, now = new Date()) {
+export function commentPatch(body, me, now = new Date(), { allowEmptyText = false } = {}) {
   const changes = {};
   let touchesText = false;
   if ('text' in body) {
     if (typeof body.text !== 'string') return { ok: false, error: '留言內容不正確' };
     const text = body.text.slice(0, MAX_TEXT_LEN).trim();
-    if (!text) return { ok: false, error: '留言內容不能是空的' };
+    if (!text && !allowEmptyText) return { ok: false, error: '留言內容不能是空的' };
     changes.text = text;
     touchesText = true;
   }

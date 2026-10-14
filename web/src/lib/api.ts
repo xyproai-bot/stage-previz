@@ -946,6 +946,28 @@ export interface SongComment {
   annotation?: Annotation;  // 畫記（畫在 3D 畫面上的）
   thumbUrl?: string;        // 縮圖（相對路徑，前面接 apiBase()）；含畫記
   guest?: { name: string; linkName: string };  // 分享連結的訪客留的
+  // 參考圖片（0028；沒有圖片的留言沒有這個欄位）
+  attachments?: CommentAttachment[];
+  /** 只有圖片、沒寫字（text 是「（圖片）」，給舊版畫面看的；新版畫面不顯示這行字） */
+  noText?: boolean;
+}
+
+/** 留言的參考圖片（url / thumbUrl 是相對路徑，前面接 apiBase()） */
+export interface CommentAttachment {
+  id: string;
+  url: string;
+  /** 清單上的小縮圖（沒有 = 用原圖） */
+  thumbUrl?: string;
+  type: string;
+  size: number;
+  width?: number;
+  height?: number;
+}
+
+/** 參考圖片的網址（相對 → 完整） */
+export function attachmentSrc(path: string | undefined | null): string {
+  if (!path) return '';
+  return /^https?:/.test(path) ? path : apiBase() + path;
 }
 
 /** 留言多帶的（0026）：區段、3D 視角、cue、畫記、縮圖（data:image/jpeg;base64,…） */
@@ -1026,6 +1048,8 @@ export async function postSongComment(
     videoId?: string | null;
     /** 回覆哪一則 */
     parentId?: string | null;
+    /** 參考圖片（先用 lib/review/attachmentsApi.ts 傳好的，照順序） */
+    attachmentIds?: string[];
   } & CommentExtras
 ): Promise<SongComment[]> {
   const c: Record<string, unknown> = {
@@ -1041,6 +1065,7 @@ export async function postSongComment(
   if (comment.mentions && comment.mentions.length > 0) c.mentions = comment.mentions;
   if (comment.videoId) c.videoId = comment.videoId;
   if (comment.parentId) c.parentId = comment.parentId;
+  if (comment.attachmentIds && comment.attachmentIds.length) c.attachmentIds = comment.attachmentIds;
   Object.assign(c, commentExtrasBody(comment));
   const data = await commentsFetch<{ comments: SongComment[] }>(
     songCommentSession(projectId, songId),
@@ -1062,7 +1087,7 @@ export async function deleteSongComment(projectId: string, songId: string, comme
 // resolvedVideoId：哪一版改好的（沒帶 = 最新一版）
 export async function patchSongComment(
   projectId: string, songId: string, commentId: string,
-  patch: Partial<{ status: 'open' | 'resolved'; text: string; resolvedVideoId: string | null }>
+  patch: Partial<{ status: 'open' | 'resolved'; text: string; resolvedVideoId: string | null; attachmentIds: string[] }>
 ): Promise<SongComment[]> {
   const data = await commentsFetch<{ comments: SongComment[] }>(
     songCommentSession(projectId, songId),

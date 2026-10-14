@@ -15,6 +15,8 @@ import {
   commentPostDecision, commentResolveDecision, commentReopenDecision, canModifyComment, commentAuthorRole,
   projectRoleOf,
 } from './access.mjs';
+// 0028：留言的參考圖片（先上傳、送出留言時掛上去；刪留言時 R2 的檔案一起清）
+import * as attach from './commentAttachments.mjs';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 export const REVIEW_REASON_MAX = 500;
@@ -113,9 +115,11 @@ async function projectMembers(db, projectId) {
   return r.results || [];
 }
 
+/** 一首歌的留言（含參考圖片 attachments） */
 export async function listSongComments(db, songId) {
-  const r = await db.prepare(`SELECT * FROM comments WHERE song_id = ? ORDER BY rowid ASC`).bind(songId).all();
-  return (r.results || []).map(rowToComment);
+  return attach.listCommentsWithAttachments(
+    db, db.prepare(`SELECT * FROM comments WHERE song_id = ? ORDER BY rowid ASC`).bind(songId), songId, rowToComment,
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -280,6 +284,7 @@ export async function pruneNotifications(db, now = new Date(), days = NOTIFICATI
  * body.comment 可以多帶（舊版前端不帶也照樣能留言）：
  *   videoId   留言時看的那一版 → 記下版本號（不是這首歌可以播的版本就當沒帶）
  *   parentId  回覆哪一則（只有一層：回覆的回覆會掛在最上面那則）；沒帶 videoId 就跟著那則的版本
+ *   attachmentIds  參考圖片（先用 POST /api/comment-attachments 傳好的，照順序，最多 4 張）；有圖片就可以不寫字
  */
 export async function postComment(db, { me, thread, body, now = new Date(), r2 = null }) {
   const raw = body?.comment;
@@ -288,6 +293,13 @@ export async function postComment(db, { me, thread, body, now = new Date(), r2 =
   if (!song) return fail(404, '這首歌不在了');
   const perm = commentPostDecision({ role: thread.role, userId: me.id, song });
   if (!perm.ok) return fail(perm.status, perm.error);
+
+  // 參考圖片（0028）：這首歌的、自己傳的、還沒掛到別的留言上（網路重送：已經掛在這則上的也算）
+  const att = await attach.resolveAttachmentIds(db, raw.attachmentIds, {
+    projectId: thread.projectId, songId: song.id, commentId: typeof raw.id === 'string' ? raw.id : null,
+    uploader: { userId: me.id }, max: attach.MEMBER_MAX_ATTACHMENTS,
+  });
+  if (!att.ok) return fail(att.status, att.error);
 
   // 作者、身分由後台依登入的人填；新留言一律「未解決」
   const c = sanitizeComment({
@@ -298,8 +310,8 @@ export async function postComment(db, { me, thread, body, now = new Date(), r2 =
     status: 'open',
     resolvedBy: undefined,
     resolvedAt: undefined,
-  });
-  if (!c) return fail(400, 'Invalid comment');
+  }, { allowEmptyText: att.ids.length > 0 });
+  if (!c) return fail(400, typeof raw.text === 'string' && !raw.text.trim() ? '留言內容不能是空的' : 'Invalid comment');
   // 0026：區段、3D 視角、cue、畫記、縮圖（舊版前端不帶 → 跟以前一樣）
   const ex = commentExtrasInput(raw);
   if (!ex.ok) return fail(400, ex.error);
@@ -346,6 +358,7 @@ export async function postComment(db, { me, thread, body, now = new Date(), r2 =
     videoId: video?.id ?? null, videoVersion: video?.version ?? null,
     parentId: parent?.id ?? null, kind: null, thumbKey,
   });
+  if (att.ids.length) await db.batch(attach.attachStatements(db, att.ids, c.id, now));
 
   // 通知：@到的人；回覆 → 按回覆的那一則的作者、最上面那則的作者
   const members = await projectMembers(db, thread.projectId);
@@ -358,7 +371,7 @@ export async function postComment(db, { me, thread, body, now = new Date(), r2 =
     userId: r.userId, kind: r.kind, projectId: thread.projectId, songId: song.id, songName: song.name,
     videoId: video?.id ?? null, videoVersion: video?.version ?? null,
     commentId: c.id,
-    actorUserId: me.id, actorName: me.name, excerpt: c.text,
+    actorUserId: me.id, actorName: me.name, excerpt: c.text || attach.IMAGE_ONLY_TEXT,
   })), now);
 
   return ok({ ok: true, id: c.id, comments: await listSongComments(db, song.id) });
@@ -389,20 +402,43 @@ export async function insertCommentRow(db, { c, projectId, songId, videoId, vide
 /**
  * 改留言：
  *   text            留言的人或 admin
+ *   attachmentIds   參考圖片的新整串（留言的人或 admin；拿掉的會刪檔，新的要是自己傳、還沒送出的）；沒帶 = 圖片不動
  *   status resolved 「已改好」：admin、負責的動畫師、留言的人自己；body.resolvedVideoId = 哪一版改好的（沒帶 = 最新一版）
  *   status open     重新打開：admin、導演、負責的動畫師、留言的人自己
  */
-export async function patchComment(db, { me, thread, body, now = new Date() }) {
+export async function patchComment(db, { me, thread, body, now = new Date(), r2 = null }) {
   const id = (body && typeof body.id === 'string') ? body.id : null;
   if (!id || !COMMENT_ID_RE.test(id)) return fail(400, 'Missing or invalid id');
   const row = await db.prepare(`SELECT * FROM comments WHERE id = ? AND song_id = ? LIMIT 1`).bind(id, thread.songId).first();
   if (!row) return fail(404, '這則留言已經被刪掉了');
   const comment = rowToComment(row);
 
-  const p = commentPatch(body, me, now);
+  // 參考圖片（0028）：沒帶 attachmentIds = 圖片不動（舊版前端）
+  const touchesImages = body.attachmentIds !== undefined && body.attachmentIds !== null;
+  if (touchesImages && !canModifyComment(comment, me.id, thread.role)) {
+    return fail(403, '只有留言的人或製作可以修改這則留言');
+  }
+  const att = touchesImages
+    ? await attach.resolveAttachmentIds(db, body.attachmentIds, {
+      projectId: thread.projectId, songId: thread.songId, commentId: id, uploader: { userId: me.id }, max: attach.MEMBER_MAX_ATTACHMENTS,
+    })
+    : { ok: true, ids: [] };
+  if (!att.ok) return fail(att.status, att.error);
+  const current = touchesImages || 'text' in body ? await attach.commentAttachmentRows(db, id).catch(() => []) : [];
+  const imagesAfter = touchesImages ? att.ids.length : current.length;
+
+  const hasPatch = 'text' in body || 'status' in body;
+  if (!hasPatch && !touchesImages) return fail(400, '沒有要改的內容');
+  // 改完還有圖片 → 文字可以清空
+  const p = hasPatch ? commentPatch(body, me, now, { allowEmptyText: imagesAfter > 0 }) : { ok: true, changes: {}, touchesText: false };
   if (!p.ok) return fail(400, p.error);
   if (p.touchesText && !canModifyComment(comment, me.id, thread.role)) {
     return fail(403, '只有留言的人或製作可以修改這則留言');
+  }
+  // 沒寫字的留言把圖片全部拿掉 → 什麼都沒有了
+  const textAfter = 'text' in body ? String(p.changes.text ?? '') : String(row.text ?? '');
+  if (touchesImages && imagesAfter === 0 && !textAfter) {
+    return fail(400, '留言內容不能是空的（沒寫字的留言至少要留一張圖片）');
   }
   const changes = { ...p.changes };
   if ('status' in changes) {
@@ -428,9 +464,29 @@ export async function patchComment(db, { me, thread, body, now = new Date() }) {
     }
   }
   const keys = Object.keys(changes);
-  await db.prepare(
-    `UPDATE comments SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ? AND song_id = ?`
-  ).bind(...keys.map(k => changes[k]), id, thread.songId).run();
+  const stmts = [];
+  if (keys.length) {
+    stmts.push(db.prepare(
+      `UPDATE comments SET ${keys.map(k => `${k} = ?`).join(', ')}, updated_at = datetime('now') WHERE id = ? AND song_id = ?`
+    ).bind(...keys.map(k => changes[k]), id, thread.songId));
+  }
+  let removed = [];
+  if (touchesImages) {
+    const plan = attach.planAttachmentEdit(current, att.ids);
+    removed = plan.remove;
+    if (removed.length) {
+      stmts.push(db.prepare(
+        `DELETE FROM comment_attachments WHERE comment_id = ? AND id IN (${removed.map(() => '?').join(', ')})`
+      ).bind(id, ...removed.map(r => r.id)));
+    }
+    stmts.push(...attach.attachStatements(db, plan.keep, id, now));
+    if (!keys.length) {
+      stmts.push(db.prepare(`UPDATE comments SET updated_at = datetime('now') WHERE id = ? AND song_id = ?`).bind(id, thread.songId));
+    }
+  }
+  if (stmts.length) await db.batch(stmts);
+  // 拿掉的圖片：R2 的檔案也刪掉
+  if (removed.length) await attach.deleteAttachmentObjects(r2, attach.attachmentObjectKeys(removed));
   return ok({ ok: true, comments: await listSongComments(db, thread.songId) });
 }
 
@@ -445,11 +501,14 @@ export async function deleteComment(db, { me, thread, id, r2 = null }) {
     const thumbs = (await db.prepare(
       `SELECT thumb_key FROM comments WHERE (id = ?1 OR reply_to_comment_id = ?1) AND song_id = ?2 AND thumb_key IS NOT NULL`
     ).bind(id, thread.songId).all()).results || [];
+    // 參考圖片（0028）：資料庫那邊跟著留言一起刪（ON DELETE CASCADE），R2 的檔案這裡清
+    const imageKeys = await attach.attachmentKeysForThread(db, thread.songId, id);
     await db.batch([
       db.prepare(`DELETE FROM comments WHERE reply_to_comment_id = ? AND song_id = ?`).bind(id, thread.songId),
       db.prepare(`DELETE FROM comments WHERE id = ? AND song_id = ?`).bind(id, thread.songId),
     ]);
     await deleteCommentThumbs(r2, thumbs.map(t => t.thumb_key));
+    await attach.deleteAttachmentObjects(r2, imageKeys);
   }
   return ok({ ok: true, comments: await listSongComments(db, thread.songId) });
 }

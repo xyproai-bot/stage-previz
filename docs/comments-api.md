@@ -122,3 +122,24 @@
   訪客回覆一串時，這串裡團隊那邊留過言的人也收到（`reply`，跟團隊回覆的規則一樣）。同一個人只收一則；要還是專案成員（全站製作算）、沒停用。
   其他成員、全站製作（不是建連結的人）不收。規則在 `guestComments.mjs` `guestCommentWants`。
 - 訪客不能改、刪、標已改好。
+
+---
+
+# 參考圖片（0028：留言附圖片）
+
+後台：`cf-worker/commentAttachments.mjs`（上傳、檢查、掛到留言上、清掉）、`guestComments.mjs`（訪客的額度）；
+規則前後台共用 `web/src/lib/review/attachmentRules.ts`；資料表：`migrations/0028_comment_attachments.sql`（只有加表）。
+測試：`commentAttachments.test.mjs`。前端：`web/src/lib/review/attachmentsApi.ts`、`useAttachmentDraft.ts`、`components/CommentAttachments.tsx`。
+
+1. 先上傳：`POST /api/comment-attachments?session=…`（團隊，跟發留言同樣的人）／`POST <分享>/songs/:s/comment-attachments`（訪客，連結要開留言）
+   - multipart：`file`（PNG / JPEG / WebP / GIF，看檔頭判斷，最多 15 MB；JPEG / PNG / WebP 長邊最多 4096）、`thumb`（清單用的小縮圖，約 480 px，可以沒有）
+   - 回 `{ ok, attachment: { id, url, thumbUrl?, type, size, width, height } }`；類型不對 415、太大 413、尺寸太大 400
+   - 前端先縮到長邊 2560、重新存一次（EXIF / GPS 拿掉）；GIF 原樣
+2. 送出：留言多帶 `attachmentIds: [...]`（照順序；團隊最多 4、訪客最多 2；要是自己 / 這條連結傳、還沒送出的）。有圖片可以不寫字。
+   - 只有圖片的留言：API 回 `text: "（圖片）"` + `noText: true`（舊版畫面看到「（圖片）」）；通知內容也是「（圖片）」
+   - 留言多一個 `attachments: [...]`（沒有圖片的留言沒有這個欄位）
+3. 改留言：PATCH 帶 `attachmentIds` = 新的整串（留言的人或製作）；拿掉的連 R2 檔案一起刪。沒帶 = 圖片不動。
+4. 拿掉還沒送出的：`DELETE /api/comment-attachments?session=…&id=…`／`DELETE <分享>/songs/:s/comment-attachments/:id`
+5. 看圖：`GET /api/comment-attachments/<專案>/<32 hex>[-t].<副檔名>`，不用登入（網址猜不到），快取一年、`nosniff`
+6. 清掉：刪留言（含回覆）、刪歌 → R2 檔案一起刪；上傳了一天都沒送出的 → 排程清掉
+7. 額度：團隊一個人還沒送出的最多 24 張、一天 300 張；訪客（最近 24 小時）同一條連結 + 同一個 IP 20 張、同一張通行證 20 張、一條連結 100 張 → 429

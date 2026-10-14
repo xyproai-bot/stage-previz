@@ -155,6 +155,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.dirPlay, label: '在 LED 上看某一版' },
       { id: A.dirAddLink, label: '貼連結加影片' },
       { id: A.dirComment, label: '留言、@ 提及' },
+      { id: A.dirAttach, label: '參考圖片、影片連結' },
       { id: A.dirAnnotate, label: '畫記、記住視角、區段' },
       { id: A.dirOpen, label: '打開留言（飛到那個視角）' },
       { id: A.dirPlayer, label: '播放器和快捷鍵' },
@@ -2025,6 +2026,21 @@ function DirectorChapter() {
         </ul>
       </Section>
 
+      <Section id={A.dirAttach} title="參考圖片、影片連結">
+        <ol className="help-steps">
+          <li>在留言框（新留言、回覆、修改都可以）貼上圖片（<kbd>Ctrl</kbd>+<kbd>V</kbd>，例如截圖），或把圖片拖進來，或按「<Ui>圖片</Ui>」選檔案。</li>
+          <li>留言框下面出現小圖，傳好了才能送出；不要的按小圖右上角的叉叉。</li>
+          <li>按「<Ui>送出</Ui>」。只放圖片不寫字也可以。</li>
+        </ol>
+        <ul className="help-list">
+          <li>一則最多 4 張，PNG、JPEG、WebP、GIF，一張 15 MB 以內。很大的圖會先縮到長邊 2560 像素；GIF 照原樣（會動）。照片裡的拍攝地點、相機資料會先拿掉。</li>
+          <li>留言裡點小圖看大圖：左右鍵換張、<kbd>Esc</kbd> 關、「<Ui>在新分頁開啟</Ui>」看原圖。</li>
+          <li>留言裡的網址點了會開新分頁。YouTube、Vimeo、Google 雲端硬碟、Dropbox、Instagram、Bilibili、優酷的連結下面會多一張小卡片。</li>
+          <li>修改留言時拿掉的圖片、刪掉的留言、刪掉的歌，圖片會一起刪掉。</li>
+          <li>匯出留言：列印頁有圖片的小圖，CSV 最後一欄是圖片的網址。</li>
+        </ul>
+      </Section>
+
       <Section id={A.dirAnnotate} title="畫記、記住視角、區段">
         <ol className="help-steps">
           <li>停在要講的那一格（暫停，或按 <kbd>,</kbd> / <kbd>.</kbd> 一格一格找）。</li>
@@ -2161,7 +2177,9 @@ function ClientChapter() {
         <ul className="help-list">
           <li>你只看得到從這條連結留的留言，和製作團隊在底下的回覆。</li>
           <li>點一則留言：跳到那一格、攝影機飛到留言時的視角、畫記疊上去。</li>
-          <li>送出後不能改、不能刪；要補充就按「<Ui>回覆</Ui>」。只收文字，一則最多 1000 字。</li>
+          <li>送出後不能改、不能刪；要補充就按「<Ui>回覆</Ui>」。一則最多 1000 字。</li>
+          <li>可以附<strong>參考圖片</strong>：在留言框貼上（<kbd>Ctrl</kbd>+<kbd>V</kbd>）、把圖片拖進來，或按「<Ui>圖片</Ui>」選檔案。一則最多 2 張（PNG、JPEG、WebP、GIF，一張 15 MB 以內），一天最多傳 20 張。照片的拍攝地點這些資料會先拿掉。</li>
+          <li>貼 YouTube、Vimeo、Google 雲端硬碟、Dropbox 等連結，團隊點得到。</li>
           <li>一直送出會請你等幾分鐘再留。</li>
         </ul>
       </Section>

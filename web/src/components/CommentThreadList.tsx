@@ -6,7 +6,7 @@
 //   訪客（guestReply）：只能回覆，沒有已改好 / 修改 / 刪除
 // 篩選 / 排序由頁面算好（scopeThreads + filterAndSortThreads）傳進來。
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Brackets, Check, Clock, CornerDownRight, MapPin, Pencil, PenLine, RotateCcw, Trash2, Video, X } from 'lucide-react';
 import Icon from './Icon';
 import * as api from '../lib/api';
@@ -25,6 +25,9 @@ import { friendlyError } from '../lib/songReview';
 import { toast } from '../lib/toast';
 import { confirmDialog } from './dialogs';
 import { useViewAs } from '../lib/viewAsContext';
+import { AttachButton, AttachmentDropZone, AttachmentGrid, AttachmentTray, CommentText } from './CommentAttachments';
+import { memberUploader, type AttachmentUploader } from '../lib/review/attachmentsApi';
+import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachmentDraft';
 import './CommentThreadList.css';
 
 interface Props {
@@ -54,7 +57,11 @@ interface Props {
   /** 多選（導演頁的批次動作） */
   selection?: { ids: Set<string>; toggle: (id: string) => void };
   /** 分享連結的訪客：只能回覆（送出交給頁面） */
-  guestReply?: { onSend: (parentId: string, text: string) => Promise<boolean> };
+  guestReply?: {
+    onSend: (parentId: string, text: string, attachmentIds: string[]) => Promise<boolean>;
+    /** 訪客傳參考圖片（lib/review/attachmentsApi.ts guestUploader；要 useMemo 起來） */
+    uploader?: AttachmentUploader | null;
+  };
   emptyText: string;
 }
 
@@ -87,7 +94,17 @@ export default function CommentThreadList({
   const [editText, setEditText] = useState('');
   const replyRef = useRef<HTMLTextAreaElement>(null);
   // 預覽模式（製作用其他身分看）：回覆、已改好、修改、刪除照樣出現但按不下去
-  const { ro } = useViewAs();
+  const { ro, readOnly } = useViewAs();
+  // 參考圖片：回覆、修改各一份（換歌時還沒送出的會拿掉）
+  const guestUploaderObj = guestReply?.uploader ?? null;
+  const uploader = useMemo<AttachmentUploader | null>(
+    () => (guestReply ? guestUploaderObj : projectId && user ? memberUploader(projectId, song.id) : null),
+    [!!guestReply, guestUploaderObj, projectId, song.id, !!user],  // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const replyDraft = useAttachmentDraft(uploader, song.id);
+  const editDraft = useAttachmentDraft(uploader, song.id);
+  const closeReply = () => { setReplyTo(null); setReplyText(''); replyDraft.clear(true); };
+  const closeEdit = () => { setEditingId(null); editDraft.clear(true); };
 
   // 切歌：收掉打到一半的回覆 / 修改
   useEffect(() => { setReplyTo(null); setReplyText(''); setEditingId(null); }, [song.id]);
@@ -117,17 +134,20 @@ export default function CommentThreadList({
 
   async function sendReply(parentId: string) {
     const text = replyText.trim();
-    if (!text) return;
+    if (!text && !replyDraft.ids.length) return;
+    if (draftBlocksSend(replyDraft)) return;
+    const attachmentIds = replyDraft.ids;
+    const sent = () => { setReplyText(''); setReplyTo(null); replyDraft.clear(false); };
     if (guestReply) {
       setBusy(true);
       try {
-        if (await guestReply.onSend(parentId, text)) { setReplyText(''); setReplyTo(null); }
+        if (await guestReply.onSend(parentId, text, attachmentIds)) sent();
       } finally { setBusy(false); }
       return;
     }
     void run(() => api.postSongComment(projectId, song.id, {
-      text, parentId, videoId: viewedVideoId, mentions: extractMentions(text, members),
-    }), '回覆沒送出：', () => { setReplyText(''); setReplyTo(null); });
+      text, parentId, videoId: viewedVideoId, mentions: extractMentions(text, members), attachmentIds,
+    }), '回覆沒送出：', sent);
   }
 
   function toggleResolved(c: SongComment) {
@@ -138,10 +158,22 @@ export default function CommentThreadList({
     }
   }
 
+  function startEdit(c: SongComment) {
+    replyDraft.clear(true);
+    setEditingId(c.id);
+    setEditText(c.noText ? '' : c.text);
+    editDraft.reset(c.attachments ?? []);
+  }
+
   function saveEdit(id: string) {
     const text = editText.trim();
-    if (!text) return;
-    void run(() => api.patchSongComment(projectId, song.id, id, { text }), '修改失敗：', () => setEditingId(null));
+    if (!text && !editDraft.ids.length) return;
+    if (draftBlocksSend(editDraft)) return;
+    // 拿掉的圖片後台會連檔案一起刪
+    void run(() => api.patchSongComment(projectId, song.id, id, { text, attachmentIds: editDraft.ids }), '修改失敗：', () => {
+      setEditingId(null);
+      editDraft.clear(false);
+    });
   }
 
   async function remove(c: SongComment, replies: number) {
@@ -213,15 +245,24 @@ export default function CommentThreadList({
             </div>
             {editing ? (
               <div className="rvc-editbox">
-                <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3} autoFocus aria-label="修改留言" />
+                <AttachmentDropZone draft={editDraft} disabled={readOnly}>
+                  <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={3} autoFocus aria-label="修改留言"
+                    placeholder={editDraft.items.length ? '說明一下（只有圖片也可以）' : undefined} />
+                </AttachmentDropZone>
+                <AttachmentTray draft={editDraft} />
                 <div className="rvc-row-end">
-                  <button type="button" className="rvc-btn" onClick={() => setEditingId(null)}>取消</button>
-                  <button type="button" className="rvc-btn rvc-btn--primary" onClick={() => saveEdit(c.id)} disabled={busy || !editText.trim()}>儲存</button>
+                  <AttachButton draft={editDraft} compact />
+                  <span className="rvc-row-gap" />
+                  <button type="button" className="rvc-btn" onClick={closeEdit}>取消</button>
+                  <button type="button" className="rvc-btn rvc-btn--primary" onClick={() => saveEdit(c.id)} disabled={busy || editDraft.busy || (!editText.trim() && !editDraft.ids.length)}>儲存</button>
                 </div>
               </div>
             ) : (
-              // 需修改的原因：後台存成「需修改：…」（舊版畫面看得懂），這裡已經有「需修改」標籤 → 不重複
-              <div className="rvc-text">{c.kind === 'needs_changes' ? c.text.replace(/^需修改：/, '') : c.text}</div>
+              <>
+                {/* 需修改的原因：後台存成「需修改：…」（舊版畫面看得懂），這裡已經有「需修改」標籤 → 不重複；只有圖片的不顯示「（圖片）」 */}
+                <CommentText text={c.noText ? '' : c.kind === 'needs_changes' ? c.text.replace(/^需修改：/, '') : c.text} />
+                {c.attachments && c.attachments.length > 0 && <AttachmentGrid attachments={c.attachments} />}
+              </>
             )}
           </div>
           {thumb && (
@@ -233,7 +274,12 @@ export default function CommentThreadList({
         {!editing && (user || guestReply) && (
           <div className="rvc-actions">
             {canPost && (
-              <button type="button" className="rvc-act" onClick={() => { setReplyTo(thread.root.id === replyTo ? null : thread.root.id); setReplyText(isReply ? `@${c.author} ` : ''); }} {...ro()}>
+              <button type="button" className="rvc-act" onClick={() => {
+                if (thread.root.id === replyTo) { closeReply(); return; }
+                replyDraft.clear(true);
+                setReplyTo(thread.root.id);
+                setReplyText(isReply ? `@${c.author} ` : '');
+              }} {...ro()}>
                 <Icon icon={CornerDownRight} size="xs" /> 回覆
               </button>
             )}
@@ -246,7 +292,7 @@ export default function CommentThreadList({
             )}
             {mine && (
               <>
-                <button type="button" className="rvc-act" onClick={() => { setEditingId(c.id); setEditText(c.text); }} aria-label="修改" {...ro('修改')}><Icon icon={Pencil} size="xs" /></button>
+                <button type="button" className="rvc-act" onClick={() => startEdit(c)} aria-label="修改" {...ro('修改')}><Icon icon={Pencil} size="xs" /></button>
                 <button type="button" className="rvc-act rvc-act--danger" onClick={() => remove(c, isReply ? 0 : thread.replies.length)} aria-label="刪除" {...ro('刪除')}><Icon icon={Trash2} size="xs" /></button>
               </>
             )}
@@ -278,21 +324,26 @@ export default function CommentThreadList({
             {replyTo === t.root.id && (
               <div className="rvc-replybox">
                 {guestThread && <div className="rvc-replybox__note">這是分享連結的訪客留的，你的回覆訪客也看得到</div>}
-                <textarea
-                  ref={replyRef}
-                  value={replyText}
-                  onChange={e => setReplyText(e.target.value)}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void sendReply(t.root.id); }
-                    if (e.key === 'Escape') setReplyTo(null);
-                  }}
-                  rows={2}
-                  placeholder={guestReply ? '回覆（Ctrl+Enter 送出）' : '回覆（打 @ 加名字可以提及成員；Ctrl+Enter 送出）'}
-                  aria-label="回覆"
-                />
+                <AttachmentDropZone draft={replyDraft} disabled={readOnly}>
+                  <textarea
+                    ref={replyRef}
+                    value={replyText}
+                    onChange={e => setReplyText(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void sendReply(t.root.id); }
+                      if (e.key === 'Escape') closeReply();
+                    }}
+                    rows={2}
+                    placeholder={guestReply ? '回覆（可以貼上圖片；Ctrl+Enter 送出）' : '回覆（打 @ 加名字可以提及成員；可以貼上圖片；Ctrl+Enter 送出）'}
+                    aria-label="回覆"
+                  />
+                </AttachmentDropZone>
+                <AttachmentTray draft={replyDraft} />
                 <div className="rvc-row-end">
-                  <button type="button" className="rvc-btn" onClick={() => setReplyTo(null)} title="取消回覆" aria-label="取消回覆"><Icon icon={X} size="xs" /></button>
-                  <button type="button" className="rvc-btn rvc-btn--primary" onClick={() => void sendReply(t.root.id)} disabled={busy || !replyText.trim()}>送出回覆</button>
+                  <AttachButton draft={replyDraft} disabled={readOnly} compact />
+                  <span className="rvc-row-gap" />
+                  <button type="button" className="rvc-btn" onClick={closeReply} title="取消回覆" aria-label="取消回覆"><Icon icon={X} size="xs" /></button>
+                  <button type="button" className="rvc-btn rvc-btn--primary" onClick={() => void sendReply(t.root.id)} disabled={busy || replyDraft.busy || (!replyText.trim() && !replyDraft.ids.length)}>送出回覆</button>
                 </div>
               </div>
             )}

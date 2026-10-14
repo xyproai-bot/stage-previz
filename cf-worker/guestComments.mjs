@@ -17,6 +17,8 @@ import {
   insertCommentRow, putCommentThumb, projectMemberIds, insertNotifications, pickRecipients, newId,
 } from './reviews.mjs';
 import { guestCommentDecision, canToggleShareComments } from './access.mjs';
+// 0028：參考圖片（訪客一則最多 2 張；上傳的額度：同一條連結 + 同一個 IP、同一張通行證、一條連結，每天都有上限）
+import * as attach from './commentAttachments.mjs';
 
 export const GUEST_NAME_MAX = 30;
 export const GUEST_TEXT_MAX = 1000;
@@ -25,6 +27,10 @@ export const GUEST_IP_RATE = { windowMs: 10 * 60_000, max: 10 };     // 同一�
 export const GUEST_PASS_RATE = { windowMs: 60 * 60_000, max: 30 };   // 同一張通行證（有密碼的連結）
 export const GUEST_LINK_DAILY_MAX = 200;                              // 一條連結一天
 export const GUEST_BODY_MAX_BYTES = 400 * 1024;                       // 一次送來的 JSON（含縮圖）
+// 訪客傳參考圖片的額度（一天 = 最近 24 小時；記在 login_attempts，跟留言的防亂發同一張表、不同前綴）
+export const GUEST_UPLOAD_IP_DAILY = 20;      // 同一條連結 + 同一個 IP
+export const GUEST_UPLOAD_PASS_DAILY = 20;    // 同一張通行證（有密碼的連結）
+export const GUEST_UPLOAD_LINK_DAILY = 100;   // 一條連結
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const ok = (body, status = 200) => ({ status, body });
@@ -87,9 +93,27 @@ export function guestRateMessage(retryAfterMs) {
 export function guestIpKey(linkToken, ipKey) {
   return `gc:${String(linkToken || '').slice(0, 64)}|${String(ipKey || 'unknown').slice(0, 64)}`;
 }
-export async function guestPassKey(accessToken) {
+export async function guestPassKey(accessToken, prefix = 'gcp:') {
   const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(accessToken))));
-  return 'gcp:' + [...d.slice(0, 12)].map(b => b.toString(16).padStart(2, '0')).join('');
+  return prefix + [...d.slice(0, 12)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+/** 傳參考圖片的額度記錄（跟留言的分開） */
+export function guestUploadIpKey(linkToken, ipKey) {
+  return `gu:${String(linkToken || '').slice(0, 64)}|${String(ipKey || 'unknown').slice(0, 64)}`;
+}
+export function guestUploadLinkKey(linkToken) {
+  return `gul:${String(linkToken || '').slice(0, 64)}`;
+}
+
+/** 訪客一天傳了幾張 → 還能不能傳（純函式） */
+export function guestUploadQuotaDecision({ ipCount = 0, passCount = 0, linkCount = 0, hasPass = false } = {}) {
+  if (ipCount >= GUEST_UPLOAD_IP_DAILY || (hasPass && passCount >= GUEST_UPLOAD_PASS_DAILY)) {
+    return { ok: false, status: 429, error: `今天傳的圖片已經到上限了（一天 ${GUEST_UPLOAD_IP_DAILY} 張），請明天再傳，或直接聯絡製作` };
+  }
+  if (linkCount >= GUEST_UPLOAD_LINK_DAILY) {
+    return { ok: false, status: 429, error: '這個分享連結今天傳的圖片已經到上限了，請明天再傳，或直接聯絡製作' };
+  }
+  return { ok: true };
 }
 
 /**
@@ -147,8 +171,7 @@ const GUEST_VISIBLE_SQL = `
    ORDER BY rowid ASC`;
 
 async function guestVisible(db, songId, linkToken) {
-  const r = await db.prepare(GUEST_VISIBLE_SQL).bind(songId, linkToken).all();
-  return (r.results || []).map(rowToGuestComment);
+  return attach.listCommentsWithAttachments(db, db.prepare(GUEST_VISIBLE_SQL).bind(songId, linkToken), songId, rowToGuestComment);
 }
 
 /** 這首歌在不在這條連結的範圍裡 */
@@ -185,7 +208,13 @@ export async function postGuestComment(db, { link, songId, body, ipKey, accessTo
   const name = sanitizeGuestName(body?.guestName ?? raw.guestName);
   if (!name) return fail(400, '請先寫你的名字（只要寫一次）');
   const text = sanitizeGuestText(raw.text);
-  if (!text) return fail(400, '留言內容不能是空的');
+  // 參考圖片（0028）：這條連結傳的、還沒送出的，最多 2 張；有圖片就可以不寫字
+  const att = await attach.resolveAttachmentIds(db, raw.attachmentIds, {
+    projectId: link.project_id, songId: typeof songId === 'string' ? songId : '', commentId: typeof raw.id === 'string' ? raw.id : null,
+    uploader: { shareToken: link.token }, max: attach.GUEST_MAX_ATTACHMENTS,
+  });
+  if (!att.ok) return fail(att.status, att.error);
+  if (!text && !att.ids.length) return fail(400, '留言內容不能是空的');
   const ex = commentExtrasInput(raw);
   if (!ex.ok) return fail(400, ex.error);
   const thumb = decodeThumbnail(raw.thumbnail);
@@ -276,6 +305,7 @@ export async function postGuestComment(db, { link, songId, body, ipKey, accessTo
     parentId, kind: null, thumbKey,
     guest: { name, shareToken: link.token, shareLabel: label },
   });
+  if (att.ids.length) await db.batch(attach.attachStatements(db, att.ids, id, now));
 
   // 小鈴鐺：建這條連結的人、專案的導演、這首歌的動畫師；回覆 → 這串裡團隊那邊留過言的人也收到（guestCommentWants）
   try {
@@ -299,11 +329,61 @@ export async function postGuestComment(db, { link, songId, body, ipKey, accessTo
     await insertNotifications(db, recipients.map(r => ({
       userId: r.userId, kind: r.kind, projectId: link.project_id, songId: song.id, songName: song.name,
       videoId: video?.id ?? null, videoVersion: video?.version ?? null, commentId: id,
-      actorUserId: null, actorName: guestAuthorLabel(name, label), excerpt: text,
+      actorUserId: null, actorName: guestAuthorLabel(name, label), excerpt: text || attach.IMAGE_ONLY_TEXT,
     })), now);
   } catch (e) {
     console.error('[guest comment notify]', e?.message || e);
   }
 
   return ok({ ok: true, id, comments: await guestVisible(db, song.id, link.token) });
+}
+
+// ─────────────────────────────────────────────
+// 參考圖片（0028）：訪客上傳 / 拿掉還沒送出的
+// ─────────────────────────────────────────────
+
+/**
+ * POST <分享>/songs/:songId/comment-attachments（multipart：file + thumb）
+ *   額度（最近 24 小時）：同一條連結 + 同一個 IP 20 張、同一張通行證 20 張、一條連結 100 張 → 429
+ */
+export async function uploadGuestAttachment(db, r2, { link, songId, request, ipKey, accessToken = null, now = new Date() }) {
+  const d = guestCommentDecision(link);
+  if (!d.ok) return fail(d.status, d.error, d.commentsDisabled ? { commentsDisabled: true } : {});
+  const s = await songInScope(db, link, songId);
+  if (s.error) return s.error;
+
+  const nowMs = now.getTime();
+  const since = nowMs - 86400_000;
+  const ipK = guestUploadIpKey(link.token, ipKey);
+  const passK = accessToken ? await guestPassKey(accessToken, 'gup:') : null;
+  const linkK = guestUploadLinkKey(link.token);
+  const count = (k) => db.prepare(`SELECT COUNT(*) AS n FROM login_attempts WHERE ip = ? AND attempted_at > ?`).bind(k, since);
+  const [ipR, passR, linkR] = await db.batch([count(ipK), count(passK || '-'), count(linkK)]);
+  const n = (r) => Number((r.results || [])[0]?.n) || 0;
+  const q = guestUploadQuotaDecision({ ipCount: n(ipR), passCount: n(passR), linkCount: n(linkR), hasPass: !!passK });
+  if (!q.ok) return fail(q.status, q.error);
+
+  const up = await attach.readAttachmentUpload(request);
+  if (!up.ok) return fail(up.status, up.error);
+  const checked = attach.checkAttachmentUpload(up.file, up.thumb);
+  if (!checked.ok) return fail(checked.status, checked.error);
+
+  const res = await attach.storeAttachment(db, r2, {
+    projectId: link.project_id, songId: s.song.id, file: up.file, thumb: up.thumb, checked,
+    uploader: { shareToken: link.token }, now,
+  });
+  if (res.status === 200) {
+    const keys = [ipK, linkK, ...(passK ? [passK] : [])];
+    await db.batch(keys.map(k => db.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(k, nowMs)));
+  }
+  return res;
+}
+
+/** DELETE <分享>/songs/:songId/comment-attachments/:id（這條連結傳的、還沒送出的） */
+export async function discardGuestAttachment(db, r2, { link, songId, id }) {
+  const d = guestCommentDecision(link);
+  if (!d.ok) return fail(d.status, d.error, d.commentsDisabled ? { commentsDisabled: true } : {});
+  const s = await songInScope(db, link, songId);
+  if (s.error) return s.error;
+  return attach.discardPendingAttachment(db, r2, { id, songId: s.song.id, uploader: { shareToken: link.token } });
 }

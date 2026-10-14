@@ -10,6 +10,7 @@ import { roleLabel } from '../roleLabels';
 import { formatDateTime } from '../serverTime';
 import { formatClockShort, formatRange, formatTimecodeOrMs } from './timecode';
 import { parseAnnotation, shapePath, strokePx } from './annotations';
+import { splitLinks } from './commentLinks';
 
 export interface ExportMeta {
   projectName: string;
@@ -53,7 +54,13 @@ export function csvCell(v: unknown): string {
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-export const CSV_HEADER = ['編號', '類型', '時間', '開始時間碼', '結束時間碼', '版本', '作者', '身分', '內容', '狀態', '回覆給', '建立時間', '有記視角', '畫記', '縮圖'];
+export const CSV_HEADER = ['編號', '類型', '時間', '開始時間碼', '結束時間碼', '版本', '作者', '身分', '內容', '狀態', '回覆給', '建立時間', '有記視角', '畫記', '縮圖', '參考圖片'];
+
+/** 相對網址 → 完整網址 */
+const fullUrl = (u: string | undefined, apiBase: string) => (!u ? '' : /^https?:/.test(u) ? u : apiBase + u);
+
+/** 只有圖片的留言：內容寫「（圖片）」 */
+const exportText = (c: SongComment) => (c.noText ? '（圖片）' : c.text);
 
 /** 留言串 → CSV（Excel 打得開：前面有 BOM、換行 CRLF）；每則留言一行，回覆接在下面 */
 export function commentsToCsv(threads: readonly CommentThread[], meta: ExportMeta): string {
@@ -67,11 +74,13 @@ export function commentsToCsv(threads: readonly CommentThread[], meta: ExportMet
       hasTime ? formatTimecodeOrMs(c.time, meta.fps) : '',
       hasRange ? formatTimecodeOrMs(c.timeEnd as number, meta.fps) : '',
       typeof c.videoVersion === 'number' && c.videoVersion > 0 ? `V${c.videoVersion}` : '',
-      c.author, exportRoleLabel(c), c.text,
+      c.author, exportRoleLabel(c), exportText(c),
       type === '留言' ? exportStatusLabel(c) : '',
       parentNum, formatDateTime(c.createdAt), c.view ? '有' : '',
       c.annotation?.shapes?.length ? `${c.annotation.shapes.length} 筆` : '',
       thumb(c),
+      // 參考圖片：完整網址，一張一行
+      (c.attachments || []).map(a => fullUrl(a.url, meta.apiBase)).join('\n'),
     ].map(csvCell).join(','));
   };
   threads.forEach((t, i) => {
@@ -115,8 +124,18 @@ function thumbHtml(c: SongComment, apiBase: string): string {
   return svg || '<div class="thumb__none">沒有縮圖</div>';
 }
 
+/** 文字（網址變成可以點的連結，存成 PDF 也點得到；其他一律跳脫，不會跑 HTML） */
 function textHtml(s: string): string {
-  return escapeHtml(s).replace(/\n/g, '<br />');
+  return splitLinks(s).map(p => (p.type === 'link'
+    ? `<a href="${escapeHtml(p.url)}">${escapeHtml(p.text)}</a>`
+    : escapeHtml(p.text))).join('').replace(/\n/g, '<br />');
+}
+
+/** 參考圖片：小縮圖一排（點了開原圖） */
+function attachmentsHtml(c: SongComment, apiBase: string): string {
+  const list = c.attachments || [];
+  if (!list.length) return '';
+  return `<div class="refs">${list.map((a, i) => `<a href="${escapeHtml(fullUrl(a.url, apiBase))}"><img src="${escapeHtml(fullUrl(a.thumbUrl || a.url, apiBase))}" alt="參考圖片 ${i + 1}" /></a>`).join('')}</div>`;
 }
 
 /** 整頁 HTML（A4 直的，一則一塊，不會被切到下一頁） */
@@ -133,7 +152,8 @@ export function buildPrintHtml(threads: readonly CommentThread[], meta: ExportMe
     const replies = t.replies.map(r => `
         <li class="reply">
           <div class="reply__head"><strong>${escapeHtml(r.author)}</strong><span class="role">${escapeHtml(exportRoleLabel(r))}</span><span class="muted">${escapeHtml(formatDateTime(r.createdAt))}</span></div>
-          <div class="reply__text">${textHtml(r.text)}</div>
+          <div class="reply__text">${textHtml(exportText(r))}</div>
+          ${attachmentsHtml(r, meta.apiBase)}
         </li>`).join('');
     return `
     <article class="item${c.status === 'resolved' ? ' is-resolved' : ''}">
@@ -148,7 +168,8 @@ export function buildPrintHtml(threads: readonly CommentThread[], meta: ExportMe
           <span class="status status--${c.status === 'resolved' ? 'done' : 'open'}">${escapeHtml(exportStatusLabel(c))}</span>
         </div>
         <div class="who"><strong>${escapeHtml(c.author)}</strong><span class="role">${escapeHtml(exportRoleLabel(c))}</span><span class="muted">${escapeHtml(formatDateTime(c.createdAt))}</span></div>
-        <div class="text">${textHtml(c.text)}</div>
+        <div class="text">${textHtml(exportText(c))}</div>
+        ${attachmentsHtml(c, meta.apiBase)}
         ${replies ? `<ul class="replies">${replies}</ul>` : ''}
       </div>
     </article>`;
@@ -190,6 +211,9 @@ export function buildPrintHtml(threads: readonly CommentThread[], meta: ExportMe
   .reply__head { display: flex; gap: 8px; align-items: baseline; }
   .reply__text { word-break: break-word; }
   .empty { color: #888; padding: 24px 0; }
+  .text a, .reply__text a { color: #0b62c4; word-break: break-all; }
+  .refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .refs img { display: block; height: 84px; width: auto; max-width: 160px; object-fit: cover; border-radius: 3px; border: 1px solid #ddd; background: #f2f2f2; }
   @page { size: A4; margin: 12mm; }
   @media print { body { padding: 0; } }
 </style>

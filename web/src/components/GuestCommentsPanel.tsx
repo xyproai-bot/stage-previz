@@ -18,6 +18,9 @@ import {
 import { isTouchDevice, type ReviewSession } from '../lib/review/useReviewSession';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { toast } from '../lib/toast';
+import { AttachButton, AttachmentDropZone, AttachmentTray } from './CommentAttachments';
+import { guestUploader } from '../lib/review/attachmentsApi';
+import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachmentDraft';
 import './GuestCommentsPanel.css';
 
 /** 訪客的留言 → 留言串清單用的格式 */
@@ -61,6 +64,9 @@ export default function GuestCommentsPanel({
   const [nameDraft, setNameDraft] = useState('');
   const [editingName, setEditingName] = useState(false);
   const [text, setText] = useState('');
+  // 參考圖片（訪客一則最多 2 張；換歌時還沒送出的拿掉）
+  const uploader = useMemo(() => guestUploader(shareRef, songId, accessToken), [shareRef, songId, accessToken]);
+  const draft = useAttachmentDraft(uploader, songId);
   const [posting, setPosting] = useState(false);
   const [attachTime, setAttachTime] = useState<number | null>(null);
   const [status, setStatus] = useState<StatusFilter>('all');
@@ -120,12 +126,14 @@ export default function GuestCommentsPanel({
 
   async function send() {
     const t = text.trim();
-    if (!t) return;
+    if (!t && !draft.ids.length) return;
+    if (draftBlocksSend(draft)) return;
     if (!name) { setEditingName(true); toast.warn('先寫你的名字（只要寫一次）'); return; }
     setPosting(true);
     try {
       const extras = session.collect(videoActive ? attachTime : null);
-      apply(await postGuestComment(shareRef, songId, accessToken ?? undefined, { guestName: name, text: t, videoId, ...extras }));
+      apply(await postGuestComment(shareRef, songId, accessToken ?? undefined, { guestName: name, text: t, videoId, attachmentIds: draft.ids, ...extras }));
+      draft.clear(false);
       setText('');
       setAttachTime(null);
       session.afterSend();
@@ -137,10 +145,10 @@ export default function GuestCommentsPanel({
     }
   }
 
-  async function reply(parentId: string, t: string): Promise<boolean> {
+  async function reply(parentId: string, t: string, attachmentIds: string[]): Promise<boolean> {
     if (!name) { setEditingName(true); toast.warn('先寫你的名字（只要寫一次）'); return false; }
     try {
-      apply(await postGuestComment(shareRef, songId, accessToken ?? undefined, { guestName: name, text: t, parentId, videoId }));
+      apply(await postGuestComment(shareRef, songId, accessToken ?? undefined, { guestName: name, text: t, parentId, videoId, attachmentIds }));
       return true;
     } catch (e) {
       handleError(e);
@@ -207,20 +215,24 @@ export default function GuestCommentsPanel({
               currentTime={currentTime}
               onStartDraw={onStartDraw}
             />
-            <textarea
-              ref={composerRef}
-              value={text}
-              onChange={(e) => setText(e.target.value.slice(0, GUEST_TEXT_MAX))}
-              onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); } }}
-              rows={3}
-              placeholder={session.draft.active
-                ? '說明一下畫的是什麼（例：這塊 LED 再亮一點）'
-                : `留言給製作團隊${videoActive ? '（會綁在上面寫的時間）' : ''}${touch ? '' : '；Ctrl+Enter 送出'}`}
-              aria-label="留言"
-            />
+            <AttachmentDropZone draft={draft}>
+              <textarea
+                ref={composerRef}
+                value={text}
+                onChange={(e) => setText(e.target.value.slice(0, GUEST_TEXT_MAX))}
+                onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); void send(); } }}
+                rows={3}
+                placeholder={session.draft.active
+                  ? '說明一下畫的是什麼（例：這塊 LED 再亮一點）'
+                  : `留言給製作團隊${videoActive ? '（會綁在上面寫的時間）' : ''}；可以貼上參考圖片或影片連結${touch ? '' : '；Ctrl+Enter 送出'}`}
+                aria-label="留言"
+              />
+            </AttachmentDropZone>
+            <AttachmentTray draft={draft} />
             <div className="share-comments__actions">
+              <AttachButton draft={draft} />
               <span className="share-comments__count">{text.length > GUEST_TEXT_MAX - 100 ? `${text.length}/${GUEST_TEXT_MAX}` : ''}</span>
-              <button type="button" className="btn btn--primary btn--sm" onClick={() => void send()} disabled={posting || !text.trim()}>
+              <button type="button" className="btn btn--primary btn--sm" onClick={() => void send()} disabled={posting || draft.busy || (!text.trim() && !draft.ids.length)}>
                 {posting ? '送出中…' : '送出'}
               </button>
             </div>
@@ -246,7 +258,7 @@ export default function GuestCommentsPanel({
               selectedId={session.selectedId}
               activeId={activeId}
               autoScroll={follow && playing}
-              guestReply={{ onSend: reply }}
+              guestReply={{ onSend: reply, uploader }}
               emptyText={threads.length === 0 ? '還沒有留言。停在影片的某一秒寫下你的意見，團隊會在這裡回覆。' : '沒有符合的留言'}
             />
           )}
