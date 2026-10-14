@@ -1355,6 +1355,7 @@ export default function ProjectEditor() {
           song={addVideoSong}
           jobs={videoJobsBySong.get(addVideoSong.id) ?? []}
           canUpload
+          ledCanvas={view.ledCanvas}
         />
       )}
 
