@@ -1114,7 +1114,7 @@ function SongDetail({
                   onAddCommentAtTime={va.guard((t: number) => setPendingCommentTime(t))}
                   onRetry={retryVersion}
                   compare={compare}
-                  review={{ session, activeId: activeCommentId, onOpenComment: openComment, onDraw: startDraw }}
+                  review={{ session, activeId: activeCommentId, onOpenComment: openComment, onDraw: va.guard(startDraw) }}
                 />
               )}
             </div>
@@ -1186,7 +1186,7 @@ function SongDetail({
             playing={player.playing}
             activeId={activeCommentId}
             onOpen={openComment}
-            onStartDraw={startDraw}
+            onStartDraw={va.guard(startDraw)}
             composerRef={composerRef}
             projectName={projectName || ''}
             currentTime={player.time}

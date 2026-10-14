@@ -1095,11 +1095,11 @@ function StudioInner({ projectId }: { projectId: string }) {
                     compare={compare}
                     comments={selectedComments}
                     onAddCommentAtTime={canPostComment({ role: projectRole, userId: user?.id ?? null, song: selectedSong })
-                      ? (t) => { setPendingCommentTime(t); focusComposer(); }
+                      ? va.guard((t: number) => { setPendingCommentTime(t); focusComposer(); })
                       : undefined}
                     review={{
                       session, activeId: activeCommentId, onOpenComment: openComment,
-                      onDraw: canPostComment({ role: projectRole, userId: user?.id ?? null, song: selectedSong }) ? startDraw : undefined,
+                      onDraw: canPostComment({ role: projectRole, userId: user?.id ?? null, song: selectedSong }) ? va.guard(startDraw) : undefined,
                     }}
                   />
                 )}
@@ -1304,7 +1304,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 playing={player.playing}
                 activeId={activeCommentId}
                 onOpen={openComment}
-                onStartDraw={startDraw}
+                onStartDraw={va.guard(startDraw)}
                 composerRef={composerRef}
                 pendingTime={pendingCommentTime}
                 onConsumedPendingTime={() => setPendingCommentTime(null)}
