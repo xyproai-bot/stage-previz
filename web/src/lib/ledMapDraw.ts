@@ -2,7 +2,7 @@
 // 兩張圖都畫在同一個「畫布像素」座標上（跟 AE 合成一樣大）：ctx 先縮放，裡面的數字一律是畫布像素。
 
 import {
-  exportScales, groupSameRect, legendLines, pickLegendCorner, rectText, wrapOffsets,
+  exportScales, groupSameRect, largestPiece, legendLines, pickLegendCorner, rectText, wrapOffsets,
   type CanvasSize, type LedLayout, type LedMapMeta, type LedPanelLayout, type PixelRect,
 } from './ledMap';
 
@@ -57,19 +57,6 @@ function gridLines(ctx: CanvasRenderingContext2D, r: PixelRect, step: number, sk
   ctx.stroke();
 }
 
-/** 跨邊緣的 LED：在畫布裡最大的那一段（標籤放這裡） */
-function largestPiece(p: LedPanelLayout, c: CanvasSize): PixelRect {
-  const { x, y, w, h } = p.rect;
-  const xs: [number, number][] = p.wrapsX ? [[x, c.width - x], [0, x + w - c.width]] : [[x, w]];
-  const ys: [number, number][] = p.wrapsY ? [[y, c.height - y], [0, y + h - c.height]] : [[y, h]];
-  let best: PixelRect = { x, y, w: Math.min(w, c.width - x), h: Math.min(h, c.height - y) };
-  let bestArea = -1;
-  for (const [px, pw] of xs) for (const [py, ph] of ys) {
-    if (pw * ph > bestArea) { bestArea = pw * ph; best = { x: px, y: py, w: pw, h: ph }; }
-  }
-  return best;
-}
-
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
   ctx.beginPath();
   if (typeof ctx.roundRect === 'function') ctx.roundRect(x, y, w, h, r);
@@ -78,8 +65,11 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 
 // ───────────────────────── 對位圖 ─────────────────────────
 
-/** 對位圖：深色底、每 100 px 格線、每塊 LED 的形狀 + 外框 + 名字 + x y w h、小說明 */
-export function drawAlignmentMap(ctx: CanvasRenderingContext2D, layout: LedLayout, meta: LedMapMeta, scale: number) {
+/**
+ * 對位圖：深色底、每 100 px 格線、每塊 LED 的形狀 + 外框 + 名字 + x y w h、小說明
+ * labels = false：不寫名字和小說明（AE 合成腳本夾帶的那張：名字已經是文字圖層，疊兩次會看不清楚）
+ */
+export function drawAlignmentMap(ctx: CanvasRenderingContext2D, layout: LedLayout, meta: LedMapMeta, scale: number, labels = true) {
   const c = layout.canvas;
   const W = c.width, H = c.height;
   // 字的大小跟著畫布（4K 畫布 = 1）
@@ -134,6 +124,8 @@ export function drawAlignmentMap(ctx: CanvasRenderingContext2D, layout: LedLayou
       ctx.restore();
     }
   }
+
+  if (!labels) { ctx.setTransform(1, 0, 0, 1, 0, 0); return; }
 
   // 名字 + 位置（最後畫，才不會被別塊蓋住）
   for (const g of groupSameRect(layout.panels)) {
@@ -232,10 +224,15 @@ function drawLegend(ctx: CanvasRenderingContext2D, layout: LedLayout, meta: LedM
 
 export interface AlignmentMapPng { blob: Blob; scale: number; width: number; height: number }
 
-/** 畫成 PNG（原尺寸；瀏覽器畫不了就縮小，scale 會 < 1） */
-export async function renderAlignmentMapPng(layout: LedLayout, meta: LedMapMeta): Promise<AlignmentMapPng> {
+/**
+ * 畫成 PNG（原尺寸；瀏覽器畫不了就縮小，scale 會 < 1）。
+ * maxSide：最長的一邊不超過這個（AE 合成腳本裡夾帶的那張，小一點腳本才不會太大）
+ */
+export async function renderAlignmentMapPng(layout: LedLayout, meta: LedMapMeta, opts: { maxSide?: number; labels?: boolean } = {}): Promise<AlignmentMapPng> {
   const { width: W, height: H } = layout.canvas;
-  for (const s of exportScales(W, H)) {
+  const cap = opts.maxSide ? Math.min(1, opts.maxSide / Math.max(W, H)) : 1;
+  const scales = exportScales(W, H).map(s => Math.min(s, cap)).filter((s, i, a) => a.indexOf(s) === i);
+  for (const s of scales) {
     const cw = Math.max(1, Math.round(W * s)), ch = Math.max(1, Math.round(H * s));
     const canvas = document.createElement('canvas');
     canvas.width = cw;
@@ -244,7 +241,7 @@ export async function renderAlignmentMapPng(layout: LedLayout, meta: LedMapMeta)
     try {
       const ctx = canvas.getContext('2d');
       if (!ctx) continue;
-      drawAlignmentMap(ctx, layout, { ...meta, scale: s }, s);
+      drawAlignmentMap(ctx, layout, { ...meta, scale: s }, s, opts.labels ?? true);
       blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
     } catch (e) {
       console.warn('[ledMap] PNG at scale', s, 'failed', e);

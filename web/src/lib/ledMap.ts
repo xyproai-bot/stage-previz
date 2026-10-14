@@ -234,6 +234,19 @@ export function wrapOffsets(p: Pick<LedPanelLayout, 'wrapsX' | 'wrapsY'>, canvas
   return out;
 }
 
+/** 跨邊緣的 LED：在畫布裡最大的那一段（標籤放這裡） */
+export function largestPiece(p: Pick<LedPanelLayout, 'rect' | 'wrapsX' | 'wrapsY'>, c: CanvasSize): PixelRect {
+  const { x, y, w, h } = p.rect;
+  const xs: [number, number][] = p.wrapsX ? [[x, c.width - x], [0, x + w - c.width]] : [[x, w]];
+  const ys: [number, number][] = p.wrapsY ? [[y, c.height - y], [0, y + h - c.height]] : [[y, h]];
+  let best: PixelRect = { x, y, w: Math.min(w, c.width - x), h: Math.min(h, c.height - y) };
+  let bestArea = -1;
+  for (const [px, pw] of xs) for (const [py, ph] of ys) {
+    if (pw * ph > bestArea) { bestArea = pw * ph; best = { x: px, y: py, w: pw, h: ph }; }
+  }
+  return best;
+}
+
 export function rectText(r: PixelRect): string {
   return `x ${r.x}  y ${r.y}  w ${r.w}  h ${r.h}`;
 }
@@ -337,13 +350,13 @@ export function pickLegendCorner(panels: readonly Pick<LedPanelLayout, 'rect'>[]
   return best;
 }
 
-function safeName(s: string): string {
+export function safeName(s: string): string {
   return (s || '專案').replace(/[\\/:*?"<>|\r\n]+/g, '_').trim() || '專案';
 }
 
-/** 檔名：LED對位圖-主舞臺-10496x5120-2026-10-14.png */
-export function ledMapFileName(kind: 'png' | 'csv' | 'json', meta: Pick<LedMapMeta, 'projectName' | 'canvas' | 'date'>): string {
-  const base = kind === 'png' ? 'LED對位圖' : 'LED位置表';
+/** 檔名：LED對位圖-主舞臺-10496x5120-2026-10-14.png、AE合成腳本-主舞臺-10496x5120-2026-10-14.jsx */
+export function ledMapFileName(kind: 'png' | 'csv' | 'json' | 'jsx', meta: Pick<LedMapMeta, 'projectName' | 'canvas' | 'date'>): string {
+  const base = kind === 'png' ? 'LED對位圖' : kind === 'jsx' ? 'AE合成腳本' : 'LED位置表';
   return `${base}-${safeName(meta.projectName)}-${meta.canvas.width}x${meta.canvas.height}-${meta.date}.${kind}`;
 }
 

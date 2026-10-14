@@ -41,7 +41,7 @@ import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOv
 import MaterialPanel from './MaterialPanel';
 import { detectFloorPlane } from '../lib/stageLook/floorPlane';
 import {
-  BookOpen, Box, Camera, ChevronDown, CircleHelp, Download, ExternalLink, FileBraces, FileSpreadsheet, Footprints, Globe, Grid3x3, ImageDown,
+  BookOpen, Box, Camera, ChevronDown, CircleHelp, Download, ExternalLink, FileBraces, FileCode, FileSpreadsheet, Footprints, Globe, Grid3x3, ImageDown,
   MapPin, MonitorCheck, Move, Palette, Pause, PersonStanding, Ratio, RefreshCw, Rotate3d, Ruler, SlidersHorizontal, Sparkles,
   Tag, Target, Video, X, Zap, type LucideIcon,
 } from 'lucide-react';
@@ -56,6 +56,7 @@ import {
 } from '../lib/ledMap';
 import { ledPanelInputs, type LedSceneObject } from '../lib/ledMapScene';
 import { downloadBlob, drawTestPattern, renderAlignmentMapPng } from '../lib/ledMapDraw';
+import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
 import './StageScene.css';
 
 // 3D 畫面上用 DOM 直接畫的小圖示（物件名稱旁的鎖、留言圖釘）：跟 lucide 的 Lock / MessageSquare 同一個圖形
@@ -409,7 +410,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   });
   // 目前影片 / 圖片的大小（製作還沒設定畫布大小時，對位圖用這個）
   const [mediaSize, setMediaSize] = useState<CanvasSize | null>(null);
-  const [ledMapBusy, setLedMapBusy] = useState(false);
+  const [ledMapBusy, setLedMapBusy] = useState<null | 'png' | 'jsx'>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // NDI 真連線：connect 後拿到 frames 就 update CanvasTexture（替代 mock）
   const ndiLiveTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
@@ -1989,7 +1990,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     canvasSource: resolvedCanvas.source,
   });
 
-  async function downloadLedMap(kind: 'png' | 'csv' | 'json') {
+  async function downloadLedMap(kind: 'png' | 'csv' | 'json' | 'jsx') {
     const layout = computeLedLayout(resolvedCanvas.canvas);
     if (layout.panels.length === 0) {
       toast.error('找不到 LED：要等模型載好，而且物件分類是「LED」的才畫得出來');
@@ -2004,7 +2005,21 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       downloadBlob(new Blob([layoutToJson(layout, meta)], { type: 'application/json' }), ledMapFileName('json', meta));
       return;
     }
-    setLedMapBusy(true);
+    if (kind === 'jsx') {
+      // AE 一鍵建合成（lib/aeCompScript.ts）：畫布大小的合成 + 每塊 LED 的外框、名字（導引圖層）+ 小張的對位圖
+      setLedMapBusy('jsx');
+      try {
+        await new Promise(r => requestAnimationFrame(() => r(null)));
+        const r = await downloadAeCompScript(layout, meta);
+        toast.success(`AE 合成腳本下載好了：在 AE 按「File > Scripts > Run Script File…」選它${r.withMap ? '' : '（這次沒有夾對位圖，外框和名字都有）'}`, 8000);
+      } catch (e) {
+        toast.error((e instanceof AeCanvasTooBigError ? '' : 'AE 合成腳本沒做出來：') + (e instanceof Error ? e.message : String(e)));
+      } finally {
+        setLedMapBusy(null);
+      }
+      return;
+    }
+    setLedMapBusy('png');
     try {
       // 先讓「正在畫」顯示出來再開始畫（大畫布要一兩秒）
       await new Promise(r => requestAnimationFrame(() => r(null)));
@@ -2020,7 +2035,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     } catch (e) {
       toast.error('LED 對位圖沒畫出來：' + (e instanceof Error ? e.message : String(e)));
     } finally {
-      setLedMapBusy(false);
+      setLedMapBusy(null);
     }
   }
 
@@ -2800,10 +2815,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     items: [
       {
         icon: ImageDown,
-        label: ledMapBusy ? '正在畫對位圖…' : '下載對位圖（PNG）',
-        disabled: ledMapBusy,
+        label: ledMapBusy === 'png' ? '正在畫對位圖…' : '下載對位圖（PNG）',
+        disabled: !!ledMapBusy,
         hint: '每塊 LED 在 AE 畫布上的位置：名字、x y w h、每 100 px 格線；可以直接放進 AE 當參考圖層',
         onSelect: () => { void downloadLedMap('png'); },
+      },
+      {
+        icon: FileCode,
+        label: ledMapBusy === 'jsx' ? '正在做 AE 合成腳本…' : '下載 AE 合成腳本（.jsx）',
+        disabled: !!ledMapBusy,
+        hint: '在 AE 按「File > Scripts > Run Script File…」（檔案 > 指令碼 > 執行指令碼檔案）跑：自動建好畫布大小的合成，每塊 LED 的外框、名字都是導引圖層（不會算圖出去）',
+        onSelect: () => { void downloadLedMap('jsx'); },
       },
       { icon: FileSpreadsheet, label: '下載位置表（CSV）', hint: 'Excel 打得開：每塊 LED 的名字和 x、y、w、h', onSelect: () => { void downloadLedMap('csv'); } },
       { icon: FileBraces, label: '下載位置表（JSON）', hint: '給 AE 腳本 / 程式讀', onSelect: () => { void downloadLedMap('json'); } },
