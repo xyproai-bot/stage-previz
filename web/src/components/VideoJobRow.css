@@ -60,6 +60,9 @@
 @keyframes vjob-slide { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
 @media (prefers-reduced-motion: reduce) { .vjob__bar.is-indeterminate span { animation: none; width: 100%; opacity: 0.4; } }
 .vjob__status { color: var(--text-dim); font-family: var(--font-mono); font-size: 11.5px; }
+/* 影片版本視窗：還沒好的那一版也寫誰交的、什麼時候、說明 */
+.vjob__by { color: var(--text-muted); font-size: 11.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.vjob__note { color: var(--text-dim); margin-left: 6px; }
 .vjob__status.is-error { color: var(--danger); font-family: inherit; }
 
 @media (hover: none) and (pointer: coarse) {

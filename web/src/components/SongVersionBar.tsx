@@ -1,15 +1,16 @@
 import { useRef } from 'react';
-import { CircleAlert, Film, LoaderCircle, Plus, RotateCcw, Trash2, TriangleAlert, Upload } from 'lucide-react';
+import { CircleAlert, Film, LoaderCircle, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
+import PendingVideoRow from './PendingVideoRow';
 import HelpLink from './HelpLink';
 import { HELP_ANCHORS } from '../lib/helpLinks';
 import { playCheckNotes } from '../lib/videoCheck';
 import { usePlayChecks } from '../lib/versionPlayCheck';
 import type { CanvasSize } from '../lib/ledMap';
 import { formatDateTime, formatRelativeTime } from '../lib/serverTime';
-import { VIDEO_ACCEPT, videoProgressPercent, videoStatusLabel, type SongVideo } from '../lib/videoApi';
-import { pendingUploadText, trackedVideoIds, type StalledView } from '../lib/stalledUploads';
+import { VIDEO_ACCEPT, type SongVideo } from '../lib/videoApi';
+import { trackedVideoIds, type StalledView } from '../lib/stalledUploads';
 import type { VideoJob } from '../lib/videoJobs';
 import type { VersionItem } from '../lib/songVersions';
 import { useViewAs } from '../lib/viewAsContext';
@@ -184,58 +185,18 @@ export default function SongVersionBar({
       {(shownJobs.length > 0 || others.length > 0) && (
         <div className="vbar__jobs">
           {shownJobs.map(j => <VideoJobRow key={j.id} job={j} compact />)}
-          {others.map(v => {
-            const pct = videoProgressPercent(v);
-            const can = canModifyPending?.(v) ?? false;
-            const view = v.status === 'uploading' ? stalled?.get(v.id) : undefined;
-            const up = v.status === 'uploading' ? pendingUploadText(pct, view, can) : null;
-            const finishing = view?.kind === 'finishing' || (view?.kind === 'finish' && can);
-            return (
-              <div key={v.id} className={`vjob vjob--compact vjob--${v.status === 'failed' || up?.error ? 'failed' : 'copying'}`}>
-                <div className="vjob__top">
-                  <span className="vjob__name" title={v.title || v.originalUrl || ''}>{v.title || v.originalUrl || '影片'}</span>
-                  <span className="vjob__grow" />
-                  {can && v.status === 'failed' && v.source !== 'upload' && onRetryPending && (
-                    <button type="button" className="vjob__btn" onClick={() => onRetryPending(v)} {...ro()}>
-                      <Icon icon={RotateCcw} size="sm" /> 重試
-                    </button>
-                  )}
-                  {can && view?.kind === 'finishFailed' && onRetryFinish && (
-                    <button type="button" className="vjob__btn" onClick={() => onRetryFinish(v)} {...ro()}>
-                      <Icon icon={RotateCcw} size="sm" /> 再試一次
-                    </button>
-                  )}
-                  {can && view?.kind === 'resume' && onResumePending && (
-                    <button
-                      type="button"
-                      className="vjob__btn"
-                      onClick={() => { resumeRef.current = v; fileRef.current?.click(); }}
-                      {...ro('選當初傳的那個檔案，會從停下來的地方接著傳')}
-                    >
-                      <Icon icon={Upload} size="sm" /> 繼續上傳（選同一個檔案）
-                    </button>
-                  )}
-                  {can && onRemovePending && !finishing && (
-                    <button type="button" className="vjob__btn" onClick={() => onRemovePending(v)} {...ro()}>
-                      {v.status === 'failed' ? '拿掉' : v.status === 'uploading' ? '取消這次上傳' : '取消'}
-                    </button>
-                  )}
-                </div>
-                {v.status !== 'failed' && (
-                  <div className={'vjob__bar' + (pct == null || finishing ? ' is-indeterminate' : '')}>
-                    <span style={pct != null && !finishing ? { width: `${pct}%` } : undefined} />
-                  </div>
-                )}
-                <div className={'vjob__status' + (v.status === 'failed' || up?.error ? ' is-error' : '')}>
-                  {v.status === 'failed'
-                    ? (v.error || '失敗了')
-                    : up
-                    ? up.text
-                    : `${videoStatusLabel(v)}${pct != null ? ` ${pct}%` : '…'}`}
-                </div>
-              </div>
-            );
-          })}
+          {others.map(v => (
+            <PendingVideoRow
+              key={v.id}
+              v={v}
+              can={canModifyPending?.(v) ?? false}
+              view={v.status === 'uploading' ? stalled?.get(v.id) : undefined}
+              onRetry={onRetryPending}
+              onRetryFinish={onRetryFinish}
+              onResume={onResumePending ? (pv) => { resumeRef.current = pv; fileRef.current?.click(); } : undefined}
+              onRemove={onRemovePending}
+            />
+          ))}
           {onResumePending && (
             <input
               ref={fileRef}

@@ -140,9 +140,9 @@
 }
 .song-item {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 8px 8px 10px;
   border-radius: var(--radius-md);
   cursor: pointer;
   transition: background 0.1s;
@@ -161,6 +161,7 @@
   font-size: 12px;
   color: var(--text-muted);
   width: 22px;
+  line-height: 26px;
   flex-shrink: 0;
 }
 .song-item.is-active .song-item__order {
@@ -170,9 +171,33 @@
   flex: 1;
   min-width: 0;
 }
+/* 歌單每一列：
+     第一行  代號 + 歌名（太長變「…」，至少留 4 個字的寬度）+ 最右邊的「⋯」（上移、下移、改名、刪除）
+     第二行  狀態、cue 數、提案、有新版
+     第三行  影片（影片 V3 → 影片版本視窗）、＋加影片
+     第四行  負責動畫師
+   「⋯」一直都在、滑鼠移上去只換底色：以前移上去會長出四個按鈕，把歌名擠成「.」、選單擠成「選」 */
+.song-item__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  min-width: 0;
+}
 .song-item__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 3px;
   font-size: 13.5px;
   font-weight: 500;
+}
+.song-item__name .song-code-field { flex-shrink: 0; }
+.song-item__name-text {
+  flex: 1 1 4em;
+  min-width: 4em;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -182,35 +207,15 @@
   color: var(--text-muted);
   font-family: var(--font-mono);
   display: flex;
-  gap: 6px;
-  margin-top: 2px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+  margin-top: 3px;
 }
-.song-item__actions {
-  display: none;
-  gap: 2px;
-}
-.song-item:hover .song-item__actions {
-  display: flex;
-}
-.song-item__actions button {
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--border-strong);
-  color: var(--text-dim);
-  border-radius: var(--radius-sm);
-  width: 22px;
-  height: 22px;
-  font-size: 11px;
-  cursor: pointer;
-  padding: 0;
-}
-.song-item__actions button:hover:not(:disabled) {
-  background: var(--surface-2);
-  color: var(--text);
-}
-.song-item__actions button:disabled {
-  opacity: 0.3;
-  cursor: not-allowed;
-}
+.song-item__meta > * { white-space: nowrap; }
+.song-item__status .status-badge { font-family: var(--font-ui); }
+/* 狀態在這一行最左邊：選單往右打開（往左會超出歌單） */
+.song-item__status .status-menu { left: 0; right: auto; }
 .proposal-badge {
   background: var(--warn-dim);
   color: var(--warn);
@@ -240,25 +245,47 @@
   line-height: 1.6;
 }
 
-/* ─── 每首歌的影片：最新版本 / 交影片進度 / ＋加影片 ─── */
-.song-item__meta { flex-wrap: wrap; align-items: center; row-gap: 3px; }
+/* ─── 每首歌的影片（第三行）：影片 V3（點了打開影片版本視窗）/ 交影片進度 / ＋加影片 ─── */
 .song-item__video {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 3px 6px;
+  margin-top: 4px;
   min-width: 0;
   font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.song-item__video-none { color: var(--text-muted); white-space: nowrap; }
+.song-item__video-label,
+.song-item__video-job {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: transparent;
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .song-item__video-label { color: var(--accent); font-family: var(--font-mono); font-weight: 600; }
-.song-item__video-none { color: var(--text-muted); }
+.song-item__video-label:hover { border-color: var(--accent); background: var(--accent-dim); }
 .song-item__video-job {
   color: var(--warn);
-  max-width: 150px;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
 }
+.song-item__video-job:hover { border-color: currentColor; }
 .song-item__video-job.is-error { color: var(--danger); }
+.song-item__video-label:focus-visible,
+.song-item__video-job:focus-visible,
+.song-item__video-add:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .song-item__video-add {
   display: inline-flex;
   align-items: center;
@@ -271,10 +298,41 @@
   color: var(--text-dim);
   font-size: 11px;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .song-item__video-add:hover { color: var(--accent); border-color: var(--accent); }
+
+/* 第四行：負責動畫師（選單至少 7.5 個字寬；放不下就換到下一行，不會被擠成「選」） */
+.song-item__assign {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 6px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: default;
+}
+.song-item__assign > span { flex-shrink: 0; white-space: nowrap; }
+.song-item__assign select {
+  flex: 1 1 7.5em;
+  min-width: 7.5em;
+  max-width: 100%;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  text-overflow: ellipsis;
+}
+.song-item__assign select:disabled { color: var(--text-muted); }
 @media (hover: none) and (pointer: coarse) {
+  .song-item__video-label,
+  .song-item__video-job,
   .song-item__video-add { height: 30px; padding: 0 10px; }
+  .song-item__assign select { height: 32px; }
 }
 
 /* ─── Song status badge / filter chips / dropdown ─── */
@@ -623,9 +681,12 @@
   border-radius: 3px;
   font-size: 9px;
 }
-/* 每一列最右邊的「⋯」（上移 / 下移、複製、改名、刪除）：一直在、很小，滑鼠移上去也不會長出一排按鈕蓋住列 */
-.cue-item__more { flex-shrink: 0; display: flex; margin-right: -2px; }
-.cue-item__more .ovf__btn {
+/* 每一列最右邊的「⋯」（cue：上移 / 下移、複製、改名、刪除；歌：上移 / 下移、改名、刪除）：
+   一直在、很小，滑鼠移上去也不會長出一排按鈕蓋住列（只換透明度和框線顏色，大小不變） */
+.cue-item__more,
+.song-item__more { flex-shrink: 0; display: flex; margin-right: -2px; }
+.cue-item__more .ovf__btn,
+.song-item__more .ovf__btn {
   width: 26px;
   height: 26px;
   background: transparent;
@@ -636,14 +697,21 @@
 .cue-item:hover .cue-item__more .ovf__btn,
 .cue-item.is-active .cue-item__more .ovf__btn,
 .cue-item__more .ovf__btn:focus-visible,
-.cue-item__more .ovf__btn.is-open {
+.cue-item__more .ovf__btn.is-open,
+.song-item:hover .song-item__more .ovf__btn,
+.song-item.is-active .song-item__more .ovf__btn,
+.song-item__more .ovf__btn:focus-visible,
+.song-item__more .ovf__btn.is-open {
   opacity: 1;
   border-color: var(--border);
   background: var(--surface-1);
 }
-.cue-item__more .ovf__btn:hover { color: var(--text); border-color: var(--border-strong); }
+.cue-item__more .ovf__btn:hover,
+.song-item__more .ovf__btn:hover { color: var(--text); border-color: var(--border-strong); }
 @media (hover: none) and (pointer: coarse) {
-  .cue-item__more .ovf__btn { width: 34px; height: 34px; opacity: 1; }
+  .cue-item__more .ovf__btn,
+  .song-item__more .ovf__btn { width: 34px; height: 34px; opacity: 1; }
+  .song-item__order { line-height: 34px; }
 }
 .editor-cues__add {
   margin: 12px;
@@ -1360,7 +1428,8 @@
 }
 @media (max-width: 900px) {
   .editor-body {
-    grid-template-columns: 1fr;
+    /* minmax(0, 1fr)：很長的歌名不會把整頁撐得比手機畫面寬（歌名自己變「…」，「⋯」留在畫面裡） */
+    grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto auto auto;
   }
   .editor-songs, .editor-cues {
@@ -1373,7 +1442,6 @@
 }
 
 /* ─── 線條圖示（取代 emoji 後）：圖示按鈕置中、空狀態圖示顏色 ─── */
-.song-item__actions button,
 .editor-back {
   display: inline-flex;
   align-items: center;
@@ -1417,8 +1485,3 @@
   .editor-topbar__right { gap: 6px; }
 }
 
-/* 歌單比較窄時（iPad 橫放）：「影片 V2」「還沒有影片」不要斷成直的，「＋加影片」放不下就換到下一行 */
-.song-item__video { flex-wrap: wrap; row-gap: 3px; }
-.song-item__video-label,
-.song-item__video-none,
-.song-item__video-add { white-space: nowrap; flex-shrink: 0; }

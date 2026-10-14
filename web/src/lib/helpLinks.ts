@@ -22,6 +22,7 @@ export const HELP_ANCHORS = {
   prodCalibrate: 'prod-calibrate',
   prodSongs: 'prod-songs',
   prodDrive: 'prod-drive',
+  prodVideos: 'prod-videos',
   prodAssign: 'prod-assign',
   prodCues: 'prod-cues',
   prodCueTiming: 'prod-cue-timing',

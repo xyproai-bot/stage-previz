@@ -43,6 +43,7 @@ import type { ProjectMember } from '../lib/mockData';
 import { SONG_STATUS_LABEL } from '../lib/songReview';
 import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
+import SongVideosDialog from '../components/SongVideosDialog';
 import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { songTitle } from '../lib/songCode';
 import { songCueCounts } from '../lib/editorSongs';
@@ -467,6 +468,14 @@ export default function ProjectEditor() {
   // ── 歌曲影片（＋加影片）：上傳中切到別首歌也會繼續；好了歌單上的「影片 V3」跟著更新 ──
   const [addVideoSongId, setAddVideoSongId] = useState<string | null>(null);
   const addVideoSong = addVideoSongId ? songs.find(s => s.id === addVideoSongId) ?? null : null;
+  // 「影片版本」視窗（歌單上點「影片 V3」）：看每一版、刪除、到導演頁播放
+  const [versionsSongId, setVersionsSongId] = useState<string | null>(null);
+  const versionsSong = versionsSongId ? songs.find(s => s.id === versionsSongId) ?? null : null;
+  // 刪了一版 / 交好了：安靜地重新讀歌單（「影片 V3」跟著變；不閃載入中）
+  const reloadSongsQuietly = useCallback(() => {
+    if (!projectId) return;
+    api.listSongs(projectId).then(setSongs).catch(() => { /* 下次重新整理就有 */ });
+  }, [projectId]);
   const videoJobs = useVideoJobs(projectId ?? null);
   const videoJobsBySong = useMemo(() => {
     const m = new Map<string, VideoJob[]>();
@@ -477,8 +486,8 @@ export default function ProjectEditor() {
   const onVideoJobDone = useCallback((job: VideoJob) => {
     if (!projectId || job.projectId !== projectId) return;
     toast.success(`${job.songLabel}：${job.result?.label || '新的一版'} 好了`);
-    api.listSongs(projectId).then(setSongs).catch(() => { /* 下次重新整理就有 */ });
-  }, [projectId]);
+    reloadSongsQuietly();
+  }, [projectId, reloadSongsQuietly]);
   useVideoJobDone(onVideoJobDone);
 
   // ── Song actions ──
@@ -1038,40 +1047,56 @@ export default function ProjectEditor() {
                     onClick={() => setSelectedSongId(s.id)}
                   >
                     <div className="song-item__order">{String(fullIdx + 1).padStart(2, '0')}</div>
+                    {/* 一列四行：代號 + 歌名（太長變「…」）+ 最右邊的「⋯」/ 狀態、cue 數 / 影片 / 負責動畫師。
+                        滑鼠移上去只換底色，不會長出按鈕把歌名、選單擠掉（上移、下移、改名、刪除都在「⋯」裡） */}
                     <div className="song-item__main">
-                      <div className="song-item__name">
-                        {projectId && (
-                          <SongCodeField
-                            projectId={projectId}
-                            song={s}
-                            songs={songs}
-                            onSaved={(code) => setSongs(list => list.map(x => x.id === s.id ? { ...x, code } : x))}
+                      <div className="song-item__head">
+                        <div className="song-item__name">
+                          {projectId && (
+                            <SongCodeField
+                              projectId={projectId}
+                              song={s}
+                              songs={songs}
+                              onSaved={(code) => setSongs(list => list.map(x => x.id === s.id ? { ...x, code } : x))}
+                            />
+                          )}
+                          <span className="song-item__name-text" title={s.name}>{s.name}</span>
+                        </div>
+                        <div className="song-item__more" onClick={(e) => e.stopPropagation()}>
+                          <OverflowMenu
+                            label={`「${songTitle(s)}」的動作（上移、下移、改名、刪除）`}
+                            items={songRowMenuItems(fullIdx, songs.length, {
+                              onMove: (dir) => moveSong(s.id, dir),
+                              onRename: () => handleRenameSong(s.id, s.name),
+                              onDelete: () => handleDeleteSong(s.id, s.name),
+                            })}
                           />
-                        )}
-                        {s.name}
+                        </div>
                       </div>
                       <div className="song-item__meta">
+                        <div className="song-item__status" onClick={(e) => e.stopPropagation()}>
+                          <StatusBadge
+                            value={s.status}
+                            onChange={(next) => handleUpdateSongStatus(s.id, next)}
+                          />
+                        </div>
                         <span>{s.cueCount} 個 cue</span>
                         {s.proposalCount > 0 && <span className="proposal-badge">{s.proposalCount} 提案</span>}
                         {newVersionLabel(s) && <span className="song-item__newer" title={`導演上次看的是 V${s.reviewedVersion ?? s.lastReview?.version ?? ''}`}>有新版 {newVersionLabel(s)}</span>}
-                        <SongVideoMeta song={s} jobs={videoJobsBySong.get(s.id)} onAdd={() => setAddVideoSongId(s.id)} />
                       </div>
-                      <label
-                        className="song-item__assign"
-                        onClick={(e) => e.stopPropagation()}
-                        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '2px 6px', marginTop: 4, fontSize: 11, color: 'var(--text-muted)' }}
-                      >
-                        <span style={{ flexShrink: 0 }}>負責動畫師</span>
+                      <SongVideoMeta
+                        song={s}
+                        jobs={videoJobsBySong.get(s.id)}
+                        onAdd={() => setAddVideoSongId(s.id)}
+                        onOpenVersions={() => setVersionsSongId(s.id)}
+                      />
+                      <label className="song-item__assign" onClick={(e) => e.stopPropagation()}>
+                        <span>負責動畫師</span>
                         <select
                           value={s.animatorUserId ?? ''}
                           onChange={(e) => handleAssignAnimator(s.id, e.target.value || null)}
                           disabled={animatorMembers.length === 0 && !s.animatorUserId}
                           title={animatorMembers.length === 0 ? '這個專案還沒有動畫師：先到「用戶」把動畫師加進這個專案' : '指派後，動畫師在工作站的「我的」就看得到這首歌'}
-                          style={{
-                            flex: '1 1 64px', minWidth: 0, fontSize: 11, padding: '1px 4px',
-                            background: 'var(--bg)', color: 'var(--text)',
-                            border: '1px solid var(--border)', borderRadius: 4,
-                          }}
                         >
                           <option value="">{animatorMembers.length === 0 ? '專案裡還沒有動畫師' : '還沒指派'}</option>
                           {animatorMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -1082,18 +1107,6 @@ export default function ProjectEditor() {
                           )}
                         </select>
                       </label>
-                    </div>
-                    <div onClick={(e) => e.stopPropagation()}>
-                      <StatusBadge
-                        value={s.status}
-                        onChange={(next) => handleUpdateSongStatus(s.id, next)}
-                      />
-                    </div>
-                    <div className="song-item__actions" onClick={(e) => e.stopPropagation()}>
-                      <button title="上移" aria-label="上移" onClick={() => moveSong(s.id, -1)} disabled={fullIdx === 0}><Icon icon={ArrowUp} /></button>
-                      <button title="下移" aria-label="下移" onClick={() => moveSong(s.id, 1)} disabled={fullIdx === songs.length - 1}><Icon icon={ArrowDown} /></button>
-                      <button title="改名" aria-label="改名" onClick={() => handleRenameSong(s.id, s.name)}><Icon icon={Pencil} /></button>
-                      <button title="刪除" aria-label="刪除" onClick={() => handleDeleteSong(s.id, s.name)}><Icon icon={Trash2} /></button>
                     </div>
                   </li>
                 );
@@ -1347,6 +1360,19 @@ export default function ProjectEditor() {
         onChanged={() => { refreshProjectMeta(); }}
       />
 
+      {versionsSong && projectId && (
+        <SongVideosDialog
+          open
+          onClose={() => setVersionsSongId(null)}
+          projectId={projectId}
+          song={versionsSong}
+          jobs={videoJobsBySong.get(versionsSong.id) ?? []}
+          onAdd={() => setAddVideoSongId(versionsSong.id)}
+          covered={!!addVideoSong}
+          onChanged={reloadSongsQuietly}
+        />
+      )}
+
       {addVideoSong && projectId && (
         <AddVideoDialog
           open
@@ -1596,6 +1622,19 @@ function CueList({
       )}
     </>
   );
+}
+
+/** 歌單每一列「⋯」裡的動作：上移 / 下移（第一首、最後一首按不了）、改名、刪除 */
+function songRowMenuItems(
+  index: number, count: number,
+  h: { onMove: (direction: -1 | 1) => void; onRename: () => void; onDelete: () => void },
+): OverflowItem[] {
+  return [
+    { key: 'up', label: '上移', icon: ArrowUp, disabled: index <= 0, onSelect: () => h.onMove(-1) },
+    { key: 'down', label: '下移', icon: ArrowDown, disabled: index >= count - 1, onSelect: () => h.onMove(1) },
+    { key: 'rename', label: '改名', icon: Pencil, separatorBefore: true, onSelect: h.onRename },
+    { key: 'delete', label: '刪除', icon: Trash2, danger: true, separatorBefore: true, onSelect: h.onDelete },
+  ];
 }
 
 /** cue 列「⋯」裡的動作（有給 handler 的才出現） */
@@ -2542,18 +2581,45 @@ function formatVideoTime(s: number): string {
   return `${String(m).padStart(2, '0')}:${sec.padStart(4, '0')}`;
 }
 
-/** 歌單上每首歌的影片：最新是哪一版、正在交的進度、＋加影片 */
-function SongVideoMeta({ song, jobs, onAdd }: { song: Song; jobs: VideoJob[] | undefined; onAdd: () => void }) {
+/**
+ * 歌單上每首歌的影片（第三行）：最新是哪一版、正在交的進度、＋加影片。
+ * 「影片 V3」/ 交影片的進度是按鈕 → 打開「影片版本」視窗（每一版、刪除、到導演頁播放）；還沒有影片 → 只寫「還沒有影片」
+ */
+function SongVideoMeta({ song, jobs, onAdd, onOpenVersions }: {
+  song: Song;
+  jobs: VideoJob[] | undefined;
+  onAdd: () => void;
+  onOpenVersions: () => void;
+}) {
   const active = (jobs ?? []).filter(isJobActive);
   const failed = (jobs ?? []).find(j => j.phase === 'failed');
+  const label = songTitle(song);
   return (
-    <span className="song-item__video" onClick={(e) => e.stopPropagation()}>
+    <div className="song-item__video" onClick={(e) => e.stopPropagation()}>
       {active.length > 0 ? (
-        <span className="song-item__video-job" title={active.map(j => `${j.name}：${jobStatusText(j)}`).join('\n')}>{jobStatusText(active[0])}</span>
+        <button
+          type="button"
+          className="song-item__video-job"
+          onClick={onOpenVersions}
+          aria-haspopup="dialog"
+          title={[...active.map(j => `${j.name}：${jobStatusText(j)}`), '點一下看這首歌的影片版本'].join('\n')}
+        >{jobStatusText(active[0])}</button>
       ) : failed ? (
-        <span className="song-item__video-job is-error" title={failed.error ?? ''}>影片沒交成功</span>
+        <button
+          type="button"
+          className="song-item__video-job is-error"
+          onClick={onOpenVersions}
+          aria-haspopup="dialog"
+          title={[failed.error, '點一下看這首歌的影片版本（可以重試或取消）'].filter(Boolean).join('\n')}
+        >影片沒交成功</button>
       ) : song.latestVideoVersion ? (
-        <span className="song-item__video-label" title="最新的影片版本">影片 V{song.latestVideoVersion}</span>
+        <button
+          type="button"
+          className="song-item__video-label"
+          onClick={onOpenVersions}
+          aria-haspopup="dialog"
+          title={`看「${label}」的所有影片版本（誰交的、說明，可以刪掉不要的版本）`}
+        >影片 V{song.latestVideoVersion}</button>
       ) : (
         <span className="song-item__video-none">還沒有影片</span>
       )}
@@ -2561,11 +2627,11 @@ function SongVideoMeta({ song, jobs, onAdd }: { song: Song; jobs: VideoJob[] | u
         type="button"
         className="song-item__video-add"
         onClick={onAdd}
-        title={`幫「${songTitle(song)}」加影片（上傳檔案或貼連結，好了變成下一個版本）`}
+        title={`幫「${label}」加影片（上傳檔案或貼連結，好了變成下一個版本）`}
       >
         <Icon icon={Plus} size="xs" /> 加影片
       </button>
-    </span>
+    </div>
   );
 }
 

@@ -62,6 +62,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   const checkTokenRef = useRef(0);
   const fileRef = useRef<HTMLInputElement>(null);
   const localRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
   const label = songTitle(song);
   // 播不了也硬要傳：只有製作可以（有些瀏覽器播得了，例如 Mac 的 Safari）
   const { user } = useAuth();
@@ -77,6 +78,14 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
     checkTokenRef.current++;
     setFileCheck(null);
   }, [open, song.id, firstWay]);
+
+  // 打開時焦點放進視窗：從別的視窗裡打開（編輯頁的「影片版本」）時，Esc 才會先關這個；
+  // 焦點已經在視窗裡（貼連結的輸入框自己拿到）就不動
+  useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+    if (panel && !panel.contains(document.activeElement)) panel.focus();
+  }, [open]);
 
   // Esc 關掉
   useEffect(() => {
@@ -165,6 +174,8 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   return (
     <div className="addvid-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className={'addvid' + (dragOver ? ' is-dragover' : '')}
         role="dialog"
         aria-modal="true"

@@ -70,7 +70,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.prodProject, label: '建立專案' },
       { id: A.prodModel, label: '匯入 3D 模型', children: [{ id: A.prodNaming, label: '物件怎麼命名' }] },
       { id: A.prodCalibrate, label: '測距校準' },
-      { id: A.prodSongs, label: '歌曲和歌曲代號', children: [{ id: A.prodDrive, label: 'Google Drive 資料夾' }] },
+      { id: A.prodSongs, label: '歌曲和歌曲代號', children: [{ id: A.prodVideos, label: '影片版本（看、刪除）' }, { id: A.prodDrive, label: 'Google Drive 資料夾' }] },
       { id: A.prodAssign, label: '指派負責動畫師' },
       {
         id: A.prodCues, label: 'cue：位置和轉場', children: [
@@ -1080,7 +1080,7 @@ function ProducerChapter() {
           <li>編輯頁左邊「<Ui>歌曲</Ui>」最下面按「<Ui>＋ 新增歌曲</Ui>」，輸入歌名 → 「<Ui>新增</Ui>」。</li>
           <li>每首歌會自動拿到一個<strong>歌曲代號</strong>：S01、S02、S03…</li>
           <li>點代號可以改：英文字母、數字，中間可以有 <code>-</code>，最多 12 個字（例：S05、ENC-1）。S1 和 S01 算同一個。</li>
-          <li>右邊的箭頭排順序（換順序<strong>不會</strong>改代號）、鉛筆改名、垃圾桶刪除（歌的所有 cue 會一起刪掉）。</li>
+          <li>每首歌最右邊的「<Ui>⋯</Ui>」裡有：上移 / 下移（換順序<strong>不會</strong>改代號）、改名、刪除（歌的所有 cue 會一起刪掉）。</li>
         </ol>
         <F k="songList" />
         <ul className="help-list">
@@ -1088,6 +1088,18 @@ function ProducerChapter() {
           <li>上面的狀態按鈕可以只看某個狀態的歌；「只看我改過的」只列你動過的歌。</li>
           <li>代號會出現在 Drive 檔名、通知、分享連結的歌單上。</li>
         </ul>
+
+        <Section id={A.prodVideos} level={3} title="影片版本（看、刪除）">
+          <p>歌單上的「<Ui>影片 V3</Ui>」點一下，會打開這首歌的「<Ui>影片版本</Ui>」：</p>
+          <F k="songVideos" />
+          <ul className="help-list">
+            <li>每一版都列出來，<strong>新的在前</strong>：號碼、誰交的、什麼時候、說明、狀態（可以播 / 這台電腦播不了；還沒好的寫上傳中、複製中幾 %、失敗）。</li>
+            <li>「<Ui>到導演頁播放</Ui>」：在新分頁打開導演頁，直接放這一版。</li>
+            <li>「<Ui>刪除 V2</Ui>」：所有人的清單上都看不到這一版，沒辦法從畫面上救回來。<strong>號碼不會再用</strong>：有 V1～V3 時刪掉 V2，下一版是 V4，不會補回 V2。</li>
+            <li>沒交成功或卡住的：貼連結的可以「<Ui>重試</Ui>」，上傳停住的可以「<Ui>繼續上傳</Ui>」（選同一個檔案），不要了按「<Ui>取消</Ui>」或「<Ui>拿掉</Ui>」，號碼不會被佔走。</li>
+            <li>下面的「<Ui>加影片</Ui>」跟歌單上的「<Ui>＋ 加影片</Ui>」一樣。還沒有影片的歌，歌單上寫「還沒有影片」。</li>
+          </ul>
+        </Section>
 
         <Section id={A.prodDrive} level={3} title="Google Drive 資料夾（選用）">
           <p>動畫師習慣把影片丟到 Google Drive 的話，可以讓系統自動抓進來：</p>

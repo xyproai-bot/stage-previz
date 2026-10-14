@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AppNotification } from './reviewApi';
 import {
-  notificationTitle, notificationDetail, notificationHref, parseDeepLink, badgeText, groupNotifications, sameNotifications,
+  notificationTitle, notificationDetail, notificationHref, parseDeepLink, badgeText, groupNotifications, sameNotifications, songPageHref,
 } from './notifications';
 
 function n(p: Partial<AppNotification> = {}): AppNotification {
@@ -37,6 +37,12 @@ describe('點了去哪裡', () => {
     expect(parseDeepLink('?song=s1&comment=../x')).toEqual({ songId: 's1', videoId: null, commentId: null });
     expect(parseDeepLink('?video=sv2')).toBeNull();
     expect(parseDeepLink(new URLSearchParams('song=s1'))).toEqual({ songId: 's1', videoId: null, commentId: null });
+  });
+  it('編輯頁「到導演頁播放」：導演頁打開那首歌、那一版，讀回來是同一首、同一版', () => {
+    const href = songPageHref('preview', 'p 1', { songId: 's1', videoId: 'sv3' });
+    expect(href).toBe('/preview/p%201?song=s1&video=sv3');
+    expect(parseDeepLink(href.slice(href.indexOf('?')))).toEqual({ songId: 's1', videoId: 'sv3', commentId: null });
+    expect(songPageHref('studio', 'p1', {})).toBe('/studio/p1');
   });
 });
 

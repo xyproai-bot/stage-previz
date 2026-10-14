@@ -24,6 +24,15 @@ export interface VersionsResult {
 
 export type VersionFetcher = (songId: string) => Promise<VersionsResult>;
 
+/** 只有版本清單（不看舊的 Drive 影片）：編輯頁的「影片版本」視窗 */
+export function songVideoFetcher(projectId: string): VersionFetcher {
+  return async (songId) => {
+    const list = await listSongVideos(projectId, songId);
+    const items = readyItems(list.videos.map(v => itemFromVideo(v, absoluteVideoUrl)));
+    return { items, pending: pendingVideos(list.videos), hasVersions: items.length > 0 };
+  };
+}
+
 /** 成員：版本清單；一版都沒有 → 舊的 Drive 影片（同一個專案的 Drive 檔案清單一分鐘內共用） */
 export function memberVersionFetcher(projectId: string): VersionFetcher {
   let driveCache: { at: number; files: Promise<api.DriveFile[]> } | null = null;

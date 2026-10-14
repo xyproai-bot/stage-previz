@@ -35,13 +35,24 @@ export function notificationDetail(n: AppNotification): string {
 
 /** 點了開哪一頁：導演 / 製作 → 導演頁；動畫師 → 動畫師工作站。帶上歌、版本、留言 */
 export function notificationHref(n: Pick<AppNotification, 'projectId' | 'projectRole' | 'songId' | 'videoId' | 'commentId'>): string {
-  const page = n.projectRole === 'animator' ? 'studio' : 'preview';
+  return songPageHref(n.projectRole === 'animator' ? 'studio' : 'preview', n.projectId, n);
+}
+
+/**
+ * 導演頁（preview）/ 動畫師工作站（studio）直接打開某首歌、某一版、某則留言的網址：
+ * /preview/<專案>?song=<歌>&video=<影片>&comment=<留言>（頁面用 parseDeepLink 讀）
+ */
+export function songPageHref(
+  page: 'preview' | 'studio',
+  projectId: string,
+  target: { songId?: string | null; videoId?: string | null; commentId?: string | null },
+): string {
   const q = new URLSearchParams();
-  if (n.songId) q.set('song', n.songId);
-  if (n.videoId) q.set('video', n.videoId);
-  if (n.commentId) q.set('comment', n.commentId);
+  if (target.songId) q.set('song', target.songId);
+  if (target.videoId) q.set('video', target.videoId);
+  if (target.commentId) q.set('comment', target.commentId);
   const qs = q.toString();
-  return `/${page}/${encodeURIComponent(n.projectId)}${qs ? `?${qs}` : ''}`;
+  return `/${page}/${encodeURIComponent(projectId)}${qs ? `?${qs}` : ''}`;
 }
 
 /** 網址上的 ?song=&video=&comment=（通知點進來）→ 要打開哪首歌、哪一版、哪則留言 */
