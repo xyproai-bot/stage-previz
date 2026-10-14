@@ -1317,12 +1317,13 @@ function ProducerChapter() {
         <p>所有人（包括分享連結的客戶）按「重置攝影機」都會回到這裡，第一眼看到的也是這個畫面，所以選一個最好看的角度。</p>
         <p><strong>畫面模式</strong>（工具列「快速 / 現場」）：</p>
         <ul className="help-list">
-          <li><strong>快速</strong>：LED 顏色跟 AE 一樣（像素 1:1），看得最清楚。</li>
+          <li><strong>快速</strong>：只看 LED 畫面本身（不受燈光、反光影響），看得最清楚。</li>
           <li><strong>現場</strong>：暗場、LED 照亮周圍、光暈、地板倒影，比較像演出當天的樣子。</li>
           <li>現場模式的「<Ui>設定</Ui>」：現場底光、曝光、LED 照明、光暈、LED 側看變暗、地板倒影、倒影清晰度。你調的只存在你這台電腦；按「<Ui>設為所有人的預設</Ui>」才會變成大家打開時的樣子。</li>
           <li>「<Ui>材質</Ui>」：依 C4D 材質名稱調顏色、亮霧面、金屬感、反射、透明度，指定鏡面地板（所有人共用）。</li>
         </ul>
         <F k="lookSettings" />
+        <p><strong>LED 的顏色</strong>：快速和現場兩種模式，正面看 LED 都是影片、圖片原本的顏色，亮度和對比跟原檔一樣。現場設定的曝光、底光只改變舞台其他地方，不會改 LED 畫面；每塊 LED 自己的亮度設定照樣有用（1 = 跟原檔一樣）。這是固定的，沒有開關，所有人（包括動畫師、導演、分享連結）看到的都一樣。</p>
       </Section>
 
       <Section id={A.prodShare} title="分享連結和密碼">
@@ -1447,6 +1448,7 @@ function AnimatorChapter() {
           <li>③ <strong>本地檔案</strong>：選這台電腦裡的影片或圖片放到 LED 上。<strong>不會上傳、別人看不到</strong>，關掉頁面就沒了。要給導演看請用「加影片」。</li>
         </ul>
         <p>會記得你上次選哪一個。右邊的「<Icon icon={CircleHelp} />」打開這一段說明。</p>
+        <p><strong>LED 的顏色</strong>：正面看 LED，就是檔案原本的顏色（跟小播放器裡看到的一樣）；製作有開「LED 側看變暗」的話，從側面看會像真的 LED 牆一樣暗一點。你自己螢幕的顏色設定（亮度、色溫、夜間模式）還是會影響看到的顏色，要比對請在同一台螢幕上比。</p>
         <F k="studioLive" />
         <p>NDI 小程序（免費）：</p>
         <DownloadHelper />

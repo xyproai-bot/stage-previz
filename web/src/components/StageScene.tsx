@@ -8,7 +8,6 @@ import { RectAreaLightHelper } from 'three/examples/jsm/helpers/RectAreaLightHel
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject, CameraView } from '../lib/api';
 import { fitFov } from '../lib/review/annotations';
@@ -35,7 +34,8 @@ import { LedLightRig, type LedLightProps } from '../lib/stageLook/ledLightRig';
 import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { AdaptiveQuality, QUALITY, detectQualityProfile, type QualityLevel } from '../lib/stageLook/quality';
-import { LED_SURFACE, NDI_PIXEL_DENSITY, applyLedSurface, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { LED_SHARED_UNIFORMS, NDI_PIXEL_DENSITY, configureLedMaterial, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { LedOutputPass } from '../lib/stageLook/ledOutputPass';
 import { FloorReflection, applyFloorReflection, setFloorReflectionFor } from '../lib/stageLook/floorReflection';
 import { applyMaterialSettings, captureOriginal, hasMirrorFloor, type MaterialOverride, type MaterialOverrides, type ModelMaterialInfo } from '../lib/stageLook/materialOverrides';
 import MaterialPanel from './MaterialPanel';
@@ -628,7 +628,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     ledRigRef.current.setMaxLights(qualityRef.current.maxLights);
     try {
       ledEnvRef.current = new LedEnvironment(renderer);
-      floorReflRef.current = new FloorReflection(renderer);
+      // 倒影只拍 LED（見 floorReflection.ts 檔頭）
+      floorReflRef.current = new FloorReflection(renderer, LED_LAYER);
     } catch (e) {
       console.warn('[StageScene] LED environment init failed:', e);
     }
@@ -646,7 +647,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         0.85,   // threshold（亮度高過此值才參與 bloom）
       );
       composer.addPass(bloomPass);
-      composer.addPass(new OutputPass());
+      // 最後一步：tone mapping + 曝光 + sRGB；LED 畫面（alpha 0）跳過壓色、照原檔（ledOutputPass.ts），光暈也在這裡加
+      composer.addPass(new LedOutputPass(bloomPass));
       composerRef.current = composer;
       bloomPassRef.current = bloomPass;
     } catch (e) {
@@ -933,7 +935,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const q = qualityRef.current;
       ledRigRef.current?.setMaxLights(q.maxLights);
       floorReflRef.current?.setEnabled(renderModeRef.current === 'live' && q.reflectionScale > 0);
-      if (bloomPassRef.current) bloomPassRef.current.enabled = q.bloomScale > 0;
+      // 光暈 0 = 整個不畫（省 13 次全畫面運算）
+      if (bloomPassRef.current) bloomPassRef.current.enabled = q.bloomScale > 0 && lookRef.current.bloomStrength > 0;
       if (renderer.xr.isPresenting) return;  // VR 中不能改尺寸
       const w = container.clientWidth;
       const h = container.clientHeight;
@@ -1186,7 +1189,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (live && !inXR) floorReflRef.current?.render(scene, camera);
 
       if (live && composerRef.current && !inXR) {
-        composerRef.current.render();
+        // 這一次 LED 把 alpha 寫 0 → 最後一步認得出 LED 畫面、不壓色（倒影 / 環境光那幾次不標）
+        LED_SHARED_UNIFORMS.uLedMaskOut.value = 1;
+        try {
+          composerRef.current.render();
+        } finally {
+          LED_SHARED_UNIFORMS.uLedMaskOut.value = 0;
+        }
       } else {
         renderer.render(scene, camera);
       }
@@ -1855,9 +1864,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       helpersRef.current.grid.visible = !live;
       helpersRef.current.axes.visible = !live;
     }
-    // 現場：Neutral tone mapping 保留 LED 飽和色；Quick 維持 ACES（畫面不變）
+    // 現場：舞台用 Neutral tone mapping（LED 畫面不經過，見 ledOutputPass.ts）；Quick 維持 ACES（LED 一樣不經過）
     renderer.toneMapping = live ? THREE.NeutralToneMapping : THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = live ? look.exposure : 1;
+    // LED 畫面照原檔、不吃曝光；曝光只用來算 LED 表面反光照相機曲線多亮（跟舞台其他地方一致）
+    LED_SHARED_UNIFORMS.uLedExposure.value = renderer.toneMappingExposure;
     if (!live) scene.environment = null;
     scene.environmentIntensity = live ? 0.2 + look.ledLightStrength * 0.4 : 1;
     const bloom = bloomPassRef.current;
@@ -1865,6 +1876,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       bloom.strength = look.bloomStrength;
       bloom.radius = 0.3;
       bloom.threshold = 0.75;
+      bloom.enabled = qualityRef.current.bloomScale > 0 && look.bloomStrength > 0;
     }
     ledRigRef.current?.setEnabled(live);
     if (!live) for (const mat of ledMaterialsRef.current) updateLedSurface(mat, { on: false });
@@ -2142,81 +2154,28 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
         if (isLed && isLit) {
           // === LED in 現場模式 ===
-          // 像真的 LED 牆：
-          //   底色接近黑、roughness 0.3 → 畫面暗的地方是黑亮面，會映出其他 LED（反射來自 LED 環境光）
-          //   emissive(Map) 是亮度來源；像素顆粒 / 側看變暗由 ledSurface shader 處理
-          //   toneMapped = false → 不在材質裡壓色（現場模式統一由 OutputPass 做 Neutral tone mapping）
-          m.color.setHex(LED_SURFACE.baseColor);
-          m.metalness = 0;
-          m.roughness = LED_SURFACE.roughness;
-          m.envMapIntensity = LED_SURFACE.envMapIntensity;
-          applyLedSurface(m);
+          // 像真的 LED 牆：底色接近黑、roughness 0.3 → 畫面暗的地方是黑亮面，會映出其他 LED（反射來自 LED 環境光）
+          // 畫面 = emissiveMap × tint × 亮度，正面看 = 原檔顏色（不壓色、不吃曝光；ledSurface.ts + ledOutputPass.ts）
+          // 像素顆粒 / 側看變暗也在 ledSurface shader
+          configureLedMaterial(m, { mode: 'live', texture: ledTexture, tint: ledTint, brightness: ledBrightness });
           ledMaterials.add(m);
-          m.opacity = 1;
-          m.transparent = false;
-          if (m.toneMapped !== false) {
-            m.toneMapped = false;
-            m.needsUpdate = true;
-          }
-
-          if (ledTexture) {
-            if (m.emissiveMap !== ledTexture) {
-              m.emissiveMap = ledTexture;
-              m.needsUpdate = true;
-            }
-            // 圖案的明暗 = emissiveMap 像素亮度 × emissive(tint) × emissiveIntensity
-            m.emissive.copy(ledTint);
-            m.emissiveIntensity = ledBrightness;
-          } else {
-            if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
-            m.emissive.copy(ledTint);
-            m.emissiveIntensity = ledBrightness;
-          }
-          // selected highlight：LED 不洗白，靠 RectAreaLightHelper / outline 之後做
-          // 這裡只在沒亮度時加一點點當 hint
+          // selected highlight：LED 不洗白，這裡只在沒畫面、沒亮度時加一點點當提示
           if (isSelected && ledBrightness < 0.05 && !ledTexture) {
             m.emissive.copy(accentGreen);
             m.emissiveIntensity = 0.3;
           }
         } else if (isLed && ledTexture) {
-          // === LED in Quick mode（有 NDI 或 imageUrl）===
-          // Quick mode 的設計目標：pixel-accurate LED 預覽（給動畫師對顏色用）
-          // 不打燈、不 tone map、不 bloom、不 PBR 計算 — texture 直接顯示。
-          //   m.map = NDI / imageUrl texture
-          //   color 白 = 不染色
-          //   metalness 0、roughness 1、envMapIntensity 0 = 不反射不被環境光打亮
-          //   toneMapped false = 跳過 ACES，texture pixel 1:1
-          //   emissive 黑 = 不疊加自發光（已經是 map 直接顯示了）
-          updateLedSurface(m, { on: false });
-          if (m.map !== ledTexture) {
-            m.map = ledTexture;
-            m.needsUpdate = true;
-          }
-          m.color.setHex(0xffffff);
-          m.metalness = 0;
-          m.roughness = 1;
-          m.envMapIntensity = 0;
-          m.opacity = 1;
-          m.transparent = false;
-          if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
-          m.emissive.copy(black);
-          m.emissiveIntensity = 0;
-          if (m.toneMapped !== false) {
-            m.toneMapped = false;
-            m.needsUpdate = true;
-          }
-          if (isSelected) {
-            // selected hint：稍微加自發光綠色框感，不洗白本來的內容
-            m.emissive.copy(accentGreen);
-            m.emissiveIntensity = 0.15;
-          }
+          // === LED in Quick mode（有畫面）===
+          // 快速模式：給動畫師 1:1 對顏色 → 只有畫面，不打燈、不反光、不壓色（以前放在 map 會被燈光打暗一大半）
+          configureLedMaterial(m, { mode: 'quick', texture: ledTexture });
+          ledMaterials.add(m);
         } else {
           // === 一般物件 / Quick mode 的 LED（沒貼圖時）===
           // 材質 = C4D 匯出的原值 → 材質面板依名稱的覆寫 → 單一物件 materialProps（舊功能，最優先）
           // （以前會用 category 顏色 + 固定 roughness 0.6 / metalness 0.1 蓋掉，C4D 的材質全被洗成同一種塑膠）
           // 沒模型時的方塊替身：建立時就是 category 顏色，所以「原值」本身就是 category 顏色
           // emissive 只在 selected 時 highlight
-          updateLedSurface(m, { on: false });
+          updateLedSurface(m, { on: false, mode: 'off' });
           applyMaterialSettings(m, materialOverrides?.[m.name], {
             color: mat.color, roughness: mat.roughness, metalness: mat.metalness, opacity: mat.opacity,
           });

@@ -3,6 +3,10 @@
 //   - 鏡像 RT 半解析度 + mipmap → 依清晰度 / 粗糙度選 mip 當模糊
 //   - Fresnel：越斜看越亮（真的亮面地板就是這樣）
 //   - 畫倒影那一次把 uReflOn 關掉，避免讀寫同一張 RT（WebGL feedback loop）
+//   - 鏡像相機只拍 onlyLayer（StageScene 給 LED_LAYER = 倒影裡只有 LED）：
+//     掛了倒影的材質（地板和其他非 LED 物件）只要倒影 RT 還綁著，就算 shader 沒讀，WebGL 也判定讀寫同一張 RT、
+//     直接不畫（主控台一直跳 Feedback loop 警告）——以前倒影裡本來就只看得到 LED。
+//     改成一開始就只拍 LED：畫面跟以前一模一樣，少了錯誤，也不用白跑那些物件
 
 import * as THREE from 'three';
 
@@ -161,7 +165,8 @@ export class FloorReflection {
   private planeY: number | null = null;
   private enabled = false;
 
-  constructor(private renderer: THREE.WebGLRenderer) {
+  constructor(private renderer: THREE.WebGLRenderer, onlyLayer?: number) {
+    if (onlyLayer !== undefined) this.virtualCamera.layers.set(onlyLayer);
     this.rt = new THREE.WebGLRenderTarget(512, 256, {
       type: THREE.HalfFloatType,
       generateMipmaps: true,
