@@ -30,6 +30,18 @@ use tokio_tungstenite::tungstenite::Message;
 
 pub const PROTOCOL_VERSION: u32 = 2;
 
+/// 畫面的顏色怎麼處理（hello / status 的 colorPipeline）：
+///   "raw"             0.1.13 起預設：NDI 給的原始像素（網頁自己做顏色校正）
+///   "limited_to_full" config 打開 limited_to_full：16–235 拉成 0–255（= 0.1.12 以前的做法）
+/// 舊版沒有這欄 → 網頁照以前（不另外校正）
+pub fn color_pipeline(limited_to_full: bool) -> &'static str {
+    if limited_to_full {
+        "limited_to_full"
+    } else {
+        "raw"
+    }
+}
+
 /// 自己的網域（只限 https、預設 port、完全一樣的主機名；子網域不算）
 const OWN_HOSTS: [&str; 2] = ["previz.haimiaan.com", "test.previz.haimiaan.com"];
 
@@ -128,6 +140,7 @@ fn platform() -> &'static str {
 
 fn hello_message(shared: &Shared) -> String {
     let source = shared.state().source.clone().unwrap_or_default();
+    let limited = shared.cfg().limited_to_full;
     json!({
         "type": "hello",
         "version": env!("CARGO_PKG_VERSION"),
@@ -135,14 +148,15 @@ fn hello_message(shared: &Shared) -> String {
         "platform": platform(),
         "port": shared.port,
         "source": source,
+        "colorPipeline": color_pipeline(limited),
     })
     .to_string()
 }
 
 pub fn status_message(shared: &Shared, frames_paused: bool) -> String {
-    let (preferred, max_fps, jpeg_quality) = {
+    let (preferred, max_fps, jpeg_quality, limited) = {
         let c = shared.cfg();
-        (c.source_name.clone(), c.max_fps, c.jpeg_quality)
+        (c.source_name.clone(), c.max_fps, c.jpeg_quality, c.limited_to_full)
     };
     let clients = shared.clients();
     let want_frames = shared.frame_clients() > 0;
@@ -178,6 +192,7 @@ pub fn status_message(shared: &Shared, frames_paused: bool) -> String {
         "outHeight": s.out_height,
         "downscale": s.downscale,
         "jpegQuality": jpeg_quality,
+        "colorPipeline": color_pipeline(limited),
         "frameCount": s.frame_count,
         "clients": clients,
         "framesPaused": frames_paused,
@@ -363,7 +378,25 @@ fn handle_command(text: &str, shared: &Arc<Shared>, rx: &mut Option<broadcast::R
 
 #[cfg(test)]
 mod tests {
-    use super::origin_allowed;
+    use super::{color_pipeline, hello_message, origin_allowed, status_message};
+    use crate::config::Config;
+    use crate::state::Shared;
+    use serde_json::Value;
+
+    #[test]
+    fn hello_and_status_report_color_pipeline() {
+        let shared = Shared::new(Config::default(), 7777);
+        let hello: Value = serde_json::from_str(&hello_message(&shared)).unwrap();
+        assert_eq!(hello["colorPipeline"], "raw");
+        let status: Value = serde_json::from_str(&status_message(&shared, false)).unwrap();
+        assert_eq!(status["colorPipeline"], "raw");
+        assert_eq!(status["jpegQuality"], 90);
+        assert_eq!(status["downscale"], 0, "還沒收到畫面");
+        let old_way = Shared::new(Config { limited_to_full: true, ..Config::default() }, 7777);
+        let hello: Value = serde_json::from_str(&hello_message(&old_way)).unwrap();
+        assert_eq!(hello["colorPipeline"], "limited_to_full");
+        assert_eq!(color_pipeline(false), "raw");
+    }
 
     #[test]
     fn allows_production_and_previews() {

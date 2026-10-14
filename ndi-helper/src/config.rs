@@ -13,7 +13,8 @@ use std::path::PathBuf;
 
 /// 設定檔格式版本（升級規則見 upgrade）：
 ///   2：autostart 舊預設 false → 一次性改成 true（「裝一次就不用管」）；之後用戶在 tray 關掉就尊重用戶
-///   3（0.1.13）：畫質變好 — 不再固定縮一半（改成太大才縮，見 max_output_pixels）、JPEG 75 → 90
+///   3（0.1.13）：畫質變好 — 不再固定縮一半（改成太大才縮，見 max_output_pixels）、JPEG 75 → 90；
+///      顏色送原始像素（limited_to_full 舊預設 true → false，顏色改由網頁校正）
 pub const CURRENT_CONFIG_VERSION: u32 = 3;
 
 /// 送出去的畫面最多幾個像素（downsample 開著時）。
@@ -47,7 +48,10 @@ pub struct Config {
     /// JPEG quality 1-100（預設 90；色度不降取樣 4:4:4）
     pub jpeg_quality: u8,
 
-    /// Limited (16-235) → Full (0-255) range conversion（NDI 的 BT.709 多半是 limited）
+    /// Limited (16-235) → Full (0-255) 拉色域（預設 false = 送 NDI 給的原始像素）。
+    /// 0.1.12 以前預設 true，但實測 AE → NDI 收到的 RGBX 不是乾淨的 limited range（黑 ≈ 16、白 ≈ 255），
+    /// 拉了會把 235 以上全部截成 255、中間調變亮（128 → 140）。現在送原始像素，網頁照 status 的
+    /// colorPipeline = "raw" 自己做顏色校正（預設曲線 + 「校正 AE 即時顏色」）
     pub limited_to_full: bool,
 
     /// 開機自動啟動（Windows：HKCU Run；macOS：~/Library/LaunchAgents）
@@ -70,7 +74,7 @@ impl Default for Config {
             downsample: true,
             max_output_pixels: DEFAULT_MAX_OUTPUT_PIXELS,
             jpeg_quality: DEFAULT_JPEG_QUALITY,
-            limited_to_full: true,
+            limited_to_full: false,
             autostart: true,
             max_fps: 30,
             config_version: CURRENT_CONFIG_VERSION,
@@ -112,6 +116,9 @@ pub fn upgrade(cfg: &mut Config) -> bool {
         if cfg.jpeg_quality == OLD_DEFAULT_JPEG_QUALITY {
             cfg.jpeg_quality = DEFAULT_JPEG_QUALITY;
         }
+        // limited_to_full 舊預設 true（沒有介面可以改，分不出是不是用戶自己開的 → 當成預設）→ 送原始像素；
+        // 本來就 false 的照舊。升級之後自己再打開的（第 3 版）不會再被改
+        cfg.limited_to_full = false;
     }
     if from < CURRENT_CONFIG_VERSION {
         cfg.config_version = CURRENT_CONFIG_VERSION;
@@ -204,6 +211,7 @@ mod tests {
         assert_eq!(c.jpeg_quality, 90);
         assert!(c.downsample, "還是開著：意思變成「太大才縮」");
         assert_eq!(c.max_output_pixels, DEFAULT_MAX_OUTPUT_PIXELS);
+        assert!(!c.limited_to_full, "舊預設 true → 送原始像素");
         // 再跑一次不會再改
         assert!(!upgrade(&mut c));
     }
@@ -216,6 +224,7 @@ mod tests {
         );
         upgrade(&mut c);
         assert!(!c.downsample, "用戶關掉縮小 → 照舊永遠不縮");
+        assert!(!c.limited_to_full, "舊檔沒寫 → 新預設 false");
         assert_eq!(c.jpeg_quality, 60);
         assert!(!c.autostart, "第 2 版以後用戶關掉開機啟動 → 尊重");
         assert_eq!(c.max_fps, 24);
@@ -241,6 +250,10 @@ mod tests {
         let mut c = Config { jpeg_quality: 75, config_version: CURRENT_CONFIG_VERSION, ..Config::default() };
         assert!(!upgrade(&mut c));
         assert_eq!(c.jpeg_quality, 75);
+        // 升級後自己把 limited_to_full 打開 → 照用戶的
+        let mut c = Config { limited_to_full: true, config_version: CURRENT_CONFIG_VERSION, ..Config::default() };
+        assert!(!upgrade(&mut c));
+        assert!(c.limited_to_full);
     }
 
     #[test]
@@ -261,6 +274,7 @@ mod tests {
         assert!(c.downsample);
         assert_eq!(c.jpeg_quality, 90);
         assert_eq!(c.max_output_pixels, DEFAULT_MAX_OUTPUT_PIXELS);
+        assert!(!c.limited_to_full);
         assert_eq!(c.config_version, CURRENT_CONFIG_VERSION);
         let mut c2 = c.clone();
         assert!(!upgrade(&mut c2), "新裝的不用升級");

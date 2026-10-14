@@ -77,13 +77,16 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 **1. `hello`**：連上後第一則，只送一次。
 
 ```json
-{ "type": "hello", "version": "0.1.11", "protocol": 2, "platform": "windows", "port": 7777,
-  "source": "ULTRA9-285K (Adobe After Effects)" }
+{ "type": "hello", "version": "0.1.13", "protocol": 2, "platform": "windows", "port": 7777,
+  "source": "ULTRA9-285K (Adobe After Effects)", "colorPipeline": "raw" }
 ```
 
 - `platform`：`"windows"` | `"macos"` | `"linux"`
 - `source`：目前要接的來源；沒有時是空字串 `""`（舊版相容）
 - `protocol`：協議版本；0.1.8 以前沒有這欄（= 1）
+- `colorPipeline`：0.1.13 起：畫面的顏色怎麼處理。`"raw"`（預設）= NDI 給的原始像素，**網頁要自己做顏色校正**
+  （實測 AE → NDI 收到的黑 ≈ 16、白 ≈ 255，不是乾淨的 limited range）；`"limited_to_full"` = config 打開了
+  `limited_to_full`（16–235 拉成 0–255，0.1.12 以前的做法）。舊版沒有這欄 = 以前的做法。status 也有同一欄
 
 **2. `status`**：hello 之後立刻一則；之後**狀態有變就馬上推**，另外**每秒推一次**（更新 fps）。
 也可以主動要（見下面的指令）。
@@ -114,6 +117,7 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
   "outWidth": 1920, "outHeight": 1080,
   "downscale": 1,
   "jpegQuality": 90,
+  "colorPipeline": "raw",
   "frameCount": 1234,
   "clients": 1,
   "framesPaused": false,
@@ -202,7 +206,7 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
   "downsample": true,
   "max_output_pixels": 4500000,
   "jpeg_quality": 90,
-  "limited_to_full": true,
+  "limited_to_full": false,
   "autostart": true,
   "max_fps": 30,
   "config_version": 3
@@ -213,11 +217,14 @@ After Effects（沒有的話接這台電腦的其他 NDI 來源）。**別台電
 - `downsample`：畫面**太大才縮**（預設開）：縮成整數分之一（1/2、1/3…），剛好不超過 `max_output_pixels`；
   本來就不大的畫面原樣送。`false` = 永遠不縮（原尺寸送，很吃 CPU）
 - `max_output_pixels`：送出去的畫面最多幾個像素（預設 450 萬，見「畫質」）
+- `limited_to_full`：把 16–235 拉成 0–255（預設關 = 送 NDI 給的原始像素，網頁照 `colorPipeline: "raw"` 自己校正顏色）。
+  0.1.12 以前預設開，但實測 AE → NDI 收到的黑 ≈ 16、白 ≈ 255：拉了會把 235 以上全部截成 255、128 變 140
 - `jpeg_quality`：JPEG 品質 1–100（預設 90；本機傳輸，頻寬不重要，只花 CPU）
 - `max_fps`：送給網頁的最高 fps（AE 送 60 也只編 30 張）
 - 改了 `config.json` 要重開小程序（右鍵 → 離開，再從開始選單打開）
 - 升級：0.1.12 以前裝的（`config_version` 2 以下）第一次打開 0.1.13 會自動改成新預設：`jpeg_quality` 還是舊預設 75 → 90；
-  `downsample` 開著的意思從「固定縮一半」變成「太大才縮」。自己改過的值（例如品質 60、`downsample: false`）不動
+  `downsample` 開著的意思從「固定縮一半」變成「太大才縮」；`limited_to_full` 舊預設開 → 關（送原始像素）。
+  自己改過的值（例如品質 60、`downsample: false`）不動
 - `autostart`：開機自動啟動（預設開；右鍵選單切換）。從 0.1.8 以前升級上來會自動打開一次
 - 開機自動啟動的實作：Windows = `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\StagePrevizNdiHelper`；
   macOS = `~/Library/LaunchAgents/com.xyproai.stage-previz-ndi-helper.plist`（0.1.12 起直接執行 App 裡的執行檔並標明
@@ -311,7 +318,7 @@ gh release upload ndi-helper-vX.Y.Z /tmp/ndi-mac/notarized/stage-previz-ndi-help
 AE NDI Output
    ↓  NDI 函式庫（runtime 動態載入：Processing.NDI.Lib.x64.dll / libndi.dylib；找不到 → 回報 ndi_missing，每 5 秒再找）
 ndi.rs   finder 常駐（每秒更新來源清單）→ 挑來源 → 有網頁要畫面才建 receiver
-         → 限速 max_fps → 太大才縮小（整數分之一）→ turbojpeg（兩個編碼工人輪流）
+         → 限速 max_fps → 太大才縮小（整數分之一；顏色送原始像素）→ turbojpeg（兩個編碼工人輪流）
    ↓  broadcast
 ws_server.rs  ws://127.0.0.1:7777（Origin 檢查）→ hello / status / JPEG
 tray.rs  系統列圖示（主執行緒；macOS 規定）
