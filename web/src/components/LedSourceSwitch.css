@@ -45,9 +45,19 @@
 }
 
 @media (max-width: 640px) {
-  .led-source { flex-wrap: wrap; row-gap: 6px; }
+  .led-source {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    padding: 8px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .led-source__switch { max-width: 100%; }
   .led-source__switch button { padding: 6px 9px; }
+  /* 狀態文字單獨一行、太長變「…」 */
+  .led-source__status { flex: 1 1 100%; }
+  .led-source__grow { display: none; }
 }
 @media (hover: none) and (pointer: coarse) {
-  .led-source__switch button { padding: 9px 12px; }
+  .led-source__switch button { padding: 9px 12px; min-height: 40px; }
 }

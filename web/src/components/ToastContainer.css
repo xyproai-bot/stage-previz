@@ -68,3 +68,8 @@
   from { transform: translateX(20px); opacity: 0; }
   to   { transform: translateX(0); opacity: 1; }
 }
+
+/* 手機：通知跳在畫面下面、留言面板收起來那一條的上面，左右各留 16px（電腦版不變）*/
+@media (max-width: 640px) {
+  .toast-container { left: 16px; right: 16px; bottom: calc(72px + env(safe-area-inset-bottom)); max-width: none; }
+}

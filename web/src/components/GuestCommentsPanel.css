@@ -69,11 +69,73 @@
 /* iPad 直放 / 手機：留言搬到舞台下面（最多半個畫面），可以收起來 */
 @media (max-width: 1024px) {
   .share-center { flex-direction: column; }
-  .share-center > .share-stage { min-height: 52vh; }
-  .share-comments { flex: 0 1 auto; max-height: 46vh; border-left: none; border-top: 1px solid var(--border); }
+  .share-center > .share-stage { min-height: 52vh; min-height: 52dvh; }
+  .share-comments { flex: 0 1 auto; max-height: 46vh; max-height: 46dvh; border-left: none; border-top: 1px solid var(--border); }
   .share-comments.is-collapsed { flex: 0 0 auto; }
+  .share-comments { padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
 }
 @media (min-width: 1025px) {
   .share-comments__head { cursor: default; pointer-events: none; }
   .share-comments__chev { display: none; }
+}
+
+/* 觸控：留言面板上的字小於 16px 的欄位（名字、留言）→ 16px（iPhone 才不會一點進去整頁被放大，見 global.css）；按鈕至少 40px */
+@media (hover: none) and (pointer: coarse) {
+  .share-comments__head { min-height: 48px; }
+  .share-comments__name-row input { min-height: 44px; }
+  .share-comments__compose textarea { min-height: 80px; }
+}
+
+/* 手機：留言變成從底下拉上來的面板（收起來只剩最上面一條；舞台吃滿剩下的高度） */
+@media (max-width: 640px) {
+  .share-center { position: relative; padding-bottom: calc(52px + env(safe-area-inset-bottom)); }
+  .share-center > .share-stage { min-height: 0; }
+  .share-comments {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    flex: none;
+    max-height: 74%;
+    overflow: hidden;
+    border-top: 1px solid var(--border-strong);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.5);
+    padding: 0 0 env(safe-area-inset-bottom);
+  }
+  /* 螢幕鍵盤跳出來時整頁高度已經縮成「看得到的高度」（--vvh），面板最高是它的 74%，輸入框在面板上半部，不會被蓋住；
+     鍵盤開著時最上面那條先藏起來，多留點地方 */
+  html[data-keyboard='open'] .share-top { display: none; }
+  .share-comments__head {
+    position: relative;
+    flex: none;
+    height: 52px;
+    min-height: 52px;
+    padding: 6px 16px 0;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    border-radius: 16px 16px 0 0;
+    font-size: 14px;
+  }
+  /* 小橫條：告訴人這裡可以拉開 */
+  .share-comments__head::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--border-strong);
+  }
+  .share-comments.is-collapsed .share-comments__head { border-bottom: none; }
+  .share-comments__title { font-size: 14px; }
+  .share-comments__body {
+    padding: 12px 16px 24px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    overscroll-behavior: contain;
+  }
 }

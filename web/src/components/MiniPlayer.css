@@ -328,13 +328,16 @@
 @media (hover: none) and (pointer: coarse) {
   /* 觸控的按鈕比較大 → 審片的小播放器寬一點，一排放得下播放、逐格、時間、速度、循環、聲音 */
   .mini-player.has-review:not(.is-collapsed) { width: min(396px, calc(100% - 16px)); }
-  .mini-player__btn { min-width: 36px; height: 36px; }
-  .mini-player__btn--play { min-width: 36px; height: 36px; }
+  .mini-player__btn { min-width: 40px; height: 40px; }
+  .mini-player__btn--play { min-width: 40px; height: 40px; }
+  .mini-player__head { min-height: 44px; }
   .mini-player__pin { width: 12px; height: 12px; top: -6px; }
+  /* 時間軸上的留言點很小（12px）：看起來不變，手指點的範圍擴成 40px */
+  .mini-player__pin::after { content: ''; position: absolute; inset: -14px; }
   /* 手指：區段那一條高一點才點得到、拖得到 */
   .mini-player__lane { height: 20px; }
   .mini-player__bar { top: 3px; height: 14px; }
-  .mini-player__chip-x { width: 30px; height: 30px; }
+  .mini-player__chip-x { width: 40px; height: 40px; }
 }
 
 /* 「比較」按鈕的字不換行；手機上收起來的小播放器寬一點，放得下播放、時間、比較、展開 */

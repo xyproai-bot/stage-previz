@@ -189,3 +189,30 @@ select option:disabled {
   vertical-align: calc(0.35em - 6px);
   flex-shrink: 0;
 }
+
+/* ─────────────────────────────────────────
+   手機 / iPad（只在窄螢幕或觸控裝置生效，電腦版長一樣）
+   - 一整頁高的版面用 dvh（網址列縮起來、放下來時跟著變），不用會被網址列蓋住的 vh
+   - 旋轉螢幕時 iOS 會自己把字放大，關掉
+   - 手指點的東西不要等 300 毫秒、不要連點兩下變放大
+   - 輸入欄位字小於 16px，iPhone 一點進去整頁會被放大 → 16px
+   - 頁面不會左右晃：超出的東西在裡面自己捲（橫向捲動的清單）或被切掉，不撐開整頁
+   ───────────────────────────────────────── */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+/* --vvh：看得到的高度（lib/viewportVars.ts 會依螢幕鍵盤、網址列更新）；沒更新時 = 整個視窗高 */
+:root { --vvh: 100vh; --vv-top: 0px; }
+@supports (height: 100dvh) { :root { --vvh: 100dvh; } }
+.empty-state,
+.page-stub { min-height: 100vh; min-height: 100dvh; }
+@media (max-width: 1024px) {
+  /* 只有導演頁、分享頁、登入、我的專案（整頁固定的版面）：管理頁的寬表格照舊可以左右捲 */
+  :is(html, body):has(.preview, .share, .login-page, .my-projects) { overflow-x: clip; }
+}
+@media (hover: none) and (pointer: coarse) {
+  button, a, summary, label, [role='button'], [role='tab'], select { touch-action: manipulation; }
+  /* 導演頁、分享頁是整頁固定的版面：手指往下滑不要觸發「下拉重新整理」（3D 畫面、留言捲到頭時會誤觸） */
+  html:has(.preview), html:has(.share) { overscroll-behavior-y: none; }
+  :is(.preview, .share, .login-page, .my-projects) :is(input:not([type='checkbox'], [type='radio'], [type='range']), textarea, select) {
+    font-size: 16px;
+  }
+}

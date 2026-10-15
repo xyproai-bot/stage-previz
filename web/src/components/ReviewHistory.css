@@ -23,6 +23,9 @@
   text-align: left;
 }
 .review-history__toggle:hover { color: var(--text); }
+@media (hover: none) and (pointer: coarse) {
+  .review-history__toggle { min-height: 40px; }
+}
 .review-history__msg {
   padding: 4px 10px 10px;
   color: var(--text-muted);

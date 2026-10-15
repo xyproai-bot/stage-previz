@@ -248,8 +248,10 @@
   .att-card { max-width: 100%; }
 }
 @media (hover: none) and (pointer: coarse) {
-  .att-tray__remove { width: 26px; height: 26px; }
-  .att-add { min-height: 36px; padding: 6px 12px; }
+  .att-tray__remove { width: 28px; height: 28px; }
+  /* 縮圖上的 ✕：看起來 28px，點的範圍擴大到 40px */
+  .att-tray__remove::after { content: ''; position: absolute; inset: -6px; }
+  .att-add { min-height: 40px; padding: 6px 12px; }
 }
 
 /* 回覆 / 修改框：「圖片」按鈕靠左，取消 / 送出靠右 */

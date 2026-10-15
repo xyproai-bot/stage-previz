@@ -7,7 +7,7 @@ import Icon from './Icon';
 import { formatClock, parkVideo, type LocalVideoState } from '../lib/localVideo';
 import type { SongComment } from '../lib/api';
 import type { CompareOption } from '../lib/abCompare';
-import type { ReviewSession } from '../lib/review/useReviewSession';
+import { isTouchDevice, type ReviewSession } from '../lib/review/useReviewSession';
 import { PLAYBACK_RATES, formatRange, formatTimecode, rateLabel } from '../lib/review/timecode';
 import './MiniPlayer.css';
 
@@ -43,6 +43,8 @@ interface Props {
   detail?: string;
   /** 記住位置 / 收起來（每個頁面一個） */
   storageKey: string;
+  /** 手機、iPad（觸控）上沒自己展開過就先收起來（審片頁、分享頁：展開的小視窗會蓋掉大半個 3D 畫面） */
+  collapseOnTouch?: boolean;
   /** 掛在影片時間上的留言 → 時間軸上的小點（區段 → 一條） */
   comments?: SongComment[];
   onCommentPinClick?: (c: SongComment) => void;
@@ -92,7 +94,7 @@ const hasRange = (c: SongComment) => c.timeEnd != null && c.timeEnd > c.time;
  * 有 review → 多了逐格、速度、時間碼、區段（拖時間軸上面那一條，或按 I / O）、畫記。
  */
 export default function MiniPlayer({
-  player, label, detail, storageKey, comments, onCommentPinClick, onAddCommentAtTime, onRetry, extra, compare, review,
+  player, label, detail, storageKey, collapseOnTouch = false, comments, onCommentPinClick, onAddCommentAtTime, onRetry, extra, compare, review,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
@@ -136,13 +138,14 @@ export default function MiniPlayer({
     const el = rootRef.current;
     const parent = el?.offsetParent as HTMLElement | null;
     if (!parent) return;
-    const measure = () => setAutoCollapsed(parent.clientHeight < 400 || parent.clientWidth < 520);
+    // 審片頁、分享頁在手機、iPad（觸控）上先收起來：展開的小視窗有 400 多 px 寬、300 多 px 高，會蓋掉大半個 3D 畫面；要看影片再按展開
+    const measure = () => setAutoCollapsed(parent.clientHeight < 400 || parent.clientWidth < 520 || (collapseOnTouch && isTouchDevice()));
     measure();
     // 沒自己按過展開 / 收起 → 畫面變矮（iPad 橫放、留言移到下面）就自動收起來，變大再打開
     const ro = new ResizeObserver(() => { measure(); keepInside(); });
     ro.observe(parent);
     return () => ro.disconnect();
-  }, [keepInside]);
+  }, [keepInside, collapseOnTouch]);
   useLayoutEffect(() => { keepInside(); }, [collapsed, keepInside]);
 
   // 拖標題列移位置

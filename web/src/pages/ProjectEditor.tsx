@@ -49,6 +49,7 @@ import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBefor
 import { songTitle } from '../lib/songCode';
 import { songCueCounts } from '../lib/editorSongs';
 import Icon from '../components/Icon';
+import PhoneEditNote from '../components/PhoneEditNote';
 import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
@@ -997,6 +998,9 @@ export default function ProjectEditor() {
           />
         </div>
       </header>
+
+      {/* 手機：編輯請用電腦或平板橫放（只有手機寬度才看得到） */}
+      <PhoneEditNote />
 
       <div className="editor-body">
         {/* Left — songs */}

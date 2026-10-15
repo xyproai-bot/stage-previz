@@ -81,3 +81,6 @@
   padding: 12px 22px;
   border-top: 1px solid var(--border);
 }
+
+/* 手機 / iPad：高度用 dvh（電腦版不變）*/
+.help-modal { max-height: 88vh; max-height: 88dvh; }

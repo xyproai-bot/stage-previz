@@ -198,8 +198,23 @@
   .notif__body { padding-bottom: env(safe-area-inset-bottom); }
 }
 
-/* 觸控裝置：按鈕大一點 */
+/* 觸控裝置：按鈕大一點（至少 40px） */
 @media (hover: none) and (pointer: coarse) {
   .notif__bell { width: 40px; height: 40px; }
-  .notif__mark-all { padding: 8px 10px; }
+  .notif__mark-all { padding: 8px 10px; min-height: 40px; }
+  .notif__close { width: 40px; height: 40px; }
+  .notif__item { min-height: 56px; }
+}
+/* iPad：下拉的面板高度照真的看得到的高度算（不用會被網址列蓋住的 vh） */
+@media (min-width: 641px) {
+  .notif__panel { max-height: min(70vh, 560px); max-height: min(70dvh, 560px); }
+}
+/* 手機：面板左右、下面讓開瀏海和 Home 橫條 */
+@media (max-width: 640px) {
+  .notif__head,
+  .notif__item {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .notif__group-label { padding-left: max(16px, env(safe-area-inset-left)); }
 }

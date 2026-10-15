@@ -628,3 +628,17 @@
   flex-shrink: 0;
 }
 .ndi-dot--on { background: currentColor; }
+
+/* ─── 手機 / iPad（觸控）：3D 工具列的每個按鈕至少 40px，字一定一行（寬度不夠由 lib/toolbarLayout.ts 拿掉字、收進「更多」，不會把字擠成直的）─── */
+@media (hover: none) and (pointer: coarse) {
+  .stage-scene__toolbar { padding: 4px; gap: 2px; }
+  .stage-scene__toolbar .tool { height: 40px; padding: 0 12px; white-space: nowrap; writing-mode: horizontal-tb; }
+  .stage-scene__toolbar .tool.tool--icon { width: 40px; padding: 0; }
+  .stage-scene__toolbar .tool.tool--chevron { width: 28px; margin-left: -6px; }
+  .stage-scene__toolbar .tool-sep { height: 20px; }
+  .stage-scene__toolbar .ndi-pill { min-height: 40px; display: inline-flex; align-items: center; }
+  .tb-menu__item { min-height: 44px; }
+}
+@media (max-width: 640px) {
+  .stage-scene__toolbar-row { top: 8px; left: 8px; right: 8px; }
+}

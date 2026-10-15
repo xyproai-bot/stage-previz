@@ -1,0 +1,34 @@
+/* 管理頁在手機上的小提醒：只有手機寬度才顯示（電腦、iPad 完全看不到） */
+.phone-edit-note { display: none; }
+
+@media (max-width: 640px) {
+  .phone-edit-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    padding: 6px 8px 6px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+    background: var(--warn-dim);
+    border-bottom: 1px solid rgba(255, 170, 68, 0.35);
+    color: var(--warn);
+    font-size: 12.5px;
+    line-height: 1.45;
+  }
+  .phone-edit-note > .ui-icon { flex-shrink: 0; }
+  .phone-edit-note__text { flex: 1; min-width: 0; }
+  .phone-edit-note__close {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    color: var(--warn);
+  }
+}

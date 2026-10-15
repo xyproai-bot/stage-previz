@@ -55,6 +55,9 @@ export default function Login() {
               placeholder="例：K7MNP3XQ2R"
               autoFocus
               autoComplete="off"
+              autoCapitalize="characters"
+              autoCorrect="off"
+              enterKeyHint="go"
               spellCheck={false}
               className="login-card__code"
             />

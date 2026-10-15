@@ -369,7 +369,10 @@ export default function Share() {
     const next = dir > 0 ? (idx < 0 ? 0 : Math.min(idx + 1, cues.length - 1)) : (idx <= 0 ? 0 : idx - 1);
     selectCue(cues[next]);
   }, [cues, selectedCueId, selectCue]);
+  // 手機：留言面板平常收在底下；要打字（畫好記號、「在 0:12 加留言」）時請它打開
+  const [openNonce, setOpenNonce] = useState(0);
   const focusComposer = useCallback(() => {
+    setOpenNonce(n => n + 1);
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const el = composerRef.current;
       if (!el) return;
@@ -442,7 +445,7 @@ export default function Share() {
         <span className="share-top__title">{data.project.name}</span>
         <span className="grow" />
         {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
-        <a className="share-top__help" href={helpUrl()} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
+        <a className="share-top__help" href={helpUrl()} target="_blank" rel="noopener" title="使用說明" aria-label="使用說明"><Icon icon={BookOpen} /><span className="share-top__help-label"> 使用說明</span></a>
         <span className="share-top__hint">{data.allowComments ? '公開預覽 · 可以留言' : '公開預覽 · 唯讀'}</span>
       </header>
 
@@ -579,6 +582,7 @@ export default function Share() {
                   label={selectedVersion.label}
                   detail={versionByline(selectedVersion) || selectedVersion.title}
                   storageKey="sp_mini_player:share"
+                  collapseOnTouch
                   onRetry={retryVersion}
                   comments={allowComments ? guestComments : undefined}
                   onAddCommentAtTime={allowComments ? (t) => { setPendingCommentTime(t); focusComposer(); } : undefined}
@@ -672,6 +676,7 @@ export default function Share() {
             currentTime={local.time}
             onAuthError={onShareFetchError}
             onDisabled={() => { setData(d => (d ? { ...d, allowComments: false } : d)); toast.info('製作把這個連結的留言關掉了'); }}
+            openNonce={openNonce}
           />
         )}
         </div>

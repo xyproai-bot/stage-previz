@@ -99,3 +99,22 @@
   text-align: center;
   font-size: 11.5px;
 }
+
+/* ─── 手機 / iPad：整頁高度照看得到的高度（dvh）、讓開瀏海 / Home 橫條、輸入欄位和按鈕夠大（電腦版不變）─── */
+.login-page { min-height: 100dvh; }
+@media (max-width: 640px) {
+  .login-page {
+    align-items: flex-start;
+    padding: 16px;
+    padding-top: max(32px, calc(env(safe-area-inset-top) + 16px));
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+  }
+  .login-card { padding: 28px 20px; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .login-card input,
+  .login-card select { min-height: 48px; }
+  .login-card .btn { min-height: 48px; }
+}

@@ -163,3 +163,9 @@
   font-size: 10.5px;
   color: var(--text-muted);
 }
+
+/* 手機 / iPad：高度照看得到的高度（dvh）、讓開 Home 橫條（電腦版不變）*/
+.activity-drawer { height: 100vh; height: 100dvh; padding-bottom: env(safe-area-inset-bottom); }
+@media (hover: none) and (pointer: coarse) {
+  .activity-drawer__close, .activity-drawer__refresh { min-width: 40px; min-height: 40px; }
+}

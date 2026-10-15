@@ -146,13 +146,29 @@
 .vbar__check-text span:first-child { color: inherit; font-weight: 600; }
 .vbar__check .help-link { flex-shrink: 0; }
 
+/* 手機：版本一排左右滑（右邊是「加影片」），說明寫在下一行；整條只佔兩三行高，舞台才有地方 */
 @media (max-width: 640px) {
-  .vbar { flex-wrap: wrap; row-gap: 6px; }
-  .vbar__chips { max-width: 100%; order: 3; flex-basis: 100%; }
-  .vbar__info { order: 4; flex-basis: 100%; }
+  .vbar {
+    flex-wrap: wrap;
+    row-gap: 6px;
+    min-height: 0;
+    padding: 8px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .vbar__title,
+  .vbar__grow { display: none; }
+  .vbar__chips { order: 1; flex: 1 1 0; min-width: 0; max-width: none; }
+  .vbar__add,
+  .vbar > .vbar__btn { order: 2; }
+  .vbar__new { order: 3; flex: 1 1 100%; justify-content: space-between; }
+  .vbar__info { order: 4; flex: 1 1 100%; }
+  .vbar__jobs { padding: 0 16px 8px; }
+  .vbar__check { margin: 0 16px 8px; }
 }
 @media (hover: none) and (pointer: coarse) {
-  .vbar__chip { padding: 5px 11px; }
-  .vbar__btn { height: 34px; padding: 0 10px; }
-  .vbar__new-btn { height: 30px; padding: 0 12px; }
+  .vbar__chip { padding: 5px 11px; min-height: 44px; justify-content: center; }
+  .vbar__btn { height: 40px; padding: 0 12px; }
+  .vbar__new { min-height: 44px; }
+  .vbar__new-btn { height: 40px; padding: 0 14px; }
 }

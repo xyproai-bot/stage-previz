@@ -563,3 +563,89 @@
 }
 .share-setlist__thumb > span { display: inline-flex; color: var(--text-dim); }
 .share-loading { flex-direction: row; }
+
+/* ═════════════════════════════════════════════
+   手機 / iPad（分享連結頁）
+   只放在窄螢幕（≤1024）、手機寬度（≤640）、觸控裝置這幾個條件裡，電腦版（≥1200）完全不動。
+   --vvh：真正看得到的高度（lib/viewportVars.ts；螢幕鍵盤跳出來、網址列縮起來都會變），沒有的話退回 100dvh。
+   ═════════════════════════════════════════════ */
+.share-loading,
+.share-error,
+.share-pwd { min-height: 100vh; min-height: 100dvh; }
+
+@media (max-width: 1024px) {
+  .share {
+    inset: auto;
+    top: var(--vv-top, 0px);
+    left: 0;
+    right: 0;
+    height: var(--vvh, 100dvh);
+  }
+  .share-top {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    padding-top: max(10px, env(safe-area-inset-top));
+  }
+  .share-cuebar {
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-right: max(14px, env(safe-area-inset-right));
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+}
+
+@media (hover: none) and (pointer: coarse) {
+  /* 分享頁不載入導演頁的樣式表（Preview.css），小按鈕、連結的觸控大小這裡自己寫一份 */
+  .share .btn--sm { min-height: 40px; min-width: 40px; }
+  .share .link-btn { min-height: 40px; display: inline-flex; align-items: center; }
+  .share .help-link { width: 40px; height: 40px; }
+  .share-top__help { min-height: 40px; display: inline-flex; align-items: center; margin: -8px 0; }
+  .share-songs__item { min-height: 40px; }
+  .share-cuebar__cue { min-height: 44px; }
+  .share-player__btn { min-width: 40px; height: 40px; }
+  .share-pwd input { min-height: 44px; }
+  .share-pwd .btn { min-height: 44px; }
+}
+
+@media (max-width: 640px) {
+  /* 密碼頁：輸入框跟著畫面寬度縮（原本最小 240px，加按鈕會超出 390px 的手機） */
+  .share-pwd form { width: 100%; max-width: 360px; }
+  .share-pwd input { min-width: 0; flex: 1 1 auto; }
+  .share-top { gap: 10px; padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: 8px; }
+  /* 「STAGE PREVIZ」不換兩行；專案名稱吃剩下的寬度，太長變「…」；說明只留圖示（點了開新分頁） */
+  .share-top__brand { white-space: nowrap; flex-shrink: 0; font-size: 11px; letter-spacing: 0.08em; }
+  .share-top__title { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .share-top .grow { display: none; }
+  .share-top__help-label { display: none; }
+  .share-top__help {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 40px;
+    height: 40px;
+    margin: -6px 0;
+    padding: 0;
+  }
+  .share-side {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .share-songs { padding: 8px 16px; }
+  .share-setlist { padding-left: 16px; padding-right: 16px; }
+  .share-setlist__remove { top: 4px; right: 0; width: 40px; height: 40px; }
+  .share-cuebar {
+    min-height: 60px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .share-overlay { width: min(440px, calc(100% - 32px)); }
+}
+
+/* 手機橫放（寬 641～1024、高度矮）：留言移回右邊一欄，3D 畫面排最前面吃滿高度；來源切換、版本列在下面（往下捲才看到） */
+@media (max-height: 520px) and (orientation: landscape) and (max-width: 1024px) {
+  .share-center { flex-direction: row; }
+  .share-center > .share-stage { min-height: 0; overflow-y: auto; }
+  .share-stage__scene { order: -2; flex: 0 0 auto; height: calc(var(--vvh, 100dvh) - 106px); min-height: 200px; }
+  .share-cuebar { order: -1; }
+  .share-comments { flex: 0 0 300px; max-height: none; border-top: none; border-left: 1px solid var(--border); }
+}

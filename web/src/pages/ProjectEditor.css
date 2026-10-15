@@ -1485,3 +1485,8 @@
   .editor-topbar__right { gap: 6px; }
 }
 
+
+/* 手機 / iPad：整個編輯頁的高度用 dvh（網址列縮起來、放下來時跟著變，底下不會被切掉；電腦版不變）*/
+@media (max-width: 1024px) {
+  .editor { height: 100vh; height: var(--vvh, 100dvh); }
+}

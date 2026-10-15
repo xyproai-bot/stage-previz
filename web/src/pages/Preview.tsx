@@ -11,6 +11,7 @@ import { CommentFilterBar, ReviewCompose, readFollow, saveFollow, type StatusFil
 import ExportCommentsDialog from '../components/ExportCommentsDialog';
 import { isTouchDevice, revealStage, useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
 import { playheadCommentId } from '../lib/review/playhead';
+import { isPhoneLayout } from '../lib/viewportVars';
 import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
@@ -56,8 +57,8 @@ import {
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, CircleHelp, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin, Pause, Play,
-  Plus, RefreshCw, Square, X,
+  ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleHelp, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin,
+  MessageSquareText, Pause, Play, Plus, RefreshCw, Square, X,
 } from 'lucide-react';
 import './Preview.css';
 
@@ -895,6 +896,8 @@ function SongDetail({
   // ── 審片：播放快捷鍵（空白鍵、J / K / L、, / .、I / O、Shift+J / K 切 cue）、區段、打開留言、畫記（lib/review/useReviewSession.ts）──
   const viewApiRef = useRef<StageViewApi | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  // 手機（窄螢幕）：留言區是從底下拉上來的面板（CSS 的 .song-detail__side）；iPad、電腦這個狀態沒作用
+  const [sheetOpen, setSheetOpen] = useState(false);
   const cueStep = useCallback((dir: 1 | -1) => {
     if (!cues.length) return;
     const idx = cues.findIndex(c => c.id === selectedCueId);
@@ -904,13 +907,23 @@ function SongDetail({
     selectCueByUser(cues[next]);
   }, [cues, selectedCueId, selectCueByUser]);
   const focusComposer = useCallback(() => {
-    requestAnimationFrame(() => {
+    setSheetOpen(true);  // 手機：先把留言面板拉上來，輸入框才看得到
+    requestAnimationFrame(() => requestAnimationFrame(() => {
       const el = composerRef.current;
       if (!el) return;
       el.focus({ preventScroll: true });
       el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    });
+    }));
   }, []);
+  // 「在 0:12 加留言」、3D 留言點了位置、通知點進來要看某一則 → 手機把留言面板拉上來
+  useEffect(() => {
+    if (pendingCommentTime !== null || pendingCommentAnchor) setSheetOpen(true);
+  }, [pendingCommentTime, pendingCommentAnchor]);
+  useEffect(() => {
+    if (focusComment) setSheetOpen(true);
+  }, [focusComment]);
+  // 換歌：面板收回去
+  useEffect(() => { setSheetOpen(false); }, [song.id]);
   const session = useReviewSession({
     player, videoActive: videoMode, resetKey: song.id, viewApiRef,
     versions: { items: versions.items, currentKey: selected?.key ?? null, select: versions.select },
@@ -925,6 +938,8 @@ function SongDetail({
   const stageRef = useRef<HTMLDivElement>(null);
   const openComment = useCallback((c: SongComment) => {
     void session.open(c);
+    // 手機：留言面板收下去，才看得到跳過去的那一格、3D 視角和畫記
+    if (isPhoneLayout()) setSheetOpen(false);
     revealStage(stageRef.current);
     const el = document.getElementById(`comment-${c.id}`);
     if (el) {
@@ -936,7 +951,8 @@ function SongDetail({
   const handlePinClick = openComment;
   const startDraw = useCallback(() => {
     if (!session.draft.start()) return;
-    // 手機、iPad：先把 3D 畫面捲回來畫（不要跳鍵盤）；電腦：留言框拿到焦點，畫好直接打字
+    // 手機、iPad：先把 3D 畫面捲回來畫（不要跳鍵盤；手機的留言面板也收下去）；電腦：留言框拿到焦點，畫好直接打字
+    if (isPhoneLayout()) setSheetOpen(false);
     if (isTouchDevice()) revealStage(stageRef.current);
     else focusComposer();
   }, [session.draft, focusComposer]);
@@ -1132,6 +1148,7 @@ function SongDetail({
                   label={selected.label}
                   detail={versionByline(selected) || selected.title}
                   storageKey="sp_mini_player:preview"
+                  collapseOnTouch
                   comments={comments}
                   onCommentPinClick={handlePinClick}
                   onAddCommentAtTime={va.guard((t: number) => setPendingCommentTime(t))}
@@ -1175,7 +1192,22 @@ function SongDetail({
           </div>
         </main>
 
-        <aside className="song-detail__side">
+        {/* 手機：留言面板拉開時，上面其餘的畫面壓暗，點一下收回去（電腦、iPad 這個不顯示） */}
+        {sheetOpen && <div className="song-detail__scrim" onClick={() => setSheetOpen(false)} aria-hidden="true" />}
+        <aside className={'song-detail__side' + (sheetOpen ? ' is-open' : '')}>
+          {/* 手機：面板最上面一條（收起來時只看得到這條）；電腦、iPad 不顯示 */}
+          <button
+            type="button"
+            className="song-detail__sheet-handle"
+            onClick={() => setSheetOpen(o => !o)}
+            aria-expanded={sheetOpen}
+            title={sheetOpen ? '收起留言' : '打開留言'}
+          >
+            <Icon icon={MessageSquareText} size="md" />
+            <span className="song-detail__sheet-title">留言（{rootComments.length}）</span>
+            <span className="song-detail__sheet-sub">{sheetOpen ? '收起' : '打開 / 寫留言'}</span>
+            <Icon icon={sheetOpen ? ChevronDown : ChevronUp} size="md" className="song-detail__sheet-chev" />
+          </button>
           <div className="song-detail__history">
             <ReviewHistory
               projectId={projectId}
@@ -1368,14 +1400,15 @@ function SongComments({
   useEffect(() => {
     if (pendingTime === null) return;
     setAttachTime(pendingTime);
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    // 兩個影格再 focus：手機的留言面板要先拉開（Preview 的 sheetOpen），輸入框才聚焦得到
+    requestAnimationFrame(() => requestAnimationFrame(() => textareaRef.current?.focus()));
     onConsumedPendingTime();
   }, [pendingTime, onConsumedPendingTime]);
 
   useEffect(() => {
     if (pendingAnchor === null) return;
     setAttachAnchor(pendingAnchor);
-    requestAnimationFrame(() => textareaRef.current?.focus());
+    requestAnimationFrame(() => requestAnimationFrame(() => textareaRef.current?.focus()));
     onConsumedPendingAnchor();
   }, [pendingAnchor, onConsumedPendingAnchor]);
 
@@ -1627,7 +1660,14 @@ function SongComments({
           <AttachmentTray draft={draft} />
           <div className="att-compose-row">
             <AttachButton draft={draft} disabled={readOnly} />
-            <button className="btn btn--primary btn--sm" onClick={handlePost} disabled={posting || draft.busy || (!text.trim() && !draft.ids.length)} {...ro()}>
+            <button
+              className="btn btn--primary btn--sm"
+              onClick={handlePost}
+              // 手機、iPad：按「送出」不要讓輸入框失去焦點（鍵盤一收、版面一動，這一下就點歪了）
+              onMouseDown={isTouchDevice() ? (e) => e.preventDefault() : undefined}
+              disabled={posting || draft.busy || (!text.trim() && !draft.ids.length)}
+              {...ro()}
+            >
               送出
             </button>
           </div>

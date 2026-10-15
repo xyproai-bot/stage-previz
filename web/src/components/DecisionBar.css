@@ -33,11 +33,17 @@
 .decision-bar__btn--changes:hover:not(:disabled) { background: var(--warn-dim); }
 .decision-bar__btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
-/* 手機：說明換到下一行，按鈕一樣大、佔滿 */
+/* 手機：狀態和兩個按鈕擠在同一排（按鈕上已經寫了是哪一版，「決定的是 V2」那句省掉），說明換到下一行 */
 @media (max-width: 640px) {
-  .decision-bar { padding: 8px 12px; }
-  .decision-bar__hint { order: 10; flex: 1 1 100%; }
-  .decision-bar__grow { display: none; }
-  .decision-bar__btns { order: 11; flex: 1 1 100%; }
+  .decision-bar {
+    padding: 8px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .decision-bar__ver,
+  .decision-bar__grow,
+  .decision-bar > .help-link { display: none; }
+  .decision-bar__hint { order: 10; flex: 1 1 100%; font-size: 12px; }
+  .decision-bar__btns { flex: 1 1 200px; }
   .decision-bar__btns .btn { flex: 1; justify-content: center; }
 }

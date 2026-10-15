@@ -156,3 +156,27 @@
   .my-projects__user-name { display: none; }
   .my-projects__main { padding: 20px 16px 32px; }
 }
+
+/* ─── 手機 / iPad：整頁高度用 dvh、讓開瀏海 / Home 橫條、點的東西至少 40px（電腦版不變）─── */
+.my-projects { min-height: 100dvh; }
+@media (max-width: 1024px) {
+  .my-projects__top {
+    padding-top: max(10px, env(safe-area-inset-top));
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
+  }
+  .my-projects__main {
+    padding-left: max(20px, env(safe-area-inset-left));
+    padding-right: max(20px, env(safe-area-inset-right));
+    padding-bottom: max(48px, calc(env(safe-area-inset-bottom) + 24px));
+  }
+}
+@media (max-width: 640px) {
+  .my-projects__top { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); gap: 4px; }
+  .my-projects__main { padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+  .my-projects__grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (hover: none) and (pointer: coarse) {
+  .my-projects__link { display: inline-flex; align-items: center; min-height: 40px; padding: 0 8px; }
+  .my-projects__card { min-height: 48px; }
+}

@@ -890,3 +890,184 @@
   .status-board { grid-auto-rows: auto; }
   .status-col__body { flex: none; overflow: visible; }
 }
+
+/* ═════════════════════════════════════════════
+   手機 / iPad（導演頁）
+   只放在窄螢幕（≤1024）、手機寬度（≤640）、觸控裝置這幾個條件裡，電腦版（≥1200）完全不動。
+   --vvh：真正看得到的高度（lib/viewportVars.ts；螢幕鍵盤跳出來、網址列縮起來都會變），沒有的話退回 100dvh。
+   ═════════════════════════════════════════════ */
+.song-detail__sheet-handle,
+.song-detail__scrim { display: none; }
+
+/* iPad、手機：整頁照看得到的高度排；缺口（瀏覽器網址列、瀏海）讓開 */
+@media (max-width: 1024px) {
+  .preview {
+    inset: auto;
+    top: var(--vv-top, 0px);
+    left: 0;
+    right: 0;
+    height: var(--vvh, 100dvh);
+  }
+  .preview-top,
+  .song-detail__sub-top {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .preview-top { padding-top: max(8px, env(safe-area-inset-top)); }
+  .status-board { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+  .song-detail__side { padding-right: env(safe-area-inset-right); padding-bottom: env(safe-area-inset-bottom); }
+  .song-detail__cuebar {
+    padding-left: max(14px, env(safe-area-inset-left));
+    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    height: auto;
+    min-height: 64px;
+  }
+}
+
+/* 觸控：每個要點的東西至少 40px */
+@media (hover: none) and (pointer: coarse) {
+  .preview-top__back { width: 40px; height: 40px; }
+  .song-detail__back,
+  .song-detail__step,
+  .song-detail__nav > .song-detail__step { min-height: 40px; min-width: 40px; }
+  .preview .btn--sm,
+  .share .btn--sm { min-height: 40px; }
+  .preview .link-btn,
+  .share .link-btn { min-height: 40px; display: inline-flex; align-items: center; }
+  .preview .help-link,
+  .share .help-link { width: 40px; height: 40px; }
+  .cuebar-btn { width: 44px; height: 44px; flex-shrink: 0; }
+  .cuebar-cue { min-height: 44px; }
+  /* Shift+J / K 是電腦鍵盤的快捷鍵，觸控螢幕不用顯示（「還沒有 cue」的說明是 span，照常顯示） */
+  div.cuebar-hint { display: none; }
+  .status-card__open { min-height: 48px; }
+  .song-comments__filters select { min-height: 40px; }
+}
+
+/* 手機：舞台吃滿剩下的高度，留言變成從底下拉上來的面板 */
+@media (max-width: 640px) {
+  .song-detail { --sheet-peek: 52px; }
+  .preview-top {
+    gap: 8px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .song-detail__sub-top {
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .status-board { padding: 16px; padding-left: max(16px, env(safe-area-inset-left)); padding-right: max(16px, env(safe-area-inset-right)); }
+
+  .song-detail__body {
+    position: relative;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    overflow: hidden;
+  }
+  /* 收起來時面板只露出最上面那一條，主要畫面底下留出那條的位置（cue 列才不會被蓋住） */
+  .song-detail__main { padding-bottom: calc(var(--sheet-peek) + env(safe-area-inset-bottom)); }
+  .song-detail__cuebar {
+    padding: 8px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    min-height: 60px;
+  }
+
+  .song-detail__scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 35;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  .song-detail__side {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    height: 74%;
+    padding: 0 0 env(safe-area-inset-bottom);
+    border-left: none;
+    border-top: none;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -1px 0 var(--border-strong), 0 -12px 32px rgba(0, 0, 0, 0.5);
+    overscroll-behavior: contain;
+    /* 收起來：往下推到只剩最上面那一條 */
+    transform: translateY(calc(100% - var(--sheet-peek) - env(safe-area-inset-bottom)));
+    transition: transform 0.22s ease;
+  }
+  .song-detail__side.is-open { transform: none; }
+  /* 螢幕鍵盤跳出來時整頁高度已經縮成「看得到的高度」（--vvh），面板高度是它的 74%，輸入框在面板最上面，不會被蓋住；
+     鍵盤開著時上面兩條也先藏起來，多留點地方 */
+  html[data-keyboard='open'] .preview-top,
+  html[data-keyboard='open'] .song-detail__sub-top { display: none; }
+  /* 寫留言的框放在面板最上面（打開就看得到、不用先捲過一排篩選），下面才是留言清單 */
+  .song-comments > .song-comments__compose { order: -1; }
+  /* 收起來時裡面的東西不能被 Tab 到、也不給讀螢幕的人念 */
+  .song-detail__side:not(.is-open) > :not(.song-detail__sheet-handle) {
+    visibility: hidden;
+    transition: visibility 0s linear 0.22s;
+  }
+  .song-detail__sheet-handle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: sticky;
+    top: 0;
+    z-index: 3;
+    width: 100%;
+    height: var(--sheet-peek);
+    min-height: var(--sheet-peek);
+    padding: 6px 16px 0;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+    background: var(--surface-1);
+    border: none;
+    border-bottom: 1px solid var(--border);
+    border-radius: 16px 16px 0 0;
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 600;
+    text-align: left;
+  }
+  /* 小橫條：告訴人這裡可以拉開 */
+  .song-detail__sheet-handle::before {
+    content: '';
+    position: absolute;
+    top: 6px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--border-strong);
+  }
+  .song-detail__sheet-sub { color: var(--text-muted); font-size: 12px; font-weight: 400; }
+  .song-detail__sheet-chev { margin-left: auto; color: var(--text-dim); }
+  .song-comments { padding: 14px 16px 24px; }
+  .song-detail__history { padding: 12px 16px 0; }
+}
+
+/* 手機橫放（高度很矮）：上面兩條縮小一點，舞台才有地方 */
+@media (max-height: 500px) and (orientation: landscape) and (max-width: 1024px) {
+  .preview-top { padding-top: max(4px, env(safe-area-inset-top)); padding-bottom: 4px; }
+  .song-detail__sub-top { padding-top: 4px; padding-bottom: 4px; }
+  .song-detail__cuebar { min-height: 52px; padding-top: 4px; padding-bottom: max(4px, env(safe-area-inset-bottom)); }
+}
+
+/* 手機橫放（寬 641～1024、高度矮）：留言移回右邊一欄，舞台排最前面吃滿高度；決定列、版本列在舞台下面（往下捲才看到） */
+@media (max-height: 520px) and (orientation: landscape) and (max-width: 1024px) {
+  .song-detail__body {
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .song-detail__side { border-left: 1px solid var(--border); border-top: none; }
+  .song-detail__main { overflow-y: auto; }
+  .song-detail__stage {
+    order: -1;
+    flex: 0 0 auto;
+    height: calc(var(--vvh, 100dvh) - 100px);
+    min-height: 220px;
+  }
+}

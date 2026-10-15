@@ -16,6 +16,7 @@ import {
   type GuestComment, type GuestError,
 } from '../lib/review/guestApi';
 import { isTouchDevice, type ReviewSession } from '../lib/review/useReviewSession';
+import { isPhoneLayout } from '../lib/viewportVars';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { toast } from '../lib/toast';
 import { AttachButton, AttachmentDropZone, AttachmentTray } from './CommentAttachments';
@@ -52,11 +53,13 @@ interface Props {
   onAuthError: (e: unknown) => void;
   /** 製作把留言關掉了（403） */
   onDisabled: () => void;
+  /** 數字變大 = 頁面要這個面板打開（手機的面板預設收起來；畫好記號回到留言框時用） */
+  openNonce?: number;
 }
 
 export default function GuestCommentsPanel({
   shareRef, accessToken, songId, session, videoActive, playing, videoId, activeId, onOpen, onStartDraw, composerRef,
-  pendingTime, onConsumedPendingTime, onComments, currentTime, onAuthError, onDisabled,
+  pendingTime, onConsumedPendingTime, onComments, currentTime, onAuthError, onDisabled, openNonce = 0,
 }: Props) {
   const touch = isTouchDevice();
   const [list, setList] = useState<SongComment[] | null>(null);
@@ -72,8 +75,8 @@ export default function GuestCommentsPanel({
   const [status, setStatus] = useState<StatusFilter>('all');
   const [follow, setFollowState] = useState(readFollow);
   const setFollow = (on: boolean) => { setFollowState(on); saveFollow(on); };
-  // 手機 / iPad：可以收起來，舞台大一點
-  const [collapsed, setCollapsed] = useState(false);
+  // 手機 / iPad：可以收起來，舞台大一點。手機（窄螢幕）是從底下拉上來的面板，一開始收起來，舞台一進來就看得到
+  const [collapsed, setCollapsed] = useState(() => isPhoneLayout());
 
   // 頁面傳進來的 callback 每次 render 都是新的 → 用 ref 接（不然讀留言的 effect 會一直重跑、打到一半的字被清掉）
   const cbRef = useRef({ onComments, onAuthError, onDisabled });
@@ -113,7 +116,18 @@ export default function GuestCommentsPanel({
     setCollapsed(false);
     onConsumedPendingTime();
   }, [pendingTime, onConsumedPendingTime]);
-  useEffect(() => { if (session.draft.active) setCollapsed(false); }, [session.draft.active]);
+  // 開始畫記：iPad 把面板打開（邊畫邊寫說明）；手機要看著舞台畫，面板先收起來，畫好才拉上來（頁面送 openNonce）
+  useEffect(() => { if (session.draft.active && !isPhoneLayout()) setCollapsed(false); }, [session.draft.active]);
+  useEffect(() => { if (openNonce > 0) setCollapsed(false); }, [openNonce]);
+  // 手機：點一則留言 → 面板收下去，才看得到跳過去的那一格、3D 視角和畫記
+  const openThread = useCallback((c: SongComment) => {
+    if (isPhoneLayout()) setCollapsed(true);
+    onOpen(c);
+  }, [onOpen]);
+  const startDraw = useCallback(() => {
+    if (isPhoneLayout()) setCollapsed(true);
+    onStartDraw();
+  }, [onStartDraw]);
 
   function saveName() {
     const n = tidyGuestName(nameDraft);
@@ -213,7 +227,7 @@ export default function GuestCommentsPanel({
               attachTime={videoActive ? attachTime : null}
               onClearTime={() => setAttachTime(null)}
               currentTime={currentTime}
-              onStartDraw={onStartDraw}
+              onStartDraw={startDraw}
             />
             <AttachmentDropZone draft={draft}>
               <textarea
@@ -232,7 +246,14 @@ export default function GuestCommentsPanel({
             <div className="share-comments__actions">
               <AttachButton draft={draft} />
               <span className="share-comments__count">{text.length > GUEST_TEXT_MAX - 100 ? `${text.length}/${GUEST_TEXT_MAX}` : ''}</span>
-              <button type="button" className="btn btn--primary btn--sm" onClick={() => void send()} disabled={posting || draft.busy || (!text.trim() && !draft.ids.length)}>
+              <button
+                type="button"
+                className="btn btn--primary btn--sm"
+                onClick={() => void send()}
+                // 手機、iPad：按「送出」不要讓輸入框失去焦點（鍵盤一收、版面一動，這一下就點歪了）
+                onMouseDown={touch ? (e) => e.preventDefault() : undefined}
+                disabled={posting || draft.busy || (!text.trim() && !draft.ids.length)}
+              >
                 {posting ? '送出中…' : '送出'}
               </button>
             </div>
@@ -254,7 +275,7 @@ export default function GuestCommentsPanel({
               viewedVideoId={videoId}
               latest={null}
               onChange={() => {}}
-              onOpen={onOpen}
+              onOpen={openThread}
               selectedId={session.selectedId}
               activeId={activeId}
               autoScroll={follow && playing}

@@ -35,6 +35,6 @@
 .rv-export-btn { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; font-size: 12px; }
 
 @media (hover: none) and (pointer: coarse) {
-  .rv-chip { min-height: 32px; font-size: 12.5px; }
-  .rv-chip__x { width: 28px; height: 28px; }
+  .rv-chip { min-height: 40px; font-size: 12.5px; }
+  .rv-chip__x { width: 40px; height: 40px; margin: -4px -4px -4px -2px; }
 }
