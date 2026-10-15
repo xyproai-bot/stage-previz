@@ -18,12 +18,15 @@ interface Props {
   onContentOn: (on: boolean) => void;
   /** 對位圖內容的狀況（畫圖中、等 3D 載好、畫不出來）；沒事 = '' */
   contentNote: string;
+  /** 框裡對位圖內容的不透明度（0～1） */
+  contentOpacity: number;
+  onContentOpacity: (o: number) => void;
   backdrop: TemplateBackdrop;
   /** 版型畫布 */
   canvas: CanvasSize;
 }
 
-export default function LedTemplateLayers({ contentOn, onContentOn, contentNote, backdrop, canvas }: Props) {
+export default function LedTemplateLayers({ contentOn, onContentOn, contentNote, contentOpacity, onContentOpacity, backdrop, canvas }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const pic = backdrop.picture;
   const { prefs } = backdrop;
@@ -54,6 +57,21 @@ export default function LedTemplateLayers({ contentOn, onContentOn, contentNote,
         >
           <Icon icon={Grid3x3} /> 對位圖內容
         </button>
+        {contentOn && (
+          <label className="ltc__opacity" title="框裡對位圖內容的不透明度：調低就能透出下面的底圖，對著底圖排">
+            <span>框不透明度</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round(contentOpacity * 100)}
+              onChange={(e) => onContentOpacity(Number(e.target.value) / 100)}
+              aria-label="框裡對位圖內容的不透明度"
+            />
+            <output>{Math.round(contentOpacity * 100)}%</output>
+          </label>
+        )}
         {contentOn && contentNote && <span className="ltc__layers-note muted">{contentNote}</span>}
         <span className="ltc__sep" />
         <button

@@ -66,7 +66,7 @@ export interface LayerDraw {
   dpr: number;
   backdrop: LayerBackdrop | null;
   /** 對位圖內容；null = 不畫 */
-  content: { map: FullMap; spanOf: (key: string) => SrcSpan | null } | null;
+  content: { map: FullMap; spanOf: (key: string) => SrcSpan | null; /** 0～1，預設 1（不透明）；調低可以透出下面的底圖 */ opacity?: number } | null;
   /** 由下往上的順序 */
   items: readonly LayerItem[];
 }
@@ -93,7 +93,8 @@ export function drawLayers(ctx: CanvasRenderingContext2D, p: LayerDraw) {
   }
 
   // 每塊螢幕框裡：整張畫布測試圖裡屬於這塊螢幕的那一段，照轉動、翻轉、縮放擺進來
-  if (p.content && p.content.map.canvas.width > 0) {
+  const contentAlpha = Math.min(1, Math.max(0, p.content?.opacity ?? 1));
+  if (p.content && p.content.map.canvas.width > 0 && contentAlpha > 0) {
     const { map, spanOf } = p.content;
     const kx = map.canvas.width / map.full.width, ky = map.canvas.height / map.full.height;
     ctx.imageSmoothingEnabled = true;
@@ -102,6 +103,7 @@ export function drawLayers(ctx: CanvasRenderingContext2D, p: LayerDraw) {
       const span = spanOf(it.key);
       if (!span || !worthDrawing(it.dest, view.zoom) || !intersectsView(it.dest, view, p.size)) continue;
       ctx.save();
+      ctx.globalAlpha = contentAlpha;
       ctx.beginPath();
       ctx.rect(it.dest.x, it.dest.y, it.dest.w, it.dest.h);
       ctx.clip();

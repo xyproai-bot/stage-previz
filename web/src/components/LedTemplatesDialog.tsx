@@ -73,6 +73,7 @@ const WHOLE: SrcSpan = { us: 0, ul: 1, vs: 0, vl: 1 };
 const SCALE_CHOICES = [100, 50, 25];
 const NEW = '__new__';
 const PREVIEW_THROTTLE_MS = 100;
+const CONTENT_OPACITY_KEY = 'sp_ledtpl_content_opacity';
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export default function LedTemplatesDialog({ open, projectId, projectName, onClose, list, ledObjects, getSpans, onChanged, onPreview, ledCanvas, onSetCanvas }: Props) {
@@ -90,6 +91,18 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
   /** 問了很多次 3D 畫面都沒有 LED 的範圍（沒有模型）：對位圖內容改畫整張畫布一張 */
   const [sceneGaveUp, setSceneGaveUp] = useState(false);
   const [contentOn, setContentOn] = useState(true);
+  // 框裡對位圖內容的不透明度：記在這台電腦（讀不到就用 100%）
+  const [contentOpacity, setContentOpacityState] = useState(() => {
+    try {
+      const v = Number(window.localStorage.getItem(CONTENT_OPACITY_KEY));
+      return window.localStorage.getItem(CONTENT_OPACITY_KEY) !== null && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 1;
+    } catch { return 1; }
+  });
+  const setContentOpacity = useCallback((o: number) => {
+    const v = Math.min(1, Math.max(0, o));
+    setContentOpacityState(v);
+    try { window.localStorage.setItem(CONTENT_OPACITY_KEY, String(v)); } catch { /* 存不了就只在這次有效 */ }
+  }, []);
   const histRef = useRef(hist);
   histRef.current = hist;
   const gestureBase = useRef<Draft | null>(null);
@@ -544,11 +557,14 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                 onRedo={doRedo}
                 fullMap={fullMap.map}
                 showContent={contentOn}
+                contentOpacity={contentOpacity}
                 backdrop={backdropLayer}
                 layersBar={(
                   <LedTemplateLayers
                     contentOn={contentOn}
                     onContentOn={setContentOn}
+                    contentOpacity={contentOpacity}
+                    onContentOpacity={setContentOpacity}
                     contentNote={contentNote}
                     backdrop={backdrop}
                     canvas={{ width: draft.width, height: draft.height }}

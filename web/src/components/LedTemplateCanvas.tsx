@@ -47,6 +47,8 @@ interface Props {
   fullMap?: FullMap | null;
   /** 框裡畫對位圖內容 */
   showContent?: boolean;
+  /** 框裡對位圖內容的不透明度（0～1，預設 1）；調低可以透出底圖 */
+  contentOpacity?: number;
   /** 底圖（含開關、不透明度、怎麼擺）；沒有 = null */
   backdrop?: LayerBackdrop | null;
   /** 工具列下面那排開關 */
@@ -69,7 +71,7 @@ export function zoomText(zoom: number): string {
   return `${pct >= 10 ? Math.round(pct) : Number(pct.toFixed(1))}%`;
 }
 
-export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo, fullMap = null, showContent = false, backdrop = null, layersBar = null }: Props) {
+export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo, fullMap = null, showContent = false, contentOpacity = 1, backdrop = null, layersBar = null }: Props) {
   const api = useCanvasView(canvas, resetKey);
   const { view, size } = api;
   const dragRef = useRef<Drag | null>(null);
@@ -224,13 +226,13 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
     try {
       drawLayers(ctx, {
         canvas, view, size, dpr, backdrop,
-        content: contentShown && fullMap ? { map: fullMap, spanOf: (k: string) => defByKey.get(k)?.src ?? null } : null,
+        content: contentShown && fullMap ? { map: fullMap, spanOf: (k: string) => defByKey.get(k)?.src ?? null, opacity: contentOpacity } : null,
         items: ordered.map(i => ({ key: i.key, dest: i.dest, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV })),
       });
     } catch (e) {
       console.warn('[ledTemplate] canvas layers draw failed:', e);
     }
-  }, [canvas, view, size, dpr, backdrop, contentShown, fullMap, defByKey, ordered]);
+  }, [canvas, view, size, dpr, backdrop, contentShown, contentOpacity, fullMap, defByKey, ordered]);
 
   return (
     <div className="ltc">
