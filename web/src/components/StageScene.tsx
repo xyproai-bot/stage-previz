@@ -210,6 +210,12 @@ interface Props {
    */
   ledTemplate?: LedTemplatePlan | null;
   /**
+   * 編輯 LED 版型時的測試圖（lib/ledTemplateDraw.ts 畫的）：有給就蓋過影片 / 圖片 / 測試圖，每塊 LED 照 ledTemplate 的放法從這張圖取色。
+   * 走跟影片一樣的「版型貼回」路徑，只是貼圖是畫出來的；不經過影片的顏色那一條路。ledPreviewVersion 加 1 = 圖重畫過了、要重傳。
+   */
+  ledPreviewCanvas?: HTMLCanvasElement | null;
+  ledPreviewVersion?: number;
+  /**
    * 每一幀問一次：有回傳位置 → 舞台照這個擺（分享頁跟著影片時間走，暫停 / 拉時間軸都會跟）；
    * 回傳 null → 照平常（換 cue 滑過去）。用函式而不是 states，才不會每幀重跑 React。
    */
@@ -289,7 +295,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -2034,6 +2040,21 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // ── 本地影片 / 圖片 → LED 貼圖（跟 NDI 貼圖同樣設定：flipY false、超出 0~1 繞回）──
   // 圖片跟影片用一模一樣的設定 → 同一張畫面放成圖片或影片，方向、顏色都一樣
   useEffect(() => {
+    // 編輯 LED 版型：畫出來的測試圖（canvas）當成「版型畫布」，其他路一個字都不動
+    if (ledPreviewCanvas) {
+      const ptex = new THREE.CanvasTexture(ledPreviewCanvas);
+      ptex.colorSpace = THREE.SRGBColorSpace;
+      ptex.minFilter = THREE.LinearFilter;
+      ptex.magFilter = THREE.LinearFilter;
+      ptex.generateMipmaps = false;
+      ptex.flipY = false;
+      ptex.wrapS = ptex.wrapT = LED_TEXTURE_WRAP;
+      ledMediaTextureRef.current = ptex;
+      return () => {
+        if (ledMediaTextureRef.current === ptex) ledMediaTextureRef.current = null;
+        ptex.dispose();
+      };
+    }
     const image = ledVideo ? null : ledImage;
     if (!ledVideo && !image) { ledMediaTextureRef.current = null; return; }
     const tex = ledVideo ? new THREE.VideoTexture(ledVideo) : new THREE.Texture(image!);
@@ -2070,7 +2091,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (ledMediaTextureRef.current === tex) ledMediaTextureRef.current = null;
       tex.dispose();
     };
-  }, [ledVideo, ledImage]);
+  }, [ledVideo, ledImage, ledPreviewCanvas]);
+
+  // 編輯 LED 版型的測試圖重畫了 → 重傳貼圖
+  useEffect(() => {
+    if (ledPreviewCanvas && ledMediaTextureRef.current) ledMediaTextureRef.current.needsUpdate = true;
+  }, [ledPreviewCanvas, ledPreviewVersion]);
 
   // ── LED 對位圖 / 測試圖：每塊 LED 在畫布上的位置（從模型的 UV 算）──
   const resolvedCanvas = useMemo(
@@ -2266,7 +2292,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       //   4. 測試圖（還沒有畫面時：每塊 LED 的名字、格線、彩條，看得出對位對不對）
       const ledImageUrl = (isLed && so?.ledProps?.imageUrl) || null;
       let ledTexture: THREE.Texture | null = null;
-      if (isLed && forceTestPattern && testPatternTex) {
+      if (isLed && ledPreviewCanvas && ledMediaTextureRef.current) {
+        // 正在編輯 LED 版型：版型的測試圖蓋過所有東西
+        ledTexture = ledMediaTextureRef.current;
+      } else if (isLed && forceTestPattern && testPatternTex) {
         ledTexture = testPatternTex;
       } else if (ledImageUrl) {
         const cache = ledTextureCacheRef.current;
@@ -2401,7 +2430,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, ledTemplate, testPatternTex, forceTestPattern]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, ledTemplate, ledPreviewCanvas, testPatternTex, forceTestPattern]);
 
   // ── 淡入淡出的半透明 shader 先編好（不然第一次換 cue 淡入淡出會卡一下）──
   // 模型載好 / 切模式 / 改材質 / 換 LED 畫面 / 畫質換了（燈數會變）→ 等畫面穩一點再編

@@ -1,21 +1,41 @@
-import { useEffect, useMemo, useState } from 'react';
-import { LayoutPanelLeft, LoaderCircle, Plus, Save, Scissors, Trash2, TriangleAlert, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Copy, Download, LayoutPanelLeft, LoaderCircle, Monitor, Plus, Save, Scissors, Trash2, TriangleAlert, X } from 'lucide-react';
 import Icon from './Icon';
-import { confirmDialog, toast } from './dialogs';
+import NumField from './NumField';
+import LedTemplateCanvas, { type ItemPatch, type PatchHow } from './LedTemplateCanvas';
+import LedSplitCanvas from './LedSplitCanvas';
+import { confirmDialog, promptDialog, toast } from './dialogs';
 import {
   createLedScreen, createLedTemplate, deleteLedScreen, deleteLedTemplate, updateLedTemplate,
-  type LedTemplate, type LedTemplateList,
+  type LedTemplateList,
 } from '../lib/ledTemplateApi';
 import {
-  buildScreenList, checkPlacements, defaultDestSize, formatPct, normalizeTemplateInput, placementsFromInputs, ROTATIONS, screenSizeLabel,
-  type LedTemplatePlan, type PlacementInput, type Rotation, type ScreenDef, type SrcSpan,
+  buildScreenList, checkPlacements, formatPct, normalizeTemplateInput, normalizeTemplateName, ROTATIONS, screenSizeLabel,
+  type Rotation, type ScreenDef, type SrcSpan,
 } from '../lib/ledTemplate';
+import {
+  addScreenToDraft, copyTemplateName, draftFromTemplate, draftSignature, draftToBody, draftToPlan, emptyDraft, nextTemplateName,
+  patchDraftItem, removeScreenFromDraft, resetItemSize, type Draft,
+} from '../lib/ledTemplateDraft';
+import {
+  commit, fitCanvasToItems, newHistory, redo, rectToUv, setRotation, settle, transient, undo, type History,
+} from '../lib/ledTemplateEdit';
+import { panelColor, type PixelRect } from '../lib/ledMap';
+import { downloadBlob } from '../lib/ledMapDraw';
+import { guideFileName } from '../lib/ledTemplatePattern';
+import { renderTemplateGuidePng } from '../lib/ledTemplateDraw';
+import type { LedPatternSource } from '../lib/useLedPatternCanvas';
+import { isPhoneLayout } from '../lib/viewportVars';
 import './LedTemplatesDialog.css';
 
 /**
- * 「LED 版型」（第 1a 階段：數字表單；拖拉編輯器之後再做）
+ * 「LED 版型」編輯器（編輯專案頁下方的面板；不蓋住 3D 畫面）
  *   版型 = 只挑幾塊螢幕、排進一張比較小的畫布；動畫師只要輸出這張，3D 畫面會把它貼回對的螢幕，沒挑到的螢幕是黑的。
+ *   左邊：版型畫布（拖曳移動、拖角落縮放、吸附、轉 90°、翻轉、復原重做）或整張畫布（拖出範圍切螢幕）；右邊：螢幕清單 + 選到的螢幕的數字欄位（跟畫布雙向連動）。
+ *   面板開著的時候，3D 的 LED 顯示這個版型的測試圖（每塊螢幕不同顏色 + 名字 + 指著上方的箭頭 + 像素格），放錯、轉錯一眼就看得出來。
+ *   「下載模板圖」= 版型畫布大小的 PNG，給動畫師當 AE 的參考圖層。「複製版型」= 複製一份再改名字。
  *   「全部」是現在的整張 LED 畫布（每塊螢幕的真實點數都從它來），不能改。
+ * 純邏輯：lib/ledTemplateEdit.ts / ledTemplateDraft.ts / ledTemplatePattern.ts（有單元測試）
  * 說明：docs/superpowers/specs/2026-10-15-led-canvas-templates-design.md
  */
 
@@ -24,6 +44,7 @@ export interface LedObjectInfo { id: string; name: string; order: number }
 interface Props {
   open: boolean;
   projectId: string;
+  projectName?: string;
   onClose: () => void;
   list: LedTemplateList | null;
   ledObjects: readonly LedObjectInfo[];
@@ -31,196 +52,245 @@ interface Props {
   getSpans: () => Record<string, SrcSpan> | null;
   /** 存好 / 刪掉以後，父層重新讀版型清單 */
   onChanged: () => Promise<unknown>;
+  /** 正在編輯的版型（3D 的 LED 要貼它的測試圖）；沒在編輯 = null */
+  onPreview: (p: LedPatternSource | null) => void;
 }
-
-interface RowDraft { on: boolean; x: string; y: string; w: string; h: string; rotate: Rotation; flipH: boolean; flipV: boolean }
-interface Draft { id: string | null; name: string; width: string; height: string; scale: string; rows: Record<string, RowDraft> }
 
 const WHOLE: SrcSpan = { us: 0, ul: 1, vs: 0, vl: 1 };
 const SCALE_CHOICES = [100, 50, 25];
 const NEW = '__new__';
+const PREVIEW_THROTTLE_MS = 100;
+const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-const emptyRow = (): RowDraft => ({ on: false, x: '', y: '', w: '', h: '', rotate: 0, flipH: false, flipV: false });
-
-function draftFromTemplate(t: LedTemplate): Draft {
-  const rows: Record<string, RowDraft> = {};
-  for (const p of t.screens) {
-    rows[p.key] = { on: true, x: String(p.dest.x), y: String(p.dest.y), w: String(p.dest.w), h: String(p.dest.h), rotate: p.rotate, flipH: p.flipH, flipV: p.flipV };
-  }
-  return { id: t.id, name: t.name, width: String(t.canvas.width), height: String(t.canvas.height), scale: String(t.scalePct), rows };
-}
-
-function nextName(list: LedTemplateList | null): string {
-  const names = new Set((list?.templates ?? []).map(t => t.name));
-  for (let i = 1; i < 100; i++) if (!names.has(`版型 ${i}`)) return `版型 ${i}`;
-  return '新版型';
-}
-
-const toInt = (s: string) => (/^\s*-?\d+\s*$/.test(s) ? Number(s) : NaN);
-
-/** 表單 → 後台要的放法（只收打勾的）；有格子不是整數 → 錯誤說明 */
-export function rowsToInputs(rows: Record<string, RowDraft>, screens: readonly ScreenDef[]): { inputs: PlacementInput[]; error: string | null } {
-  const inputs: PlacementInput[] = [];
-  for (const s of screens) {
-    const r = rows[s.key];
-    if (!r?.on) continue;
-    const x = toInt(r.x), y = toInt(r.y), w = toInt(r.w), h = toInt(r.h);
-    if ([x, y, w, h].some(n => Number.isNaN(n)) || w < 1 || h < 1) {
-      return { inputs, error: `「${s.name}」的位置和大小要填整數（寬、高至少 1）` };
-    }
-    inputs.push({ key: s.key, dest: { x, y, w, h }, rotate: r.rotate, flipH: r.flipH, flipV: r.flipV });
-  }
-  return { inputs, error: null };
-}
-
-export default function LedTemplatesDialog({ open, projectId, onClose, list, ledObjects, getSpans, onChanged }: Props) {
-  const [selected, setSelected] = useState<string>('');
-  const [draft, setDraft] = useState<Draft | null>(null);
+export default function LedTemplatesDialog({ open, projectId, projectName, onClose, list, ledObjects, getSpans, onChanged, onPreview }: Props) {
+  const phone = isPhoneLayout();
+  const [selectedTpl, setSelectedTpl] = useState('');
+  const [hist, setHist] = useState<History<Draft> | null>(null);
+  const [savedSig, setSavedSig] = useState('');
+  const [selKey, setSelKey] = useState<string | null>(null);
+  const [mode, setMode] = useState<'template' | 'full'>('template');
   const [busy, setBusy] = useState(false);
-  const [dirty, setDirty] = useState(false);
   const [spans, setSpans] = useState<Record<string, SrcSpan>>({});
-  const [splitObj, setSplitObj] = useState('');
-  const [splitName, setSplitName] = useState('');
-  const [splitRect, setSplitRect] = useState({ x: '', y: '', w: '', h: '' });
+  const histRef = useRef(hist);
+  histRef.current = hist;
+  const gestureBase = useRef<Draft | null>(null);
+  const loadedFor = useRef('');
 
+  const draft = hist?.present ?? null;
+  const dirty = !!draft && draftSignature(draft) !== savedSig;
   const fullCanvas = list?.fullCanvas ?? null;
   const customs = useMemo(() => (list?.templates ?? []).filter(t => t.kind === 'custom'), [list]);
-  const full = list?.templates.find(t => t.kind === 'full') ?? null;
+  const manuals = list?.screens;
 
-  // 打開時：向 3D 畫面要每個 LED 物件的範圍、選第一個版型
+  // 打開時：向 3D 畫面要每個 LED 物件的範圍（模型還沒載好就等一下再問）
   useEffect(() => {
     if (!open) return;
-    setSpans(getSpans() ?? {});
-    setSplitObj(ledObjects[0]?.id ?? '');
+    let tries = 0;
+    let timer = 0;
+    const grab = () => {
+      const s = getSpans();
+      if (s && Object.keys(s).length > 0) setSpans(s);
+      else if (tries++ < 12) timer = window.setTimeout(grab, 700);
+    };
+    grab();
+    return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  useEffect(() => { if (!open) { setMode('template'); setSelKey(null); } }, [open]);
 
   const screens = useMemo<ScreenDef[]>(() => {
     if (!fullCanvas) return [];
     return buildScreenList(
       ledObjects.map(o => ({ objectId: o.id, name: o.name, order: o.order, src: spans[o.id] ?? WHOLE })),
-      list?.screens ?? [], fullCanvas,
+      manuals ?? [], fullCanvas,
     );
-  }, [ledObjects, spans, list, fullCanvas]);
+  }, [ledObjects, spans, manuals, fullCanvas]);
+  const defKeys = useMemo(() => new Set(screens.map(s => s.key)), [screens]);
 
-  // 選的版型變了 / 清單重讀 → 重新帶入表單（有沒存的修改時不蓋掉）
+  // 選的版型變了 / 清單重讀 → 重新帶入草稿（有沒存的修改時不蓋掉；內容沒變就不動，選到的螢幕不會被清掉）
   useEffect(() => {
-    if (!open || dirty) return;
-    if (selected === NEW) return;
-    const t = customs.find(x => x.id === selected);
-    if (t) { setDraft(draftFromTemplate(t)); return; }
-    if (customs.length > 0) { setSelected(customs[0].id); return; }
-    setDraft(null);
-    setSelected('');
-  }, [open, selected, customs, dirty]);
-
-  // Esc 關掉
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !busy) void tryClose(); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    if (!open || phone || dirty) return;
+    if (selectedTpl === NEW) return;
+    const t = customs.find(x => x.id === selectedTpl);
+    if (t) {
+      const d = draftFromTemplate(t);
+      const stamp = `${t.id}:${draftSignature(d)}`;
+      if (loadedFor.current === stamp && hist) return;
+      loadedFor.current = stamp;
+      setHist(newHistory(d));
+      setSavedSig(draftSignature(d));
+      setSelKey(null);
+      return;
+    }
+    if (customs.length > 0) { setSelectedTpl(customs[0].id); return; }
+    loadedFor.current = '';
+    setHist(null);
+    setSavedSig('');
+    setSelectedTpl('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, busy, dirty]);
+  }, [open, phone, selectedTpl, customs, dirty]);
 
+  const plan = useMemo(() => (draft ? draftToPlan(draft, manuals ?? []) : null), [draft, manuals]);
+  const source = useMemo<LedPatternSource | null>(
+    () => (open && !phone && plan && fullCanvas ? { plan, defs: screens } : null),
+    [open, phone, plan, fullCanvas, screens],
+  );
+
+  // 3D 的 LED 測試圖：最多每 0.1 秒更新一次（拖曳的時候不會每一幀都重畫整個畫面）
+  const onPreviewRef = useRef(onPreview);
+  onPreviewRef.current = onPreview;
+  const latestSource = useRef(source);
+  latestSource.current = source;
+  const lastSent = useRef(0);
+  const previewTimer = useRef(0);
+  useEffect(() => {
+    if (!source) {
+      window.clearTimeout(previewTimer.current);
+      previewTimer.current = 0;
+      onPreviewRef.current(null);
+      return;
+    }
+    if (previewTimer.current) return;   // 已經排好一次了，它會拿最新的
+    const wait = Math.max(0, lastSent.current + PREVIEW_THROTTLE_MS - Date.now());
+    previewTimer.current = window.setTimeout(() => {
+      previewTimer.current = 0;
+      lastSent.current = Date.now();
+      onPreviewRef.current(latestSource.current);
+    }, wait);
+  }, [source]);
+  useEffect(() => () => { window.clearTimeout(previewTimer.current); onPreviewRef.current(null); }, []);
+
+  const issues = useMemo(() => {
+    if (!plan) return [];
+    return checkPlacements({ ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) }, screens);
+  }, [plan, screens, defKeys]);
+  const orphans = draft ? draft.items.filter(i => !defKeys.has(i.key)).length : 0;
+  const placedCount = draft ? draft.items.filter(i => defKeys.has(i.key)).length : 0;
+  const itemByKey = useMemo(() => new Map((draft?.items ?? []).map(i => [i.key, i])), [draft]);
+  const selItem = selKey ? itemByKey.get(selKey) ?? null : null;
+  const selDef = selKey ? screens.find(s => s.key === selKey) ?? null : null;
+
+  // ───────── 改草稿 ─────────
+  const apply = useCallback((fn: (d: Draft) => Draft, how: PatchHow) => {
+    setHist(h => {
+      if (!h) return h;
+      const next = fn(h.present);
+      if (next === h.present) return h;
+      return how === 'live' ? transient(h, next) : commit(h, next, { tag: how.tag });
+    });
+  }, []);
+  const patchItem = useCallback((key: string, patch: ItemPatch, how: PatchHow) => apply(d => patchDraftItem(d, key, patch), how), [apply]);
+  const onGesture = useCallback((phase: 'start' | 'end') => {
+    if (phase === 'start') { gestureBase.current = histRef.current?.present ?? null; return; }
+    const base = gestureBase.current;
+    gestureBase.current = null;
+    setHist(h => (h && base && h.present !== base ? settle(h, base) : h));
+  }, []);
+  const doUndo = useCallback(() => setHist(h => (h ? undo(h) : h)), []);
+  const doRedo = useCallback(() => setHist(h => (h ? redo(h) : h)), []);
+  const addScreen = (def: ScreenDef) => { apply(d => addScreenToDraft(d, def), {}); setSelKey(def.key); setMode('template'); };
+  const removeScreen = (key: string) => { apply(d => removeScreenFromDraft(d, key), {}); setSelKey(k => (k === key ? null : k)); };
+  const setMeta = (p: Partial<Pick<Draft, 'name' | 'width' | 'height' | 'scalePct'>>, tag: string) => apply(d => ({ ...d, ...p }), { tag });
+
+  // 切換 / 關閉前：有沒存的修改要問
+  async function askDiscard(): Promise<boolean> {
+    if (!dirty || (draft && !draft.id && draft.items.length === 0)) return true;
+    return confirmDialog({ title: '還沒存的修改要丟掉嗎？', message: '這個版型改的地方還沒按「儲存」。', confirmLabel: '丟掉', destructive: true });
+  }
   async function tryClose() {
-    if (dirty && !(await confirmDialog({ title: '還沒存的修改要丟掉嗎？', message: '這個版型改的地方還沒按「儲存」。', confirmLabel: '丟掉', destructive: true }))) return;
-    setDirty(false);
+    if (busy) return;
+    if (!(await askDiscard())) return;
+    setHist(null); setSavedSig(''); setSelectedTpl(''); loadedFor.current = '';
     onClose();
   }
-
   async function pick(id: string) {
-    if (id === selected) return;
-    if (dirty && !(await confirmDialog({ title: '還沒存的修改要丟掉嗎？', message: '這個版型改的地方還沒按「儲存」。', confirmLabel: '丟掉', destructive: true }))) return;
-    setDirty(false);
-    setSelected(id);
-    if (id === NEW) startNew();
+    if (id === selectedTpl || busy) return;
+    if (!(await askDiscard())) return;
+    loadedFor.current = '';
+    if (id === NEW) { startNew(); return; }
+    setHist(null);
+    setSavedSig('');
+    setSelectedTpl(id);
   }
-
   function startNew() {
-    const canvas = fullCanvas ?? { width: 1920, height: 1080 };
-    setDraft({ id: null, name: nextName(list), width: String(canvas.width), height: String(canvas.height), scale: '100', rows: {} });
-    setSelected(NEW);
-    setDirty(false);
+    const d = emptyDraft(nextTemplateName((list?.templates ?? []).map(t => t.name)), fullCanvas ?? { width: 1920, height: 1080 });
+    setHist(newHistory(d));
+    setSavedSig('');
+    setSelKey(null);
+    setSelectedTpl(NEW);
+    setMode('template');
   }
 
-  function patch(p: Partial<Draft>) { setDraft(d => (d ? { ...d, ...p } : d)); setDirty(true); }
-  function patchRow(key: string, p: Partial<RowDraft>) {
-    setDraft(d => (d ? { ...d, rows: { ...d.rows, [key]: { ...(d.rows[key] ?? emptyRow()), ...p } } } : d));
-    setDirty(true);
-  }
-
-  const scaleNum = draft ? Number(draft.scale) : 100;
-
-  /** 打勾：沒填過位置就照比例填預設大小，放在已經放的螢幕下面 */
-  function toggleScreen(s: ScreenDef, on: boolean) {
-    if (!draft) return;
-    const row = draft.rows[s.key] ?? emptyRow();
-    if (!on) { patchRow(s.key, { on: false }); return; }
-    if (row.w && row.h) { patchRow(s.key, { on: true }); return; }
-    const size = defaultDestSize({ w: s.nativeW, h: s.nativeH }, Number.isFinite(scaleNum) && scaleNum > 0 ? scaleNum : 100, row.rotate);
-    let bottom = 0;
-    for (const o of screens) {
-      const r = draft.rows[o.key];
-      if (o.key !== s.key && r?.on) bottom = Math.max(bottom, (toInt(r.y) || 0) + (toInt(r.h) || 0));
-    }
-    patchRow(s.key, { on: true, x: '0', y: String(bottom), w: String(size.w), h: String(size.h) });
-  }
-
-  /** 旋轉 90 / 270 度時，寬高對調（已經填了大小的才換） */
-  function changeRotation(s: ScreenDef, rotate: Rotation) {
-    if (!draft) return;
-    const row = draft.rows[s.key] ?? emptyRow();
-    const swap = (row.rotate === 90 || row.rotate === 270) !== (rotate === 90 || rotate === 270);
-    patchRow(s.key, swap && row.w && row.h ? { rotate, w: row.h, h: row.w } : { rotate });
-  }
-
-  /** 畫布剛好包住打勾的螢幕 */
-  function fitCanvas() {
-    if (!draft) return;
-    const { inputs, error } = rowsToInputs(draft.rows, screens);
-    if (error || inputs.length === 0) { toast.warn(error ?? '先打勾要放進版型的螢幕'); return; }
-    patch({
-      width: String(Math.max(16, ...inputs.map(i => i.dest.x + i.dest.w))),
-      height: String(Math.max(16, ...inputs.map(i => i.dest.y + i.dest.h))),
-    });
-  }
-
-  const planForCheck = useMemo<LedTemplatePlan | null>(() => {
-    if (!draft) return null;
-    const { inputs, error } = rowsToInputs(draft.rows, screens);
-    const w = toInt(draft.width), h = toInt(draft.height);
-    if (error || Number.isNaN(w) || Number.isNaN(h) || !(scaleNum > 0)) return null;
-    return { v: 1, id: draft.id, name: draft.name, canvas: { width: w, height: h }, scalePct: scaleNum, screens: placementsFromInputs(inputs, list?.screens ?? []) };
-  }, [draft, screens, scaleNum, list]);
-  const issues = useMemo(() => (planForCheck ? checkPlacements(planForCheck, screens) : []), [planForCheck, screens]);
+  const validate = (d: Draft) => {
+    const parsed = normalizeTemplateInput(draftToBody(d, defKeys), { partial: false });
+    return parsed.ok ? { body: draftToBody(d, defKeys) } : { error: parsed.error };
+  };
+  const afterSave = async (name: string) => {
+    const next = (await onChanged()) as LedTemplateList | null | undefined;
+    return next?.templates.find(t => t.kind === 'custom' && t.name === name)?.id ?? '';
+  };
 
   async function save() {
-    if (!draft) return;
-    const { inputs, error } = rowsToInputs(draft.rows, screens);
-    if (error) { toast.error(error); return; }
-    const parsed = normalizeTemplateInput({
-      name: draft.name, canvas: { width: toInt(draft.width), height: toInt(draft.height) }, scalePct: scaleNum, screens: inputs,
-    }, { partial: false });
-    if (!parsed.ok) { toast.error(parsed.error); return; }
-    const body = { name: parsed.value.name!, canvas: parsed.value.canvas!, scalePct: parsed.value.scalePct!, screens: parsed.value.screens! };
+    if (!draft || busy) return;
+    const v = validate(draft);
+    if (!v.body) { toast.error(v.error!); return; }
     setBusy(true);
     try {
-      if (draft.id) await updateLedTemplate(projectId, draft.id, body);
-      else await createLedTemplate(projectId, body);
-      setDirty(false);
-      const next = (await onChanged()) as LedTemplateList | null | undefined;
-      toast.success(`版型「${body.name}」存好了`);
-      if (!draft.id) setSelected(next?.templates.find(t => t.kind === 'custom' && t.name === body.name)?.id ?? '');   // 新增的：選到剛存的那個
+      if (draft.id) await updateLedTemplate(projectId, draft.id, v.body);
+      else await createLedTemplate(projectId, v.body);
+      // 存好的樣子就是現在的草稿（拿掉模型裡找不到的螢幕）
+      const kept: Draft = { ...draft, items: draft.items.filter(i => defKeys.has(i.key)) };
+      setHist(h => (h ? { ...h, present: kept } : h));
+      setSavedSig(draftSignature(kept));
+      const newId = await afterSave(v.body.name);
+      toast.success(`版型「${v.body.name}」存好了`);
+      if (!draft.id && newId) { loadedFor.current = ''; setSelectedTpl(newId); }
     } catch (e) {
-      toast.error('沒有存好：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('沒有存好：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function duplicate() {
+    if (!draft || busy) return;
+    const taken = (list?.templates ?? []).map(t => t.name);
+    const name = await promptDialog({
+      title: '複製版型',
+      label: '新版型的名稱',
+      defaultValue: copyTemplateName(draft.name, taken),
+      confirmLabel: '複製',
+      maxLength: 40,
+      hint: draft.id && dirty ? '會連同你還沒存的修改一起複製；原本的版型維持現在的樣子。' : '複製以後可以直接改。',
+      validate: (v) => {
+        const n = normalizeTemplateName(v);
+        if (!n.ok) return n.error;
+        return taken.some(t => t.toLowerCase() === n.value.toLowerCase()) ? '已經有同名的版型了，請換一個名字' : null;
+      },
+    });
+    if (!name) return;
+    const body = { ...draftToBody(draft, defKeys), name: name.trim().replace(/\s+/g, ' ') };
+    setBusy(true);
+    try {
+      await createLedTemplate(projectId, body);
+      const newId = await afterSave(body.name);
+      toast.success(`複製好了：「${body.name}」`);
+      if (newId) { loadedFor.current = ''; setHist(null); setSavedSig(''); setSelectedTpl(newId); }
+    } catch (e) {
+      toast.error('沒有複製成功：' + msg(e));
     } finally {
       setBusy(false);
     }
   }
 
   async function remove() {
-    if (!draft?.id) { setDirty(false); setSelected(''); setDraft(null); return; }
+    if (!draft || busy) return;
+    if (!draft.id) {
+      if (!(await askDiscard())) return;
+      setHist(null); setSavedSig(''); setSelectedTpl(''); loadedFor.current = '';
+      return;
+    }
     if (!(await confirmDialog({
       title: `刪除版型「${draft.name}」？`,
       message: '已經交的影片版本會記住當時的排法，不受影響。還有歌在用這個版型的話要先改成別的。',
@@ -229,31 +299,49 @@ export default function LedTemplatesDialog({ open, projectId, onClose, list, led
     setBusy(true);
     try {
       await deleteLedTemplate(projectId, draft.id);
-      setDirty(false);
-      setSelected('');
+      setHist(null); setSavedSig(''); setSelectedTpl(''); loadedFor.current = '';
       await onChanged();
       toast.success('版型刪掉了');
     } catch (e) {
-      toast.error('沒有刪掉：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('沒有刪掉：' + msg(e));
     } finally {
       setBusy(false);
     }
   }
 
-  async function addSplit() {
-    if (!fullCanvas || !splitObj) return;
-    const x = toInt(splitRect.x), y = toInt(splitRect.y), w = toInt(splitRect.w), h = toInt(splitRect.h);
-    if ([x, y, w, h].some(Number.isNaN) || w < 1 || h < 1) { toast.error('範圍要填整數（單位：整張畫布的像素，寬、高至少 1）'); return; }
+  async function downloadGuide() {
+    if (!draft || !plan || busy) return;
+    if (placedCount === 0) { toast.warn('版型裡還沒有螢幕：先把螢幕「加入版型」'); return; }
     setBusy(true);
     try {
-      await createLedScreen(projectId, {
-        objectId: splitObj, name: splitName.trim() || '螢幕',
-        uv: [x / fullCanvas.width, y / fullCanvas.height, Math.min(1, (x + w) / fullCanvas.width), Math.min(1, (y + h) / fullCanvas.height)],
-      });
-      setSplitName(''); setSplitRect({ x: '', y: '', w: '', h: '' });
-      await onChanged();
+      const shown = { ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) };
+      const png = await renderTemplateGuidePng(shown, screens);
+      let file = guideFileName(projectName, shown);
+      if (png.scale < 1) {
+        file = file.replace(/\.png$/, `-縮小${Math.round(png.scale * 100)}%.png`);
+        toast.warn(`這台電腦的瀏覽器畫不出 ${draft.width}×${draft.height} 的原尺寸，圖縮成 ${png.width}×${png.height}（${Math.round(png.scale * 100)}%）：在 AE 裡把這個圖層放大成 ${Math.round(100 / png.scale)}% 就能對上。要原尺寸請換一台記憶體大一點的電腦。`);
+      } else {
+        toast.success(`模板圖下載好了（${png.width}×${png.height}）`);
+      }
+      downloadBlob(png.blob, file);
     } catch (e) {
-      toast.error('沒有切開：' + (e instanceof Error ? e.message : String(e)));
+      toast.error('下載不了模板圖：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function createSplit(input: { objectId: string; name: string; rect: PixelRect }): Promise<boolean> {
+    if (!fullCanvas) return false;
+    setBusy(true);
+    try {
+      await createLedScreen(projectId, { objectId: input.objectId, name: input.name, uv: rectToUv(input.rect, fullCanvas) });
+      await onChanged();
+      toast.success(`切出「${input.name}」了，現在可以把它放進版型`);
+      return true;
+    } catch (e) {
+      toast.error('沒有切開：' + msg(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -262,153 +350,206 @@ export default function LedTemplatesDialog({ open, projectId, onClose, list, led
   async function removeSplit(id: string, name: string) {
     if (!(await confirmDialog({ title: `刪掉切開的螢幕「${name}」？`, message: '版型裡放著它的那一格也會一起拿掉；已經交的影片版本不受影響。', confirmLabel: '刪掉', destructive: true }))) return;
     setBusy(true);
-    try { await deleteLedScreen(projectId, id); await onChanged(); } catch (e) { toast.error('沒有刪掉：' + (e instanceof Error ? e.message : String(e))); } finally { setBusy(false); }
+    try { await deleteLedScreen(projectId, id); await onChanged(); } catch (e) { toast.error('沒有刪掉：' + msg(e)); } finally { setBusy(false); }
   }
 
-  const sizeOf = (s: ScreenDef, r: RowDraft | undefined) => (r?.on && r.w && r.h
-    ? screenSizeLabel(s, { dest: { x: 0, y: 0, w: toInt(r.w) || 0, h: toInt(r.h) || 0 } })
-    : `實際 ${s.nativeW}×${s.nativeH}`);
-  const objName = (id: string) => ledObjects.find(o => o.id === id)?.name ?? id;
+  const fitCanvas = () => {
+    const fit = fitCanvasToItems(draft?.items.filter(i => defKeys.has(i.key)) ?? []);
+    if (!fit) { toast.warn('先把要放進版型的螢幕「加入版型」'); return; }
+    apply(d => ({ ...d, width: fit.width, height: fit.height }), {});
+  };
+
+  const splitObjects = useMemo(
+    () => ledObjects.map((o, index) => ({ objectId: o.id, name: o.name, src: spans[o.id] ?? WHOLE, index })),
+    [ledObjects, spans],
+  );
+  const colorOf = (s: ScreenDef) => panelColor(screens.indexOf(s));
 
   // 所有 hook 都在上面；沒打開就什麼都不畫
   if (!open) return null;
 
-  return (
-    <div className="ledtpl-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) void tryClose(); }}>
-      <div className="ledtpl" role="dialog" aria-modal="true" aria-labelledby="ledtpl-title">
-        <header className="ledtpl__head">
-          <div>
-            <h2 id="ledtpl-title"><Icon icon={LayoutPanelLeft} size="lg" /> LED 版型</h2>
-            <p className="muted">動畫師有時只要出幾塊螢幕：挑出來排進一張比較小的畫布，3D 畫面會貼回對的螢幕，沒挑到的螢幕是黑的。每首歌在歌單上選要用哪個版型。</p>
-          </div>
-          <button className="ledtpl__close" onClick={() => void tryClose()} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
-        </header>
-
-        {!list ? (
-          <div className="ledtpl__empty muted">這個後台還沒有版型功能，或讀取失敗了。請重新整理。</div>
-        ) : !fullCanvas ? (
-          <div className="ledtpl__empty">
-            <Icon icon={TriangleAlert} size="lg" />
-            <div>還沒填這個專案的 LED 畫布大小。</div>
-            <small className="muted">先到 3D 畫面工具列的「更多」→ LED 對位圖，填 AE 合成的寬 × 高（每塊螢幕的真實點數從它算），再回來建立版型。</small>
-          </div>
-        ) : (
-          <div className="ledtpl__body">
-            <aside className="ledtpl__list">
-              <div className="ledtpl__fixed" title="現在的整張畫布；每塊螢幕的真實點數從它來">
-                <strong>全部</strong>
-                <span className="muted">{fullCanvas.width}×{fullCanvas.height}（真實點數）</span>
-              </div>
-              {customs.map(t => (
-                <button key={t.id} className={'ledtpl__item' + (selected === t.id ? ' is-active' : '')} onClick={() => void pick(t.id)}>
-                  <strong>{t.name}</strong>
-                  <span className="muted">{t.canvas.width}×{t.canvas.height} · {formatPct(t.scalePct)} · {t.screens.length} 塊{t.songCount > 0 ? ` · ${t.songCount} 首歌在用` : ''}</span>
-                </button>
-              ))}
-              {selected === NEW && <div className="ledtpl__item is-active"><strong>{draft?.name || '新版型'}</strong><span className="muted">還沒存</span></div>}
-              <button className="btn btn--ghost ledtpl__add" onClick={() => void pick(NEW)} disabled={busy}><Icon icon={Plus} /> 新增版型</button>
-              {full && <p className="ledtpl__note muted">「全部」是沒用版型的歌（以前的影片都是）。</p>}
-            </aside>
-
-            <section className="ledtpl__editor">
-              {!draft ? (
-                <div className="ledtpl__empty muted">還沒有版型。按左邊的「新增版型」。</div>
-              ) : (
-                <>
-                  <div className="ledtpl__fields">
-                    <label>名稱<input value={draft.name} maxLength={40} onChange={(e) => patch({ name: e.target.value })} /></label>
-                    <label>畫布（影片大小）
-                      <span className="ledtpl__pair">
-                        <input inputMode="numeric" value={draft.width} onChange={(e) => patch({ width: e.target.value })} aria-label="畫布寬" />
-                        <span>×</span>
-                        <input inputMode="numeric" value={draft.height} onChange={(e) => patch({ height: e.target.value })} aria-label="畫布高" />
-                      </span>
-                    </label>
-                    <label>比例
-                      <span className="ledtpl__pair">
-                        <select value={SCALE_CHOICES.includes(scaleNum) ? String(scaleNum) : 'custom'} onChange={(e) => patch({ scale: e.target.value === 'custom' ? '75' : e.target.value })}>
-                          {SCALE_CHOICES.map(n => <option key={n} value={n}>{n}%</option>)}
-                          <option value="custom">自訂</option>
-                        </select>
-                        {!SCALE_CHOICES.includes(scaleNum) && (
-                          <input inputMode="decimal" value={draft.scale} onChange={(e) => patch({ scale: e.target.value })} aria-label="比例（%）" style={{ width: 70 }} />
-                        )}
-                      </span>
-                    </label>
-                    <button className="btn btn--ghost" onClick={fitCanvas} title="畫布寬高改成剛好包住打勾的螢幕">畫布剛好包住選的螢幕</button>
-                  </div>
-                  <p className="ledtpl__hint muted">比例 = 這個版型裡的螢幕比 LED 真實點數縮了多少（50% 就是一半大）。打勾放進版型的螢幕，位置和大小是版型畫布上的像素；轉動是順時針、轉完再翻。</p>
-
-                  <div className="ledtpl__table" role="table" aria-label="螢幕">
-                    <div className="ledtpl__row ledtpl__row--head" role="row">
-                      <span>放進版型</span><span>螢幕</span><span>x</span><span>y</span><span>寬</span><span>高</span><span>轉動</span><span>翻轉</span>
-                    </div>
-                    {screens.length === 0 && <div className="ledtpl__empty muted">這個專案還沒有 LED 物件。</div>}
-                    {screens.map(s => {
-                      const r = draft.rows[s.key] ?? emptyRow();
-                      return (
-                        <div key={s.key} className={'ledtpl__row' + (r.on ? '' : ' is-off')} role="row">
-                          <label className="ledtpl__check"><input type="checkbox" checked={r.on} onChange={(e) => toggleScreen(s, e.target.checked)} aria-label={`放進版型：${s.name}`} /></label>
-                          <span className="ledtpl__name" title={s.name}>
-                            <strong>{s.name}{s.manual ? '（切開的）' : ''}</strong>
-                            <small className="muted">{sizeOf(s, r)}</small>
-                          </span>
-                          {(['x', 'y', 'w', 'h'] as const).map(k => (
-                            <input key={k} inputMode="numeric" disabled={!r.on} value={r[k]} onChange={(e) => patchRow(s.key, { [k]: e.target.value })} aria-label={`${s.name} ${k === 'x' ? '左' : k === 'y' ? '上' : k === 'w' ? '寬' : '高'}`} />
-                          ))}
-                          <select disabled={!r.on} value={r.rotate} onChange={(e) => changeRotation(s, Number(e.target.value) as Rotation)} aria-label={`${s.name} 轉動`}>
-                            {ROTATIONS.map(d => <option key={d} value={d}>{d}°</option>)}
-                          </select>
-                          <span className="ledtpl__flips">
-                            <label title="左右翻"><input type="checkbox" disabled={!r.on} checked={r.flipH} onChange={(e) => patchRow(s.key, { flipH: e.target.checked })} /> 左右</label>
-                            <label title="上下翻"><input type="checkbox" disabled={!r.on} checked={r.flipV} onChange={(e) => patchRow(s.key, { flipV: e.target.checked })} /> 上下</label>
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {issues.length > 0 && (
-                    <ul className="ledtpl__issues" role="status">
-                      {issues.map((i, n) => <li key={n}><Icon icon={TriangleAlert} size="sm" /> {i.text}</li>)}
-                    </ul>
-                  )}
-
-                  <div className="ledtpl__actions">
-                    <button className="btn btn--ghost ledtpl__delete" onClick={() => void remove()} disabled={busy}><Icon icon={Trash2} /> {draft.id ? '刪除版型' : '放棄'}</button>
-                    <span className="ledtpl__spacer" />
-                    {dirty && <span className="muted small">有還沒存的修改</span>}
-                    <button className="btn btn--primary" onClick={() => void save()} disabled={busy || (!dirty && !!draft.id)}>
-                      <Icon icon={busy ? LoaderCircle : Save} spin={busy} /> 儲存
-                    </button>
-                  </div>
-                </>
-              )}
-
-              <details className="ledtpl__split">
-                <summary><Icon icon={Scissors} size="sm" /> 一個物件裡有好幾塊螢幕？在整張畫布上切開{(list?.screens.length ?? 0) > 0 ? `（已切 ${list?.screens.length} 塊）` : ''}</summary>
-                <p className="muted small">模型裡一個 LED 物件其實包著好幾塊獨立的螢幕時，在整張畫布（{fullCanvas.width}×{fullCanvas.height}）上框出每一塊，就能分別放進版型。切開以後，那個物件整塊的就不能放了。</p>
-                {(list?.screens ?? []).map(sc => (
-                  <div key={sc.id} className="ledtpl__splitrow">
-                    <span><strong>{sc.name}</strong> <span className="muted">（{objName(sc.objectId)}）{Math.round(sc.uv[0] * fullCanvas.width)}, {Math.round(sc.uv[1] * fullCanvas.height)}　{Math.round((sc.uv[2] - sc.uv[0]) * fullCanvas.width)}×{Math.round((sc.uv[3] - sc.uv[1]) * fullCanvas.height)}</span></span>
-                    <button className="btn btn--ghost" onClick={() => void removeSplit(sc.id, sc.name)} disabled={busy}><Icon icon={Trash2} /> 刪掉</button>
-                  </div>
-                ))}
-                <div className="ledtpl__splitadd">
-                  <select value={splitObj} onChange={(e) => setSplitObj(e.target.value)} aria-label="要切的 LED 物件">
-                    {ledObjects.map(o => <option key={o.id} value={o.id}>{o.name}</option>)}
-                  </select>
-                  <input placeholder="螢幕名稱" value={splitName} maxLength={40} onChange={(e) => setSplitName(e.target.value)} aria-label="螢幕名稱" />
-                  {(['x', 'y', 'w', 'h'] as const).map(k => (
-                    <input key={k} inputMode="numeric" placeholder={k === 'x' ? '左' : k === 'y' ? '上' : k === 'w' ? '寬' : '高'} value={splitRect[k]} onChange={(e) => setSplitRect(r => ({ ...r, [k]: e.target.value }))} aria-label={`範圍${k}`} />
-                  ))}
-                  <button className="btn" onClick={() => void addSplit()} disabled={busy || !splitObj}><Icon icon={Plus} /> 切開</button>
-                </div>
-              </details>
-            </section>
-          </div>
-        )}
+  if (phone) {
+    return (
+      <div className="ledtpl-phone" role="dialog" aria-modal="true" aria-labelledby="ledtpl-phone-title">
+        <div className="ledtpl-phone__box">
+          <Icon icon={Monitor} size="xl" />
+          <h2 id="ledtpl-phone-title">請用電腦編輯版型</h2>
+          <p className="muted">版型要在畫布上拖曳、縮放螢幕，手機的畫面太小了。請改用電腦，或把 iPad 橫放。</p>
+          <button className="btn btn--primary" onClick={onClose}>知道了</button>
+        </div>
       </div>
-    </div>
+    );
+  }
+
+  const scaleIsChoice = !!draft && SCALE_CHOICES.includes(draft.scalePct);
+  const resetKey = draft ? `${draft.id ?? NEW}` : '';
+
+  return (
+    <section className="ledtpl-dock" role="region" aria-label="LED 版型編輯">
+      <header className="ledtpl-dock__head">
+        <h2><Icon icon={LayoutPanelLeft} size="md" /> LED 版型</h2>
+        {list && fullCanvas && (
+          <>
+            <select className="ledtpl-dock__pick" value={selectedTpl} onChange={(e) => void pick(e.target.value)} aria-label="選版型" disabled={busy}>
+              {!selectedTpl && <option value="">{customs.length ? '選一個版型…' : '還沒有版型'}</option>}
+              {customs.map(t => <option key={t.id} value={t.id}>{t.name}（{t.canvas.width}×{t.canvas.height} · {formatPct(t.scalePct)} · {t.screens.length} 塊{t.songCount > 0 ? ` · ${t.songCount} 首歌在用` : ''}）</option>)}
+              {selectedTpl === NEW && draft && <option value={NEW}>{draft.name}（新版型，還沒存）</option>}
+            </select>
+            <button className="btn btn--ghost" onClick={() => void pick(NEW)} disabled={busy} title="新增一個空的版型"><Icon icon={Plus} /> 新增版型</button>
+            <button className="btn btn--ghost" onClick={() => void duplicate()} disabled={busy || !draft} title="複製現在這個版型，取個新名字再改"><Icon icon={Copy} /> 複製版型</button>
+          </>
+        )}
+        <span className="ledtpl-dock__spacer" />
+        {dirty && <span className="ledtpl-dock__dirty">有還沒存的修改</span>}
+        {draft && (
+          <>
+            <button className="btn btn--ghost" onClick={() => void downloadGuide()} disabled={busy} title="下載版型畫布大小的 PNG（每塊螢幕的長方形、名字、像素大小、指著上方的箭頭），給動畫師當 AE 的參考圖層"><Icon icon={Download} /> 下載模板圖</button>
+            <button className="btn btn--ghost ledtpl-dock__danger" onClick={() => void remove()} disabled={busy}><Icon icon={Trash2} /> {draft.id ? '刪除版型' : '放棄'}</button>
+            <button className="btn btn--primary" onClick={() => void save()} disabled={busy || !dirty}><Icon icon={busy ? LoaderCircle : Save} spin={busy} /> 儲存</button>
+          </>
+        )}
+        <button className="ledtpl-dock__close" onClick={() => void tryClose()} title="關閉版型編輯" aria-label="關閉版型編輯"><Icon icon={X} size="md" /></button>
+      </header>
+
+      {!list ? (
+        <div className="ledtpl-dock__empty muted">這個後台還沒有版型功能，或讀取失敗了。請重新整理。</div>
+      ) : !fullCanvas ? (
+        <div className="ledtpl-dock__empty">
+          <Icon icon={TriangleAlert} size="lg" />
+          <div>還沒填這個專案的 LED 畫布大小。</div>
+          <small className="muted">先到 3D 畫面工具列的「更多」→ LED 對位圖，填 AE 合成的寬 × 高（每塊螢幕的真實點數從它算），再回來建立版型。</small>
+        </div>
+      ) : !draft ? (
+        <div className="ledtpl-dock__empty">
+          <div className="muted">{customs.length ? '選一個版型來編輯，' : '還沒有版型。'}或新增一個。3D 畫面上方的 LED 會顯示這個版型的測試圖，擺放的結果一看就知道。</div>
+          <button className="btn btn--primary" onClick={() => void pick(NEW)}><Icon icon={Plus} /> 新增版型</button>
+        </div>
+      ) : (
+        <div className="ledtpl-dock__body">
+          <div className="ledtpl-dock__stage">
+            <div className="ledtpl-fields">
+              <label>名稱
+                <input value={draft.name} maxLength={40} onChange={(e) => setMeta({ name: e.target.value }, 'name')} />
+              </label>
+              <label>畫布（影片大小）
+                <span className="ledtpl-pair">
+                  <NumField value={draft.width} min={16} max={32768} label="畫布寬" onChange={(n) => setMeta({ width: n }, 'canvas-w')} />
+                  <span>×</span>
+                  <NumField value={draft.height} min={16} max={32768} label="畫布高" onChange={(n) => setMeta({ height: n }, 'canvas-h')} />
+                </span>
+              </label>
+              <label>比例
+                <span className="ledtpl-pair">
+                  <select value={scaleIsChoice ? String(draft.scalePct) : 'custom'} onChange={(e) => setMeta({ scalePct: e.target.value === 'custom' ? 75 : Number(e.target.value) }, 'scale')} title="螢幕比 LED 真實點數縮了多少（50% 就是一半大）。只影響預設大小和「被拉伸」的提醒">
+                    {SCALE_CHOICES.map(n => <option key={n} value={n}>{n}%</option>)}
+                    <option value="custom">自訂</option>
+                  </select>
+                  {!scaleIsChoice && <NumField value={draft.scalePct} min={1} max={400} label="比例（%）" onChange={(n) => setMeta({ scalePct: n }, 'scale')} />}
+                </span>
+              </label>
+              <button className="btn btn--ghost" onClick={fitCanvas} title="畫布寬高改成剛好包住放進去的螢幕">畫布剛好包住螢幕</button>
+              <span className="ledtpl-seg" role="group" aria-label="顯示哪張畫布">
+                <button className={mode === 'template' ? 'is-on' : ''} aria-pressed={mode === 'template'} onClick={() => setMode('template')}>版型畫布</button>
+                <button className={mode === 'full' ? 'is-on' : ''} aria-pressed={mode === 'full'} onClick={() => setMode('full')} title="在整張畫布上拖出範圍，把一個 LED 物件切成好幾塊螢幕"><Icon icon={Scissors} size="xs" /> 整張畫布（切螢幕）</button>
+              </span>
+            </div>
+
+            {mode === 'template' ? (
+              <LedTemplateCanvas
+                canvas={{ width: draft.width, height: draft.height }}
+                scalePct={draft.scalePct}
+                defs={screens}
+                items={draft.items}
+                selected={selKey}
+                resetKey={resetKey}
+                canUndo={!!hist && hist.past.length > 0}
+                canRedo={!!hist && hist.future.length > 0}
+                onSelect={setSelKey}
+                onPatch={patchItem}
+                onGesture={onGesture}
+                onRemove={removeScreen}
+                onUndo={doUndo}
+                onRedo={doRedo}
+              />
+            ) : (
+              <LedSplitCanvas
+                fullCanvas={fullCanvas}
+                objects={splitObjects}
+                manuals={manuals ?? []}
+                resetKey={resetKey}
+                busy={busy}
+                onCreate={createSplit}
+              />
+            )}
+
+            {(issues.length > 0 || orphans > 0) && (
+              <ul className="ledtpl-issues" role="status">
+                {issues.map((i, n) => <li key={n}><Icon icon={TriangleAlert} size="xs" /> {i.text}</li>)}
+                {orphans > 0 && <li><Icon icon={TriangleAlert} size="xs" /> 有 {orphans} 塊螢幕在模型裡找不到（模型換過、物件刪掉了，或已經被切開），存檔時會拿掉</li>}
+              </ul>
+            )}
+          </div>
+
+          <aside className="ledtpl-side">
+            <h3>螢幕 <small className="muted">{placedCount} / {screens.length} 塊在這個版型裡</small></h3>
+            {screens.length === 0 && <p className="muted small">這個專案還沒有 LED 物件。</p>}
+            <ul className="ledtpl-screens">
+              {screens.map(s => {
+                const it = itemByKey.get(s.key);
+                return (
+                  <li key={s.key} className={(it ? 'is-in' : '') + (s.key === selKey ? ' is-sel' : '')} onClick={() => { if (it) { setSelKey(s.key); setMode('template'); } }}>
+                    <span className="ledtpl-dot" style={{ background: colorOf(s) }} aria-hidden="true" />
+                    <span className="ledtpl-screens__name" title={s.name}>
+                      <strong>{s.name}{s.manual ? '（切開的）' : ''}</strong>
+                      <small className="muted">{it ? screenSizeLabel(s, it) : `實際 ${s.nativeW}×${s.nativeH}，不在版型裡（顯示黑的）`}</small>
+                    </span>
+                    {mode === 'full' && s.manual ? (
+                      <button className="btn btn--ghost ledtpl-mini" onClick={(e) => { e.stopPropagation(); void removeSplit(s.key.slice(2), s.name); }} disabled={busy} title="刪掉這塊切開的螢幕"><Icon icon={Trash2} size="xs" /> 刪掉</button>
+                    ) : it ? (
+                      <button className="btn btn--ghost ledtpl-mini" onClick={(e) => { e.stopPropagation(); removeScreen(s.key); }} title="從這個版型拿掉（這塊螢幕就顯示黑的）">拿掉</button>
+                    ) : (
+                      <button className="btn ledtpl-mini" onClick={(e) => { e.stopPropagation(); addScreen(s); }} title="加進版型：真實點數 × 比例的大小，放在畫布上的空位"><Icon icon={Plus} size="xs" /> 加入版型</button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+
+            {mode === 'template' && selItem && selDef && (
+              <div className="ledtpl-sel" role="group" aria-label={`選到的螢幕：${selDef.name}`}>
+                <h4>{selDef.name} <small className="muted">{screenSizeLabel(selDef, selItem)}</small></h4>
+                <div className="ledtpl-sel__grid">
+                  {(['x', 'y', 'w', 'h'] as const).map(k => (
+                    <label key={k}>{k === 'x' ? '左' : k === 'y' ? '上' : k === 'w' ? '寬' : '高'}
+                      <NumField
+                        value={selItem.dest[k]}
+                        min={k === 'w' || k === 'h' ? 1 : -65536}
+                        label={`${selDef.name} ${k === 'x' ? '左' : k === 'y' ? '上' : k === 'w' ? '寬' : '高'}`}
+                        onChange={(n) => patchItem(selItem.key, { dest: { ...selItem.dest, [k]: n } }, { tag: `f:${selItem.key}:${k}` })}
+                      />
+                    </label>
+                  ))}
+                </div>
+                <div className="ledtpl-sel__row">
+                  <label>轉動
+                    <select value={selItem.rotate} onChange={(e) => patchItem(selItem.key, setRotation(selItem, Number(e.target.value) as Rotation), {})}>
+                      {ROTATIONS.map(d => <option key={d} value={d}>{d}°</option>)}
+                    </select>
+                  </label>
+                  <label className="ledtpl-check"><input type="checkbox" checked={selItem.flipH} onChange={(e) => patchItem(selItem.key, { flipH: e.target.checked }, {})} /> 左右翻轉</label>
+                  <label className="ledtpl-check"><input type="checkbox" checked={selItem.flipV} onChange={(e) => patchItem(selItem.key, { flipV: e.target.checked }, {})} /> 上下翻轉</label>
+                </div>
+                <div className="ledtpl-sel__row">
+                  <button className="btn btn--ghost" onClick={() => apply(d => resetItemSize(d, selDef), {})} title="大小改回「真實點數 × 比例」">標準大小</button>
+                  <button className="btn btn--ghost" onClick={() => removeScreen(selItem.key)}>從版型拿掉</button>
+                </div>
+              </div>
+            )}
+            {mode === 'template' && !selItem && placedCount > 0 && <p className="muted small">點畫布上的螢幕（或清單裡的名字）來選它，就能在這裡改數字。</p>}
+          </aside>
+        </div>
+      )}
+    </section>
   );
 }
+

@@ -1,50 +1,52 @@
-.ledtpl-overlay {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(6px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 16px;
-  padding-left: max(16px, env(safe-area-inset-left));
-  padding-right: max(16px, env(safe-area-inset-right));
-  z-index: 1000;
-}
-.ledtpl {
-  background: var(--surface-1);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  width: 100%;
-  max-width: 980px;
-  max-height: calc(100dvh - 32px);
+/* LED 版型編輯器：編輯專案頁下方的面板（不蓋住 3D 畫面，3D 畫面會縮小讓出位置） */
+.ledtpl-dock {
+  flex: 0 0 auto;
+  height: clamp(380px, 52dvh, 640px);
   display: flex;
   flex-direction: column;
-  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  min-height: 0;
+  background: var(--surface-1);
+  border-top: 1px solid var(--border-strong);
+  box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.35);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  z-index: 20;
 }
-.ledtpl__head {
-  padding: 16px 22px;
-  border-bottom: 1px solid var(--border);
+.ledtpl-dock__head {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-.ledtpl__head h2 {
-  margin: 0 0 4px;
-  font-size: 16px;
-  font-weight: 700;
-  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
 }
-.ledtpl__head p {
+.ledtpl-dock__head h2 {
   margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  max-width: 720px;
+  font-size: 14px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
 }
-.ledtpl__close {
+.ledtpl-dock__pick {
+  max-width: min(420px, 100%);
+  min-width: 180px;
+}
+.ledtpl-dock__spacer {
+  flex: 1;
+}
+.ledtpl-dock__dirty {
+  font-size: 12px;
+  color: var(--warn);
+  white-space: nowrap;
+}
+.ledtpl-dock__danger {
+  color: var(--danger);
+}
+.ledtpl-dock__close {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -54,229 +56,311 @@
   border: none;
   color: var(--text-dim);
   cursor: pointer;
-  border-radius: 4px;
-  flex-shrink: 0;
+  border-radius: var(--radius-sm);
 }
-.ledtpl__close:hover {
+.ledtpl-dock__close:hover {
   background: var(--surface-2);
   color: var(--text);
 }
-.ledtpl__body {
-  display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  min-height: 0;
-  flex: 1;
-}
-.ledtpl__list {
-  border-right: 1px solid var(--border);
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  overflow-y: auto;
-}
-.ledtpl__fixed,
-.ledtpl__item {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 2px;
-  padding: 8px 10px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  text-align: left;
-  font-size: 12px;
-}
-.ledtpl__item {
-  cursor: pointer;
-  min-height: 40px;
-}
-.ledtpl__item:hover {
-  border-color: var(--border-strong);
-}
-.ledtpl__item.is-active {
-  border-color: var(--accent);
-  background: var(--surface-3, var(--surface-2));
-}
-.ledtpl__add {
-  justify-content: center;
-  min-height: 40px;
-}
-.ledtpl__note {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.5;
-}
-.ledtpl__editor {
-  padding: 14px 18px 18px;
-  overflow-y: auto;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.ledtpl__fields {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: flex-end;
-}
-.ledtpl__fields label {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 12px;
-  color: var(--text-dim);
-}
-.ledtpl__pair {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.ledtpl input,
-.ledtpl select {
-  font-size: 16px; /* iPhone 不會一點進去整頁被放大 */
+.ledtpl-dock .btn {
   min-height: 36px;
-  padding: 4px 8px;
+  white-space: nowrap;
+}
+.ledtpl-dock input,
+.ledtpl-dock select {
+  font-size: 16px; /* iPad 不會一點進去整頁被放大 */
+  min-height: 36px;
+  padding: 2px 8px;
   background: var(--surface-2);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   min-width: 0;
+  font-family: inherit;
 }
-.ledtpl input[type='checkbox'] {
+.ledtpl-dock input[type='checkbox'] {
   min-height: 0;
   width: 18px;
   height: 18px;
 }
-.ledtpl__pair input {
-  width: 92px;
-}
-.ledtpl__hint {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-}
-.ledtpl__table {
+.ledtpl-dock__empty {
+  padding: 28px 22px;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  overflow-x: auto;
+  gap: 10px;
+  align-items: flex-start;
+  font-size: 13px;
 }
-.ledtpl__row {
+.ledtpl-dock__body {
+  flex: 1;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 56px minmax(150px, 1.6fr) repeat(4, 74px) 78px 120px;
-  gap: 6px;
-  align-items: center;
-  min-width: 720px;
+  grid-template-columns: minmax(0, 1fr) 320px;
 }
-.ledtpl__row--head {
+.ledtpl-dock__stage {
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 12px 8px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ledtpl-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+}
+.ledtpl-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   font-size: 11px;
   color: var(--text-dim);
 }
-.ledtpl__row.is-off .ledtpl__name {
-  opacity: 0.6;
+.ledtpl-fields > label:first-child input {
+  width: 150px;
 }
-.ledtpl__check {
+.ledtpl-pair {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-height: 40px;
+  gap: 5px;
+  color: var(--text);
 }
-.ledtpl__name {
+.ledtpl-pair input {
+  width: 80px;
+}
+.ledtpl-pair select {
+  width: 88px;
+}
+.ledtpl-seg {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.ledtpl-seg button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 36px;
+  padding: 0 12px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  border: none;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ledtpl-seg button.is-on {
+  background: var(--accent-dim);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.ledtpl-issues {
+  list-style: none;
+  margin: 0;
+  padding: 4px 8px;
+  max-height: 3.9em;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--warn);
+  flex-shrink: 0;
+}
+.ledtpl-issues li {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+}
+.ledtpl-side {
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  padding: 8px 12px 10px;
   display: flex;
   flex-direction: column;
-  min-width: 0;
-  font-size: 12px;
+  gap: 8px;
 }
-.ledtpl__name strong,
-.ledtpl__name small {
+.ledtpl-side h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 700;
+}
+.ledtpl-side h3 small {
+  font-weight: 400;
+  margin-left: 6px;
+}
+.ledtpl-screens {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ledtpl-screens li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  min-height: 44px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+  opacity: 0.8;
+}
+.ledtpl-screens li.is-in {
+  opacity: 1;
+  cursor: pointer;
+}
+.ledtpl-screens li.is-sel {
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+.ledtpl-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.ledtpl-screens__name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  line-height: 1.3;
+}
+.ledtpl-screens__name > * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.ledtpl__flips {
-  display: flex;
-  gap: 8px;
+.ledtpl-screens__name small {
+  font-size: 11px;
+}
+.ledtpl-mini {
+  min-height: 36px;
+  padding: 0 8px;
   font-size: 12px;
+  flex-shrink: 0;
 }
-.ledtpl__flips label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-height: 40px;
-}
-.ledtpl__issues {
-  list-style: none;
-  margin: 0;
-  padding: 8px 10px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  font-size: 12px;
-  line-height: 1.5;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  color: var(--warn, #e0a030);
-}
-.ledtpl__actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.ledtpl__spacer {
-  flex: 1;
-}
-.ledtpl__delete {
-  color: var(--danger, #e5484d);
-}
-.ledtpl__empty {
-  padding: 28px 22px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  align-items: flex-start;
-  font-size: 13px;
-}
-.ledtpl__split {
+.ledtpl-sel {
   border-top: 1px solid var(--border);
-  padding-top: 10px;
-  font-size: 12px;
-}
-.ledtpl__split summary {
-  cursor: pointer;
-  min-height: 40px;
+  padding-top: 8px;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  gap: 8px;
+}
+.ledtpl-sel h4 {
+  margin: 0;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ledtpl-sel h4 small {
+  font-weight: 400;
+  font-size: 11px;
+}
+.ledtpl-sel__grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
 }
-.ledtpl__splitrow,
-.ledtpl__splitadd {
+.ledtpl-sel label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.ledtpl-sel__grid input {
+  width: 100%;
+  padding: 2px 4px;
+}
+.ledtpl-sel__row {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 10px;
+}
+.ledtpl-check {
+  flex-direction: row !important;
   align-items: center;
-  gap: 8px;
-  margin-top: 6px;
+  gap: 5px !important;
+  min-height: 36px;
+  font-size: 12px !important;
+  color: var(--text) !important;
 }
-.ledtpl__splitrow {
-  justify-content: space-between;
+.small {
+  font-size: 11px;
 }
-.ledtpl__splitadd input {
-  width: 72px;
+
+/* 手機：不給編輯 */
+.ledtpl-phone {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+  background: rgba(0, 0, 0, 0.7);
 }
-.ledtpl__splitadd input[aria-label='螢幕名稱'] {
-  width: 130px;
+.ledtpl-phone__box {
+  max-width: 360px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  padding: 24px 20px;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
 }
-@media (max-width: 760px) {
-  .ledtpl__body {
-    grid-template-columns: 1fr;
+.ledtpl-phone__box h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.ledtpl-phone__box p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* iPad 橫放（1180）：右邊欄窄一點 */
+@media (max-width: 1280px) {
+  .ledtpl-dock__body {
+    grid-template-columns: minmax(0, 1fr) 280px;
   }
-  .ledtpl__list {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    max-height: 190px;
+}
+/* 比 iPad 橫放窄（直放平板）：面板疊在頁面上，不擠壓下面的版面 */
+@media (max-width: 900px) {
+  .ledtpl-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: 62dvh;
+  }
+  .ledtpl-dock__body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) auto;
+    overflow-y: auto;
+  }
+  .ledtpl-side {
+    border-left: none;
+    border-top: 1px solid var(--border);
+    max-height: 36dvh;
   }
 }

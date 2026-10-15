@@ -1,7 +1,7 @@
 # LED 畫布版型 (LED canvas templates) — design
 
 Date: 2026-10-15. Approved by the owner on 2026-10-15 (see `HANDOFF.md`, 「已核准、排隊中：LED 畫布版型」). Like a disguise / d3 feed map.
-This document covers the whole feature and says which part ships when. **Part 1a (this document's "built now" items) is implemented on `feat/live-stage-look`, migration 0034.** Part 1b (visual editor) and parts 2, 3 are designed here, built later.
+This document covers the whole feature and says which part ships when. **Part 1a (this document's "built now" items) is implemented on `feat/live-stage-look`, migration 0034.** **Part 1b (visual editor, section 6a below) is implemented on the same branch, no backend change.** Parts 2, 3 are designed here, built later.
 
 UI strings are quoted exactly as they ship. Traditional Chinese, no emoji (icons via `Icon` + lucide), in-page dialogs only, no English role words (guard tests in `web/src/test/`).
 
@@ -115,9 +115,33 @@ Production `master` (old frontend) is older than this branch.
 | Part | Content | Status |
 |---|---|---|
 | **1a core** | This spec; migration 0034; API + permissions + share/version fields; pure logic + tests; shader remap (colour unchanged); numeric template form (name, canvas, scale, per-screen x/y/w/h/rotation/flip, manual splits by pixel rectangle) in the 「LED 版型」 dialog (`LedTemplatesDialog.tsx`, opened from the 編輯專案 top bar button 「版型」); per-song selector 「LED 版型」 on the 歌單 (shown once a custom template exists); upload resolution check; version label. Screen UV spans for the form come from the 3D view (`StageSceneQuery.ledSpans()`). | built |
-| **1b editor** | Visual drag-and-drop editor on the full canvas (drag, resize, rotate 90°, flip, type numbers, snap to pixel grid and neighbouring edges, red frame for overlap / out of canvas, draw manual splits); 3D live test pattern with screen names while editing; **download template PNG** (name + pixels, for AE); **duplicate template**. | later |
+| **1b editor** | Visual drag-and-drop editor (section 6a); 3D live test pattern with screen names while editing; **download template PNG**; **duplicate template**; manual split by drawing rectangles on the full canvas. | built (no backend change) |
 | **2 AE live / coordinate sheet** | NDI live (AE → helper → browser) honours the song template (the helper sends the template canvas; the shader remap applies to the NDI texture); export a **coordinate CSV** (screen, native rect, template rect, rotation, flip) for LED engineers / d3. | later |
 | **3 switch mid-song** | A song may change template at a cue. Needs a per-cue template choice and a time-based plan switch in the player. | later |
+
+### 6a. Part 1b: the visual editor (built)
+
+Shown only to 製作 (`RequireAdmin` page + `user.role === 'admin'`). On a phone (<= 640 px) the 「版型」 button opens a notice 「請用電腦編輯版型」 instead. iPad landscape (1180) works; below 900 px the panel overlays the page.
+
+**Where.** 編輯專案 → top bar 「版型」 opens a docked panel **under** the page body (`LedTemplatesDialog.tsx`, a flex child of `.editor`, `clamp(380px, 52dvh, 640px)`), so the 3D view shrinks instead of being covered and stays visible while editing. Header: template picker, 「新增版型」, 「複製版型」, 「下載模板圖」, 「刪除版型」, 「儲存」, close. Left: name / canvas size / scale / 「畫布剛好包住螢幕」 + a switch 「版型畫布」 / 「整張畫布（切螢幕）」 and the canvas. Right: the screen list (every screen, 「加入版型」 / 「拿掉」, 「實際 W×H → 這個版型 w×h」) and, for the selected screen, numeric fields (left, top, width, height, rotation, flips, 「標準大小」) that are two-way bound to the canvas.
+
+**Template canvas** (`LedTemplateCanvas.tsx`, maths in `lib/ledTemplateEdit.ts`):
+- Each placed screen is a labelled rectangle (name + 「實際 W×H → 這個版型 w×h」, a small arrow for the screen's up direction, tags for rotation / flips / stretched). Drag to move (3 px slop), four corner handles to resize (Shift keeps the aspect ratio), arrow keys nudge 1 px (Shift 10), Delete removes, Ctrl+Z / Ctrl+Shift+Z (Ctrl+Y) undo / redo (100 steps; a drag is one step; fast nudges and typing in one field coalesce).
+- Snap: positions are always whole pixels. Edges snap to the canvas edges and to every other screen's edges within 8 screen px (`SNAP_SCREEN_PX / zoom` in canvas px). Alt turns the edge snapping off (still whole pixels); guide lines show what it snapped to.
+- Overlap or outside the canvas = red outline (+ a red tag and the warning list under the canvas); the 1a `checkPlacements` warnings (stretch) stay. Nothing is forbidden.
+- 「轉 90°」 turns the selection clockwise and swaps width / height around the centre; 「左右翻轉」 / 「上下翻轉」 toggle the flips (turn first, then flip, same as the shader).
+- Zoom and pan: wheel zooms around the cursor, Shift + wheel / drag on empty space / middle button pans, two fingers pinch + pan on touch, buttons + 「符合畫面」 (fit).
+- 「加入版型」 places the screen at native size × template scale in the first free spot (top-to-bottom, left-to-right; if nothing fits, below everything, shown red).
+
+**Splitting** (`LedSplitCanvas.tsx`): on the full canvas the owner drags a rectangle (snaps to other screens' edges, Alt = no snap); a form appears (which LED object — guessed from the biggest overlap —, a name, numeric left / top / width / height) and 「切開」 calls the 1a `POST /led-screens` with the UV box. Existing objects are light frames (dashed once split), splits are solid; 「刪掉」 in the screen list calls the 1a delete.
+
+**Live test pattern.** While the panel is open the dock publishes `{ plan, defs }` (throttled to every 0.1 s) to `ProjectEditor`, which draws a canvas (`lib/useLedPatternCanvas.ts`, `lib/ledTemplateDraw.ts` `drawTemplatePattern`, at most 4096 px per side / 6 M px) and hands it to `StageScene` as `ledPreviewCanvas` + `ledPreviewVersion` together with the draft plan as `ledTemplate`. `StageScene` wraps the canvas in a `CanvasTexture` that takes the same slot as the video texture (`ledMediaTextureRef`), so the 3D uses the exact same template mapping path (`buildObjectUniforms` -> `uLedTplOn`); the preview texture wins over test pattern / per-object image / video while the panel is open. It never goes through the video colour path (`needsVideoSrgbDecode` only looks at `VideoTexture`; the video / image branch of the effect is untouched). Each screen is filled with its own colour (`panelHue(index)`), and drawn in **its own orientation** (matrix `localMatrix` = local native pixels -> template pixels), so a rotated or flipped screen is sideways / mirrored in the template image and upright on the stage: name, 「實際 W×H」, 「版型 w×h」, an up arrow, a 1-LED-pixel grid (every 100 / 50 / 10 native px) and a white triangle in the top-left corner (a mirrored screen shows it elsewhere). A wrong placement or rotation is obvious on the stage. Screens not in the template stay black.
+
+**Template PNG** (`renderTemplateGuidePng`, 「下載模板圖」): template canvas size, dark background, 100 / 500 px grid, per screen: tinted rectangle, name, 「w×h 像素」, position, 「上方朝右」 etc., and an arrow along the screen's up direction (text always upright), plus a legend box. File name `LED版型圖-專案-版型-WxH.png`. Uses a normal canvas with `exportScales` fallbacks; if the browser cannot allocate the full size the PNG is scaled down, the file name gets `-縮小N%` and a toast says how to scale the layer back in AE; if even the smallest fails, an error toast.
+
+**Duplicate** (「複製版型」): asks for a name in the in-page prompt (default 「名稱 複本」, unique, case-insensitive), then creates the copy from what is on screen (unsaved edits included) and selects it.
+
+Pure logic with tests: `lib/ledTemplateEdit.ts` (+ `.test.ts`), `lib/ledTemplateDraft.ts` (+ `.test.ts`), `lib/ledTemplatePattern.ts` (+ `.test.ts`). No backend change.
 
 ## 7. Tests
 

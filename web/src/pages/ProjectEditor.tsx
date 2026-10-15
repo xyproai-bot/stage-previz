@@ -48,6 +48,7 @@ import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
 import LedTemplatesDialog from '../components/LedTemplatesDialog';
 import { useLedTemplates } from '../lib/useLedTemplates';
+import { useLedPatternCanvas, type LedPatternSource } from '../lib/useLedPatternCanvas';
 import { setSongTemplate } from '../lib/ledTemplateApi';
 import SongVideosDialog from '../components/SongVideosDialog';
 import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
@@ -195,6 +196,9 @@ export default function ProjectEditor() {
   // LED 畫布版型（數字表單；每首歌選用哪個）
   const ledTpls = useLedTemplates(projectId);
   const [ledTplOpen, setLedTplOpen] = useState(false);
+  // 編輯版型時 3D 的 LED 顯示的測試圖（面板關掉 = null，LED 照原本的）
+  const [tplPreview, setTplPreview] = useState<LedPatternSource | null>(null);
+  const tplPattern = useLedPatternCanvas(tplPreview);
   const customLedTemplates = useMemo(() => (ledTpls.list?.templates ?? []).filter(t => t.kind === 'custom'), [ledTpls.list]);
   const ledObjectInfos = useMemo(
     () => stageObjects.filter(o => o.category === 'led_panel').map(o => ({ id: o.id, name: o.displayName || o.meshName, order: o.order })),
@@ -947,7 +951,7 @@ export default function ProjectEditor() {
     { key: 'diff', label: '對比', menuLabel: '兩個 cue 對比', title: '兩個 cue 並排對比', icon: Columns2, onSelect: () => setDiffOpen(true), disabled: !selectedSong || masterCues.length < 2, secondary: true },
     { key: 'import', label: '匯入 Cue', menuLabel: '從別首歌匯入 cue', title: '從別首歌匯入 cue（巡迴複製、跨專案沿用）', icon: Import, onSelect: () => setImportCuesOpen(true), disabled: !selectedSong, secondary: true },
     { key: 'search', label: '搜留言', menuLabel: '搜尋留言', title: '搜尋專案內所有歌的留言', icon: Search, onSelect: () => setCommentSearchOpen(true), secondary: true },
-    ...(ledTpls.loaded && !ledTpls.list ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => setLedTplOpen(true), secondary: true }]),
+    ...(user?.role !== 'admin' || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => setLedTplOpen(true), secondary: true }]),
     { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
     { key: 'invite', label: '邀請', menuLabel: '邀請連結', title: '邀請連結：傳給導演 / 動畫師，點開就加進這個專案（不用登入碼）', icon: UserPlus, onSelect: () => setInviteOpen(true) },
     { key: 'drive', label: 'Drive', menuLabel: projectMeta?.drive_folder_id ? 'Drive 來源（已設定）' : 'Drive 來源', title: 'Drive 來源設定', icon: Cloud, onSelect: () => setDriveOpen(true), secondary: true },
@@ -1237,6 +1241,9 @@ export default function ProjectEditor() {
               projectName={projectMeta?.name}
               ledCanvas={view.ledCanvas}
               onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
+              ledTemplate={tplPreview?.plan ?? null}
+              ledPreviewCanvas={tplPreview ? tplPattern.canvas : null}
+              ledPreviewVersion={tplPattern.version}
             />
           )}
           {/* 機關時間軸：開「機關」分頁時排在 3D 畫面下面（右邊欄太窄） */}
@@ -1382,9 +1389,11 @@ export default function ProjectEditor() {
       />
 
       <LedTemplatesDialog
-        open={ledTplOpen}
+        open={ledTplOpen && user?.role === 'admin'}
         projectId={projectId || ''}
+        projectName={projectMeta?.name}
         onClose={() => setLedTplOpen(false)}
+        onPreview={setTplPreview}
         list={ledTpls.list}
         ledObjects={ledObjectInfos}
         getSpans={() => mech.sceneQueryRef.current?.ledSpans?.() ?? null}
