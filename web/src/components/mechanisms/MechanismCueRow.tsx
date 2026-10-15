@@ -1,10 +1,10 @@
 // 機關分頁上面：「這個 cue 的機關位置」的一列（一個機關）
 //   名稱 · 方向字 · 現在的值 · 來源（這個 cue 設定 / 沿用「…」/ 預設位置）
 //   常用位置（點一下就存）、滑桿（拖的時候 3D 邊拖邊看、放手才存；離常用位置很近會吸過去，按住 Alt 不吸）、
-//   數字欄位（Enter 或點別的地方就存）、回到沿用上一個 cue；來不及到位 / 超出行程的提醒
+//   數字欄位（Enter 或點別的地方就存）、回到沿用上一個 cue；超出行程的提醒、被下一個 cue 接手的說明（灰色）
 //   v2：這個 cue 自己設的「延遲 N 秒、走 N 秒」（空白 = 跟著 cue；只有這個 cue 自己設了位置才有）
 import { useEffect, useRef, useState } from 'react';
-import { CornerDownRight, Gauge, Move3d, MoveHorizontal, MoveVertical, RotateCcw, RotateCw, TimerReset, TriangleAlert } from 'lucide-react';
+import { CornerDownRight, Info, Move3d, MoveHorizontal, MoveVertical, RotateCcw, RotateCw, TimerReset, TriangleAlert } from 'lucide-react';
 import Icon from '../Icon';
 import { directionWord, parseTimingSeconds, presetAt, snapToPreset, unitOf, valueDecimals, type Mechanism, type MechanismTiming, type MechVec3 } from '../../lib/mechanisms/model';
 import { sheetTime } from '../../lib/mechanisms/cueSheet';
@@ -20,8 +20,6 @@ interface Props {
   /** cue id → 名稱（「沿用「主歌」」） */
   cueName: (cueId: string) => string;
   check?: MechCheck;
-  /** 這個 cue 的「照機器速度」秒數（所有機關最大的） */
-  cueFix: number | null;
   front: MechVec3 | null;
   focused: boolean;
   disabled?: boolean;
@@ -29,7 +27,6 @@ interface Props {
   onCommit: (value: number) => void;
   onPreview: (value: number | null) => void;
   onClear: () => void;
-  onFix: (seconds: number) => void;
   /** v2：這個 cue 自己設的時間（沒設 = null）；showTiming = 這個 cue 自己設了位置、不是第一個 cue */
   timing?: MechanismTiming | null;
   showTiming?: boolean;
@@ -41,7 +38,7 @@ interface Props {
 }
 
 export default function MechanismCueRow({
-  mech, resolved, editingDefault, cueName, check, cueFix, front, focused, disabled, onFocus, onCommit, onPreview, onClear, onFix,
+  mech, resolved, editingDefault, cueName, check, front, focused, disabled, onFocus, onCommit, onPreview, onClear,
   timing = null, showTiming = false, cueSpan = null, cueLabel = (id) => cueName(id), onTiming,
 }: Props) {
   const unit = unitOf(mech.kind);
@@ -116,59 +113,17 @@ export default function MechanismCueRow({
   const word = directionWord(mech, front);
   const kindIcon = mech.kind === 'rotary' ? RotateCw : word === '上下' ? MoveVertical : word === '左右' ? MoveHorizontal : Move3d;
   const fmt = (v: number) => formatMechValue(v, mech.kind);
-  const speed = mech.maxSpeed !== null ? fmt(mech.maxSpeed) : '';
-
-  type Action = { label: string; title: string; run: () => void };
-  const warnings: { key: string; text: string; actions?: Action[] }[] = [];
-  const onlyThis = (sec: number): Action => ({
-    label: `只改這個機關（走 ${formatSeconds(sec)} 秒）`,
-    title: `只讓「${mech.name}」在這個 cue 走 ${formatSeconds(sec)} 秒；轉場和其他物件不變`,
-    run: () => onTiming?.({ durationSec: sec }),
-  });
-  if (check && !editingDefault) {
-    const verb = mech.kind === 'rotary' ? '轉' : '走';
-    if (check.status === 'tooFast' && check.explicitDuration) {
-      warnings.push({
-        key: 'fast',
-        text: `走 ${formatSeconds(check.available ?? 0)} 秒太快：這段要${verb} ${fmt(check.distance)}（最高 ${speed}/秒），需要 ${formatSeconds(check.need ?? 0)} 秒`,
-        actions: check.durationFix !== null && onTiming ? [{
-          label: `照機器速度（走 ${formatSeconds(check.durationFix)} 秒）`,
-          title: `只改「${mech.name}」：在這個 cue 走 ${formatSeconds(check.durationFix)} 秒（轉場和其他物件不變）`,
-          run: () => onTiming({ durationSec: check.durationFix }),
-        }] : [],
-      });
-    } else if (check.status === 'tooFast' && check.reason === 'gap') {
-      warnings.push({
-        key: 'gap',
-        text: `跟上一個 cue 只隔 ${formatSeconds(check.gap ?? 0)} 秒，機器需要 ${formatSeconds(check.need ?? 0)} 秒：把這個 cue 的影片時間往後挪，或減少行程`,
-        actions: check.durationFix !== null && onTiming && showTiming ? [onlyThis(check.durationFix)] : [],
-      });
-    } else if (check.status === 'tooFast') {
-      const actions: Action[] = [];
-      if (cueFix !== null) {
-        actions.push({
-          label: `照機器速度（${formatSeconds(cueFix)} 秒）`,
-          title: `把這個 cue 的轉場改成 ${formatSeconds(cueFix)} 秒；這個 cue 的其他物件也會用 ${formatSeconds(cueFix)} 秒移動`,
-          run: () => onFix(cueFix),
-        });
-      }
-      if (check.durationFix !== null && onTiming && showTiming) actions.push(onlyThis(check.durationFix));
-      warnings.push({
-        key: 'fast', actions,
-        text: `轉場 ${formatSeconds(check.available ?? 0)} 秒太快：這段要${verb} ${fmt(check.distance)}（最高 ${speed}/秒），需要 ${formatSeconds(check.need ?? 0)} 秒`,
-      });
-    } else if (check.lateBy !== null) {
-      warnings.push({ key: 'late', text: `上一段還沒走完，會晚 ${formatSeconds(check.lateBy)} 秒到位` });
-    }
-    if (check.cut) {
-      const who = `${cueLabel(check.cut.byCueId)} ${sheetTime(check.cut.at)}`;
-      warnings.push({
-        key: 'cut',
-        text: check.cut.started
-          ? `還沒走完，${who} 就接手了：只走到 ${fmt(check.cut.reached)}`
-          : `還沒開始動，${who} 就接手了`,
-      });
-    }
+  // 提醒（橘色）：存的位置超出行程。說明（灰色）：被下一個 cue 接手，預覽時機關在這裡停下來
+  const warnings: { key: string; text: string }[] = [];
+  const notes: { key: string; text: string }[] = [];
+  if (check?.cut && !editingDefault) {
+    const who = `${cueLabel(check.cut.byCueId)} ${sheetTime(check.cut.at)}`;
+    notes.push({
+      key: 'cut',
+      text: check.cut.started
+        ? `還沒走完，${who} 就接手了：預覽時只走到 ${fmt(check.cut.reached)}`
+        : `還沒開始動，${who} 就接手了：預覽時這一段不會動`,
+    });
   }
   if (!editingDefault && resolved.clamped) {
     warnings.push({ key: 'range', text: `存的是 ${fmt(resolved.stored)}，超出行程（${fmt(mech.travelMin)} ~ ${fmt(mech.travelMax)}），播放時停在 ${fmt(resolved.value)}` });
@@ -321,16 +276,12 @@ export default function MechanismCueRow({
         <div key={w.key} className="mech-warn" role="status">
           <Icon icon={TriangleAlert} size="sm" className="mech-warn__icon" />
           <span>{w.text}</span>
-          {w.actions?.map(a => (
-            <button
-              key={a.label}
-              type="button"
-              className="btn btn--ghost btn--sm mech-warn__fix"
-              disabled={disabled}
-              title={a.title}
-              onClick={a.run}
-            ><Icon icon={Gauge} /> {a.label}</button>
-          ))}
+        </div>
+      ))}
+      {notes.map(n => (
+        <div key={n.key} className="mech-note" role="status">
+          <Icon icon={Info} size="sm" className="mech-note__icon" />
+          <span>{n.text}</span>
         </div>
       ))}
     </li>

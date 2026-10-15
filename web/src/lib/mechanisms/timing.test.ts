@@ -30,21 +30,21 @@ describe('延遲 / 走幾秒', () => {
   // a 0 秒；b 30 秒到位、轉場 20 → GO 10 秒；c 40 秒、轉場 5 → GO 35；d 60 秒、轉場 10 → GO 50
   const cues = [cue('a', 0, 0, 0), cue('b', 1, 30, 20), cue('c', 2, 40, 5), cue('d', 3, 60, 10)];
 
-  it('GO 後 2 秒開始、走 8 秒：12 秒開始動，20 秒到位；沒填速度照設定走', () => {
+  it('GO 後 2 秒開始、走 8 秒：12 秒開始動，20 秒到位', () => {
     const { tl, check } = timelineOf([free], cues, [P('a', 'free', 0), P('b', 'free', 4, 2, 8)]);
     expect(tl.valueAt('free', 11.99)).toBe(0);
     expect(tl.valueAt('free', 12)).toBe(0);
     expect(tl.valueAt('free', 16)).toBeCloseTo(2, 9);
     expect(tl.valueAt('free', 20)).toBe(4);
     const mv = tl.moveFor('b', 'free')!;
-    expect(mv).toMatchObject({ start: 12, duration: 8, plannedEnd: 20, end: 20, explicitDelay: true, explicitDuration: true });
-    expect(check.cues.get('b')!.items.free).toMatchObject({ status: 'noSpeed', delay: 2, available: 8, startAt: 12, endAt: 20 });
+    expect(mv).toMatchObject({ start: 12, duration: 8, end: 20, explicitDelay: true, explicitDuration: true });
+    expect(check.cues.get('b')!.items.free).toMatchObject({ status: 'move', delay: 2, available: 8, startAt: 12, endAt: 20 });
   });
 
   it('沒設 = 跟著 cue（v1）：GO 出發、到位時間到；時間不沿用到下一個 cue', () => {
     const { tl, check } = timelineOf([free], cues, [P('b', 'free', 4, 2, 8), P('c', 'free', 1)]);
     // c 自己設了位置、沒設時間 → 35 秒出發、40 秒到（跟著轉場 5 秒），不會沿用 b 的延遲 2 / 走 8
-    expect(tl.moveFor('c', 'free')).toMatchObject({ start: 35, duration: 5, plannedEnd: 40, explicitDelay: false, explicitDuration: false });
+    expect(tl.moveFor('c', 'free')).toMatchObject({ start: 35, duration: 5, end: 40, explicitDelay: false, explicitDuration: false });
     expect(check.cues.get('c')!.items.free).toMatchObject({ delay: 0, available: 5, explicitDuration: false });
   });
 
@@ -54,23 +54,24 @@ describe('延遲 / 走幾秒', () => {
     expect(tl.valueAt('free', 37)).toBeCloseTo(4 * 25 / 30, 9);
     expect(tl.valueAt('free', 42)).toBe(4);
     expect(check.cues.get('c')!.items.free.status).toBe('still');
-    expect(check.cues.get('c')!.items.free.lateBy).toBeNull();   // 故意走比較久，不算晚到
-    expect(check.problemCueIds).toEqual([]);
+    expect(check.cues.get('c')!.items.free.cut).toBeNull();   // 故意走比較久，沿用的 cue 不會打斷它
   });
 
-  it('走幾秒太短：太快（只改這個機關 → 走 14 秒），照最高速度晚到；改轉場沒用', () => {
+  it('走幾秒設得很短：照設的走，不管機器最高速度（升降台 0.25 m/秒，8 秒也走 3.5 m）', () => {
     const { tl, check } = timelineOf([lift], cues, [P('b', 'lift', 3.5, 2, 8)]);
     const c = check.cues.get('b')!;
-    expect(c.items.lift).toMatchObject({ status: 'tooFast', need: 14, available: 8, fix: null, durationFix: 14, explicitDuration: true });
-    expect(c.items.lift.lateBy).toBeCloseTo(6, 9);
-    expect(c.fix).toBeNull();
-    expect(tl.valueAt('lift', 26)).toBe(3.5);
-    expect(tl.valueAt('lift', 19)).toBeCloseTo(1.75, 9);
+    expect(c.items.lift).toMatchObject({ status: 'move', available: 8, delay: 2, startAt: 12, endAt: 20, explicitDuration: true, cut: null });
+    expect(tl.valueAt('lift', 12)).toBe(0);
+    expect(tl.valueAt('lift', 16)).toBeCloseTo(1.75, 9);
+    expect(tl.valueAt('lift', 20)).toBe(3.5);
+    expect(tl.moveFor('b', 'lift')).toMatchObject({ start: 12, duration: 8, end: 20 });
   });
 
-  it('跟著轉場也太快：照機器速度（改轉場）跟只改這個機關兩種都給', () => {
-    const { check } = timelineOf([lift], [cue('a', 0, 0, 0), cue('b', 1, 30, 5)], [P('b', 'lift', 3.5)]);
-    expect(check.cues.get('b')!.items.lift).toMatchObject({ status: 'tooFast', fix: 14, durationFix: 14, reason: null });
+  it('跟著轉場很短：GO 出發、到位時間準時到', () => {
+    const { tl, check } = timelineOf([lift], [cue('a', 0, 0, 0), cue('b', 1, 30, 5)], [P('b', 'lift', 3.5)]);
+    expect(check.cues.get('b')!.items.lift).toMatchObject({ status: 'move', available: 5, startAt: 25, endAt: 30, explicitDuration: false });
+    expect(tl.valueAt('lift', 27.5)).toBeCloseTo(1.75, 9);
+    expect(tl.valueAt('lift', 30)).toBe(3.5);
   });
 
   it('下一個自己設了的 cue 在這段走完前出發 → 從半路接手、這一段標「被接手」', () => {
@@ -79,9 +80,9 @@ describe('延遲 / 走幾秒', () => {
     expect(tl.moveFor('c', 'lift')!.cut).toEqual({ byCueId: 'd', at: 50, reached: 2.75, started: true });
     expect(check.cues.get('c')!.items.lift.cut).toMatchObject({ byCueId: 'd', reached: 2.75 });
     expect(tl.valueAt('lift', 50)).toBeCloseTo(2.75, 9);
-    // d 從 2.75 出發：要 11 秒、只有 10 秒 → 晚 1 秒
-    expect(check.cues.get('d')!.items.lift.lateBy).toBeCloseTo(1, 9);
-    expect(check.problemCueIds).toEqual(['c', 'd']);
+    // d 從 2.75 出發、照 cue 的轉場 10 秒走完：60 秒準時到 0
+    expect(tl.valueAt('lift', 55)).toBeCloseTo(1.375, 9);
+    expect(tl.valueAt('lift', 60)).toBe(0);
   });
 
   it('延遲太久：還沒開始動就被下一個 cue 接手 → 取消', () => {
@@ -103,7 +104,7 @@ describe('延遲 / 走幾秒', () => {
 
 describe('點 cue：先等延遲再走', () => {
   const m = [{ id: 'lift', maxSpeed: 0.25 }, { id: 'free', maxSpeed: null }];
-  it('照設定走（管理頁）：等 2 秒、走 8 秒；照機器速度：至少 14 秒；直接到位：不等', () => {
+  it('照設定走：等 2 秒、走 8 秒；舊的 real 一樣；直接到位：不等', () => {
     const tw = new MechanismTweener();
     tw.retarget(m, { lift: 0, free: 0 }, 0, { animate: false, minSeconds: 0 });
     tw.retarget(m, { lift: 3.5, free: 4 }, 0, {
@@ -116,9 +117,9 @@ describe('點 cue：先等延遲再走', () => {
     expect(tw.isMoving(1000)).toBe(true);
 
     tw.retarget(m, { lift: 0, free: 4 }, 20000, { animate: true, minSeconds: 0, motion: 'real', timings: { lift: { delaySec: 1, durationSec: 2 } } });
-    expect(tw.valueAt('lift', 21000)).toBe(3.5);
-    expect(tw.valueAt('lift', 28000)).toBeCloseTo(1.75, 9);  // 照最高速度要 14 秒
-    expect(tw.valueAt('lift', 35000)).toBe(0);
+    expect(tw.valueAt('lift', 21000)).toBe(3.5);              // 等 1 秒
+    expect(tw.valueAt('lift', 22000)).toBeCloseTo(1.75, 9);   // 走 2 秒（不管最高速度 0.25 m/秒）
+    expect(tw.valueAt('lift', 23000)).toBe(0);
 
     tw.retarget(m, { lift: 2, free: 4 }, 40000, { animate: true, minSeconds: 0, motion: 'instant', timings: { lift: { delaySec: 5, durationSec: 5 } } });
     expect(tw.valueAt('lift', 40000)).toBe(2);
@@ -176,11 +177,14 @@ describe('機關總表：延遲 / 開始時間 / 走幾秒', () => {
       songs: [song], mechanisms: [mech], front: { x: 0, y: 0, z: 1 },
       positions: [P('b', 'lift', 3.5, 2, 8), P('c', 'lift', 2, null, 30), P('d', 'lift', 0)],
     });
-    expect(csv.replace(/^﻿/, '').split('\r\n').slice(1, 5)).toEqual([
-      'S01 開場,1,暗場,0:00.0,0:00.0,0,中央升降台,Axis 3,,0.000,m,,,,,,,,0.25,起始位置',
-      'S01 開場,2,升起,0:10.0,0:30.0,20,中央升降台,Axis 3,0.000,3.500,m,,3.500,2.0,0:12.0,8.0,14.0,0.438,0.25,太快：要走 14 秒',
-      'S01 開場,3,半降,0:35.0,0:40.0,5,中央升降台,Axis 3,3.500,2.000,m,,1.500,0.0,0:35.0,30.0,6.0,0.050,0.25,被 Cue 4 接手，只走到 2.750',
-      'S01 開場,4,收起,0:50.0,1:00.0,10,中央升降台,Axis 3,2.000,0.000,m,,2.000,0.0,0:50.0,10.0,8.0,0.200,0.25,會晚 1 秒到位',
+    expect(csv.replace(/^\ufeff/, '').split('\r\n').slice(0, 5)).toEqual([
+      '歌曲 Song,Cue #,Cue 名稱 Cue name,GO 時間 GO,到位時間 Arrive,轉場(秒) Move s,機關 Axis,控台編號 Console,起點 From,目標 Target,單位 Unit,常用位置 Preset,行程 Distance,延遲(秒) Delay s,開始時間 Start,走幾秒 Axis s,備註 Note',
+      'S01 開場,1,暗場,0:00.0,0:00.0,0,中央升降台,Axis 3,,0.000,m,,,,,,起始位置',
+      'S01 開場,2,升起,0:10.0,0:30.0,20,中央升降台,Axis 3,0.000,3.500,m,,3.500,2.0,0:12.0,8.0,',
+      'S01 開場,3,半降,0:35.0,0:40.0,5,中央升降台,Axis 3,3.500,2.000,m,,1.500,0.0,0:35.0,30.0,被 Cue 4 接手，只走到 2.750',
+      'S01 開場,4,收起,0:50.0,1:00.0,10,中央升降台,Axis 3,2.000,0.000,m,,2.000,0.0,0:50.0,10.0,',
     ]);
+    // 沒有速度欄位、沒有「太快」「來不及」「晚」這類字
+    expect(csv).not.toMatch(/速度|Speed|Max|太快|來不及|會晚|Need|需要/);
   });
 });

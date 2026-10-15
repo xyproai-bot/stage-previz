@@ -3,6 +3,8 @@
 Date: 2026-10-14. Status: implemented on `feat/live-stage-look` (see section 15 for what changed during implementation). Roadmap: `docs/ROADMAP.md` section 3.
 Branch at time of writing: `feat/live-stage-look`. Migration number: **0023**. 0022 belongs to the invite-links work, and the two have no dependency on each other.
 
+> **2026-10-15 update:** the speed checks described below (max speed, 「太快」 / late warnings, 「照機器速度」, the 「照機器速度播放」 toggle and the `'real'` motion mode, the speed CSV columns) were removed by the owner. This is a preview tool, so mechanisms always move exactly as the timing set per cue. See `2026-10-15-mechanism-v2-design.md`, the note under the title. The `max_speed` column and API field stay for compatibility.
+
 Language: this spec is in English. Every string that appears in the UI is quoted in Traditional Chinese, exactly as it should ship. The UI uses no emoji, only the `Icon` component (`web/src/components/Icon.tsx`, lucide-react). `web/src/test/noEmojiInUi.test.ts` enforces this.
 
 ---

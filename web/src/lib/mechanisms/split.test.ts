@@ -262,7 +262,8 @@ describe('機關總表：對開寫兩行（各自的名稱和控台編號）', (
     expect(legend[1]).toContain('升降門（A 邊）（Axis 7）：直線，0 = cue 裡原本的位置，正的數字往左（觀眾看過去）');
     expect(legend[2]).toContain('升降門（B 邊）（Axis 8）：直線，0 = cue 裡原本的位置，正的數字往右（觀眾看過去）');
     expect(legend[1]).toContain('對開：A 邊、B 邊同一個數字，往反方向動');
-    expect(legend[1]).toContain('行程 0 m ~ 4 m；最高 0.5 m/秒');
+    expect(legend[1]).toContain('行程 0 m ~ 4 m');
+    expect(legend[1]).not.toMatch(/最高|速度/);
   });
 
   it('翻轉的說明寫選的邊緣和正的角度', () => {

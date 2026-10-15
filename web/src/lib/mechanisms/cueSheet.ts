@@ -1,9 +1,9 @@
 // 機關總表（給自動化控台操作員）：CSV，用 Excel 打開；整個專案每首歌、每個正式 cue、每個機關一行，下面附機關說明。
-// 跟機關分頁的提醒用同一套計算（track.ts 沿用、motion.ts 速度檢查）→ 總表跟畫面上說的一模一樣。
+// 跟機關分頁用同一套計算（track.ts 沿用、motion.ts 時間表）→ 總表跟畫面上說的一模一樣。
 //
 // 檔案格式：UTF-8 加 BOM（不然 Windows 的 Excel 中文會亂碼）、CRLF 換行、逗號分隔、RFC 4180 引號。
 // 文字開頭是 = + - @ → 前面加 '（不讓 Excel 當成公式）；數字欄位不加（負數照樣是數字）。
-// 數字：公尺 3 位小數（毫米）、度 1 位、秒 1 位、速度 m/秒 3 位 / °/秒 1 位；時間用影片時間 m:ss.s。
+// 數字：公尺 3 位小數（毫米）、度 1 位、秒 1 位；時間用影片時間 m:ss.s。
 
 import {
   LINEAR_DIRECTIONS, ROTARY_AXES, matchLinearDirection, matchRotaryAxis, presetAt, splitConsoleLabel, splitSideGeometry, splitSideName, unitOf, valueAxes,
@@ -36,8 +36,7 @@ const numCell = (v: string | null): Cell => (v === null ? null : { t: 'num', v }
 
 export const SHEET_HEADER = [
   '歌曲 Song', 'Cue #', 'Cue 名稱 Cue name', 'GO 時間 GO', '到位時間 Arrive', '轉場(秒) Move s', '機關 Axis', '控台編號 Console',
-  '起點 From', '目標 Target', '單位 Unit', '常用位置 Preset', '行程 Distance', '延遲(秒) Delay s', '開始時間 Start', '走幾秒 Axis s', '需要(秒) Need s',
-  '速度(單位/秒) Speed', '最高速度 Max', '檢查 Check',
+  '起點 From', '目標 Target', '單位 Unit', '常用位置 Preset', '行程 Distance', '延遲(秒) Delay s', '開始時間 Start', '走幾秒 Axis s', '備註 Note',
 ];
 
 /** 影片時間 m:ss.s（0:00.0、1:05.0） */
@@ -52,21 +51,14 @@ const fixed = (v: number, d: number) => { const s = v.toFixed(d); return /^-0(\.
 const valueText = (v: number, kind: Mechanism['kind']) => fixed(v, kind === 'rotary' ? 1 : 3);
 const trimNum = (v: number) => String(Math.round(v * 1000) / 1000);
 
-function checkText(c: MechCheck, cueNo: (id: string) => number, kind: Mechanism['kind']): string {
-  const cut = c.cut
-    ? (c.cut.started
-      ? `被 Cue ${cueNo(c.cut.byCueId)} 接手，只走到 ${valueText(c.cut.reached, kind)}`
-      : `還沒動就被 Cue ${cueNo(c.cut.byCueId)} 接手`)
-    : null;
-  switch (c.status) {
-    case 'start': return '起始位置';
-    case 'still': return c.lateBy ? `會晚 ${formatSeconds(c.lateBy)} 秒到位` : '不動';
-    case 'noSpeed': return cut ?? '沒填最高速度';
-    case 'ok': return cut ?? (c.lateBy ? `會晚 ${formatSeconds(c.lateBy)} 秒到位` : 'OK');
-    case 'tooFast':
-      if (c.explicitDuration) return `太快：要走 ${formatSeconds(c.durationFix ?? 0)} 秒`;
-      return c.fix !== null ? `太快：轉場要 ${formatSeconds(c.fix)} 秒` : `太快：跟上一個 cue 只隔 ${formatSeconds(c.gap ?? 0)} 秒`;
-  }
+/** 備註：起始位置 / 不動 / 被後面的 cue 接手（照時間走的一般移動不寫） */
+function noteText(c: MechCheck, cueNo: (id: string) => number, kind: Mechanism['kind']): string {
+  if (c.status === 'start') return '起始位置';
+  if (c.status === 'still') return '不動';
+  if (!c.cut) return '';
+  return c.cut.started
+    ? `被 Cue ${cueNo(c.cut.byCueId)} 接手，只走到 ${valueText(c.cut.reached, kind)}`
+    : `還沒動就被 Cue ${cueNo(c.cut.byCueId)} 接手`;
 }
 
 /** 表格的每一行（還沒變成 CSV） */
@@ -91,10 +83,8 @@ export function sheetRows(input: SheetInput): Cell[][] {
       for (const m of mechs) {
         const c = check.cues.get(cue.id)?.items[m.id];
         if (!c) continue;
-        const moving = c.status === 'ok' || c.status === 'tooFast' || c.status === 'noSpeed';
+        const moving = c.status === 'move';
         const preset = presetAt(m.presets, c.to);
-        const speed = moving && c.available && c.available > 0
-          ? fixed(c.distance / c.available, m.kind === 'rotary' ? 1 : 3) : null;
         // 對開：A 邊、B 邊各一行（數字、檢查都一樣，名稱和控台編號各自的）
         for (const side of m.variant === 'split' ? (['a', 'b'] as const) : [null]) rows.push([
           text(songLabel),
@@ -113,10 +103,7 @@ export function sheetRows(input: SheetInput): Cell[][] {
           numCell(moving ? fixed(c.delay, 1) : null),
           text(moving && c.startAt !== null ? sheetTime(c.startAt) : null),
           numCell(moving && c.available !== null ? fixed(c.available, 1) : null),
-          numCell((c.status === 'ok' || c.status === 'tooFast') && c.need !== null ? fixed(c.need, 1) : null),
-          numCell(speed),
-          numCell(m.maxSpeed === null ? null : trimNum(m.maxSpeed)),
-          text(checkText(c, cueNo, m.kind)),
+          text(noteText(c, cueNo, m.kind)),
         ]);
       }
     });
@@ -147,11 +134,8 @@ function directionText(m: Mechanism, side: MechanismSide | null, f: MechVec3): s
   return m.variant === 'split' ? `${dir}（對開：A 邊、B 邊同一個數字，往反方向動）` : dir;
 }
 
-function limitParts(m: Mechanism, u: (v: number) => string, unit: string): string[] {
-  const parts = [
-    `行程 ${u(m.travelMin)} ~ ${u(m.travelMax)}`,
-    m.maxSpeed !== null ? `最高 ${trimNum(m.maxSpeed)}${unit === '°' ? '°' : ' m'}/秒` : '沒填最高速度（不檢查）',
-  ];
+function limitParts(m: Mechanism, u: (v: number) => string): string[] {
+  const parts = [`行程 ${u(m.travelMin)} ~ ${u(m.travelMax)}`];
   if (m.presets.length) parts.push(`常用位置 ${m.presets.map(p => `${p.name} ${trimNum(p.value)}`).join(' / ')}`);
   return parts;
 }
@@ -173,10 +157,10 @@ export function sheetLegend(mechanisms: Mechanism[], front?: MechVec3 | null): s
       const label = side ? splitConsoleLabel(m, side) : m.consoleLabel;
       const name = side ? splitSideName(m.name, side) : m.name;
       const head = label ? `${name}（${label}）` : name;
-      lines.push(`# ${[`${head}：${directionText(m, side, f)}`, ...limitParts(m, u, unit)].join('；')}`);
+      lines.push(`# ${[`${head}：${directionText(m, side, f)}`, ...limitParts(m, u)].join('；')}`);
     }
   }
-  lines.push('# 註：需要秒數 = 行程 ÷ 最高速度，以等速計算、沒有算加減速，實際會再久一點。GO 時間 = 到位時間 − 轉場（不會早於上一個 cue 到位）；開始時間 = GO 時間 + 延遲；走幾秒沒另外設 = 跟著 cue 的轉場。沒有影片時間的 cue 由現場叫 GO。');
+  lines.push('# 註：機關照設定的時間等速移動（沒有算加減速）。GO 時間 = 到位時間 − 轉場（不會早於上一個 cue 到位）；開始時間 = GO 時間 + 延遲；走幾秒沒另外設 = 跟著 cue 的轉場。沒有影片時間的 cue 由現場叫 GO。');
   return lines;
 }
 

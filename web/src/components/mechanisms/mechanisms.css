@@ -24,9 +24,9 @@
 .mech-section__head .btn { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 
 .mech-cue-pick { display: flex; align-items: center; gap: 8px; }
-.mech-speed-toggle { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; cursor: pointer; }
-.mech-speed-toggle input { accent-color: var(--warn); margin: 0; }
-.mech-speed-toggle small { flex-basis: 100%; padding-left: 20px; font-size: 11px; line-height: 1.4; }
+.mech-toggle { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; cursor: pointer; }
+.mech-toggle input { accent-color: var(--warn); margin: 0; }
+.mech-toggle small { flex-basis: 100%; padding-left: 20px; font-size: 11px; line-height: 1.4; }
 .mech-cue-pick select,
 .mech-form select,
 .mech-form input[type="text"],
@@ -98,7 +98,7 @@
 .mech-icon-btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
 .mech-icon-btn:disabled { opacity: 0.35; cursor: not-allowed; }
 
-/* 提醒（橘色） */
+/* 提醒（橘色）：存的位置超出行程這類真的要改的事 */
 .mech-warn {
   display: flex;
   align-items: flex-start;
@@ -113,8 +113,21 @@
 }
 .mech-warn > span { flex: 1; min-width: 160px; }
 .mech-warn__icon { margin-top: 2px; flex-shrink: 0; }
-.mech-warn__fix { display: inline-flex; align-items: center; gap: 5px; color: var(--warn); border: 1px solid rgba(255, 170, 68, 0.5); }
 .mech-warn--song { margin-bottom: -6px; }
+
+/* 說明（灰色）：預覽上看到的是什麼、為什麼（被下一個 cue 接手、吊點高度算出來的樣子）；不是提醒，沒有顏色 */
+.mech-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 2px 8px;
+}
+.mech-note > span { flex: 1; min-width: 160px; }
+.mech-note__icon { margin-top: 2px; flex-shrink: 0; }
 
 /* 設定清單 */
 .mech-setup-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -207,18 +220,6 @@
 }
 .mech-form__convert .btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; }
 
-/* 分頁標籤上的小橘點（有 cue 來不及到位）：放在字的右上角，不會把標籤撐成兩行 */
-.editor-cues__tabs .tab:has(.mech-tab-dot) { position: relative; }
-.mech-tab-dot {
-  position: absolute;
-  top: 7px;
-  right: 3px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--warn);
-}
-
 /* 物件狀態分頁：這個物件在機關上 */
 .mech-object-hint {
   font-size: 11.5px;
@@ -285,14 +286,9 @@
 .mech-tl__move:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
 .mech-tl__move.is-dragging { cursor: grabbing; }
 .mech-tl__move.is-selected { box-shadow: 0 0 0 2px var(--text); }
-.mech-tl__move.is-fast { background: rgba(255, 69, 58, 0.6); border-color: var(--danger); }
 .mech-tl__movelabel { position: absolute; left: 5px; top: 0; font-size: 10px; line-height: 16px; color: #fff; pointer-events: none; }
 .mech-tl__handle { position: absolute; right: 0; top: 0; bottom: 0; width: 7px; cursor: ew-resize; background: rgba(255, 255, 255, 0.25); }
-.mech-tl__cutrest { position: absolute; top: 0; bottom: 0; right: 0; background: var(--surface-1); border-left: 2px dashed var(--warn); opacity: 0.85; pointer-events: none; }
-.mech-tl__late {
-  position: absolute; top: 8px; height: 12px; pointer-events: none;
-  background: repeating-linear-gradient(135deg, rgba(255, 69, 58, 0.55) 0 4px, transparent 4px 8px);
-}
+.mech-tl__cutrest { position: absolute; top: 0; bottom: 0; right: 0; background: var(--surface-1); border-left: 2px dashed var(--text-muted); opacity: 0.85; pointer-events: none; }
 .mech-tl__head { position: absolute; top: 0; bottom: 0; left: 8px; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
 .mech-tl__drag { position: absolute; right: 10px; bottom: 6px; background: var(--surface-2); border-radius: 4px; padding: 2px 8px; }
 
@@ -302,7 +298,6 @@
 .mech-group__head .grow { flex: 1; }
 .mech-group__head .btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
 .mech-group__name { font-weight: 600; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 50%; }
-.mech-group__flag { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; color: var(--warn); }
 .mech-rows--member { padding-left: 6px; border-left: 2px solid var(--border-strong); margin-left: 6px; }
 .mech-setup-list--member { padding: 0 6px 6px 18px; }
 
@@ -348,5 +343,4 @@
   position: absolute; top: 5px; height: 18px; padding: 0; border-radius: 4px; cursor: pointer;
   background: rgba(16, 199, 138, 0.3); border: 1px solid var(--accent); overflow: hidden;
 }
-.mech-tl__gmove.is-fast { background: rgba(255, 69, 58, 0.35); border-color: var(--danger); }
 .mech-tl__gmove.is-selected { box-shadow: 0 0 0 2px var(--text); }

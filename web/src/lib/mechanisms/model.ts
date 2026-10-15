@@ -45,7 +45,7 @@ export interface Mechanism {
   travelMax: number;
   /** 沒有 cue 設定時的位置 */
   defaultValue: number;
-  /** 最高速度（公尺/秒、度/秒）；null = 不檢查速度，照轉場秒數移動 */
+  /** 最高速度（公尺/秒、度/秒）。舊資料 / 舊版前端留著的欄位：畫面不再設定、預覽不看它（2026-10-15），機關一律照設定的時間動 */
   maxSpeed: number | null;
   /** 常用位置（照數字排好） */
   presets: MechanismPreset[];
@@ -168,9 +168,6 @@ export const MECH_LIMITS = {
 export function unitOf(kind: MechanismKind): 'm' | '°' {
   return kind === 'rotary' ? '°' : 'm';
 }
-export function speedUnitOf(kind: MechanismKind): string {
-  return kind === 'rotary' ? '°/秒' : 'm/秒';
-}
 /** 數字顯示幾位小數：公尺最多 3 位（毫米）、度 1 位 */
 export function valueDecimals(kind: MechanismKind): number {
   return kind === 'rotary' ? 1 : 3;
@@ -216,7 +213,7 @@ export const MECH_MESSAGES = {
   pivot: '轉軸中心要是數字',
   travelOrder: '行程的最高要比最低大',
   travelNumber: '行程要填數字',
-  maxSpeed: '最高速度要是正的數字，或留空不檢查',
+  maxSpeed: '最高速度要是正的數字，或留空',
   presetsMax: '常用位置最多 12 個',
   presetDuplicate: (name: string) => `常用位置的名稱重複了：「${name}」`,
   objectsMax: '一個機關最多帶 200 個物件',

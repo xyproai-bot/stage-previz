@@ -225,33 +225,10 @@ export const FIGS = {
     alt: '從常用擺位建立 cue：選一個按套用',
     caption: '從常用擺位建立 cue：按「套用」',
   }),
-  mechTab: fig({
-    src: '/help/producer/mech-tab.webp', w: 680, h: 1514, width: 340,
-    alt: '機關分頁：這個 cue 的機關位置、來不及到位的提醒、設定機關',
-    caption: '① 照機器速度播放 ② 換 cue ③ 常用位置 ④ 照機器速度（把轉場改成夠用的秒數）⑤ 匯出機關總表 ⑥ 新增機關',
-    boxes: [
-      { x: 3.24, y: 16.01, w: 93.82, h: 7.86, n: 1 },
-      { x: 3.24, y: 24.4, w: 93.82, h: 4.36, n: 2 },
-      { x: 6.47, y: 34.11, w: 87.35, h: 3.85, n: 3 },
-      { x: 8.82, y: 49.72, w: 46.4, h: 4.49, n: 4 },
-      { x: 3.24, y: 11, w: 34.71, h: 4.49, n: 5 },
-      { x: 69.41, y: 73.72, w: 27.65, h: 4.49, n: 6 },
-    ],
-  }),
-  mechForm: fig({
-    src: '/help/producer/mech-form.webp', w: 626, h: 2262, width: 300,
-    alt: '設定機關的表單：名稱、動作、方向、帶動的物件、行程、預設位置、最高速度、常用位置、控台編號',
-    caption: '設定一個機關（例：中央升降台）',
-  }),
   mech3d: fig({
     src: '/help/producer/mech-3d.webp', w: 1000, h: 1160, width: 420,
     alt: '3D 畫面：升降台升到全開，前緣 LED 和主唱一起上去',
     caption: '升降台在這個 cue 升到「全開」：帶動的物件（前緣 LED、主唱）一起上去',
-  }),
-  mechTimeline: fig({
-    src: '/help/producer/mech-timeline.png', w: 880, h: 120, width: 880,
-    alt: '機關時間軸：中央升降台在 Cue 2 延遲 5 秒、走 6 秒，紅色代表照最高速度來不及，後面的斜線是實際會走到哪',
-    caption: '機關時間軸：上面的數字是 cue，色塊是每一段移動；紅色 = 照最高速度來不及（斜線 = 實際會走到哪）',
   }),
   ledMenu: fig({
     src: '/help/producer/led-menu.webp', w: 1000, h: 390, width: 600,

@@ -1,7 +1,7 @@
 // 機關時間軸（管理頁，只有製作看得到）：開「機關」分頁時排在 3D 畫面下面（右邊欄太窄，時間軸要寬）
 //   每個機關一行、橫的是影片時間；每一段移動一條色塊（開始動 → 照設定到位）
 //   拖整條 = 改延遲；拖右邊 = 改走幾秒；按住 Alt 不吸到 0.1 秒；鍵盤：← → 延遲、↑ ↓ 走幾秒（Shift 一次 1 秒）
-//   紅色 = 照最高速度來不及（後面斜線 = 實際會走到哪）；虛線 = 還沒走完就被下一個 cue 接手
+//   虛線（灰色）= 還沒走完就被下一個 cue 接手
 //   上面是 cue 的記號（GO → 到位）；點時間尺 / 播放 → 3D 畫面的機關跟著時間軸動（物件停在目前選的 cue）
 // 每幀不重畫 React：播放頭、時間字直接改 DOM；機關位置 StageScene 每幀問 mech.previewTimeRef
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -11,7 +11,7 @@ import type { Cue } from '../../lib/api';
 import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
 import type { Mechanism, MechanismGroup } from '../../lib/mechanisms/model';
 import { layoutMechanisms } from '../../lib/mechanisms/group';
-import { SPEED_TOLERANCE_S, formatMechValue, formatSeconds, sortMasters, type TimelineMove } from '../../lib/mechanisms/motion';
+import { formatMechValue, formatSeconds, sortMasters, type TimelineMove } from '../../lib/mechanisms/motion';
 import { sheetTime } from '../../lib/mechanisms/cueSheet';
 
 interface Props {
@@ -200,7 +200,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
   const header = (
     <div className="mech-tl__bar">
       <strong className="mech-tl__title">機關時間軸</strong>
-      <span className="muted small mech-tl__hint">拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）；紅色 = 照最高速度來不及</span>
+      <span className="muted small mech-tl__hint">拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）</span>
       <span className="grow" />
       <span ref={clockRef} className="mech-tl__clock" aria-live="off" />
       <button type="button" className="mech-icon-btn" disabled={!tl} onClick={() => { if (playing) setPlaying(false); else { if (mech.previewTimeRef.current === null || mech.previewTimeRef.current >= total) setTime(0); setPreviewing(true); setPlaying(true); } }}
@@ -238,14 +238,13 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
 
   /** 一排的標題行：每個 cue 一條合併的色塊（最早開始動 → 最後一個到位）；收起來時看這一條就知道整排什麼時候動 */
   const groupRow = (row: Extract<TlRow, { kind: 'group' }>) => {
-    const byCue = new Map<string, { start: number; end: number; fast: boolean; first: TimelineMove; n: number }>();
+    const byCue = new Map<string, { start: number; end: number; first: TimelineMove; n: number }>();
     for (const m of row.members) {
       for (const mv of movesBy.get(m.id) || []) {
         const start = mv.go + mv.delay, end = start + mv.duration;
-        const fast = mv.need > mv.duration + SPEED_TOLERANCE_S;
         const cur = byCue.get(mv.cueId);
-        if (!cur) byCue.set(mv.cueId, { start, end, fast, first: mv, n: 1 });
-        else { cur.start = Math.min(cur.start, start); cur.end = Math.max(cur.end, end); cur.fast = cur.fast || fast; cur.n++; }
+        if (!cur) byCue.set(mv.cueId, { start, end, first: mv, n: 1 });
+        else { cur.start = Math.min(cur.start, start); cur.end = Math.max(cur.end, end); cur.n++; }
       }
     }
     return (
@@ -255,9 +254,9 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
           const sel = cueId === selectedCueId && row.members.some(m => m.id === mech.focusedId);
           const label = `「${row.group.name}」${cueLabel(cueId)}：${b.n} 個機關，${sheetTime(b.start)} 最早開始動、${sheetTime(b.end)} 最後一個到位`;
           return (
-            <button key={cueId} type="button" className={'mech-tl__gmove' + (b.fast ? ' is-fast' : '') + (sel ? ' is-selected' : '')}
+            <button key={cueId} type="button" className={'mech-tl__gmove' + (sel ? ' is-selected' : '')}
               style={{ left: 8 + b.start * scale, width: Math.max(4, (b.end - b.start) * scale) }}
-              title={`${label}${b.fast ? '\n有機關照最高速度來不及，展開看是哪幾個' : ''}\n展開這一排可以拖每一個機關的色塊`}
+              title={`${label}\n展開這一排可以拖每一個機關的色塊`}
               aria-label={label} onClick={() => select(b.first)}>
               {(b.end - b.start) * scale > 46 && <span className="mech-tl__movelabel">{cueNo.get(cueId)}</span>}
             </button>
@@ -309,21 +308,17 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
                   const delay = d ? d.delay : mv.delay;
                   const dur = d ? d.dur : mv.duration;
                   const start = mv.go + delay;
-                  const fast = mv.need > dur + SPEED_TOLERANCE_S;
-                  const lateEnd = start + Math.max(dur, mv.need);
                   const cutAt = !d && mv.cut ? mv.cut.at : null;
                   const sel = mv.cueId === selectedCueId && mech.focusedId === mv.mechId;
-                  const issue = fast ? `\n照最高速度要 ${formatSeconds(mv.need)} 秒，會晚 ${formatSeconds(mv.need - dur)} 秒到位` : '';
                   const cutTxt = mv.cut ? `\n${cueLabel(mv.cut.byCueId)} ${sheetTime(mv.cut.at)} 接手時${mv.cut.started ? '還沒走完' : '還沒開始動'}` : '';
                   const label = `「${m.name}」${cueLabel(mv.cueId)}：${sheetTime(start)} 開始、走 ${formatSeconds(dur)} 秒、${sheetTime(start + dur)} 到位（${formatMechValue(mv.from, m.kind)} → ${formatMechValue(mv.to, m.kind)}）`;
                   return (
                     <span key={mv.cueId}>
-                      {fast && <span className="mech-tl__late" style={{ left: 8 + (start + dur) * scale, width: (lateEnd - start - dur) * scale }} aria-hidden="true" />}
                       <button
                         type="button"
-                        className={'mech-tl__move' + (fast ? ' is-fast' : '') + (sel ? ' is-selected' : '') + (cutAt !== null ? ' is-cut' : '') + (d ? ' is-dragging' : '')}
+                        className={'mech-tl__move' + (sel ? ' is-selected' : '') + (cutAt !== null ? ' is-cut' : '') + (d ? ' is-dragging' : '')}
                         style={{ left: 8 + start * scale, width: Math.max(4, dur * scale) }}
-                        title={`${label}${issue}${cutTxt}\n拖整條改延遲、拖右邊改走幾秒`}
+                        title={`${label}${cutTxt}\n拖整條改延遲、拖右邊改走幾秒`}
                         aria-label={label}
                         onPointerDown={(e) => startDrag(e, mv, 'move')}
                         onPointerMove={onDragMove}

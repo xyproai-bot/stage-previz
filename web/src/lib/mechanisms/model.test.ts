@@ -72,13 +72,13 @@ describe('檢查機關設定（每一條規則和訊息）', () => {
     expect(ok(lift({ defaultValue: 1.2 })).defaultValue).toBe(1.2);
   });
 
-  it('最高速度：留空 = 不檢查；要大於 0、直線 ≤ 100 m/秒、旋轉 ≤ 3600°/秒', () => {
+  it('最高速度（舊資料和舊版前端還會送，預覽不看它）：留空 = 沒有；要大於 0、直線 ≤ 100 m/秒、旋轉 ≤ 3600°/秒', () => {
     expect(ok(lift({ maxSpeed: null })).maxSpeed).toBeNull();
     expect(ok({ ...lift(), maxSpeed: '' }).maxSpeed).toBeNull();
     expect(ok(lift({ maxSpeed: 0.25 })).maxSpeed).toBe(0.25);
     expect(ok({ ...lift(), maxSpeed: '0.5' }).maxSpeed).toBe(0.5);
     for (const bad of [0, -1, 101, 'fast']) {
-      expect(err({ ...lift(), maxSpeed: bad }).error).toBe('最高速度要是正的數字，或留空不檢查');
+      expect(err({ ...lift(), maxSpeed: bad }).error).toBe('最高速度要是正的數字，或留空');
     }
     expect(ok({ ...lift(), kind: 'rotary', travelMin: -180, travelMax: 180, maxSpeed: 360 }).maxSpeed).toBe(360);
     expect(err({ ...lift(), kind: 'rotary', travelMin: -180, travelMax: 180, maxSpeed: 4000 }).field).toBe('maxSpeed');

@@ -1,7 +1,7 @@
 // 設定一個機關（新增 / 編輯）：直接展開在機關分頁裡（不是跳出視窗 → 3D 畫面照樣可以轉、可以 Shift 點物件）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeftRight, Bookmark, Crosshair, Gauge, Layers, MoveVertical, Plus, RotateCw, Ruler, Search, Trash2, Wand2,
+  ArrowLeftRight, Bookmark, Crosshair, Layers, MoveVertical, Plus, RotateCw, Ruler, Search, Trash2, Wand2,
 } from 'lucide-react';
 import Icon from '../Icon';
 import { confirmDialog } from '../dialogs';
@@ -9,7 +9,7 @@ import type { StageObject } from '../../lib/api';
 import { STAGE_CATEGORY } from '../stageCategories';
 import {
   LINEAR_DIRECTIONS, MECH_LIMITS, ROTARY_AXES, blankMechanismInput, linearDirectionVector, matchLinearDirection,
-  matchRotaryAxis, mechanismToInput, mirrorForSplit, normalizeMechanismInput, rotaryAxisVector, standardPresets, unitOf, speedUnitOf,
+  matchRotaryAxis, mechanismToInput, mirrorForSplit, normalizeMechanismInput, rotaryAxisVector, standardPresets, unitOf,
   type LinearDirection, type Mechanism, type MechanismField, type MechanismInput, type MechanismSide, type MechVec3, type RotaryAxisKind,
 } from '../../lib/mechanisms/model';
 import { FLIP_HINGES, flipSetupOf, hingeFromBox, withFlipSetup, type FlipHinge, type StageBox } from '../../lib/mechanisms/flip';
@@ -51,7 +51,6 @@ type Draft = {
   travelMin: string;
   travelMax: string;
   defaultValue: string;
-  maxSpeed: string;
   presets: { name: string; value: string }[];
   consoleLabel: string;
   /** 對開（兩邊往反方向）：開 / 關、每個物件在哪一邊（沒寫 = A 邊）、B 邊的控台編號 */
@@ -88,7 +87,6 @@ function initialDraft(m: Mechanism | null, front: MechVec3, scale: number): Draf
     travelMin: fmt(base.travelMin),
     travelMax: fmt(base.travelMax),
     defaultValue: fmt(base.defaultValue),
-    maxSpeed: base.maxSpeed === null ? '' : fmt(base.maxSpeed),
     presets: base.presets.map(x => ({ name: x.name, value: fmt(x.value) })),
     consoleLabel: base.consoleLabel ?? '',
     split: base.variant === 'split',
@@ -231,7 +229,8 @@ export default function MechanismSetupForm({
       travelMin: n(d.travelMin),
       travelMax: n(d.travelMax),
       defaultValue: d.defaultValue.trim() === '' ? 0 : n(d.defaultValue),
-      maxSpeed: d.maxSpeed.trim() === '' ? null : (num(d.maxSpeed) ?? 'x'),
+      // 最高速度已經不在畫面上設定（預覽不看它）；編輯舊的機關時照原本存的送回去，不會被清掉
+      maxSpeed: editing?.maxSpeed ?? null,
       presets: d.presets.map(p => ({ name: p.name, value: n(p.value) })),
       parentId: d.parentId || null,
       objectIds: d.objectIds,
@@ -300,7 +299,7 @@ export default function MechanismSetupForm({
       </div>
 
       <div className="mech-form__row">
-        <label className="mech-speed-toggle" title={hasKids ? '有機關裝在它上面，不能改成對開' : '兩邊用同一個數字，往反方向動'}>
+        <label className="mech-toggle" title={hasKids ? '有機關裝在它上面，不能改成對開' : '兩邊用同一個數字，往反方向動'}>
           <input type="checkbox" checked={d.split} disabled={hasKids} onChange={e => toggleSplit(e.target.checked)} />
           <Icon icon={ArrowLeftRight} size="sm" />
           <span>對開（兩邊往反方向）</span>
@@ -495,16 +494,6 @@ export default function MechanismSetupForm({
           <span className="num-field__unit" aria-hidden="true">{unit}</span>
         </label>
         <small className="muted">沒有 cue 設定時停在這裡</small>
-      </div>
-
-      <div className="mech-form__row">
-        <label htmlFor="mech-speed"><Icon icon={Gauge} /> 最高速度</label>
-        <label className="num-field">
-          <input id="mech-speed" type="text" inputMode="decimal" placeholder="選填" value={d.maxSpeed} onChange={e => set({ maxSpeed: e.target.value })} />
-          <span className="num-field__unit" aria-hidden="true">{speedUnitOf(d.kind)}</span>
-        </label>
-        <small className="muted">填了才會檢查轉場夠不夠；沒填就照轉場秒數移動</small>
-        {err('maxSpeed')}
       </div>
 
       <div className="mech-form__row">

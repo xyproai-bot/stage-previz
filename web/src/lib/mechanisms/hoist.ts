@@ -6,9 +6,9 @@
 // 一組吊掛 = 一個「整組」（帶動物件，自己沒有位置）+ 2～4 個「吊點」（各自是往上的直線機關，有自己的行程、速度、每個 cue 的位置）。
 // 每個吊點有一個 attach：它在物件上的位置（場景單位，cue 位置的座標）。吊點的值 h_i = 這個吊點被拉高幾公尺（0 = cue 裡原本的位置）。
 // 物件是硬的：
-//   2 個吊點：沿著兩點的水平連線，繞著跟它垂直的水平軸轉，轉到兩點的高度差剛好等於 h₂ − h₁（轉不到 → 斜到垂直為止並提醒）
+//   2 個吊點：沿著兩點的水平連線，繞著跟它垂直的水平軸轉，轉到兩點的高度差剛好等於 h₂ − h₁（轉不到 → 斜到垂直為止，畫面下方寫一句說明）
 //   3 個吊點：最小的轉動，把物件的吊點平面轉到「通過三個目標點」的平面
-//   4 個吊點：同上，用最小平方法找最接近四個目標點的平面（四點不共面 → 提醒硬的東西會被扭到）
+//   4 個吊點：同上，用最小平方法找最接近四個目標點的平面（四點不共面 → 畫面下方寫一句說明：用最接近的平面）
 // 平移：吊點的重心升高 h 的平均值。永遠不會繞著垂直軸轉（沒有 yaw）。
 // 每幀只做一次小矩陣乘法，不配置記憶體（HoistSolver 事先算好）。
 
@@ -211,8 +211,8 @@ export function tiltText(a: Pick<HoistAnalysis, 'tiltDeg' | 'axis'>, front: Mech
 }
 
 export const HOIST_MESSAGES = {
-  planar: (cm: string) => `四個吊點的高度不在同一個平面上（差 ${cm} cm）：硬的東西會被扭到`,
-  reach: (diff: string, dist: string) => `兩個吊點的高度差（${diff} m）比它們之間的距離（${dist} m）還大：吊不起來，最多只能斜到垂直`,
+  planar: (cm: string) => `四個吊點的高度不在同一個平面上（差 ${cm} cm），畫面上整片會貼著最接近這四個點的平面`,
+  reach: (diff: string, dist: string) => `兩個吊點的高度差（${diff} m）比它們之間的距離（${dist} m）還大，畫面上整片斜到垂直就停住`,
 } as const;
 
 const trimNum = (v: number, d = 1) => String(Math.round(v * 10 ** d) / 10 ** d);
@@ -231,7 +231,7 @@ export function hoistWorst(s: HoistSolver, heights: ArrayLike<number>[]): HoistW
 }
 
 /**
- * 最糟的情況 → 要提醒的字（同一種只說一次，沒有 = 空）。
+ * 最糟的情況 → 要說明的字（畫面上為什麼不是照吊點高度；同一種只說一次，沒有 = 空）。
  * sceneUnitsPerMeter：公尺 → 場景單位的倍率（= 1 ÷ 測距校準倍率），用來換成公分 / 公尺說給人聽。
  */
 export function hoistWarningsFrom(s: HoistSolver, w: HoistWorst, sceneUnitsPerMeter: number): string[] {
@@ -242,7 +242,7 @@ export function hoistWarningsFrom(s: HoistSolver, w: HoistWorst, sceneUnitsPerMe
   return out;
 }
 
-/** 這組高度（場景單位）要提醒的事 */
+/** 這組高度（場景單位）要說明的事 */
 export function hoistWarnings(s: HoistSolver, h: ArrayLike<number>, sceneUnitsPerMeter: number): string[] {
   return hoistWarningsFrom(s, hoistWorst(s, [h]), sceneUnitsPerMeter);
 }
@@ -361,7 +361,7 @@ export function hoistMoveSamples(legs: HoistLeg[], sceneUnitsPerMeter: number): 
 export interface RigCueCheck {
   /** 這個 cue 到位時的傾斜 */
   tilt: HoistAnalysis;
-  /** 到位時的提醒 + 走過來的路上的提醒（同樣的字只留一次） */
+  /** 到位時的說明 + 走過來的路上的說明（同樣的字只留一次） */
   warnings: string[];
 }
 

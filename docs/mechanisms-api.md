@@ -5,12 +5,14 @@
 檢查規則跟前端共用：`web/src/lib/mechanisms/model.ts`。前端呼叫：`web/src/lib/mechanisms/mechanismApi.ts`。
 資料表：`cf-worker/migrations/0023_mechanisms.sql`（`mechanisms`、`mechanism_objects`、`cue_mechanism_positions`）。
 
+> 2026-10-15 製作決定：這是預覽工具，機關的速度提醒（太快 / 來不及 / 會晚到）全部拿掉，機關一律照每個 cue 設的時間動。後台本來就沒有速度檢查，API 不變：`maxSpeed` / `max_speed` 欄位還在（舊資料和舊版前端照常讀寫），只是畫面不再設定、預覽不看它。
+
 所有網址前面是 `https://proxy.haimiaan.com`（`apiBase()`）。登入方式跟其他 API 一樣（`Authorization: Bearer <token>`）。
 錯誤一律是 `{ "error": "中文說明", ...其他欄位 }`，`error` 可以直接顯示給使用者。
 
 ## 重點
 
-- **一個機關設定一次**：帶哪些物件、直線移動或旋轉、方向 / 轉軸、行程、最高速度、常用位置。
+- **一個機關設定一次**：帶哪些物件、直線移動或旋轉、方向 / 轉軸、行程、常用位置。
 - **一個機關的位置是一個數字**，從物件在 cue 裡原本的位置算起：直線 = 公尺，旋轉 = 度。0 = cue 放的位置。模型縮放永遠不動；公尺 → 場景單位用專案的測距校準倍率。
 - **每個 cue 存自己的位置**；沒存 = 沿用前面最近一個**正式 cue** 存的；前面都沒存 = 預設位置（規則在 `web/src/lib/mechanisms/track.ts`，每一頁都用同一份）。
 - 存的值不會因為改行程被改掉；播放 / 畫面 / 總表用的值夾在行程內。
@@ -40,7 +42,7 @@
   "pivot": null,                // 旋轉中心（場景單位）；直線 = null
   "travelMin": 0, "travelMax": 3.5,     // 行程（公尺 / 度）
   "defaultValue": 0,            // 沒有 cue 設定時的位置
-  "maxSpeed": 0.25,             // 公尺/秒、度/秒；null = 不檢查，照轉場秒數移動
+  "maxSpeed": 0.25,             // 公尺/秒、度/秒；舊欄位，畫面不再設定、預覽不看它（機關一律照每個 cue 設的時間動）
   "presets": [{ "name": "收起", "value": 0 }, { "name": "全開", "value": 3.5 }],  // 照數字排，最多 12 個
   "parentId": null,             // 裝在哪個機關上
   "objectIds": ["so_…", "so_…"],

@@ -151,7 +151,7 @@ interface Props {
   bookmarkScope?: string;
   /** 機關定義（每個專案設定一次）；沒給 / 還在讀 = 沒有機關 */
   mechanisms?: Mechanism[] | null;
-  /** 目前這個 cue 的機關位置（已經沿用 / 夾在行程內）；換 cue 時照機器速度走過去，同一個 cue 裡改值直接跳 */
+  /** 目前這個 cue 的機關位置（已經沿用 / 夾在行程內）；換 cue 時照走幾秒走過去，同一個 cue 裡改值直接跳 */
   mechanismTargets?: MechanismValues;
   /** 跟著影片時間：只在 poseAtFrame 有回傳位置的那幾幀才問；回傳 null = 用 mechanismTargets */
   mechanismAtFrame?: () => MechanismValues | null;
@@ -159,7 +159,7 @@ interface Props {
   mechanismTimings?: MechanismTimings;
   /** true = 每幀都問 mechanismAtFrame（管理頁的機關時間軸拉 / 播時；回傳 null = 照點 cue 走） */
   mechanismFrameAlways?: boolean;
-  /** 換 cue 時機關怎麼走：'real'（預設）= 照機器速度；'transition' = 照轉場秒數（管理頁編輯時）；'instant' = 直接到位（分鏡縮圖） */
+  /** 換 cue 時機關怎麼走：'transition'（預設）= 照走幾秒（沒設 = 轉場秒數）；'instant' = 直接到位（分鏡縮圖） */
   mechanismMotion?: MechanismMotion;
   /** 查舞台：舞台正面方向、一組物件的中心（設定機關用） */
   sceneQueryRef?: React.MutableRefObject<StageSceneQuery | null>;
@@ -263,7 +263,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'real', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -992,7 +992,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         mechTimelineActiveRef.current = true;
       } else {
         if (mechTimelineActiveRef.current) {
-          // 影片時間軸剛停（點了沒設時間的 cue / 換 AE 即時）→ 從畫面上最後的位置照機器速度走回目前 cue 的位置
+          // 影片時間軸剛停（點了沒設時間的 cue / 換 AE 即時）→ 從畫面上最後的位置走回目前 cue 的位置
           mechTimelineActiveRef.current = false;
           tweener.setCurrent(shown, nowTs);
           tweener.retarget(rigNow.mechanisms, mechTargetsRef.current || EMPTY_VALUES, nowTs, {
@@ -1160,7 +1160,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         }
       }
 
-      // 機關：這一幀的值（影片時間軸 / 照機器速度走）→ 套到每個物件（整個畫面只在這裡寫 mesh 的位置）
+      // 機關：這一幀的值（影片時間軸 / 點 cue 走過去）→ 套到每個物件（整個畫面只在這裡寫 mesh 的位置）
       commitPosesRef.current(nowTs, !!framePoses);
 
       const rmode = renderModeRef.current;
@@ -1614,7 +1614,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     commitPosesRef.current(performance.now(), timelineActiveRef.current);
   }, [states, selectedObjectIds, modelVersion, readOnly]);
 
-  // ── 機關目標：換 cue → 照機器速度走過去；同一個 cue 裡改值（滑桿 / 常用位置 / 打字）→ 直接跳 ──
+  // ── 機關目標：換 cue → 照走幾秒走過去；同一個 cue 裡改值（滑桿 / 常用位置 / 打字）→ 直接跳 ──
   const lastMechCueKeyRef = useRef<string | null | undefined | typeof UNSET_CUE>(UNSET_CUE);
   useEffect(() => {
     const prev = lastMechCueKeyRef.current;

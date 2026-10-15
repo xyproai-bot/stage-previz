@@ -6,7 +6,7 @@ import { Layers, MoveVertical, RotateCw, Rows3 } from 'lucide-react';
 import Icon from '../Icon';
 import type { StageObject } from '../../lib/api';
 import {
-  LINEAR_DIRECTIONS, MECH_LIMITS, linearDirectionVector, rotaryAxisVector, standardPresets, unitOf, speedUnitOf,
+  LINEAR_DIRECTIONS, MECH_LIMITS, linearDirectionVector, rotaryAxisVector, standardPresets, unitOf,
   type GroupNumbering, type LinearDirection, type Mechanism, type MechanismGroup, type MechVec3,
 } from '../../lib/mechanisms/model';
 import { FLIP_HINGES, hingeFromBox, withFlipSetup, type FlipHinge, type StageBox } from '../../lib/mechanisms/flip';
@@ -39,7 +39,6 @@ type Draft = {
   travelMin: string;
   travelMax: string;
   defaultValue: string;
-  maxSpeed: string;
   presets: boolean;
 };
 
@@ -50,7 +49,7 @@ export default function MechanismBatchForm({
 }: BatchFormProps) {
   const [d, setD] = useState<Draft>({
     prefix: '', numbering: 'leftToRight', kind: 'linear', dir: 'up', hinge: 'top', flipFirst: true,
-    travelMin: '0', travelMax: '1', defaultValue: '0', maxSpeed: '', presets: true,
+    travelMin: '0', travelMax: '1', defaultValue: '0', presets: true,
   });
   const [error, setError] = useState<string | null>(null);
   const set = (patch: Partial<Draft>) => setD(prev => ({ ...prev, ...patch }));
@@ -74,10 +73,8 @@ export default function MechanismBatchForm({
     if (tMin === null || tMax === null) return '行程要填數字';
     const dv = d.defaultValue.trim() === '' ? 0 : num(d.defaultValue);
     if (dv === null) return '預設位置要是數字';
-    const speed = d.maxSpeed.trim() === '' ? null : num(d.maxSpeed);
-    if (d.maxSpeed.trim() !== '' && speed === null) return '最高速度要是正的數字，或留空不檢查';
     const base: BatchPayload['base'] = {
-      kind: d.kind, travelMin: tMin, travelMax: tMax, defaultValue: dv, maxSpeed: speed,
+      kind: d.kind, travelMin: tMin, travelMax: tMax, defaultValue: dv,
       presets: d.presets && tMax > tMin ? standardPresets(tMin, tMax) : [],
     };
     const overrides: NonNullable<BatchPayload['overrides']> = {};
@@ -200,15 +197,12 @@ export default function MechanismBatchForm({
           <label className="num-field"><span className="num-field__axis">預設位置</span>
             <input type="text" inputMode="decimal" aria-label={`預設位置（${unit}）`} value={d.defaultValue} onChange={e => set({ defaultValue: e.target.value })} />
             <span className="num-field__unit" aria-hidden="true">{unit}</span></label>
-          <label className="num-field"><span className="num-field__axis">最高速度</span>
-            <input type="text" inputMode="decimal" aria-label="最高速度（選填）" placeholder="選填" value={d.maxSpeed} onChange={e => set({ maxSpeed: e.target.value })} />
-            <span className="num-field__unit" aria-hidden="true">{speedUnitOf(d.kind)}</span></label>
         </div>
-        <label className="mech-speed-toggle">
+        <label className="mech-toggle">
           <input type="checkbox" checked={d.presets} onChange={e => set({ presets: e.target.checked })} />
           <span>每個機關都加上 收起 / 半開 / 全開 的常用位置</span>
         </label>
-        <small className="muted">控台編號、哪個物件、名字，建好之後在每個機關的「編輯」裡一個一個改；行程、速度想一起改，用這一排的「編輯這一排」</small>
+        <small className="muted">控台編號、哪個物件、名字，建好之後在每個機關的「編輯」裡一個一個改；行程、預設位置想一起改，用這一排的「編輯這一排」</small>
       </div>
 
       {error && <div className="field-error small" role="alert">{error}</div>}

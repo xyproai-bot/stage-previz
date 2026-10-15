@@ -37,7 +37,7 @@ describe('每一幀的花費', () => {
     expect(perFrame).toBeLessThan(0.5);  // 很慢的 CI 也要過；設計目標 0.1 ms
   });
 
-  it('點 cue（照機器速度走）：一幀遠低於 0.1 ms', () => {
+  it('點 cue（照走幾秒走）：一幀遠低於 0.1 ms', () => {
     const tw = new MechanismTweener();
     tw.retarget(mechs, Object.fromEntries(mechs.map(m => [m.id, 0])), 0, { animate: false, minSeconds: 0 });
     tw.retarget(mechs, Object.fromEntries(mechs.map(m => [m.id, 90])), 0, { animate: true, minSeconds: 30 });

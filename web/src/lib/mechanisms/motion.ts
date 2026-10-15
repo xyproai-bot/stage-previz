@@ -1,12 +1,11 @@
-// 機關怎麼動：速度檢查、跟著影片時間的位置、點 cue 時照機器速度走過去。
+// 機關怎麼動：每個 cue 每個機關什麼時候開始動、走幾秒、影片第 t 秒在哪、點 cue 時怎麼走過去。
 //
-// 速度模型：等速（跟物件換 cue 一樣，沒有加減速）。
-//   沒填最高速度的機關：照轉場秒數移動（跟物件一樣），不檢查。
-//   有填：轉場太短 → 機器照最高速度走，晚一點才到位（預覽要讓問題先在這裡被看到，不是到現場才發現）。
+// 這是預覽工具（給導演、動畫師看），不管現場機器的最高速度：機關一律照使用者設的時間動（等速，跟物件換 cue 一樣）。
+// 2026-10-15 製作決定拿掉速度提醒；舊資料裡的最高速度欄位還在，但預覽不看它。
 //
-//   checkSongMechanisms    — 每個 cue、每個機關：來不來得及（給管理頁的提醒、機關總表）
+//   checkSongMechanisms    — 每個 cue、每個機關：什麼時候開始動、什麼時候到位、有沒有被下一個 cue 接手（機關分頁、機關總表）
 //   buildMechanismTimeline — 影片第 t 秒每個機關在哪（分享頁 / 導演頁 / 工作站播影片時，每幀問）；機關時間軸上的每一段
-//   MechanismTweener       — 點 cue 換位置：照機器速度走過去（不靠時鐘以外的東西，測試可以自己給時間）
+//   MechanismTweener       — 點 cue 換位置：照走幾秒走過去（不靠時鐘以外的東西，測試可以自己給時間）
 // 用跟物件同一套 cue 時段（cueWindows）：GO = max(到位 − 轉場, 上一個 cue 到位)。
 //
 // v2：每個 cue 每個機關自己的時間（設計：docs/superpowers/specs/2026-10-15-mechanism-v2-design.md）
@@ -20,13 +19,13 @@ import type { ResolvedRow } from './track';
 import { cueWindows, type TimelineCue } from '../cueTimeline';
 import { cueTransitionSeconds } from '../cueTiming';
 
-/** 差這麼一點點不算太快（秒） */
-export const SPEED_TOLERANCE_S = 0.05;
+/** 還差這麼一點點才走完就被接手，不算「沒走完」（秒） */
+const CUT_TOLERANCE_S = 0.05;
 const STILL_EPS = 1e-6;
 const MOVE_EPS = 1e-9;
 const NO_TIMING: MechanismTiming = { delaySec: null, durationSec: null };
 
-export type MotionMechanism = Pick<Mechanism, 'id' | 'maxSpeed'>;
+export type MotionMechanism = Pick<Mechanism, 'id'>;
 export interface MotionCue extends TimelineCue { order: number; status: string }
 
 /**
@@ -34,17 +33,6 @@ export interface MotionCue extends TimelineCue { order: number; status: string }
  * 只有自己設的 cue 會叫機器出發。
  */
 export type OwnMoveFor = (cueId: string, mechId: string) => MechanismTiming | null;
-
-/** 走這段距離最少要幾秒（沒填最高速度 = 0，不限） */
-export function requiredSeconds(distance: number, maxSpeed: number | null | undefined): number {
-  if (!maxSpeed || !(maxSpeed > 0)) return 0;
-  return Math.abs(distance) / maxSpeed;
-}
-
-/** 「照機器速度」要把轉場 / 走幾秒改成幾秒：往上取到 0.1 秒 */
-export function fixSeconds(need: number): number {
-  return Math.ceil(Math.round(need * 10 * 1e6) / 1e6) / 10;
-}
 
 /** resolveSongMechanisms 的結果 + 每個 cue 自己設的時間 → OwnMoveFor */
 export function ownMoveFor(resolved: Map<string, ResolvedRow>, timings?: Map<string, MechanismTimings> | null): OwnMoveFor {
@@ -55,10 +43,11 @@ export function ownMoveFor(resolved: Map<string, ResolvedRow>, timings?: Map<str
 }
 
 // ─────────────────────────────────────────────
-// 速度檢查
+// 每個 cue 每個機關怎麼動（時間表）
 // ─────────────────────────────────────────────
 
-export type MechCheckStatus = 'start' | 'still' | 'ok' | 'tooFast' | 'noSpeed';
+/** start = 第一個 cue（起始位置）；still = 位置跟上一個 cue 一樣，不動；move = 要動 */
+export type MechCheckStatus = 'start' | 'still' | 'move';
 
 /** 被後面的 cue 接手（這一段沒走完 / 還沒開始） */
 export interface MoveCut {
@@ -78,22 +67,12 @@ export interface MechCheck {
   from: number | null;
   to: number;
   distance: number;
-  /** 機器最少要幾秒（沒填最高速度 = null） */
-  need: number | null;
-  /** 這段能用幾秒（= 走幾秒：自己設的，或跟著 cue） */
+  /** 這段走幾秒（= 走幾秒：自己設的，或跟著 cue） */
   available: number | null;
-  /** 跟著 cue 時能用幾秒（到位 − GO / 轉場；第一個 cue = null） */
+  /** 跟著 cue 時走幾秒（到位 − GO / 轉場；第一個 cue = null） */
   span: number | null;
-  /** 「照機器速度」把這個 cue 的轉場改成幾秒；改轉場沒用（跟上一個 cue 隔太近 / 這個機關自己設了走幾秒）= null */
-  fix: number | null;
-  /** 「只改這個機關」：這個 cue 這個機關的走幾秒改成幾秒（太快才有） */
-  durationFix: number | null;
-  /** 'gap' = 跟上一個 cue 的影片時間隔太近，改轉場沒用 */
-  reason: 'gap' | null;
   /** 跟上一個 cue 的影片時間隔幾秒（有影片時間才有） */
   gap: number | null;
-  /** 播影片時實際會晚幾秒到位（上一段還沒走完 / 太快）；準時 = null */
-  lateBy: number | null;
   /** 延遲幾秒（沒設 = 0） */
   delay: number;
   /** 這個 cue 自己設了延遲（> 0）/ 走幾秒 */
@@ -101,25 +80,19 @@ export interface MechCheck {
   explicitDuration: boolean;
   /** 影片第幾秒開始動（= GO + 延遲；沒影片時間 = null） */
   startAt: number | null;
-  /** 照設定第幾秒到位（= 開始動 + 走幾秒；沒影片時間 = null） */
+  /** 影片第幾秒到位（= 開始動 + 走幾秒；沒影片時間 = null） */
   endAt: number | null;
-  /** 這一段照設定還在走就被後面的 cue 接手；沒有 = null */
+  /** 這一段還在走就被後面的 cue 接手；沒有 = null */
   cut: MoveCut | null;
 }
 
 export interface CueCheck {
   cueId: string;
   items: Record<string, MechCheck>;
-  /** 這個 cue 的「照機器速度」轉場秒數（跟著轉場的機關裡最大的；沒有能修的 = null） */
-  fix: number | null;
-  /** 有幾個機關來不及（太快 / 會晚到 / 沒走完就被接手） */
-  problems: number;
 }
 
 export interface SongCheck {
   cues: Map<string, CueCheck>;
-  /** 有問題的 cue（照清單順序） */
-  problemCueIds: string[];
   /** cue 的清單順序跟影片時間對不上 */
   orderMismatch: boolean;
 }
@@ -141,12 +114,12 @@ export function timedOrderMismatch(cues: MotionCue[]): boolean {
 }
 
 /**
- * 每個正式 cue、每個有填最高速度的機關：從上一個 cue 走過來來不來得及。
+ * 每個正式 cue、每個機關：從上一個 cue 走過來的時間表（什麼時候開始動、走幾秒、什麼時候到位、有沒有被接手）。
  * @param resolved  resolveSongMechanisms 的結果（夾在行程內的值）
  * @param timings   cueId → 這個 cue 自己設的時間（沒給 = 都跟著轉場）
  */
 export function checkSongMechanisms(
-  mechs: Pick<Mechanism, 'id' | 'maxSpeed' | 'defaultValue'>[],
+  mechs: Pick<Mechanism, 'id' | 'defaultValue'>[],
   cues: MotionCue[],
   resolved: Map<string, ResolvedRow>,
   timings?: Map<string, MechanismTimings> | null,
@@ -157,7 +130,7 @@ export function checkSongMechanisms(
   const valueOf = (cueId: string, m: { id: string; defaultValue: number }) => resolved.get(cueId)?.[m.id]?.value ?? m.defaultValue;
   const own = ownMoveFor(resolved, timings);
 
-  // 影片時間軸實際跑一次：上一段還沒走完時會晚多少、哪一段被接手
+  // 影片時間軸實際跑一次：哪一段被下一個 cue 接手
   const timeline = buildMechanismTimeline(mechs, masters, cueId => {
     const row = resolved.get(cueId);
     const out: MechanismValues = {};
@@ -166,12 +139,11 @@ export function checkSongMechanisms(
   }, own);
 
   const out = new Map<string, CueCheck>();
-  const problemCueIds: string[] = [];
   masters.forEach((cue, listIdx) => {
     const wi = winIndex.get(cue.id);
     const timed = wi !== undefined;
     let prevCueId: string | null = null;
-    let span: number | null = null;   // 跟著 cue 時能用幾秒
+    let span: number | null = null;   // 跟著 cue 時走幾秒
     let gap: number | null = null;
     let go: number | null = null;
     if (timed) {
@@ -188,8 +160,6 @@ export function checkSongMechanisms(
     }
 
     const items: Record<string, MechCheck> = {};
-    let fix: number | null = null;
-    let problems = 0;
     for (const m of mechs) {
       const to = valueOf(cue.id, m);
       const t = prevCueId ? own(cue.id, m.id) : null;
@@ -199,48 +169,25 @@ export function checkSongMechanisms(
       const available = span === null ? null : explicitDuration ? t!.durationSec! : span;
       const startAt = go === null ? null : go + delay;
       const base: MechCheck = {
-        status: 'start', prevCueId, from: null, to, distance: 0, need: null, available, span,
-        fix: null, durationFix: null, reason: null, gap, lateBy: null,
+        status: 'start', prevCueId, from: null, to, distance: 0, available, span, gap,
         delay, explicitDelay, explicitDuration,
         startAt, endAt: startAt === null || available === null ? null : startAt + available, cut: null,
       };
       if (!prevCueId) { items[m.id] = base; continue; }
       const from = valueOf(prevCueId, m);
       const distance = Math.abs(to - from);
-      const late = timed ? timeline?.lateBy(cue.id, m.id) ?? null : null;
-      const lateBy = late !== null && late > SPEED_TOLERANCE_S ? late : null;
-      const mv = timed ? timeline?.moveFor(cue.id, m.id) ?? null : null;
-      // 被接手：只算「照設定還在走」的（v1 那種太快晚到被接手，太快 / 會晚到已經說了）
-      const cut = mv?.cut && mv.plannedEnd > mv.cut.at + SPEED_TOLERANCE_S ? mv.cut : null;
       if (distance < STILL_EPS) {
-        items[m.id] = { ...base, status: 'still', from, distance: 0, lateBy };
-        if (lateBy) problems++;
+        items[m.id] = { ...base, status: 'still', from, distance: 0 };
         continue;
       }
-      if (!m.maxSpeed) {
-        items[m.id] = { ...base, status: 'noSpeed', from, distance, cut };
-        if (cut) problems++;
-        continue;
-      }
-      const need = requiredSeconds(distance, m.maxSpeed);
-      if (need <= (available ?? 0) + SPEED_TOLERANCE_S) {
-        items[m.id] = { ...base, status: 'ok', from, distance, need, lateBy, cut };
-        if (lateBy || cut) problems++;
-        continue;
-      }
-      const gapLimited = !explicitDuration && timed && gap !== null && gap < need;
-      const f = explicitDuration || gapLimited ? null : fixSeconds(need);
-      items[m.id] = {
-        ...base, status: 'tooFast', from, distance, need, fix: f, durationFix: fixSeconds(need),
-        reason: gapLimited ? 'gap' : null, lateBy, cut,
-      };
-      problems++;
-      if (f !== null) fix = fix === null ? f : Math.max(fix, f);
+      // 被接手：這一段還在走（照設定還沒到位）、下一個 cue 就叫它往別的地方走
+      const mv = timed ? timeline?.moveFor(cue.id, m.id) ?? null : null;
+      const cut = mv?.cut && mv.end > mv.cut.at + CUT_TOLERANCE_S ? mv.cut : null;
+      items[m.id] = { ...base, status: 'move', from, distance, cut };
     }
-    out.set(cue.id, { cueId: cue.id, items, fix, problems });
-    if (problems > 0) problemCueIds.push(cue.id);
+    out.set(cue.id, { cueId: cue.id, items });
   });
-  return { cues: out, problemCueIds, orderMismatch: timedOrderMismatch(masters) };
+  return { cues: out, orderMismatch: timedOrderMismatch(masters) };
 }
 
 /** 機關總表 / 畫面用：cue 的 GO 時間（= 到位 − 可用秒數）和到位時間；沒影片時間 = null */
@@ -272,18 +219,14 @@ export interface TimelineMove {
   go: number;
   arrive: number;
   delay: number;
-  /** 照設定：開始動、走幾秒、到位 */
+  /** 開始動、走幾秒、到位（= 開始動 + 走幾秒；被接手也一樣，接手的記在 cut） */
   start: number;
   duration: number;
-  plannedEnd: number;
-  /** 照最高速度實際到位（太快 → 比 plannedEnd 晚；被接手前算的） */
   end: number;
   from: number;
   to: number;
   explicitDelay: boolean;
   explicitDuration: boolean;
-  /** 機器最少要幾秒（沒填最高速度 = 0） */
-  need: number;
   cut: MoveCut | null;
 }
 
@@ -295,14 +238,11 @@ export class MechanismTimeline {
   readonly moves: TimelineMove[];
   /** 有影片時間的 cue：GO、到位（照影片時間排） */
   readonly windows: WindowLite[];
-  /** cueId → mechId → 實際到位時間 − 應該到位時間 */
-  private late: Map<string, Record<string, number>>;
   private moveIndex: Map<string, TimelineMove>;
   private out: MechanismValues = {};
 
-  constructor(tracks: Track[], late: Map<string, Record<string, number>>, moves: TimelineMove[] = [], windows: WindowLite[] = []) {
+  constructor(tracks: Track[], moves: TimelineMove[] = [], windows: WindowLite[] = []) {
     this.tracks = tracks;
-    this.late = late;
     this.moves = moves;
     this.windows = windows;
     this.moveIndex = new Map(moves.map(m => [`${m.cueId}\u0000${m.mechId}`, m]));
@@ -320,13 +260,6 @@ export class MechanismTimeline {
     return tr ? trackValueAt(tr, t) : null;
   }
 
-  /** 這個 cue 這個機關實際晚幾秒到位（沒動 / 準時 = 0；沒這個 cue = null） */
-  lateBy(cueId: string, mechId: string): number | null {
-    const r = this.late.get(cueId);
-    if (!r) return null;
-    return r[mechId] ?? 0;
-  }
-
   /** 這個 cue 叫這個機關出發的那一段（沒動 = null） */
   moveFor(cueId: string, mechId: string): TimelineMove | null {
     return this.moveIndex.get(`${cueId}\u0000${mechId}`) ?? null;
@@ -335,7 +268,7 @@ export class MechanismTimeline {
   /** 最後一段走完的時間（時間軸要畫多長） */
   get endTime(): number {
     let t = this.windows.length ? this.windows[this.windows.length - 1].arrive : 0;
-    for (const m of this.moves) t = Math.max(t, m.cut ? m.cut.at : m.end, m.plannedEnd);
+    for (const m of this.moves) t = Math.max(t, m.end);
     return t;
   }
 }
@@ -359,7 +292,7 @@ function trackValueAt(tr: Track, t: number): number {
  * 有影片時間的 cue → 每個機關一段一段的移動：
  *   第一個 cue 之前停在第一個 cue 的位置
  *   自己設了位置的 cue：GO + 延遲 出發（從機器那時候實際在的位置，可能還在走上一段）
- *     走的時間 = max(走幾秒, 距離 ÷ 最高速度) → 太快就晚一點到；走幾秒沒設 = 到位 − GO（跟 v1 一樣）
+ *     走的時間 = 走幾秒；沒設 = 到位 − GO（跟 v1 一樣）；不管機器最高速度
  *     上一段還沒走完 → 從那裡接著走；上一段還沒開始 → 取消
  *   沿用的 cue：機器已經在 / 正在往這個位置走 → 不打斷；不是（cue 順序跟影片時間對不上）→ 跟 v1 一樣在 GO 接手
  * @param ownFor  沒給 = 每個 cue 都當自己設了、都跟著轉場（v1 的算法；舊的呼叫 / 測試）
@@ -373,8 +306,6 @@ export function buildMechanismTimeline(
 ): MechanismTimeline | null {
   const windows = cueWindows(cues);
   if (windows.length === 0) return null;
-  const late = new Map<string, Record<string, number>>();
-  for (const w of windows) late.set(w.cueId, {});
   const allMoves: TimelineMove[] = [];
   const tracks: Track[] = mechs.map(m => {
     const first = valuesFor(windows[0].cueId)?.[m.id];
@@ -408,14 +339,7 @@ export function buildMechanismTimeline(
         // 沿用：前面排好的移動最後會停在這個 cue 的位置 → 不打斷（延遲還沒到的也照樣會出發）
         const n = tr.seg.length / 4;
         const endValue = n > 0 ? tr.seg[(n - 1) * 4 + 3] : tr.initial;
-        if (Math.abs(endValue - target) < MOVE_EPS) {
-          // 那一段照設定應該在這個 cue 到位前走完、卻還在走（太快）→ 這個 cue 會晚到（跟 v1 一樣報在這個 cue）
-          if (n > 0) {
-            const t1 = tr.seg[(n - 1) * 4 + 1];
-            if (segMove[n - 1].plannedEnd <= w.arrive + MOVE_EPS && t1 > w.arrive) late.get(w.cueId)![m.id] = t1 - w.arrive;
-          }
-          continue;
-        }
+        if (Math.abs(endValue - target) < MOVE_EPS) continue;
       }
       const own = timing !== null;
       const delay = own ? Math.max(0, timing.delaySec ?? 0) : 0;
@@ -425,56 +349,52 @@ export function buildMechanismTimeline(
       const p = trackValueAt(tr, s);
       const d = Math.abs(target - p);
       if (d < MOVE_EPS) continue;
-      const need = requiredSeconds(d, m.maxSpeed);
-      const dur = Math.max(planned, need);
-      tr.seg.push(s, s + dur, p, target);
+      tr.seg.push(s, s + planned, p, target);
       const mv: TimelineMove = {
         cueId: w.cueId, mechId: m.id, own, go: w.start, arrive: w.arrive, delay,
-        start: s, duration: planned, plannedEnd: s + planned, end: s + dur, from: p, to: target,
+        start: s, duration: planned, end: s + planned, from: p, to: target,
         explicitDelay: own && timing.delaySec != null && timing.delaySec > 0,
         explicitDuration: own && timing.durationSec != null,
-        need, cut: null,
+        cut: null,
       };
       segMove.push(mv);
       allMoves.push(mv);
-      late.get(w.cueId)![m.id] = dur - planned;
     }
     return tr;
   });
-  return new MechanismTimeline(tracks, late, allMoves, windows);
+  return new MechanismTimeline(tracks, allMoves, windows);
 }
 
 // ─────────────────────────────────────────────
-// 點 cue：照機器速度走過去
+// 點 cue：照走幾秒走過去
 // ─────────────────────────────────────────────
 
 interface TweenState { from: number; to: number; t0: number; dur: number }
 
 /**
  * 換 cue 時機關怎麼走：
- *   'real'       照機器速度（花 max(走幾秒, 距離 ÷ 最高速度) 秒；導演頁、分享頁、工作站、管理頁開「照機器速度播放」時）
- *   'transition' 照走幾秒（沒設 = 轉場秒數；跟物件一起到；管理頁預設，編輯時不用等機器）；0 = 直接切換
+ *   'transition' 照走幾秒（沒設 = 轉場秒數；跟物件一起到）；0 = 直接切換。預設
  *   'instant'    直接到位（分鏡縮圖）
- * 延遲：'real' 和 'transition' 都會先等延遲再出發；'instant' 不等。
+ *   'real'       舊的「照機器速度」（已拿掉，2026-10-15）：跟 'transition' 一樣；留著是讓舊的呼叫還能用
+ * 延遲：除了 'instant' 都會先等延遲再出發。
  */
-export type MechanismMotion = 'real' | 'transition' | 'instant';
+export type MechanismMotion = 'transition' | 'instant' | 'real';
 
 export interface RetargetOptions {
   /** 換了 cue = true（照下面的動法走過去）；同一個 cue 裡改值 = false（直接跳） */
   animate: boolean;
-  /** 新 cue 的轉場秒數（沒設走幾秒的機關照這個秒數走；有填最高速度的至少這麼久） */
+  /** 新 cue 的轉場秒數（沒設走幾秒的機關照這個秒數走） */
   minSeconds: number;
-  /** 預設 'real'；'transition' = 不管最高速度，照走幾秒；'instant' = 跟 animate: false 一樣 */
+  /** 預設 'transition'（照走幾秒）；'instant' = 跟 animate: false 一樣 */
   motion?: MechanismMotion;
   /** 新 cue 自己設的時間（mechId → 延遲 / 走幾秒）；沒有的機關跟著轉場 */
   timings?: MechanismTimings | null;
 }
 
-/** 換 cue 時這個機關要走幾秒 */
-export function moveSeconds(distance: number, maxSpeed: number | null | undefined, minSeconds: number, motion: MechanismMotion = 'real'): number {
+/** 換 cue 時這個機關要走幾秒（= 走幾秒；沒設 = 轉場；跟機器速度無關） */
+export function moveSeconds(seconds: number, motion: MechanismMotion = 'transition'): number {
   if (motion === 'instant') return 0;
-  const t = Math.max(0, minSeconds);
-  return motion === 'transition' ? t : Math.max(t, requiredSeconds(distance, maxSpeed));
+  return Math.max(0, seconds);
 }
 
 export class MechanismTweener {
@@ -512,7 +432,7 @@ export class MechanismTweener {
 
   /**
    * 換目標：目標沒變的機關不動（繼續走它原本的）；
-   * 換 cue → 從現在的位置走過去：先等延遲，再花 max(走幾秒, 距離 ÷ 最高速度) 秒；同一個 cue 裡改值 → 直接跳。
+   * 換 cue → 從現在的位置走過去：先等延遲，再花走幾秒（沒設 = 轉場）；同一個 cue 裡改值 → 直接跳。
    * 第一次看到的機關直接放在目標。
    */
   retarget(mechs: MotionMechanism[], targets: MechanismValues, nowMs: number, opts: RetargetOptions) {
@@ -529,7 +449,7 @@ export class MechanismTweener {
       const t = opts.timings?.[m.id];
       const delayMs = Math.max(0, t?.delaySec ?? 0) * 1000;
       const base = t && t.durationSec != null ? t.durationSec : opts.minSeconds;
-      const dur = moveSeconds(to - from, m.maxSpeed, base, opts.motion) * 1000;
+      const dur = moveSeconds(base, opts.motion) * 1000;
       this.states.set(m.id, { from, to, t0: nowMs + delayMs, dur: dur > 0 ? dur : 0 });
     }
     for (const id of [...this.states.keys()]) if (!live.has(id)) this.states.delete(id);

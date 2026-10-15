@@ -1,14 +1,14 @@
 // 管理頁右邊的「機關」分頁（只有製作看得到）
-//   上面：這個 cue 的機關位置（常用位置一鍵、滑桿、打數字、回到沿用；來不及到位的提醒和「照機器速度」）
+//   上面：這個 cue 的機關位置（常用位置一鍵、滑桿、打數字、回到沿用；延遲和走幾秒；被下一個 cue 接手的說明）
 //   下面：設定機關（新增 / 編輯 / 刪除 / 排序；表單直接展開在這裡，3D 畫面照樣能轉、能選物件）
 //   匯出機關總表（CSV，用 Excel 打開）
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Cable, ChartGantt, ChevronDown, ChevronRight, Cog, FileSpreadsheet, LoaderCircle, Pencil, Plus, Rows3, TriangleAlert, Waves } from 'lucide-react';
+import { ArrowDown, ArrowUp, Cable, ChartGantt, ChevronDown, ChevronRight, Cog, FileSpreadsheet, Info, LoaderCircle, Pencil, Plus, Rows3, TriangleAlert, Waves } from 'lucide-react';
 import Icon from '../Icon';
 import type { Cue, StageObject } from '../../lib/api';
 import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
 import { formatMechValue } from '../../lib/mechanisms/motion';
-import { speedUnitOf, type Mechanism, type MechanismGroup, type MechVec3 } from '../../lib/mechanisms/model';
+import type { Mechanism, MechanismGroup, MechVec3 } from '../../lib/mechanisms/model';
 import { flipLabel } from '../../lib/mechanisms/flip';
 import { countSides } from '../../lib/mechanisms/split';
 import { layoutMechanisms, moveLayoutItem, valueRange } from '../../lib/mechanisms/group';
@@ -39,8 +39,6 @@ interface Props {
   stageObjects: StageObject[];
   selectedObjectIds: string[];
   scaleCorrection: number;
-  /** 「照機器速度」：把這個 cue 的轉場改成幾秒 */
-  onSetCrossfade: (seconds: number) => Promise<void>;
   /** 轉換舊位置後，物件位置也變了 → 重新讀 */
   onStatesChanged: () => void;
 }
@@ -48,7 +46,7 @@ interface Props {
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export default function MechanismTab({
-  mech, projectId, projectName, cues, selectedCue, onSelectCue, stageObjects, selectedObjectIds, scaleCorrection, onSetCrossfade, onStatesChanged,
+  mech, projectId, projectName, cues, selectedCue, onSelectCue, stageObjects, selectedObjectIds, scaleCorrection, onStatesChanged,
 }: Props) {
   const mechanisms = mech.mechanisms;
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
@@ -199,7 +197,7 @@ export default function MechanismTab({
       const skippedNote = dry.skipped.length ? `另外 ${dry.skipped.length} 個 cue 沒辦法轉，會照原本的樣子留著。` : '';
       const ok = await confirmDialog({
         title: `把 ${dry.converted} 個 cue 的位置轉成「${m.name}」的機關位置？`,
-        message: `這些 cue 裡「${m.name}」帶的物件的高度 / 角度會變成機關的位置，畫面看起來不會變，之後就能檢查速度、匯出總表。想先試試看的話，可以先複製專案、在副本上試。${skippedNote}`,
+        message: `這些 cue 裡「${m.name}」帶的物件的高度 / 角度會變成機關的位置，畫面看起來不會變，之後就能用機關時間軸調整、匯出總表。想先試試看的話，可以先複製專案、在副本上試。${skippedNote}`,
         confirmLabel: '轉換',
       });
       if (!ok) return;
@@ -355,7 +353,6 @@ export default function MechanismTab({
       editingDefault={editingDefault}
       cueName={cueName}
       check={cueCheck?.items[m.id]}
-      cueFix={cueCheck?.fix ?? null}
       front={front}
       focused={mech.focusedId === m.id}
       disabled={busy}
@@ -363,7 +360,6 @@ export default function MechanismTab({
       onCommit={(v) => void mech.commitValue(m.id, v)}
       onPreview={(v) => mech.previewValue(m.id, v)}
       onClear={() => void mech.clearValue(m.id)}
-      onFix={(s) => void onSetCrossfade(s)}
       timing={selectedCue ? mech.timings.get(selectedCue.id)?.[m.id] ?? null : null}
       showTiming={!!selectedCue && mech.selectedRow[m.id]?.source === 'own' && !!cueCheck?.items[m.id]?.prevCueId}
       cueSpan={cueCheck?.items[m.id]?.span ?? null}
@@ -377,7 +373,6 @@ export default function MechanismTab({
     const open = openRows.has(g.id);
     const range = valueRange(members.map(m => (editingDefault ? m.defaultValue : mech.selectedRow[m.id]?.value ?? m.defaultValue)));
     const kind = members[0]?.kind ?? 'linear';
-    const problems = members.filter(m => cueCheck?.items[m.id] && cueCheck.items[m.id].status === 'tooFast').length;
     const firstCue = !!selectedCue && !members.some(m => cueCheck?.items[m.id]?.prevCueId);
     return (
       <li key={g.id} className="mech-group">
@@ -386,7 +381,6 @@ export default function MechanismTab({
             onClick={() => setOpenRows(s => toggle(s, g.id))}><Icon icon={open ? ChevronDown : ChevronRight} /></button>
           <span className="mech-group__name" title={g.name}>{g.name}</span>
           <span className="muted small">{members.length} 個機關{range ? ` · ${formatMechValue(range.min, kind)}${range.max !== range.min ? ` ~ ${formatMechValue(range.max, kind)}` : ''}` : ''}</span>
-          {problems > 0 && <span className="mech-group__flag" title={`有 ${problems} 個機關來不及到位，展開看是哪幾個`}><Icon icon={TriangleAlert} size="sm" /> {problems}</span>}
           <span className="grow" />
           <button type="button" className="btn btn--ghost btn--sm" disabled={!selectedCue || busy || patternFor === g.id}
             title={selectedCue ? '一次設好這一排在這個 cue 的位置和延遲：一起、依序、波浪、漸層' : '先在上面選一個 cue，花樣是設在 cue 上的'}
@@ -413,21 +407,20 @@ export default function MechanismTab({
   // ── 吊掛（v2 第 4 階段） ──
   const msPerMeter = 1 / (scaleCorrection > 0 ? scaleCorrection : 1);
   const rigDef = (rigId: string) => mech.hoistRigs.find(r => r.rigId === rigId);
-  /** 整組現在的傾斜字和提醒（拖滑桿時照畫面上現在的高度；沒在拖就用這個 cue 的檢查，含走過來路上的提醒） */
+  /** 整組現在的傾斜字和說明（拖滑桿時照畫面上現在的高度；沒在拖就用這個 cue 的檢查，含走過來路上的說明） */
   const rigView = (rig: Mechanism, hoists: Mechanism[]) => {
     const def = rigDef(rig.id);
     if (!def) return null;
     const h = def.hoistIds.map(id => (mech.targets[id] ?? hoists.find(x => x.id === id)?.defaultValue ?? 0) * msPerMeter);
     const previewing = def.hoistIds.some(id => id in mech.preview);
     const stored = !previewing && selectedCue ? mech.hoistChecks?.get(selectedCue.id)?.get(rig.id) : undefined;
-    return { tilt: tiltText(analyzeHoist(def.solver, h), front), warnings: stored ? stored.warnings : hoistWarnings(def.solver, h, msPerMeter) };
+    return { tilt: tiltText(analyzeHoist(def.solver, h), front), notes: stored ? stored.warnings : hoistWarnings(def.solver, h, msPerMeter) };
   };
 
   /** 「這個 cue 的機關位置」裡的一組吊掛：標題（傾斜、一起動）+ 每個吊點那一列 */
   const cueRig = (rig: Mechanism, hoists: Mechanism[]) => {
     const open = !closedRigs.has(rig.id);
     const view = rigView(rig, hoists);
-    const problems = hoists.filter(h => cueCheck?.items[h.id]?.status === 'tooFast').length;
     return (
       <li key={rig.id} className="mech-group">
         <div className="mech-group__head">
@@ -437,7 +430,6 @@ export default function MechanismTab({
           <span className="mech-group__name" title={rig.name}>{rig.name}</span>
           <span className="muted small">{hoists.length} 個吊點</span>
           {view && <span className="mech-hoist__tilt">{view.tilt}</span>}
-          {problems > 0 && <span className="mech-group__flag" title={`有 ${problems} 個吊點來不及到位，展開看是哪幾個`}><Icon icon={TriangleAlert} size="sm" /> {problems}</span>}
           <span className="grow" />
           <button type="button" className="btn btn--ghost btn--sm" disabled={!selectedCue || busy || togetherFor === rig.id}
             title={selectedCue ? '所有吊點一次拉到同一個高度（整片平著升降，像單點吊）' : '先在上面選一個 cue，位置是設在 cue 上的'}
@@ -449,9 +441,9 @@ export default function MechanismTab({
             <span>這組吊掛的吊點位置算不出來，物件不會動：按「設定機關」裡的「編輯」，把吊點分開（兩個吊點不能在同一個位置，三個以上不能排成一直線）</span>
           </div>
         )}
-        {view?.warnings.map(w => (
-          <div key={w} className="mech-warn" role="status">
-            <Icon icon={TriangleAlert} size="sm" className="mech-warn__icon" />
+        {view?.notes.map(w => (
+          <div key={w} className="mech-note" role="status">
+            <Icon icon={Info} size="sm" className="mech-note__icon" />
             <span>{w}</span>
           </div>
         ))}
@@ -504,7 +496,6 @@ export default function MechanismTab({
                     <span className="mech-setup-item__name">{h.name}</span>
                     <span className="muted small">
                       {formatMechValue(h.travelMin, 'linear', false)} ~ {formatMechValue(h.travelMax, 'linear')}
-                      {h.maxSpeed !== null && ` · ${formatMechValue(h.maxSpeed, 'linear', false)} ${speedUnitOf('linear')}`}
                       {` · ${h.cueCount} 個 cue 有設定`}
                     </span>
                   </div>
@@ -538,8 +529,6 @@ export default function MechanismTab({
   /** 「設定機關」裡一個機關那一列（index = 在清單的第幾項；一排裡面的成員不能單獨上下移，傳 null） */
   const setupItem = (m: Mechanism, index: number | null) => {
     const kids = children(m);
-    const speed = m.maxSpeed === null ? null
-      : m.kind === 'rotary' ? `${formatMechValue(m.maxSpeed, 'rotary', false)}${speedUnitOf('rotary')}` : `${formatMechValue(m.maxSpeed, 'linear', false)} ${speedUnitOf('linear')}`;
     return (
       <li key={m.id} className={'mech-setup-item' + (mech.focusedId === m.id ? ' is-focused' : '')}>
         <div className="mech-setup-item__row" onClick={() => mech.setFocusedId(m.id)}>
@@ -547,7 +536,6 @@ export default function MechanismTab({
             <span className="mech-setup-item__name">{m.name}</span>
             <span className="muted small">
               {formatMechValue(m.travelMin, m.kind, false)} ~ {formatMechValue(m.travelMax, m.kind)}
-              {speed && ` · ${speed}`}
               {flipLabel(m.metadata) && ` · ${flipLabel(m.metadata)}`}
               {m.variant === 'split'
                 ? ` · 對開：A 邊 ${countSides(m.objectIds, m.objectSides ?? {}).a} 個、B 邊 ${countSides(m.objectIds, m.objectSides ?? {}).b} 個 · ${m.cueCount} 個 cue 有設定`
@@ -636,13 +624,8 @@ export default function MechanismTab({
             <HelpLink anchor={HELP_ANCHORS.prodMechanisms} />
           </span>
         </header>
-        <label className="mech-speed-toggle" title="開了：換 cue 時機關照最高速度走（跟導演頁、分享連結一樣，太快就晚到）。關了：照轉場秒數，跟物件一起到">
-          <input type="checkbox" checked={mech.realSpeed} onChange={e => mech.setRealSpeed(e.target.checked)} />
-          <span>照機器速度播放</span>
-          <small className="muted">{mech.realSpeed ? '換 cue 時機關照最高速度走，跟導演、客戶看到的一樣' : '換 cue 時機關照轉場秒數走（編輯比較快）；提醒照樣會出現'}</small>
-        </label>
         {mechanisms.length > 0 && (
-          <label className="mech-speed-toggle" title="開了：3D 畫面下面排出這首歌每個機關什麼時候動，可以拖色塊改延遲和走幾秒">
+          <label className="mech-toggle" title="開了：3D 畫面下面排出這首歌每個機關什麼時候動，可以拖色塊改延遲和走幾秒">
             <input type="checkbox" checked={mech.timelineOpen} onChange={e => mech.setTimelineOpen(e.target.checked)} />
             <Icon icon={ChartGantt} size="sm" />
             <span>顯示機關時間軸</span>

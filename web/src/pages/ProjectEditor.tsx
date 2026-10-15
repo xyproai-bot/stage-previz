@@ -1211,9 +1211,7 @@ export default function ProjectEditor() {
                 key={key}
                 className={'tab' + (rightTab === key ? ' is-active' : '')}
                 onClick={() => setRightTab(key)}
-              >{label}{key === 'mechanisms' && mech.problemCount > 0 && (
-                <span className="mech-tab-dot" title={`有 ${mech.problemCount} 個 cue 的機關來不及到位`} aria-label={`有 ${mech.problemCount} 個 cue 的機關來不及到位`} />
-              )}</button>
+              >{label}</button>
             ))}
           </div>
 
@@ -1247,7 +1245,6 @@ export default function ProjectEditor() {
                 stageObjects={stageObjects}
                 selectedObjectIds={selectedObjectIds}
                 scaleCorrection={view.scaleCorrection}
-                onSetCrossfade={(s) => handleUpdateCueMeta({ crossfadeSeconds: s })}
                 onStatesChanged={() => { void refreshCueStates(); }}
               />
             ) : songsLoading && !selectedSongId ? (

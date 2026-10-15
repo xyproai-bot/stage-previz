@@ -4,16 +4,22 @@ Date: 2026-10-15. Builds on v1 (`2026-10-14-mechanism-system-design.md`, impleme
 
 UI strings are quoted exactly as they ship. No emoji; icons via `Icon` + lucide. In-page dialogs only.
 
+> **2026-10-15 owner decision: speed warnings removed, preview only.** The product is a preview tool for directors and animators. On-site machine operation (max speed, 「太快」, 「來不及」) is not our business and would mislead people, so mechanisms now move exactly as the timing the user sets: GO + delay, then 走幾秒 (or the cue's transition when empty). Machine max speed never stretches, clamps or delays a move.
+> - Gone: the 太快 / 會晚到 messages, 「照機器速度（走 N 秒）」, 「只改這個機關」, the 「照機器速度播放」 toggle (the `'real'` motion mode now behaves like `'transition'`), the red bars and hatching on 機關時間軸, the orange tab dot and group flags, and the CSV columns 需要(秒), 速度, 最高速度 (the last column is now 備註 Note).
+> - Kept as plain grey text (not warning style): the take-over note 「還沒走完，Cue N … 就接手了」, and the hoist geometry notes (4 points not on one plane, so the best-fit plane is used; 2-point height difference beyond the spacing, so the piece stops vertical).
+> - Kept for compatibility: the `max_speed` column and the `maxSpeed` API field (old frontends and old data keep working). The UI no longer shows or sets it; editing an old mechanism sends the stored value back unchanged. The backend did not change; it never had a speed check.
+> - Anything below that mentions speed checks, 「太快」, late arrival, fixes, red or hatched bars, or the speed columns describes the earlier design and is superseded by this note.
+
 ## 0. Decisions at a glance
 
 | # | Decision | Why |
 |---|---|---|
 | 1 | Timing lives on the existing per-cue row: `cue_mechanism_positions.delay_sec`, `.duration_sec` (NULL = follow the cue). | A move belongs to "this cue sets this axis". Every later stage (對開 one value, arrays one row per member, hoists one row per hoist) still writes exactly one row per cue × value-axis, so the model never changes again. |
 | 2 | Timing is **not inherited**. A cue without its own value has no move and no timing. | Timing describes one move, not a state. Inheriting "start 2 s late" into an unrelated later cue would be wrong. |
-| 3 | Move window: start = cue GO + delay; planned length = own duration, else the cue's span (arrive − GO for timed cues, 轉場 for click mode). Constant speed. Real speed = max(planned, distance ÷ max speed). | Same constant-speed model as v1. No accel/decel (owner). |
+| 3 | Move window: start = cue GO + delay; planned length = own duration, else the cue's span (arrive − GO for timed cues, 轉場 for click mode). Constant speed. ~~Real speed = max(planned, distance ÷ max speed).~~ (Superseded 2026-10-15: a move always takes exactly the planned time.) | Same constant-speed model as v1. No accel/decel (owner). |
 | 4 | Only cues that **set** a mechanism launch it. An inherited cue never interrupts a running or pending move. A setting cue takes over at its start: running move is cut where it is, a not-yet-started move is cancelled. | Needed for "start 2 s after the cue, take 8 s" when the next cue's GO falls inside those 8 s. Physically right: a cue that doesn't include an axis doesn't touch it. |
-| 5 | With no timing set anywhere, every warning, CSV row and late value equals v1. The only visual difference: a machine already running late keeps max speed instead of slowing to fit the next cue's window. | Backward compatibility; v1 golden CSV unchanged apart from the new columns. |
-| 6 | Speed fixes: a mechanism following the cue keeps v1's 「照機器速度」 (changes the cue's 轉場) and also gets 「只改這個機關（走 N 秒）」. A mechanism with its own duration only gets the duration fix. | The targeted fix doesn't move other objects. |
+| 5 | ~~With no timing set anywhere, every warning, CSV row and late value equals v1.~~ (Superseded 2026-10-15: no speed warnings or late values exist any more.) | Backward compatibility; v1 golden CSV unchanged apart from the new columns. |
+| 6 | ~~Speed fixes: 「照機器速度」 and 「只改這個機關（走 N 秒）」.~~ (Removed 2026-10-15 with the speed warnings.) | The targeted fix doesn't move other objects. |
 | 7 | 機關時間軸 is docked under the 3D view while the 機關 tab is open (the right column is 340 px, too narrow). Editing there writes the same rows. | Editing-timeline layout the owner knows from AE / Premiere. |
 | 8 | Stages 2–4 add a `variant` column and side/rig columns; `kind` stays `linear`/`rotary` (its CHECK can't be widened without rebuilding a table that other tables cascade from). | No destructive migration, ever. |
 
@@ -69,11 +75,11 @@ From stage 2 on, old frontends must not show the new variants with the wrong mot
 ## 3. Shared pure logic (`web/src/lib/mechanisms/`)
 
 **Timing (stage 1, `motion.ts`, `track.ts`):** `ownTimingsByCue(positions)` and `ownMoveFor(resolved, timings)`. `buildMechanismTimeline(mechs, cues, valuesFor, ownFor)` follows decision 4:
-- **Setting cue:** `takeOver(start)` drops pending segments (marks them `cut.started=false`) and truncates a running one (`cut.started=true`, `reached`). It then pushes `[start, start+max(D, need)]` from the actual position.
-- **Inherited cue:** if the last segment already ends at this cue's value, nothing happens. Late is reported on this cue only when that move was planned to finish by this cue's arrival. Otherwise (order mismatch) it takes over at GO, as in v1.
+- **Setting cue:** `takeOver(start)` drops pending segments (marks them `cut.started=false`) and truncates a running one (`cut.started=true`, `reached`). It then pushes `[start, start+D]` from the actual position (D = own duration, else the cue's span; max speed is not used).
+- **Inherited cue:** if the last segment already ends at this cue's value, nothing happens. Otherwise (order mismatch) it takes over at GO, as in v1.
 - **Without `ownFor`:** the exact v1 algorithm, kept for old callers.
 
-`checkSongMechanisms(..., timings)` adds `delay`, `startAt`, `endAt`, `span`, `explicitDelay`, `explicitDuration`, `durationFix` and `cut` (reported only when the planned end lies after the take-over). `MechanismTweener.retarget(..., { timings })` waits `delay`, then moves over `duration ?? 轉場` (`'transition'`) or the max of that and need (`'real'`). `'instant'` ignores timing. No per-frame allocation (values object reused, segments are flat arrays).
+`checkSongMechanisms(..., timings)` reports per cue and mechanism `status` (`start` / `still` / `move`), `delay`, `startAt`, `endAt`, `span`, `available` (= 走幾秒), `explicitDelay`, `explicitDuration` and `cut` (reported only when the planned end lies after the take-over). It has no `need`, `fix`, `durationFix`, `lateBy` or problem counts any more. `MechanismTweener.retarget(..., { timings })` waits `delay`, then moves over `duration ?? 轉場` (`'transition'`, the default; the old `'real'` is an alias of it). `'instant'` ignores timing. No per-frame allocation (values object reused, segments are flat arrays).
 
 **Patterns (stage 3, `patterns.ts`):** `applyPattern(members in group order, p) → { items:[{mechanismId,value,delaySec}], clamped }`.
 - 一起: same value V, same delay.
@@ -105,19 +111,16 @@ The v1 rule still holds: stored = base pose; drawn = `applyChain(base, values)`,
 
 **Stage 1 (built):**
 - **Per-cue row.** Only when the cue sets the mechanism and isn't the first cue: 「延遲 [ ] 秒」「走 [ ] 秒」. The placeholder shows the cue's value. `TimerReset` 「延遲和走幾秒改回跟著 cue」. Summary: 「0:12.0 開始動，0:20.0 到位」 (timed), or 「GO 後 2 秒開始動，走 8 秒」, plus 「（走幾秒跟著轉場）」. A bad entry gives 「秒數要是 0 到 3600，已還原」.
-- **Warnings:**
-  - 「走 8 秒太快：這段要走 3 m（最高 0.25 m/秒），需要 12 秒」 with 「照機器速度（走 12 秒）」.
-  - v1 too-fast plus 「只改這個機關（走 N 秒）」.
-  - 「還沒走完，Cue 4「間奏」 0:50.0 就接手了：只走到 2.75 m」 and 「還沒開始動，… 就接手了」.
+- **Notes (grey, no warning colours):** 「還沒走完，Cue 4「間奏」 0:50.0 就接手了：預覽時只走到 2.75 m」 and 「還沒開始動，… 就接手了：預覽時這一段不會動」. (The earlier 太快 warnings and their two fix buttons were removed on 2026-10-15.)
 - **Tab toggle:** `ChartGantt` 「顯示機關時間軸」 (remembered per computer, try/catch).
 - **機關時間軸:**
-  - Title 「機關時間軸」, hint 「拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）；紅色 = 照最高速度來不及」.
+  - Title 「機關時間軸」, hint 「拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）」.
   - Buttons: 「播放」/「暫停」, 「停止預覽」, 「縮小」/「放大」 (also Ctrl+wheel), 「整首放進來」, 「收起機關時間軸」.
-  - Layout: one row per mechanism; cue numbers on the ruler, with the GO→到位 band; red bar plus hatched overrun; dashed rest for a move that is cut. Untimed cues are noted as 「N 個 cue 沒設時間」.
+  - Layout: one row per mechanism; cue numbers on the ruler, with the GO→到位 band; one bar per move (start → planned arrival); a grey dashed rest for a move that is cut. Untimed cues are noted as 「N 個 cue 沒設時間」.
   - Empty states: 「這首歌的 cue 還沒有設「對應影片時間」：設了之後機關就會排在時間軸上」 and 「還沒有機關：先在右邊「機關」分頁新增機關」.
   - Keyboard: ←/→ change the delay, ↑/↓ change the duration (Shift = 1 s), saved on key-up.
   - Clicking a bar selects that cue and mechanism.
-  - The ruler and Play drive a 3D preview at machine speed, with objects held at the selected cue. The playhead and clock update the DOM directly, with no React render per frame.
+  - The ruler and Play drive a 3D preview, with objects held at the selected cue. The playhead and clock update the DOM directly, with no React render per frame.
   - When the editor gains song-video playback, the timeline follows `video.currentTime` instead of its own clock.
 
 **Stage 2 (built as written; the rotary form shows 「怎麼轉」 first, with 「轉台，或自己設定轉軸（進階）」 as the old behaviour and the six edges; the axis and pivot fields sit under 「進階」, disabled while an edge is chosen):** 「動作」 adds a 「對開（兩邊往反方向）」 toggle. The object list splits into 「A 邊」 and 「B 邊」 (with 「照位置自動分兩邊」), and there are two labels: 「控台編號（A 邊）」 and 「控台編號（B 邊）」. The value reads 「每邊 2 m（中間開 4 m）」. Rotary adds 「沿著上緣翻 / 下緣翻 / 左緣翻 / 右緣翻 / 前緣翻 / 後緣翻」; pivot/axis fields move under 「進階」.
@@ -128,27 +131,27 @@ The v1 rule still holds: stored = base pose; drawn = `applyChain(base, values)`,
 
 ## 6. CSV export (機關總表)
 
-The columns change from v1 in two ways. 延遲 and 開始時間 are new. 可用(秒) becomes 走幾秒, because it is now the move's own planned time:
+The columns change from v1 in two ways. 延遲 and 開始時間 are new. 可用(秒) becomes 走幾秒, because it is now the move's own planned time. On 2026-10-15 the speed columns (需要(秒), 速度(單位/秒), 最高速度) were removed and 檢查 Check became 備註 Note:
 
-`歌曲 Song, Cue #, Cue 名稱 Cue name, GO 時間 GO, 到位時間 Arrive, 轉場(秒) Move s, 機關 Axis, 控台編號 Console, 起點 From, 目標 Target, 單位 Unit, 常用位置 Preset, 行程 Distance, 延遲(秒) Delay s, 開始時間 Start, 走幾秒 Axis s, 需要(秒) Need s, 速度(單位/秒) Speed, 最高速度 Max, 檢查 Check`
+`歌曲 Song, Cue #, Cue 名稱 Cue name, GO 時間 GO, 到位時間 Arrive, 轉場(秒) Move s, 機關 Axis, 控台編號 Console, 起點 From, 目標 Target, 單位 Unit, 常用位置 Preset, 行程 Distance, 延遲(秒) Delay s, 開始時間 Start, 走幾秒 Axis s, 備註 Note`
 
 - The timing cells are filled only on moving rows; 開始時間 only for timed cues.
-- New check texts are 「太快：要走 N 秒」 (own duration), 「被 Cue N 接手，只走到 X」 and 「還沒動就被 Cue N 接手」.
-- The legend note adds 「開始時間 = GO 時間 + 延遲；走幾秒沒另外設 = 跟著 cue 的轉場」.
+- 備註 is 「起始位置」, 「不動」, 「被 Cue N 接手，只走到 X」 or 「還沒動就被 Cue N 接手」; a normal move is empty. There are no 太快 / 來不及 / 會晚 texts.
+- The legend note says the mechanisms move at constant speed over the set time and adds 「開始時間 = GO 時間 + 延遲；走幾秒沒另外設 = 跟著 cue 的轉場」. The legend lines no longer list a max speed.
 - Stage 2 writes two rows per split (「{name}（A 邊）」/「（B 邊）」, each with its own console label).
 - Stage 4 writes one row per hoist; the rig appears in the legend only.
 
-Golden sample (`timing.test.ts`): lift 0~3.5 m at 0.25 m/s. Cue 2 has delay 2 and duration 8; cue 3 has duration 30; cue 4 follows the cue.
+Golden sample (`timing.test.ts`; the lift still carries a stored max speed of 0.25 to prove it is ignored). Cue 2 has delay 2 and duration 8; cue 3 has duration 30; cue 4 follows the cue.
 ```csv
-S01 開場,1,暗場,0:00.0,0:00.0,0,中央升降台,Axis 3,,0.000,m,,,,,,,,0.25,起始位置
-S01 開場,2,升起,0:10.0,0:30.0,20,中央升降台,Axis 3,0.000,3.500,m,,3.500,2.0,0:12.0,8.0,14.0,0.438,0.25,太快：要走 14 秒
-S01 開場,3,半降,0:35.0,0:40.0,5,中央升降台,Axis 3,3.500,2.000,m,,1.500,0.0,0:35.0,30.0,6.0,0.050,0.25,被 Cue 4 接手，只走到 2.750
-S01 開場,4,收起,0:50.0,1:00.0,10,中央升降台,Axis 3,2.000,0.000,m,,2.000,0.0,0:50.0,10.0,8.0,0.200,0.25,會晚 1 秒到位
+S01 開場,1,暗場,0:00.0,0:00.0,0,中央升降台,Axis 3,,0.000,m,,,,,,起始位置
+S01 開場,2,升起,0:10.0,0:30.0,20,中央升降台,Axis 3,0.000,3.500,m,,3.500,2.0,0:12.0,8.0,
+S01 開場,3,半降,0:35.0,0:40.0,5,中央升降台,Axis 3,3.500,2.000,m,,1.500,0.0,0:35.0,30.0,被 Cue 4 接手，只走到 2.750
+S01 開場,4,收起,0:50.0,1:00.0,10,中央升降台,Axis 3,2.000,0.000,m,,2.000,0.0,0:50.0,10.0,
 ```
 
 ## 7. Backward compatibility
 
-- Existing rows get NULL timing, so playback, warnings and export match v1. The v1 golden rows are unchanged apart from the two new columns.
+- Existing rows get NULL timing, so playback matches v1 (except that nothing is slowed by max speed any more, see the 2026-10-15 note). The CSV golden rows lost the speed columns on 2026-10-15.
 - The old frontend on master with the new worker:
   - its PUT `{ value }` uses `ON CONFLICT … SET value` and keeps the timing;
   - it ignores the extra fields on reads;
@@ -160,8 +163,8 @@ S01 開場,4,收起,0:50.0,1:00.0,10,中央升降台,Axis 3,2.000,0.000,m,,2.000
 ## 8. Test plan
 
 - **Unit (vitest):**
-  - `timing.test.ts`: windows with delay and duration; timing not inherited; an inherited cue does not interrupt; too fast with own duration; both fixes; cut and cancel; scrub determinism; tweener delay in each mode; body validation; the CSV golden above.
-  - The existing `motion`/`cueSheet` tests still pass (v1 parity).
+  - `timing.test.ts`: windows with delay and duration; timing not inherited; an inherited cue does not interrupt; a very short duration still arrives on time (max speed ignored); cut and cancel; scrub determinism; tweener delay in each mode; body validation; the CSV golden above.
+  - `motion` / `cueSheet` tests were rewritten on 2026-10-15 to prove that max speed changes nothing; `web/src/test/noMechanismSpeedWarnings.test.ts` fails the build if speed wording comes back into the mechanism screens, the sheet or the help text.
   - Later stages: `patterns.test.ts`, `hoist.test.ts` (2/3/4 points, coplanarity), and split/flip round trips in `pose.test.ts`.
 - **Worker (node:test + node:sqlite):** `mechanismTiming.test.mjs` covers:
   - migration 0027 on old rows, plus the CHECKs;
@@ -169,7 +172,7 @@ S01 開場,4,收起,0:50.0,1:00.0,10,中央升降台,Axis 3,2.000,0.000,m,,2.000
   - an old-style `{ value }` keeps the timing; timing alone without a row is a 400;
   - share lists are masters only;
   - clone and template copies.
-- **End-to-end (local wrangler + Vite + Playwright):** set the delay and duration on one cue, then check the bar, the red state, the warning, resizing, moving, and the duration fix button.
+- **End-to-end (local wrangler + Vite + Playwright):** set the delay and duration on one cue, then check the bar, resizing and moving (the red state, the warning and the duration fix button were removed on 2026-10-15).
 
 ## 9. Tasks
 

@@ -45,7 +45,6 @@ type HoistDraft = {
   travelMin: string;
   travelMax: string;
   defaultValue: string;
-  maxSpeed: string;
   consoleLabel: string;
 };
 
@@ -57,7 +56,7 @@ let keySeq = 0;
 const newKey = () => `h${++keySeq}`;
 
 function blankHoist(spot: HoistSpot): HoistDraft {
-  return { key: newKey(), id: null, name: '', spot, xyz: ['', '', ''], travelMin: '0', travelMax: '5', defaultValue: '0', maxSpeed: '', consoleLabel: '' };
+  return { key: newKey(), id: null, name: '', spot, xyz: ['', '', ''], travelMin: '0', travelMax: '5', defaultValue: '0', consoleLabel: '' };
 }
 
 function initialDraft(editing: Mechanism | null, hoists: Mechanism[], scale: number): Draft {
@@ -69,7 +68,7 @@ function initialDraft(editing: Mechanism | null, hoists: Mechanism[], scale: num
       key: newKey(), id: h.id, name: h.name, spot: 'custom' as const,
       xyz: [fmt(sceneToMeters(h.attach?.x ?? 0, scale)), fmt(sceneToMeters(h.attach?.y ?? 0, scale)), fmt(sceneToMeters(h.attach?.z ?? 0, scale))],
       travelMin: fmt(h.travelMin), travelMax: fmt(h.travelMax), defaultValue: fmt(h.defaultValue),
-      maxSpeed: h.maxSpeed === null ? '' : fmt(h.maxSpeed), consoleLabel: h.consoleLabel ?? '',
+      consoleLabel: h.consoleLabel ?? '',
     })),
   };
 }
@@ -159,7 +158,6 @@ export default function MechanismHoistForm({
         travelMin: n(h.travelMin),
         travelMax: n(h.travelMax),
         defaultValue: h.defaultValue.trim() === '' ? 0 : n(h.defaultValue),
-        maxSpeed: h.maxSpeed.trim() === '' ? null : n(h.maxSpeed),
         consoleLabel: h.consoleLabel,
       });
     }
@@ -292,9 +290,6 @@ export default function MechanismHoistForm({
                   <span className="num-field__unit" aria-hidden="true">m</span></label>
               </div>
               <div className="mech-form__pair">
-                <label className="num-field"><span className="num-field__axis">最高速度</span>
-                  <input type="text" inputMode="decimal" placeholder="選填" aria-label={`吊點 ${i + 1} 最高速度（m/秒）`} value={h.maxSpeed} onChange={e => setHoist(h.key, { maxSpeed: e.target.value })} />
-                  <span className="num-field__unit" aria-hidden="true">m/秒</span></label>
                 <input type="text" value={h.consoleLabel} maxLength={MECH_LIMITS.consoleLabelMax} placeholder="控台編號（選填）" aria-label={`吊點 ${i + 1} 的控台編號`}
                   onChange={e => setHoist(h.key, { consoleLabel: e.target.value })} />
               </div>
@@ -304,8 +299,8 @@ export default function MechanismHoistForm({
         <div className="mech-form__pair">
           <button type="button" className="btn btn--ghost btn--sm" disabled={d.hoists.length >= MECH_LIMITS.hoistsMax} onClick={addHoist}><Icon icon={Plus} /> 新增吊點</button>
         </div>
-        <small className="muted">2 個吊點：整片沿著兩點的連線傾斜；3 個：傾斜到通過三個點的平面；4 個：四個點要在同一個平面上，不然硬的東西會被扭到（會提醒）</small>
-        {err('hoists', 'attach', 'travel', 'maxSpeed', 'rigId', 'hoistsAll')}
+        <small className="muted">2 個吊點：整片沿著兩點的連線傾斜；3 個：傾斜到通過三個點的平面；4 個：四個點最好在同一個平面上，不然畫面上整片會貼著最接近的平面（下面會寫一句說明）</small>
+        {err('hoists', 'attach', 'travel', 'rigId', 'hoistsAll')}
       </div>
 
       <div className="mech-form__actions">

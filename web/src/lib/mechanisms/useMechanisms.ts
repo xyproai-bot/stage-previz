@@ -27,7 +27,7 @@ export interface MechanismSceneProps {
   mechanismTimings?: MechanismTimings;
   /** 管理頁：機關時間軸拉 / 播的時候每幀都問 mechanismAtFrame（不用等影片） */
   mechanismFrameAlways?: boolean;
-  /** 管理頁：預設 'transition'（照轉場秒數）；其他頁不給 = 照機器速度 */
+  /** 換 cue 時機關怎麼走：不給 = 照走幾秒（沒設 = 轉場秒數）；'instant' = 直接到位 */
   mechanismMotion?: MechanismMotion;
   focusedMechanismId?: string | null;
   sceneQueryRef?: React.MutableRefObject<StageSceneQuery | null>;
@@ -183,14 +183,6 @@ export function useShareMechanisms(o: {
 // 管理頁（製作）
 // ─────────────────────────────────────────────
 
-/** 管理頁「照機器速度播放」記在這台電腦（每個人自己的） */
-export const REAL_SPEED_PREF_KEY = 'sp_mech_real_speed';
-export function readRealSpeedPref(storage: Pick<Storage, 'getItem'> | null | undefined): boolean {
-  try { return storage?.getItem(REAL_SPEED_PREF_KEY) === '1'; } catch { return false; }
-}
-export function writeRealSpeedPref(storage: Pick<Storage, 'setItem' | 'removeItem'> | null | undefined, on: boolean): void {
-  try { if (on) storage?.setItem(REAL_SPEED_PREF_KEY, '1'); else storage?.removeItem(REAL_SPEED_PREF_KEY); } catch { /* 無痕模式 / 不能存 → 這次有效就好 */ }
-}
 /** 機關時間軸開著還是收起來（記在這台電腦；預設開） */
 export const TIMELINE_PREF_KEY = 'sp_mech_timeline';
 const localStore = (): Storage | null => { try { return typeof localStorage === 'undefined' ? null : localStorage; } catch { return null; } };
@@ -219,9 +211,6 @@ export function useEditorMechanisms(o: {
   // 拖滑桿時的預覽（還沒存）：mechId → value
   const [preview, setPreview] = useState<MechanismValues>({});
   const [focusedId, setFocusedId] = useState<string | null>(null);
-  // 換 cue 時：預設照轉場秒數（跟物件一起到，編輯不用等機器）；開了「照機器速度播放」才照機器速度
-  const [realSpeed, setRealSpeedState] = useState(() => readRealSpeedPref(localStore()));
-  const setRealSpeed = useCallback((on: boolean) => { setRealSpeedState(on); writeRealSpeedPref(localStore(), on); }, []);
   const [timelineOpen, setTimelineOpenState] = useState(() => { try { return localStore()?.getItem(TIMELINE_PREF_KEY) !== '0'; } catch { return true; } });
   const setTimelineOpen = useCallback((on: boolean) => {
     setTimelineOpenState(on);
@@ -273,7 +262,7 @@ export function useEditorMechanisms(o: {
     () => (pb.axes && pb.axes.length ? checkSongMechanisms(pb.axes, o.cues, pb.resolved, pb.timings) : null),
     [pb.axes, o.cues, pb.resolved, pb.timings],
   );
-  // 吊掛（v2 第 4 階段）：每個 cue、每一組吊掛的傾斜和提醒（到位時 + 走過來的路上四個吊點不在同一個平面上 / 兩點吊不起來）
+  // 吊掛（v2 第 4 階段）：每個 cue、每一組吊掛的傾斜和說明（到位時 + 走過來的路上四個吊點不在同一個平面上 / 兩點的高度差比距離大）
   const scale = o.scaleCorrection && o.scaleCorrection > 0 ? o.scaleCorrection : 1;
   const hoistRigs = useMemo(() => buildHoistRigs(mechanisms), [mechanisms]);
   const hoistChecks = useMemo(() => {
@@ -282,8 +271,7 @@ export function useEditorMechanisms(o: {
       const r = pb.resolved.get(cueId)?.[hoistId];
       const c = check.cues.get(cueId)?.items[hoistId];
       if (!r || !c) return null;
-      const moving = c.status === 'ok' || c.status === 'tooFast' || c.status === 'noSpeed';
-      return { value: r.value, from: c.from, delay: c.delay, duration: moving ? Math.max(c.available ?? 0, c.need ?? 0) : 0 };
+      return { value: r.value, from: c.from, delay: c.delay, duration: c.status === 'move' ? c.available ?? 0 : 0 };
     };
     return checkHoistRigs(hoistRigs, sortMasters(o.cues).map(c => c.id), itemOf, 1 / scale);
   }, [hoistRigs, check, pb.resolved, o.cues, scale]);
@@ -470,7 +458,7 @@ export function useEditorMechanisms(o: {
   /** 套用花樣前的預覽：一次讓好幾個機關在 3D 畫面移到指定位置（不存）；null = 取消預覽 */
   const previewValues = useCallback((values: MechanismValues | null) => setPreview(values ? { ...values } : {}), []);
 
-  // ── 機關時間軸：拉時間尺 / 播放時，3D 畫面的機關跟著時間軸（照機器速度；物件停在目前選的 cue）──
+  // ── 機關時間軸：拉時間尺 / 播放時，3D 畫面的機關跟著時間軸（物件停在目前選的 cue）──
   // 只寫 ref，不重畫 React；StageScene 每幀問 mechanismAtFrame
   const previewTimeRef = useRef<number | null>(null);
   const setPreviewTime = useCallback((t: number | null) => { previewTimeRef.current = t; }, []);
@@ -542,9 +530,9 @@ export function useEditorMechanisms(o: {
 
   const sceneProps: MechanismSceneProps = useMemo(() => ({
     mechanisms, mechanismTargets: targets, focusedMechanismId: focusedId, sceneQueryRef,
-    mechanismMotion: (realSpeed ? 'real' : 'transition') as MechanismMotion,
+    mechanismMotion: 'transition' as MechanismMotion,
     mechanismTimings: pb.selectedTimings, mechanismAtFrame: editorAtFrame, mechanismFrameAlways: true,
-  }), [mechanisms, targets, focusedId, realSpeed, pb.selectedTimings, editorAtFrame]);
+  }), [mechanisms, targets, focusedId, pb.selectedTimings, editorAtFrame]);
 
   return {
     status, mechanisms: mechanisms || EMPTY_MECHS, positions: list, resolved: pb.resolved, selectedRow: pb.selectedRow,
@@ -552,21 +540,13 @@ export function useEditorMechanisms(o: {
     commitValue, clearValue, previewValue, create, update, remove, reorder,
     /** 一排機關（v2 第 3 階段）：分組、一次建立、共用設定、花樣（一次存很多個位置）、花樣預覽 */
     groups, createBatch, updateGroup, removeGroup, applyPositions, previewValues,
-    /** 吊掛（v2 第 4 階段）：每一組的吊點資料、每個 cue 的傾斜和提醒 */
+    /** 吊掛（v2 第 4 階段）：每一組的吊點資料、每個 cue 的傾斜和說明 */
     hoistRigs, hoistChecks,
     /** 延遲 / 走幾秒（v2）、機關時間軸 */
     commitTiming, timings: pb.timings, timeline: pb.timeline, setPreviewTime, previewTimeRef, timelineOpen, setTimelineOpen,
-    /** 「照機器速度播放」：換 cue 時照機器速度（預設關 = 照轉場秒數） */
-    realSpeed, setRealSpeed,
     refreshDefs, refreshPositions, sceneProps,
     /** 目前 cue 的機關值（從目前 3D 畫面建立 cue 時一起存） */
     currentValues: pb.targets,
-    /** 這首歌有幾個 cue 的機關來不及到位（含吊掛提醒） */
-    problemCount: (() => {
-      const bad = new Set(check?.problemCueIds ?? []);
-      if (hoistChecks) for (const [cueId, row] of hoistChecks) for (const c of row.values()) if (c.warnings.length) bad.add(cueId);
-      return bad.size;
-    })(),
   };
 }
 

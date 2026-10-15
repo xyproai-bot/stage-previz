@@ -65,7 +65,7 @@ describe('兩個吊點：沿著兩點的連線，繞著水平軸轉', () => {
     expect(far.p.unreachable).toBe(true);
     expect(deg(2 * Math.atan2(Math.hypot(far.p.qx, far.p.qy, far.p.qz), far.p.qw))).toBeCloseTo(90, 6);
     const w = hoistWarnings(far.s, [0, 5], 1);
-    expect(w).toEqual(['兩個吊點的高度差（5 m）比它們之間的距離（2 m）還大：吊不起來，最多只能斜到垂直']);
+    expect(w).toEqual(['兩個吊點的高度差（5 m）比它們之間的距離（2 m）還大，畫面上整片斜到垂直就停住']);
     // 剛好等於也吊不起來（|Δh| ≥ |d|）；差一點點還可以
     expect(pose(a, [0, 2]).p.unreachable).toBe(true);
     expect(pose(a, [0, 1.99]).p.unreachable).toBe(false);
@@ -153,11 +153,11 @@ describe('四個吊點：最小平方法找平面，不在同一個平面上就�
     // 只有第 4 個拉高 0.2：離平面最遠 0.05 m = 5 cm
     const an = analyzeHoist(s, [0, 0, 0, 0.2]);
     expect(an.residual).toBeCloseTo(0.05, 9);
-    expect(hoistWarnings(s, [0, 0, 0, 0.2], 1)).toEqual(['四個吊點的高度不在同一個平面上（差 5 cm）：硬的東西會被扭到']);
+    expect(hoistWarnings(s, [0, 0, 0, 0.2], 1)).toEqual(['四個吊點的高度不在同一個平面上（差 5 cm），畫面上整片會貼著最接近這四個點的平面']);
     // 差 0.5 cm → 不到 1 cm，不提醒
     expect(hoistWarnings(s, [0, 0, 0, 0.02], 1)).toEqual([]);
     // 校準倍率：場景單位 / 公尺 = 2（物件放大一倍）→ 同樣高度（公尺）換算後 cm 一樣
-    expect(hoistWarnings(s, [0, 0, 0, 0.4], 2)).toEqual(['四個吊點的高度不在同一個平面上（差 5 cm）：硬的東西會被扭到']);
+    expect(hoistWarnings(s, [0, 0, 0, 0.4], 2)).toEqual(['四個吊點的高度不在同一個平面上（差 5 cm），畫面上整片會貼著最接近這四個點的平面']);
   });
 
   it('預先算好的矩陣：每幀不重新配置，數字跟用 THREE 逐步算的一樣', () => {
@@ -237,7 +237,7 @@ describe('沿著移動檢查', () => {
     };
     const r = checkHoistRigs(rigs, ['c1', 'c2'], item, 1);
     expect(r.get('c1')!.get('rig')!.warnings).toEqual([]);
-    expect(r.get('c2')!.get('rig')!.warnings).toEqual(['四個吊點的高度不在同一個平面上（差 25 cm）：硬的東西會被扭到']);
+    expect(r.get('c2')!.get('rig')!.warnings).toEqual(['四個吊點的高度不在同一個平面上（差 25 cm），畫面上整片會貼著最接近這四個點的平面']);
     expect(r.get('c2')!.get('rig')!.tilt.tiltDeg).toBeLessThan(1e-6);   // 到位時一樣高 = 沒有傾斜
   });
 });
