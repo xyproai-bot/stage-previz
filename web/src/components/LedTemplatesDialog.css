@@ -364,3 +364,13 @@
     max-height: 36dvh;
   }
 }
+
+/* 還沒設畫布大小：直接在版型面板填寬 × 高 */
+.ledtpl-dock__canvasform {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.ledtpl-dock__canvasform .input { width: 96px; }
+.ledtpl-dock__canvaserr { color: var(--danger, #f87171); }

@@ -196,6 +196,14 @@ export default function ProjectEditor() {
   // LED 畫布版型（數字表單；每首歌選用哪個）
   const ledTpls = useLedTemplates(projectId);
   const [ledTplOpen, setLedTplOpen] = useState(false);
+  // 畫布大小改了（3D 工具列「設定畫布大小…」或版型面板裡填的）、打開版型面板 → 重讀版型清單（等存檔送出再讀）
+  const ledCanvasKey = view.ledCanvas ? `${view.ledCanvas.width}x${view.ledCanvas.height}` : '';
+  const reloadLedTpls = ledTpls.reload;
+  useEffect(() => {
+    if (!ledCanvasKey && !ledTplOpen) return;
+    const t = window.setTimeout(() => { void reloadLedTpls(); }, 800);
+    return () => window.clearTimeout(t);
+  }, [ledCanvasKey, ledTplOpen, reloadLedTpls]);
   // 編輯版型時 3D 的 LED 顯示的測試圖（面板關掉 = null，LED 照原本的）
   const [tplPreview, setTplPreview] = useState<LedPatternSource | null>(null);
   const tplPattern = useLedPatternCanvas(tplPreview);
@@ -1398,6 +1406,8 @@ export default function ProjectEditor() {
         ledObjects={ledObjectInfos}
         getSpans={() => mech.sceneQueryRef.current?.ledSpans?.() ?? null}
         onChanged={ledTpls.reload}
+        ledCanvas={view.ledCanvas}
+        onSetCanvas={view.canEdit ? view.setLedCanvas : undefined}
       />
 
       <ModelVersionsDialog

@@ -26,6 +26,8 @@ import { guideFileName } from '../lib/ledTemplatePattern';
 import { renderTemplateGuidePng } from '../lib/ledTemplateDraw';
 import type { LedPatternSource } from '../lib/useLedPatternCanvas';
 import { isPhoneLayout } from '../lib/viewportVars';
+import type { LedCanvas } from '../lib/ledCanvas';
+import { parseCanvasFields } from '../lib/newProjectWizard';
 import './LedTemplatesDialog.css';
 
 /**
@@ -54,6 +56,10 @@ interface Props {
   onChanged: () => Promise<unknown>;
   /** 正在編輯的版型（3D 的 LED 要貼它的測試圖）；沒在編輯 = null */
   onPreview: (p: LedPatternSource | null) => void;
+  /** 父層知道的 LED 畫布大小（3D 工具列「設定畫布大小…」剛存的，後台清單還沒重讀時先用它） */
+  ledCanvas?: LedCanvas | null;
+  /** 有給 → 還沒設畫布大小時，直接在這裡填（跟「設定畫布大小…」存同一個地方） */
+  onSetCanvas?: (c: LedCanvas) => void;
 }
 
 const WHOLE: SrcSpan = { us: 0, ul: 1, vs: 0, vl: 1 };
@@ -62,8 +68,11 @@ const NEW = '__new__';
 const PREVIEW_THROTTLE_MS = 100;
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export default function LedTemplatesDialog({ open, projectId, projectName, onClose, list, ledObjects, getSpans, onChanged, onPreview }: Props) {
+export default function LedTemplatesDialog({ open, projectId, projectName, onClose, list, ledObjects, getSpans, onChanged, onPreview, ledCanvas, onSetCanvas }: Props) {
   const phone = isPhoneLayout();
+  const [canvasW, setCanvasW] = useState('');
+  const [canvasH, setCanvasH] = useState('');
+  const [canvasErr, setCanvasErr] = useState('');
   const [selectedTpl, setSelectedTpl] = useState('');
   const [hist, setHist] = useState<History<Draft> | null>(null);
   const [savedSig, setSavedSig] = useState('');
@@ -78,7 +87,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
 
   const draft = hist?.present ?? null;
   const dirty = !!draft && draftSignature(draft) !== savedSig;
-  const fullCanvas = list?.fullCanvas ?? null;
+  const fullCanvas = list?.fullCanvas ?? ledCanvas ?? null;
   const customs = useMemo(() => (list?.templates ?? []).filter(t => t.kind === 'custom'), [list]);
   const manuals = list?.screens;
 
@@ -417,7 +426,29 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
         <div className="ledtpl-dock__empty">
           <Icon icon={TriangleAlert} size="lg" />
           <div>還沒填這個專案的 LED 畫布大小。</div>
-          <small className="muted">先到 3D 畫面工具列的「更多」→ LED 對位圖，填 AE 合成的寬 × 高（每塊螢幕的真實點數從它算），再回來建立版型。</small>
+          {onSetCanvas ? (
+            <>
+              <small className="muted">填 AE 合成（整張畫布）的寬 × 高，每塊螢幕的真實點數從它算。</small>
+              <form
+                className="ledtpl-dock__canvasform"
+                onSubmit={e => {
+                  e.preventDefault();
+                  const r = parseCanvasFields(canvasW, canvasH);
+                  if ('error' in r) { setCanvasErr(r.error); return; }
+                  setCanvasErr('');
+                  onSetCanvas(r.canvas);
+                }}
+              >
+                <input className="input" inputMode="numeric" placeholder="寬" aria-label="畫布寬（像素）" value={canvasW} onChange={e => setCanvasW(e.target.value)} />
+                <span>×</span>
+                <input className="input" inputMode="numeric" placeholder="高" aria-label="畫布高（像素）" value={canvasH} onChange={e => setCanvasH(e.target.value)} />
+                <button type="submit" className="btn btn--primary">設定</button>
+              </form>
+              {canvasErr && <small className="ledtpl-dock__canvaserr">{canvasErr}</small>}
+            </>
+          ) : (
+            <small className="muted">先到 3D 畫面工具列的「更多」→ LED 對位圖，填 AE 合成的寬 × 高（每塊螢幕的真實點數從它算），再回來建立版型。</small>
+          )}
         </div>
       ) : !draft ? (
         <div className="ledtpl-dock__empty">
