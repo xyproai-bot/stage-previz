@@ -285,6 +285,31 @@
   width: 100%;
   padding: 2px 4px;
 }
+.ledtpl-sel__grid--2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.ledtpl-sel__names {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 132px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.ledtpl-sel__names li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.ledtpl-sel__names li > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ledtpl-sel__row {
   display: flex;
   flex-wrap: wrap;

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, Download, LayoutPanelLeft, LoaderCircle, Monitor, Plus, Save, Scissors, Trash2, TriangleAlert, X } from 'lucide-react';
 import Icon from './Icon';
 import NumField from './NumField';
-import LedTemplateCanvas, { type ItemPatch, type PatchHow } from './LedTemplateCanvas';
+import LedTemplateCanvas, { type PatchHow } from './LedTemplateCanvas';
 import LedSplitCanvas from './LedSplitCanvas';
 import LedTemplateLayers from './LedTemplateLayers';
 import { confirmDialog, promptDialog, toast } from './dialogs';
@@ -16,8 +16,9 @@ import {
 } from '../lib/ledTemplate';
 import {
   addScreenToDraft, copyTemplateName, draftFromTemplate, draftSignature, draftToBody, draftToPlan, emptyDraft, nextTemplateName,
-  patchDraftItem, removeScreenFromDraft, resetItemSize, type Draft,
+  patchDraftItems, removeScreensFromDraft, resetItemSize, type Draft, type ItemPatch, type ItemPatchEntry,
 } from '../lib/ledTemplateDraft';
+import { boundsOf, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection, selectionTag } from '../lib/ledTemplateSelect';
 import {
   commit, fitCanvasToItems, newHistory, redo, rectToUv, setRotation, settle, transient, undo, type History,
 } from '../lib/ledTemplateEdit';
@@ -84,7 +85,8 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
   const [selectedTpl, setSelectedTpl] = useState('');
   const [hist, setHist] = useState<History<Draft> | null>(null);
   const [savedSig, setSavedSig] = useState('');
-  const [selKey, setSelKey] = useState<string | null>(null);
+  /** 選到的螢幕代號（可以好幾塊；順序 = 選的先後） */
+  const [selKeys, setSelKeys] = useState<string[]>([]);
   const [mode, setMode] = useState<'template' | 'full'>('template');
   const [busy, setBusy] = useState(false);
   const [spans, setSpans] = useState<Record<string, SrcSpan>>({});
@@ -131,7 +133,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  useEffect(() => { if (!open) { setMode('template'); setSelKey(null); } }, [open]);
+  useEffect(() => { if (!open) { setMode('template'); setSelKeys([]); } }, [open]);
 
   const screens = useMemo<ScreenDef[]>(() => {
     if (!fullCanvas) return [];
@@ -154,7 +156,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
       loadedFor.current = stamp;
       setHist(newHistory(d));
       setSavedSig(draftSignature(d));
-      setSelKey(null);
+      setSelKeys([]);
       return;
     }
     if (customs.length > 0) { setSelectedTpl(customs[0].id); return; }
@@ -226,8 +228,14 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
   const orphans = draft ? draft.items.filter(i => !defKeys.has(i.key)).length : 0;
   const placedCount = draft ? draft.items.filter(i => defKeys.has(i.key)).length : 0;
   const itemByKey = useMemo(() => new Map((draft?.items ?? []).map(i => [i.key, i])), [draft]);
-  const selItem = selKey ? itemByKey.get(selKey) ?? null : null;
-  const selDef = selKey ? screens.find(s => s.key === selKey) ?? null : null;
+  // 選到的：版型裡已經沒有的（復原、拿掉之後）自動排除
+  const selected = useMemo(() => pruneSelection(selKeys, k => itemByKey.has(k) && defKeys.has(k)), [selKeys, itemByKey, defKeys]);
+  const selSet = useMemo(() => new Set(selected), [selected]);
+  const selItems = useMemo(() => (draft?.items ?? []).filter(i => selSet.has(i.key)), [draft, selSet]);
+  /** 剛好選一塊：數字欄位照舊；選了好幾塊：整組的外框 */
+  const selItem = selItems.length === 1 ? selItems[0] : null;
+  const selDef = selItem ? screens.find(s => s.key === selItem.key) ?? null : null;
+  const groupBox = useMemo(() => (selItems.length > 1 ? boundsOf(selItems.map(i => i.dest)) : null), [selItems]);
 
   // ───────── 改草稿 ─────────
   const apply = useCallback((fn: (d: Draft) => Draft, how: PatchHow) => {
@@ -238,7 +246,9 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
       return how === 'live' ? transient(h, next) : commit(h, next, { tag: how.tag });
     });
   }, []);
-  const patchItem = useCallback((key: string, patch: ItemPatch, how: PatchHow) => apply(d => patchDraftItem(d, key, patch), how), [apply]);
+  // 一次改好幾塊 = 草稿只換一次 = 復原只有一步
+  const patchItems = useCallback((patches: readonly ItemPatchEntry[], how: PatchHow) => apply(d => patchDraftItems(d, patches), how), [apply]);
+  const patchItem = useCallback((key: string, patch: ItemPatch, how: PatchHow) => patchItems([{ key, patch }], how), [patchItems]);
   const onGesture = useCallback((phase: 'start' | 'end') => {
     if (phase === 'start') { gestureBase.current = histRef.current?.present ?? null; return; }
     const base = gestureBase.current;
@@ -247,8 +257,24 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
   }, []);
   const doUndo = useCallback(() => setHist(h => (h ? undo(h) : h)), []);
   const doRedo = useCallback(() => setHist(h => (h ? redo(h) : h)), []);
-  const addScreen = (def: ScreenDef) => { apply(d => addScreenToDraft(d, def), {}); setSelKey(def.key); setMode('template'); };
-  const removeScreen = (key: string) => { apply(d => removeScreenFromDraft(d, key), {}); setSelKey(k => (k === key ? null : k)); };
+  const addScreen = (def: ScreenDef) => { apply(d => addScreenToDraft(d, def), {}); setSelKeys([def.key]); setMode('template'); };
+  const removeScreens = (keys: readonly string[]) => { apply(d => removeScreensFromDraft(d, keys), {}); setSelKeys(prev => prev.filter(k => !keys.includes(k))); };
+  const removeScreen = (key: string) => removeScreens([key]);
+  /** 拿掉選到的螢幕：一塊直接拿掉（可以復原），好幾塊只問一次 */
+  async function removeSelected(keys: readonly string[]) {
+    if (keys.length === 0) return;
+    if (keys.length > 1 && !(await confirmDialog({
+      title: `從版型拿掉這 ${keys.length} 塊螢幕？`,
+      message: '拿掉的螢幕在 3D 上會顯示黑的。拿掉以後可以按 Ctrl+Z 一次全部復原。',
+      confirmLabel: '拿掉', destructive: true,
+    }))) return;
+    removeScreens(keys);
+  }
+  /** 數字欄位改整組外框的左 / 上：整組一起平移 */
+  const moveGroup = (axis: 'x' | 'y', n: number) => apply(d => {
+    const cur = d.items.filter(i => selSet.has(i.key));
+    return patchDraftItems(d, movePatches(cur, moveGroupTo(cur.map(c => c.dest), { [axis]: n })));
+  }, { tag: selectionTag(`g:${axis}`, selected) });
   const setMeta = (p: Partial<Pick<Draft, 'name' | 'width' | 'height' | 'scalePct'>>, tag: string) => apply(d => ({ ...d, ...p }), { tag });
 
   // 切換 / 關閉前：有沒存的修改要問
@@ -275,7 +301,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     const d = emptyDraft(nextTemplateName((list?.templates ?? []).map(t => t.name)), fullCanvas ?? { width: 1920, height: 1080 });
     setHist(newHistory(d));
     setSavedSig('');
-    setSelKey(null);
+    setSelKeys([]);
     setSelectedTpl(NEW);
     setMode('template');
   }
@@ -545,14 +571,14 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                 scalePct={draft.scalePct}
                 defs={screens}
                 items={draft.items}
-                selected={selKey}
+                selected={selected}
                 resetKey={resetKey}
                 canUndo={!!hist && hist.past.length > 0}
                 canRedo={!!hist && hist.future.length > 0}
-                onSelect={setSelKey}
-                onPatch={patchItem}
+                onSelect={setSelKeys}
+                onPatch={patchItems}
                 onGesture={onGesture}
-                onRemove={removeScreen}
+                onRemove={removeSelected}
                 onUndo={doUndo}
                 onRedo={doRedo}
                 fullMap={fullMap.map}
@@ -597,7 +623,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
               {screens.map(s => {
                 const it = itemByKey.get(s.key);
                 return (
-                  <li key={s.key} className={(it ? 'is-in' : '') + (s.key === selKey ? ' is-sel' : '')} onClick={() => { if (it) { setSelKey(s.key); setMode('template'); } }}>
+                  <li key={s.key} className={(it ? 'is-in' : '') + (selSet.has(s.key) ? ' is-sel' : '')} onClick={(e) => { if (it) { setSelKeys(prev => clickSelect(prev, s.key, isAdditive(e))); setMode('template'); } }}>
                     <span className="ledtpl-dot" style={{ background: colorOf(s) }} aria-hidden="true" />
                     <span className="ledtpl-screens__name" title={s.name}>
                       <strong>{s.name}{s.manual ? '（切開的）' : ''}</strong>
@@ -645,7 +671,34 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                 </div>
               </div>
             )}
-            {mode === 'template' && !selItem && placedCount > 0 && <p className="muted small">點畫布上的螢幕（或清單裡的名字）來選它，就能在這裡改數字。</p>}
+            {mode === 'template' && groupBox && (
+              <div className="ledtpl-sel" role="group" aria-label={`選到 ${selItems.length} 塊螢幕`}>
+                <h4>已選 {selItems.length} 塊 <small className="muted">整組的外框 {groupBox.w} × {groupBox.h}，改左、上就是整組一起移動</small></h4>
+                <div className="ledtpl-sel__grid ledtpl-sel__grid--2">
+                  {(['x', 'y'] as const).map(k => (
+                    <label key={k}>{k === 'x' ? '整組的左' : '整組的上'}
+                      <NumField value={groupBox[k]} min={-65536} label={k === 'x' ? '整組的左' : '整組的上'} onChange={(n) => moveGroup(k, n)} />
+                    </label>
+                  ))}
+                </div>
+                <ul className="ledtpl-sel__names" aria-label="選到的螢幕">
+                  {selItems.map(i => {
+                    const def = screens.find(s => s.key === i.key);
+                    return def ? (
+                      <li key={i.key}>
+                        <span className="ledtpl-dot" style={{ background: colorOf(def) }} aria-hidden="true" />
+                        <span title={def.name}>{def.name}</span>
+                      </li>
+                    ) : null;
+                  })}
+                </ul>
+                <p className="muted small">畫布上方的「轉 90°」「左右翻轉」「上下翻轉」會讓每一塊各自在原地轉、翻。</p>
+                <div className="ledtpl-sel__row">
+                  <button className="btn btn--ghost" onClick={() => void removeSelected(selected)}>從版型拿掉這 {selItems.length} 塊</button>
+                </div>
+              </div>
+            )}
+            {mode === 'template' && selItems.length === 0 && placedCount > 0 && <p className="muted small">點畫布上的螢幕（或清單裡的名字）來選它，就能在這裡改數字。按住 Shift 或 Ctrl 可以加選，在畫布空白處拖曳可以框選好幾塊。</p>}
           </aside>
         </div>
       )}

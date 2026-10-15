@@ -1,12 +1,17 @@
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { FlipHorizontal2, FlipVertical2, Maximize, Redo2, RotateCw, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
 import Icon from './Icon';
 import { useCanvasView } from '../lib/useCanvasView';
 import {
-  flaggedKeys, gridStep, nudgeRect, rotatePlacement90, SNAP_SCREEN_PX, snapMove, snapResize, snapTargets,
+  flaggedKeys, gridStep, SNAP_SCREEN_PX, snapResize, snapTargets,
   type Handle, type SnapGuide, type SnapTargets, type View,
 } from '../lib/ledTemplateEdit';
+import {
+  applyMarquee, boundsOf, flipPatches, groupTargets, isAdditive, marqueeBox, marqueeHits, movePatches, nudgeRects, pressSelect, releaseSelect,
+  rotatePatches, sameSelection, selectAllKeys, selectionTag, snapGroupMove, type PressPending, type Selection,
+} from '../lib/ledTemplateSelect';
+import type { ItemPatch, ItemPatchEntry } from '../lib/ledTemplateDraft';
 import { panelHue, type CanvasSize, type PixelRect } from '../lib/ledMap';
 import { defaultDestSize, screenSizeLabel, type PlacementInput, type ScreenDef } from '../lib/ledTemplate';
 import { upDirection, upText } from '../lib/ledTemplatePattern';
@@ -15,32 +20,37 @@ import './LedTemplateCanvas.css';
 
 /**
  * 版型畫布（拖拉編輯）：版型的畫布 + 每塊放進去的螢幕（長方形，寫著名字和「實際 W×H → 這個版型 w×h」）。
- *   拖曳移動、拖四個角縮放（Shift 鎖長寬比）、方向鍵微調（Shift 10 px）、Delete 拿掉、Ctrl+Z / Ctrl+Shift+Z 復原重做。
- *   位置、大小一定是整數；靠近別塊螢幕的邊或畫布的邊會吸過去（按住 Alt 不吸附）。
- *   重疊、超出畫布的畫紅框。滾輪縮放、空白處拖曳（或中鍵）平移、手機平板雙指縮放。
+ *   點一下選一塊，Shift / Ctrl（Cmd）點 = 加選或取消選，空白處拖曳 = 框選（碰到的都選，Shift / Ctrl 加選），Ctrl+A 全選，點空白處取消選取。
+ *   拖曳移動（選了好幾塊就整組一起動，吸附的是整組的外框）、單選時拖四個角縮放（Shift 鎖長寬比）、方向鍵微調整組（Shift 10 px）、
+ *   Delete 拿掉選到的（好幾塊只問一次）、Ctrl+Z / Ctrl+Shift+Z 復原重做（整組一個動作 = 一步）。
+ *   位置、大小一定是整數；靠近沒選到的螢幕的邊或畫布的邊會吸過去（按住 Alt 不吸附）。
+ *   重疊、超出畫布的畫紅框。滾輪縮放、按住空白鍵拖曳（或中鍵拖曳）平移、手機平板雙指縮放平移。
  *   每塊螢幕的框裡可以畫「對位圖內容」（整張畫布的測試圖裡屬於這塊螢幕的那一段，照轉動、翻轉擺進來），
  *   最底下可以墊一張自己載入的「底圖」；兩個都畫在同一張 canvas 上（lib/ledTemplateContentDraw.ts），框和字還是網頁元素。
  * 數字怎麼算：lib/ledTemplateEdit.ts（有單元測試）。
  */
 
 export type PatchHow = 'live' | { tag?: string };
-export interface ItemPatch { dest?: PixelRect; rotate?: PlacementInput['rotate']; flipH?: boolean; flipV?: boolean }
+export type { ItemPatch, ItemPatchEntry };
 
 interface Props {
   canvas: CanvasSize;
   scalePct: number;
   defs: readonly ScreenDef[];
   items: readonly PlacementInput[];
-  selected: string | null;
+  /** 選到的螢幕（可以好幾塊；不存在的代號呼叫的人先拿掉） */
+  selected: Selection;
   /** 換版型時重新「符合畫面」 */
   resetKey: string;
   canUndo: boolean;
   canRedo: boolean;
-  onSelect: (key: string | null) => void;
-  onPatch: (key: string, patch: ItemPatch, how: PatchHow) => void;
+  onSelect: (keys: string[]) => void;
+  /** 一次改好幾塊（整組拖、微調、各自轉…）；交給外面記成「一步」復原 */
+  onPatch: (patches: readonly ItemPatchEntry[], how: PatchHow) => void;
   /** 一次拖曳開始 / 結束（結束時記成復原的一步） */
   onGesture: (phase: 'start' | 'end') => void;
-  onRemove: (key: string) => void;
+  /** 拿掉選到的螢幕（好幾塊時外面只問一次） */
+  onRemove: (keys: string[]) => void;
   onUndo: () => void;
   onRedo: () => void;
   /** 整張畫布的測試圖（畫好留著的那張）；還沒有 = null */
@@ -57,8 +67,9 @@ interface Props {
 
 type Pt = { x: number; y: number };
 type Drag =
-  | { kind: 'move'; key: string; startPt: Pt; startClient: Pt; startRect: PixelRect; targets: SnapTargets; started: boolean }
+  | { kind: 'move'; keys: string[]; startRects: PixelRect[]; anchor: string; baseSel: string[]; pending: PressPending; startPt: Pt; startClient: Pt; targets: SnapTargets; started: boolean }
   | { kind: 'resize'; key: string; handle: Handle; startRect: PixelRect; targets: SnapTargets }
+  | { kind: 'marquee'; startPt: Pt; startClient: Pt; base: string[]; additive: boolean; last: string[]; started: boolean }
   | { kind: 'pan'; startLocal: Pt; startView: View };
 
 const HANDLES: Handle[] = ['nw', 'ne', 'sw', 'se'];
@@ -77,28 +88,63 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
   const dragRef = useRef<Drag | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [grabbing, setGrabbing] = useState(false);
+  /** 框選拉出來的框（畫布位置，可以有小數）；沒在框選 = null */
+  const [marquee, setMarquee] = useState<PixelRect | null>(null);
+  /** 按住空白鍵 = 左鍵拖曳變平移 */
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  const spaceRef = useRef(false);
+  const hoverRef = useRef(false);
   const pixRef = useRef<HTMLCanvasElement>(null);
 
   const defByKey = useMemo(() => new Map(defs.map(d => [d.key, d])), [defs]);
   const placed = useMemo(() => items.filter(i => defByKey.has(i.key)), [items, defByKey]);
   const flagged = useMemo(() => flaggedKeys(placed.map(i => ({ key: i.key, dest: i.dest })), canvas), [placed, canvas]);
-  const itemByKey = useMemo(() => new Map(placed.map(i => [i.key, i])), [placed]);
-  const sel = selected ? itemByKey.get(selected) ?? null : null;
+  const selectedSet = useMemo(() => new Set(selected), [selected]);
+  /** 選到的螢幕（照版型裡的順序） */
+  const selItems = useMemo(() => placed.filter(i => selectedSet.has(i.key)), [placed, selectedSet]);
+  const selKeys = useMemo(() => selItems.map(i => i.key), [selItems]);
+  /** 剛好只選一塊才有縮放把手 */
+  const sel = selItems.length === 1 ? selItems[0] : null;
+  const groupBox = useMemo(() => (selItems.length > 1 ? boundsOf(selItems.map(i => i.dest)) : null), [selItems]);
 
   const targetsFor = (key: string): SnapTargets =>
     snapTargets(canvas, placed.filter(i => i.key !== key).map(i => i.dest));
+
+  // 按住空白鍵拖曳平移：滑鼠在畫布上（或畫布有焦點）時才接空白鍵，在輸入欄位 / 按鈕上打字不受影響
+  useEffect(() => {
+    const host = api.hostRef.current;
+    const setSpace = (on: boolean) => { if (spaceRef.current !== on) { spaceRef.current = on; setSpaceHeld(on); } };
+    const onDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const t = e.target as Node | null;
+      if (!(host && t && host.contains(t)) && !(hoverRef.current && t === document.body)) return;
+      e.preventDefault();
+      setSpace(true);
+    };
+    const onUp = (e: KeyboardEvent) => { if (e.code === 'Space') setSpace(false); };
+    const onBlur = () => setSpace(false);
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, [api.hostRef]);
 
   function endDrag(release?: { pointerId: number }) {
     const d = dragRef.current;
     dragRef.current = null;
     setGuides([]);
     setGrabbing(false);
+    setMarquee(null);
     if (d && (d.kind === 'resize' || (d.kind === 'move' && d.started))) onGesture('end');
     if (release) { try { api.hostRef.current?.releasePointerCapture(release.pointerId); } catch { /* 已經放開了 */ } }
   }
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
-    if (api.touchDown(e)) { endDrag(); return; }   // 兩指縮放
+    if (api.touchDown(e)) { endDrag(); return; }   // 兩指縮放 / 平移
     if (e.button !== 0 && e.button !== 1) return;
     const host = api.hostRef.current;
     if (!host) return;
@@ -109,22 +155,27 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
     try { host.setPointerCapture(e.pointerId); } catch { /* 有些瀏覽器不給 */ }
     e.preventDefault();
     const pt = api.point(e);
-    if (e.button === 1) { dragRef.current = { kind: 'pan', startLocal: api.local(e), startView: view }; setGrabbing(true); return; }
+    const startClient = { x: e.clientX, y: e.clientY };
+    // 中鍵、或按著空白鍵的左鍵：平移（不管底下有沒有螢幕）
+    if (e.button === 1 || spaceRef.current) { dragRef.current = { kind: 'pan', startLocal: api.local(e), startView: view }; setGrabbing(true); return; }
     if (handleEl && sel) {
       dragRef.current = { kind: 'resize', key: sel.key, handle: handleEl.dataset.handle as Handle, startRect: sel.dest, targets: targetsFor(sel.key) };
       onGesture('start');
       return;
     }
-    if (itemEl?.dataset.key) {
-      const key = itemEl.dataset.key;
-      const it = itemByKey.get(key);
-      onSelect(key);
-      if (it) dragRef.current = { kind: 'move', key, startPt: pt, startClient: { x: e.clientX, y: e.clientY }, startRect: it.dest, targets: targetsFor(key), started: false };
+    const key = itemEl?.dataset.key;
+    if (key && placed.some(i => i.key === key)) {
+      const press = pressSelect(selKeys, key, isAdditive(e));
+      if (!sameSelection(press.selection, selKeys)) onSelect(press.selection);
+      const moving = placed.filter(i => press.selection.includes(i.key));
+      dragRef.current = {
+        kind: 'move', keys: moving.map(i => i.key), startRects: moving.map(i => i.dest), anchor: key, baseSel: press.selection, pending: press.pending,
+        startPt: pt, startClient, targets: groupTargets(canvas, placed, press.selection), started: false,
+      };
       return;
     }
-    onSelect(null);
-    dragRef.current = { kind: 'pan', startLocal: api.local(e), startView: view };
-    setGrabbing(true);
+    // 空白處：拖曳 = 框選（沒拖 = 點一下，放開時取消選取）
+    dragRef.current = { kind: 'marquee', startPt: pt, startClient, base: [...selKeys], additive: isAdditive(e), last: [...selKeys], started: false };
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
@@ -139,6 +190,17 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
     const p = api.point(e);
     const threshold = SNAP_SCREEN_PX / view.zoom;
     const snap = !e.altKey;
+    if (d.kind === 'marquee') {
+      if (!d.started) {
+        if (Math.hypot(e.clientX - d.startClient.x, e.clientY - d.startClient.y) < MOVE_SLOP_PX) return;
+        d.started = true;
+      }
+      const box = marqueeBox(d.startPt, p);
+      setMarquee(box);
+      const next = applyMarquee(d.base, marqueeHits(box, placed), d.additive);
+      if (!sameSelection(next, d.last)) { d.last = next; onSelect(next); }
+      return;
+    }
     if (d.kind === 'move') {
       if (!d.started) {
         if (Math.hypot(e.clientX - d.startClient.x, e.clientY - d.startClient.y) < MOVE_SLOP_PX) return;
@@ -146,18 +208,26 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
         setGrabbing(true);
         onGesture('start');
       }
-      const r = snapMove(d.startRect, d.startRect.x + (p.x - d.startPt.x), d.startRect.y + (p.y - d.startPt.y), d.targets, { threshold, snap });
+      const r = snapGroupMove(d.startRects, p.x - d.startPt.x, p.y - d.startPt.y, d.targets, { threshold, snap });
       setGuides(r.guides);
-      onPatch(d.key, { dest: r.rect }, 'live');
+      onPatch(movePatches(d.keys.map(key => ({ key })), r.rects), 'live');
     } else {
       const r = snapResize(d.startRect, d.handle, p.x, p.y, d.targets, { threshold, snap, keepAspect: e.shiftKey });
       setGuides(r.guides);
-      onPatch(d.key, { dest: r.rect }, 'live');
+      onPatch([{ key: d.key, patch: { dest: r.rect } }], 'live');
     }
   }
 
   function onPointerUp(e: ReactPointerEvent<HTMLDivElement>) {
     api.touchUp(e);
+    const d = dragRef.current;
+    if (d?.kind === 'move') {
+      // 沒拖：按著 Shift / Ctrl 點已選的 = 拿掉；沒按點複選裡的一塊 = 只留這一塊
+      const next = releaseSelect(d.baseSel, d.anchor, d.pending, d.started);
+      if (!sameSelection(next, d.baseSel)) onSelect(next);
+    } else if (d?.kind === 'marquee' && !d.started && !d.additive && d.base.length > 0) {
+      onSelect([]);   // 點空白處 = 取消選取
+    }
     endDrag(e);
   }
 
@@ -170,22 +240,27 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
       if (k === 'y' || e.shiftKey) onRedo(); else onUndo();
       return;
     }
+    if (mod && !e.altKey && !e.shiftKey && k === 'a') {
+      stop();
+      if (!dragRef.current) onSelect(selectAllKeys(placed));
+      return;
+    }
     if (mod || e.altKey) return;
-    if (k === 'escape') { if (selected) { stop(); onSelect(null); } return; }
-    if (!sel) return;
-    if (k === 'delete' || k === 'backspace') { stop(); onRemove(sel.key); return; }
+    if (k === 'escape') { if (selKeys.length > 0) { stop(); onSelect([]); } return; }
+    if (selItems.length === 0) return;
+    if (k === 'delete' || k === 'backspace') { stop(); onRemove(selKeys); return; }
     const step = e.shiftKey ? 10 : 1;
     const dir = k === 'arrowleft' ? [-step, 0] : k === 'arrowright' ? [step, 0] : k === 'arrowup' ? [0, -step] : k === 'arrowdown' ? [0, step] : null;
     if (dir) {
       stop();
-      onPatch(sel.key, { dest: nudgeRect(sel.dest, dir[0], dir[1]) }, { tag: `nudge:${sel.key}` });
+      onPatch(movePatches(selItems, nudgeRects(selItems.map(i => i.dest), dir[0], dir[1])), { tag: selectionTag('nudge', selKeys) });
     }
   }
 
-  function rotate90() {
-    if (!sel) return;
-    onPatch(sel.key, rotatePlacement90(sel, 1), {});
-  }
+  // 轉 90° / 翻轉：選到幾塊就各自在原地轉 / 翻
+  const rotate90 = () => { if (selItems.length) onPatch(rotatePatches(selItems, 1), {}); };
+  const flip = (axis: 'h' | 'v') => { if (selItems.length) onPatch(flipPatches(selItems, axis), {}); };
+  const allFlipped = (axis: 'h' | 'v') => selItems.length > 0 && selItems.every(i => (axis === 'h' ? i.flipH : i.flipV));
 
   // ───────── 畫面 ─────────
   const sx = (x: number) => x * view.zoom + view.panX;
@@ -211,7 +286,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view, size, step, canvas]);
 
-  const ordered = useMemo(() => [...placed].sort((a, b) => (a.key === selected ? 1 : 0) - (b.key === selected ? 1 : 0)), [placed, selected]);
+  const ordered = useMemo(() => [...placed].sort((a, b) => (selectedSet.has(a.key) ? 1 : 0) - (selectedSet.has(b.key) ? 1 : 0)), [placed, selectedSet]);
 
   // 底圖 + 框裡的對位圖內容：畫在一張 canvas 上（整張畫布的測試圖是畫好留著的，這裡只是剪一塊貼進框裡）
   const contentShown = showContent && !!fullMap && fullMap.canvas.width > 0;
@@ -245,18 +320,21 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
         <button className="ltc__btn" onClick={onUndo} disabled={!canUndo} title="復原（Ctrl+Z）" aria-label="復原"><Icon icon={Undo2} /></button>
         <button className="ltc__btn" onClick={onRedo} disabled={!canRedo} title="重做（Ctrl+Shift+Z）" aria-label="重做"><Icon icon={Redo2} /></button>
         <span className="ltc__sep" />
-        <button className="ltc__btn" onClick={rotate90} disabled={!sel} title="選到的螢幕順時針轉 90 度（寬高對調）"><Icon icon={RotateCw} /> <span className="ltc__btn-text">轉 90°</span></button>
-        <button className="ltc__btn" onClick={() => sel && onPatch(sel.key, { flipH: !sel.flipH }, {})} disabled={!sel} aria-pressed={!!sel?.flipH} title="左右翻轉（轉完再翻）"><Icon icon={FlipHorizontal2} /> <span className="ltc__btn-text">左右翻轉</span></button>
-        <button className="ltc__btn" onClick={() => sel && onPatch(sel.key, { flipV: !sel.flipV }, {})} disabled={!sel} aria-pressed={!!sel?.flipV} title="上下翻轉（轉完再翻）"><Icon icon={FlipVertical2} /> <span className="ltc__btn-text">上下翻轉</span></button>
+        <button className="ltc__btn" onClick={rotate90} disabled={selItems.length === 0} title="選到的螢幕順時針轉 90 度（寬高對調）；選了好幾塊就各自在原地轉"><Icon icon={RotateCw} /> <span className="ltc__btn-text">轉 90°</span></button>
+        <button className="ltc__btn" onClick={() => flip('h')} disabled={selItems.length === 0} aria-pressed={allFlipped('h')} title="左右翻轉（轉完再翻）；選了好幾塊就各自翻"><Icon icon={FlipHorizontal2} /> <span className="ltc__btn-text">左右翻轉</span></button>
+        <button className="ltc__btn" onClick={() => flip('v')} disabled={selItems.length === 0} aria-pressed={allFlipped('v')} title="上下翻轉（轉完再翻）；選了好幾塊就各自翻"><Icon icon={FlipVertical2} /> <span className="ltc__btn-text">上下翻轉</span></button>
+        {selItems.length > 1 && <span className="ltc__count" role="status">已選 {selItems.length} 塊</span>}
       </div>
       {layersBar}
 
       <div
         ref={api.hostRef}
-        className={'ltc__host' + (grabbing ? ' is-grabbing' : '')}
+        className={'ltc__host' + (grabbing ? ' is-grabbing' : '') + (spaceHeld ? ' is-space' : '')}
         tabIndex={0}
         role="application"
-        aria-label={`版型畫布 ${canvas.width}×${canvas.height}，用方向鍵微調選到的螢幕`}
+        aria-label={`版型畫布 ${canvas.width}×${canvas.height}，用方向鍵微調選到的螢幕，在空白處拖曳可以框選好幾塊`}
+        onPointerEnter={() => { hoverRef.current = true; }}
+        onPointerLeave={() => { hoverRef.current = false; }}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -296,7 +374,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
             <div
               key={it.key}
               data-key={it.key}
-              className={'ltc__item' + (it.key === selected ? ' is-selected' : '') + (bad ? ' is-bad' : '') + (grabbing && it.key === selected ? ' is-grabbing' : '') + (contentShown ? ' has-pix' : '')}
+              className={'ltc__item' + (selectedSet.has(it.key) ? ' is-selected' : '') + (bad ? ' is-bad' : '') + (grabbing && selectedSet.has(it.key) ? ' is-grabbing' : '') + (contentShown ? ' has-pix' : '')}
               style={style}
               title={tip}
             >
@@ -322,6 +400,14 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           );
         })}
 
+        {groupBox && (
+          <div
+            className="ltc__group"
+            aria-hidden="true"
+            style={{ transform: `translate(${sx(groupBox.x)}px, ${sy(groupBox.y)}px)`, width: groupBox.w * view.zoom, height: groupBox.h * view.zoom }}
+          />
+        )}
+
         {sel && (() => {
           const b = sel.dest;
           const pos: Record<Handle, Pt> = {
@@ -333,11 +419,19 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           ));
         })()}
 
+        {marquee && (
+          <div
+            className="ltc__marquee"
+            aria-hidden="true"
+            style={{ transform: `translate(${sx(marquee.x)}px, ${sy(marquee.y)}px)`, width: marquee.w * view.zoom, height: marquee.h * view.zoom }}
+          />
+        )}
+
         {placed.length === 0 && (
           <div className="ltc__empty muted">版型裡還沒有螢幕。在右邊的清單按「加入版型」，就會放在畫布上，再用滑鼠拖到想要的位置。</div>
         )}
       </div>
-      <p className="ltc__hint muted">拖曳移動 · 拖角落縮放（Shift 鎖長寬比）· 方向鍵微調 1 像素（Shift 10 像素）· 靠近邊會吸附（Alt 不吸附）· 滾輪縮放 · 空白處拖曳平移</p>
+      <p className="ltc__hint ltc__hint--wrap muted">空白處拖曳框選（Shift / Ctrl 加選，Ctrl+A 全選）· 拖曳螢幕移動，選了好幾塊就一起動 · 只選一塊時拖角落縮放（Shift 鎖長寬比）· 方向鍵微調 1 像素（Shift 10 像素）· 靠近邊會吸附（Alt 不吸附）· 滾輪縮放 · 按住空白鍵拖曳、滑鼠中鍵拖曳或雙指平移</p>
     </div>
   );
 }

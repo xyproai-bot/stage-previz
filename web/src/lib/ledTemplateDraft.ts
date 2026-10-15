@@ -65,7 +65,40 @@ export function removeScreenFromDraft(d: Draft, key: string): Draft {
   return d.items.some(i => i.key === key) ? { ...d, items: d.items.filter(i => i.key !== key) } : d;
 }
 
-export function patchDraftItem(d: Draft, key: string, patch: Partial<Pick<PlacementInput, 'dest' | 'rotate' | 'flipH' | 'flipV'>>): Draft {
+/** 對一塊螢幕的修改（只改有給的欄位） */
+export type ItemPatch = Partial<Pick<PlacementInput, 'dest' | 'rotate' | 'flipH' | 'flipV'>>;
+export interface ItemPatchEntry { key: string; patch: ItemPatch }
+
+const sameRect = (a: PlacementInput['dest'], b: PlacementInput['dest']) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
+
+/**
+ * 一次改好幾塊（複選一起拖、一起微調、各自轉 90°…）：回傳「一個」新草稿，所以記進復原就是一步。
+ * 每一塊的內容都沒變（位置、大小、轉動、翻轉全一樣）= 回傳原本的草稿，不會多一步。
+ */
+export function patchDraftItems(d: Draft, patches: readonly ItemPatchEntry[]): Draft {
+  if (patches.length === 0) return d;
+  const byKey = new Map<string, ItemPatch>();
+  for (const p of patches) byKey.set(p.key, { ...(byKey.get(p.key) ?? {}), ...p.patch });
+  let changed = false;
+  const items = d.items.map(i => {
+    const patch = byKey.get(i.key);
+    if (!patch) return i;
+    const next = { ...i, ...patch };
+    const same = sameRect(next.dest, i.dest) && next.rotate === i.rotate && next.flipH === i.flipH && next.flipV === i.flipV;
+    if (same) return i;
+    changed = true;
+    return next;
+  });
+  return changed ? { ...d, items } : d;
+}
+
+/** 一次拿掉好幾塊：一個新草稿 = 復原一步 */
+export function removeScreensFromDraft(d: Draft, keys: Iterable<string>): Draft {
+  const gone = new Set(keys);
+  return d.items.some(i => gone.has(i.key)) ? { ...d, items: d.items.filter(i => !gone.has(i.key)) } : d;
+}
+
+export function patchDraftItem(d: Draft, key: string, patch: ItemPatch): Draft {
   let changed = false;
   const items = d.items.map(i => {
     if (i.key !== key) return i;

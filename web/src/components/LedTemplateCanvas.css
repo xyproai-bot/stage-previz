@@ -62,15 +62,19 @@
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
-  cursor: grab;
+  cursor: default;
   outline: none;
 }
 .ltc__host:focus-visible {
   border-color: var(--accent);
 }
+.ltc__host.is-space {
+  cursor: grab;
+}
 .ltc__host.is-grabbing {
   cursor: grabbing;
 }
+/* 空白處拖曳 = 框選，所以空白處不是「抓」的游標 */
 .ltc__bg {
   position: absolute;
   inset: 0;
@@ -207,6 +211,33 @@
   .ltc__handle::after {
     inset: -12px;
   }
+}
+/* 複選：選到好幾塊時，外面套一個虛線外框（整組移動的範圍）；框選時拉出來的框 */
+.ltc__group {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  border: 1px dashed var(--accent);
+  pointer-events: none;
+  z-index: 3;
+}
+.ltc__marquee {
+  position: absolute;
+  left: 0;
+  top: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--accent);
+  background: var(--accent-dim);
+  pointer-events: none;
+  z-index: 5;
+}
+.ltc__count {
+  margin-left: auto;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--accent);
+  white-space: nowrap;
 }
 .ltc__empty {
   position: absolute;
