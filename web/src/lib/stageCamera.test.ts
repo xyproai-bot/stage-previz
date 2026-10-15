@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { stageFrontDirection, fitDistance, computeFrontView } from './stageCamera';
+import { stageFrontDirection, fitDistance, computeFrontView, computePresetView } from './stageCamera';
 
 /** 一片朝向 dir 的 LED（PlaneGeometry 預設朝 +Z） */
 function ledFacing(dir: THREE.Vector3, at = new THREE.Vector3()) {
@@ -87,5 +87,40 @@ describe('computeFrontView', () => {
     const withFloor = computeFrontView([led, hugeFloor], [led], 50, 16 / 9);
     const ledOnly = computeFrontView([led], [led], 50, 16 / 9);
     expect(withFloor.position.distanceTo(ledOnly.position)).toBeLessThan(1e-6);
+  });
+});
+
+describe('computePresetView', () => {
+  it('front 與 computeFrontView 相同', () => {
+    const led = ledFacing(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 3, 0));
+    const vPreset = computePresetView('front', [led], [led], 50, 16 / 9);
+    const vFront = computeFrontView([led], [led], 50, 16 / 9);
+    expect(vPreset.position.distanceTo(vFront.position)).toBeLessThan(1e-6);
+    expect(vPreset.target.distanceTo(vFront.target)).toBeLessThan(1e-6);
+  });
+
+  it('foh（控台）比正面全景退得更遠', () => {
+    const led = ledFacing(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 3, 0));
+    const front = computePresetView('front', [led], [led], 50, 16 / 9);
+    const foh = computePresetView('foh', [led], [led], 50, 16 / 9);
+    const distFront = front.position.distanceTo(front.target);
+    const distFoh = foh.position.distanceTo(foh.target);
+    expect(distFoh).toBeGreaterThan(distFront);
+  });
+
+  it('stands（二樓看台）俯角更高（Y 座標高於正面）', () => {
+    const led = ledFacing(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 3, 0));
+    const front = computePresetView('front', [led], [led], 50, 16 / 9);
+    const stands = computePresetView('stands', [led], [led], 50, 16 / 9);
+    expect(stands.position.y).toBeGreaterThan(front.position.y);
+  });
+
+  it('vip（特區）比正面全景更近且視角更低', () => {
+    const led = ledFacing(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 3, 0));
+    const front = computePresetView('front', [led], [led], 50, 16 / 9);
+    const vip = computePresetView('vip', [led], [led], 50, 16 / 9);
+    const distFront = front.position.distanceTo(front.target);
+    const distVip = vip.position.distanceTo(vip.target);
+    expect(distVip).toBeLessThan(distFront);
   });
 });

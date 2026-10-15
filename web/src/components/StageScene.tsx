@@ -11,7 +11,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject, CameraView } from '../lib/api';
 import { fitFov } from '../lib/review/annotations';
-import { computeFrontView } from '../lib/stageCamera';
+import { computeFrontView, computePresetView, CAMERA_PRESETS, type CameraPreset } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
 import type { Mechanism, MechanismTimings, MechanismValues, MechVec3 } from '../lib/mechanisms/model';
@@ -2608,6 +2608,19 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     return home;
   }
 
+  /** 常用看台預設視角（正面全景、控台 FOH、二樓看台、特區） */
+  function computePresetViewHelper(preset: CameraPreset): { position: THREE.Vector3; target: THREE.Vector3 } | null {
+    const modelRoots = [...modelMeshMapRef.current.values()];
+    if (modelRoots.length > 0) {
+      return computePresetView(preset, modelRoots, ledModelRoots(modelMeshMapRef.current), DEFAULT_FOV, viewAspect());
+    } else if (meshesRef.current.size > 0) {
+      const ledIds = new Set((stageObjectsRef.current || []).filter(o => o.category === 'led_panel').map(o => o.id));
+      const leds = [...meshesRef.current].filter(([id]) => ledIds.has(id)).map(([, m]) => m);
+      return computePresetView(preset, [...meshesRef.current.values()], leds, DEFAULT_FOV, viewAspect());
+    }
+    return null;
+  }
+
   /** 現在的鏡頭 → 重置視角 */
   function currentCameraView(): HomeView | null {
     const cam = cameraRef.current;
@@ -2941,14 +2954,35 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         {bookmarkPanelOpen && bookmarkScope && !viewer && (
           <div className="bm-popover" onClick={e => e.stopPropagation()}>
             <div className="bm-popover__head">
-              <span>視角書籤</span>
+              <span>視角</span>
               <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
+            </div>
+            <div style={{ padding: '8px 10px 4px' }}>
+              <div className="muted small" style={{ marginBottom: 6 }}>常用看台視角</div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 4, marginBottom: 10 }}>
+                {CAMERA_PRESETS.map(p => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    className="btn btn--ghost btn--sm"
+                    style={{ justifyContent: 'center' }}
+                    onClick={() => {
+                      const v = computePresetViewHelper(p.id);
+                      if (v) flyCamera(v.position, v.target, DEFAULT_FOV);
+                    }}
+                    title={p.hint}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <div className="muted small" style={{ marginBottom: 6 }}>自訂書籤</div>
             </div>
             <button className="btn btn--primary btn--sm bm-popover__save" onClick={saveCurrentCamera}>
               + 儲存目前視角
             </button>
             {bookmarks.length === 0 ? (
-              <div className="bm-popover__empty">還沒儲存任何視角</div>
+              <div className="bm-popover__empty">還沒儲存任何自訂視角</div>
             ) : (
               <ul className="bm-popover__list">
                 {bookmarks.map(bm => (

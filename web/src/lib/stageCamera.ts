@@ -98,7 +98,69 @@ export function computeFrontView(
   const target = new THREE.Box3().setFromPoints(points).getCenter(new THREE.Vector3());
   const front = stageFrontDirection(ledRoots);
   const e = THREE.MathUtils.degToRad(elevationDeg);
-  const dir = front.multiplyScalar(Math.cos(e)).addScaledVector(UP, Math.sin(e)).normalize();
+  const dir = front.clone().multiplyScalar(Math.cos(e)).addScaledVector(UP, Math.sin(e)).normalize();
   const dist = points.length > 0 ? fitDistance(points, target, dir, vfovDeg, aspect) : 10;
   return { position: target.clone().addScaledVector(dir, dist), target };
 }
+
+export type CameraPreset = 'front' | 'foh' | 'stands' | 'vip';
+
+export interface CameraPresetDef {
+  id: CameraPreset;
+  label: string;
+  hint: string;
+}
+
+export const CAMERA_PRESETS: readonly CameraPresetDef[] = [
+  { id: 'front', label: '正面全景', hint: '整個舞台剛好入鏡' },
+  { id: 'foh', label: '控台', hint: '控台（FOH）位置的平視角度' },
+  { id: 'stands', label: '二樓看台', hint: '高角度俯瞰舞台與地屏' },
+  { id: 'vip', label: '特區搖滾區', hint: '舞台前排近距離仰角' },
+];
+
+/** 常用看台預設角度：依舞台正面方向、中心與 LED 框計算攝影機位置與看向點 */
+export function computePresetView(
+  preset: CameraPreset,
+  roots: THREE.Object3D[], ledRoots: THREE.Object3D[],
+  vfovDeg: number, aspect: number,
+): { position: THREE.Vector3; target: THREE.Vector3 } {
+  if (preset === 'front') {
+    return computeFrontView(roots, ledRoots, vfovDeg, aspect, 3);
+  }
+  const ledPoints = collectFramePoints(ledRoots);
+  const points = ledPoints.length > 0 ? ledPoints : collectFramePoints(roots);
+  const target = new THREE.Box3().setFromPoints(points).getCenter(new THREE.Vector3());
+  const front = stageFrontDirection(ledRoots);
+
+  let elevationDeg = 3;
+  let distMult = 1.0;
+  let targetOffsetY = 0;
+
+  switch (preset) {
+    case 'foh':
+      elevationDeg = 5;
+      distMult = 1.4;
+      break;
+    case 'stands':
+      elevationDeg = 26;
+      distMult = 1.2;
+      break;
+    case 'vip':
+      elevationDeg = 1;
+      distMult = 0.55;
+      targetOffsetY = 0.2;
+      break;
+  }
+
+  const e = THREE.MathUtils.degToRad(elevationDeg);
+  const dir = front.clone().multiplyScalar(Math.cos(e)).addScaledVector(UP, Math.sin(e)).normalize();
+  const baseDist = points.length > 0 ? fitDistance(points, target, dir, vfovDeg, aspect) : 10;
+  const dist = baseDist * distMult;
+
+  const actualTarget = target.clone();
+  if (targetOffsetY !== 0) {
+    actualTarget.y += targetOffsetY;
+  }
+  return { position: actualTarget.clone().addScaledVector(dir, dist), target: actualTarget };
+}
+
