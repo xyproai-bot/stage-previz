@@ -139,6 +139,8 @@ interface Props {
   ndiUrl?: string;
   /** AE 即時現在卡在哪一步（給上層顯示狀態文字） */
   onNdiStatus?: (guide: NdiGuide) => void;
+  /** AE 即時收到的畫面大小（第一張畫面、畫面大小換了才叫；AE 切 Full / Half / Third 也會）：檢查跟 LED 版型的畫布大小對不對得上 */
+  onNdiFrameSize?: (size: { width: number; height: number }) => void;
   /** AE 即時還沒接好時，在 3D 畫面上顯示檢查清單卡片（分享頁、動畫師工作站） */
   ndiGuide?: boolean;
   /** 卡片最下面的小字 */
@@ -206,8 +208,10 @@ interface Props {
   /** 本地圖片（分享頁拖進來的檔案，要先載好）：當靜態畫面放在 LED 上；跟 ledVideo 都有給時影片優先 */
   ledImage?: HTMLImageElement | null;
   /**
-   * LED 畫布版型（lib/ledTemplate.ts）：ledVideo / ledImage 是「版型畫布」時給，每塊螢幕從版型畫布上自己的位置取畫面（轉 90° / 翻轉也照做），
-   * 沒放進版型的螢幕顯示黑的；像素格照真實點數。沒給 / null = 整張畫布（跟以前一樣）。測試圖、AE 即時（NDI）不受影響。
+   * LED 畫布版型（lib/ledTemplate.ts）：ledVideo / ledImage（歌曲影片、本地檔案）和 AE 即時（NDI）收到的畫面是「版型畫布」時給，
+   * 每塊螢幕從版型畫布上自己的位置取畫面（轉 90° / 翻轉也照做），沒放進版型的螢幕顯示黑的；像素格照整張畫布的真實點數。
+   * 沒給 / null = 整張畫布（跟以前一樣）。測試圖、物件設定的圖片網址不受影響。
+   * 現在該用哪一份由頁面決定（lib/ledLiveTemplate.ts chooseLedTemplate：影片版本用自己的快照、AE 即時 / 本地檔案用這首歌選的版型）。
    */
   ledTemplate?: LedTemplatePlan | null;
   /**
@@ -296,7 +300,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -473,6 +477,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // LED 畫布版型：現在用的版型、每個 LED 物件在整張畫布上的範圍（從模型的 UV 算，一個物件只算一次）、燈光取色的位置換算
   const ledTemplateRef = useRef<LedTemplatePlan | null>(null);
   ledTemplateRef.current = ledTemplate;
+  const onNdiFrameSizeRef = useRef(onNdiFrameSize);
+  onNdiFrameSizeRef.current = onNdiFrameSize;
+  const ndiReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const ledSpanCacheRef = useRef<WeakMap<THREE.Object3D, SrcSpan | null>>(new WeakMap());
   const ledTemplateRemapRef = useRef<Map<string, (r: UvRect) => UvRect | null>>(new Map());
   const ndiColorLutRef = useRef<NdiColorLut | null>(null);
@@ -1252,11 +1259,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             const iw = img?.videoWidth || img?.width || 1;
             const ih = img?.videoHeight || img?.height || 1;
             // AE 即時：看收到的大小跟 LED 畫布（或小程序回報縮了幾倍）算一共幾顆 LED；其他貼圖一個像素 = 一顆
-            // 版型：影片是版型畫布（可能縮小），像素格一律用整張畫布的真實點數
-            const tplNative = ledTemplateRef.current && tex && tex === ledMediaTextureRef.current ? projectCanvasRef.current : null;
-            const texels: [number, number] = tex && tex === liveTexture
-              ? ndiLedTexels({ width: iw, height: ih }, projectCanvasRef.current, ndiDownscaleRef.current)
-              : tplNative ? [tplNative.width, tplNative.height] : [iw, ih];
+            // 版型：影片 / 圖片 / AE 畫面是版型畫布（可能縮小，形狀也跟整張畫布不一樣），像素格一律用整張畫布的真實點數
+            // （沒有版型時 tplNative = null，跟以前完全一樣）
+            const tplNative = ledTemplateRef.current && tex && (tex === ledMediaTextureRef.current || tex === liveTexture) ? projectCanvasRef.current : null;
+            const texels: [number, number] = tplNative
+              ? [tplNative.width, tplNative.height]
+              : tex && tex === liveTexture
+                ? ndiLedTexels({ width: iw, height: ih }, projectCanvasRef.current, ndiDownscaleRef.current)
+                : [iw, ih];
             updateLedSurface(mat, {
               on: !!tex,
               texels,
@@ -1958,6 +1968,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       }
       liveTex.ctx.drawImage(bitmap, 0, 0);
       liveTex.texture.needsUpdate = true;
+      // 畫面大小第一次知道 / 換了才通知上層（跟 LED 版型的畫布大小比，不是每一幀）
+      const seen = ndiReportedSizeRef.current;
+      if (!seen || seen.width !== bitmap.width || seen.height !== bitmap.height) {
+        ndiReportedSizeRef.current = { width: bitmap.width, height: bitmap.height };
+        onNdiFrameSizeRef.current?.(ndiReportedSizeRef.current);
+      }
       bitmap.close?.();
     },
   });
@@ -2321,9 +2337,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         ledTexture = testPatternTex;
       }
 
-      // LED 畫布版型：這個物件的螢幕放法（只對「本地影片 / 圖片」那張版型畫布；測試圖、imageUrl、NDI 都是整張畫布）
+      // LED 畫布版型：這個物件的螢幕放法（對「影片 / 圖片」和 AE 即時收到的那張版型畫布；測試圖、imageUrl 都是整張畫布）
       let tplData: ReturnType<typeof buildObjectUniforms> | null = null;
-      if (ledTemplate && isLed && ledTexture && ledTexture === ledMediaTextureRef.current) {
+      if (ledTemplate && isLed && ledTexture && (ledTexture === ledMediaTextureRef.current || ledTexture === ndiLiveTextureRef.current?.texture)) {
         const srcFor = (p: Placement): SrcSpan | null => (p.uv ? spanFromUv(p.uv) : ledObjectSpan(obj));
         tplData = buildObjectUniforms(ledTemplate, id, srcFor);
         ledTemplateRemapRef.current.set(id, (r) => mapUvRectToTemplate(ledTemplate, id, srcFor, r));

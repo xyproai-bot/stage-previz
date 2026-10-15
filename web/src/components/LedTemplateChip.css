@@ -1,0 +1,73 @@
+/* LED 版型狀態標籤（動畫師工作站的來源列、導演頁編輯器的 3D 畫面上方）＋ 畫面大小提示 */
+.tpl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+}
+.tpl-chip__tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.tpl-chip__tag.is-temp { border-color: var(--warn); color: var(--warn); background: var(--warn-dim); }
+.tpl-chip__toggle {
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text-dim);
+  padding: 3px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.tpl-chip__toggle:hover { color: var(--text); border-color: var(--text-muted); }
+.tpl-chip__toggle.is-on { background: var(--warn); border-color: var(--warn); color: #000; font-weight: 600; }
+
+.tpl-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  background: var(--warn-dim);
+  color: var(--warn);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.tpl-hint svg { flex-shrink: 0; margin-top: 2px; }
+
+/* 導演頁編輯器：3D 畫面上方的一條 */
+.tpl-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+.tpl-bar__label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+
+@media (max-width: 640px) {
+  .tpl-hint {
+    padding: 6px 16px;
+    padding-left: max(16px, env(safe-area-inset-left));
+    padding-right: max(16px, env(safe-area-inset-right));
+  }
+  .tpl-chip { flex-wrap: wrap; }
+}
+@media (hover: none) and (pointer: coarse) {
+  .tpl-chip__toggle { min-height: 40px; padding: 8px 12px; }
+}

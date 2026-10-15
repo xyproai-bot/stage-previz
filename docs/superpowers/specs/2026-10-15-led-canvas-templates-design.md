@@ -81,7 +81,7 @@ For a screen with source spans `(us, ul, vs, vl)` (start/length) and placement `
 
 Everything is a pure function (`web/src/lib/ledTemplate.ts`: `placementToUniform`, `mapUvToTemplate`, `compareVideoToTemplate`, `buildScreenList`, `checkTemplate`) with vitest tests. The shader (`lib/stageLook/ledTemplate.ts` GLSL string, spliced into `ledSurface.ts`) is the same math. Up to 8 screens per mesh in a uniform array; one auto screen per object is the common case.
 
-**Pixel grid / colour:** the grid code keeps reading the original mesh UV with `uLedTexels` = native counts (full canvas). Only the colour sample UV is remapped, and only when `uLedTplOn = 1` (a non-full template is active for the media texture). With `uLedTplOn = 0` the old `texture2D(emissiveMap, vEmissiveMapUv)` line runs unchanged. The test pattern, per-object images and AE live (NDI) textures are full-canvas content and are never remapped in 1a. The ambient LED light colours (live mode) sample through the same mapping.
+**Pixel grid / colour:** the grid code keeps reading the original mesh UV with `uLedTexels` = native counts (full canvas). Only the colour sample UV is remapped, and only when `uLedTplOn = 1` (a non-full template is active for the media texture). With `uLedTplOn = 0` the old `texture2D(emissiveMap, vEmissiveMapUv)` line runs unchanged. The test pattern and per-object images are full-canvas content and are never remapped. (In 1a the AE live (NDI) texture was also never remapped; since part 2a, section 6b, it follows the song's template like a local file.) The ambient LED light colours (live mode) sample through the same mapping.
 
 **Upload check (`compareVideoToTemplate(video, canvas)`):** exact size → ok, no message. Same aspect and one uniform factor `k` (|vw − cw·k| and |vh − ch·k| within 1 px) → accepted, labelled with the percentage (「影片是版型的 50%（2200×506），會自動放大貼回，LED 像素格照真實點數畫」, no warning). Aspect differs → warning 「影片 A×B 跟版型「名稱」的 C×D 比例不一樣：畫面會變形，請用 C×D 輸出」. The label is also shown on the version row (「版型「名稱」· 影片是版型的 50%」). For the 全部 template the existing 「比較糊 / 比較大 / 變形」 wording is kept.
 
@@ -116,7 +116,8 @@ Production `master` (old frontend) is older than this branch.
 |---|---|---|
 | **1a core** | This spec; migration 0034; API + permissions + share/version fields; pure logic + tests; shader remap (colour unchanged); numeric template form (name, canvas, scale, per-screen x/y/w/h/rotation/flip, manual splits by pixel rectangle) in the 「LED 版型」 dialog (`LedTemplatesDialog.tsx`, opened from the 編輯專案 top bar button 「版型」); per-song selector 「LED 版型」 on the 歌單 (shown once a custom template exists); upload resolution check; version label. Screen UV spans for the form come from the 3D view (`StageSceneQuery.ledSpans()`). | built |
 | **1b editor** | Visual drag-and-drop editor (section 6a); 3D live test pattern with screen names while editing; **download template PNG**; **duplicate template**; manual split by drawing rectangles on the full canvas. | built (no backend change) |
-| **2 AE live / coordinate sheet** | NDI live (AE → helper → browser) honours the song template (the helper sends the template canvas; the shader remap applies to the NDI texture); export a **coordinate CSV** (screen, native rect, template rect, rotation, flip) for LED engineers / d3. | later |
+| **2a live sources** | NDI live (AE → helper → browser) and local files honour the song's current template (section 6b). The shader is unchanged: the same remap now applies to the NDI texture. | built (no backend change) |
+| **2b coordinate sheet** | Export a **coordinate CSV** (screen, native rect, template rect, rotation, flip) for LED engineers / d3. | later |
 | **3 switch mid-song** | A song may change template at a cue. Needs a per-cue template choice and a time-based plan switch in the player. | later |
 
 ### 6a. Part 1b: the visual editor (built)
@@ -147,9 +148,35 @@ Shown only to 製作 (`RequireAdmin` page + `user.role === 'admin'`). On a phone
 
 Pure logic with tests: `lib/ledTemplateEdit.ts` (+ `.test.ts`), `lib/ledTemplateDraft.ts` (+ `.test.ts`), `lib/ledTemplatePattern.ts` (+ `.test.ts`), `lib/ledTemplateContent.ts` (+ `.test.ts`), `lib/ledTemplateBackdrop.ts` (+ `.test.ts`). No backend change.
 
+### 6b. Part 2a: AE live and local files follow the song's template (built)
+
+Reported by the owner: song S02 was set to 「版型 1」, but the LEDs still mapped his local 1920×1080 file as the whole canvas (「怎麼沒有更新？」). Before this part only an uploaded version used a template (its snapshot); a local file and AE live were always the full canvas.
+
+**Which plan applies** (pure, `web/src/lib/ledLiveTemplate.ts` `chooseLedTemplate`, one answer per LED source):
+
+| Situation | Plan given to `StageScene.ledTemplate` |
+|---|---|
+| Editor with the 版型 panel open (the test-pattern preview) | the panel's plan, over everything (also over 「暫時用整張畫布看」) |
+| Uploaded version | that version's own snapshot, as before; a version without a snapshot is the full canvas even if the song picked a template later |
+| AE live, local file (video or image) | the song's **current** template, looked up by `songs.template_id` in the project template list (`useLedTemplates`). 「全部」, no template, a deleted template and a list that is not loaded yet are all the full canvas |
+| 「暫時用整張畫布看」 on | the full canvas, for AE live / local files only (session state of the page, never saved; it resets when the song changes) |
+
+Pages: the editor (AE live only, it has no source switch), the animator workstation (version / AE live / local file). The director page only plays versions, so it is unchanged. The share page does have AE live and local files, but its public data has neither the song's template id nor the template list (a guest cannot call `/led-templates`), so it stays full canvas until the share bundle carries the song's template plan (that needs a backend change, not done here).
+
+**StageScene:** the remap condition changed from 「the texture is the media texture」 to 「the media texture or the NDI texture」; the test pattern and per-object images still never remap. The shader is not touched. A new callback `onNdiFrameSize` reports the received AE frame size (only on the first frame and when the size changes), used by the check below.
+
+**Pixel grid density:** the grid always uses the full canvas' native counts (`projectCanvas`), the same as the media texture. For AE live with a template the received frame is the *template* canvas (e.g. 1920×1080 against a 8800×2024 wall), so the old rule in `ndiLedTexels` (frame shape == project canvas shape, else frame × helper downscale) would have given a wrong density; with a template active the native counts are used directly. With no template the code path is the old one, bit for bit (`led-color-accuracy.mjs` before / after identical).
+
+**Colour:** unchanged. AE live's colour curve (`ndiColor` / `uLedColorLut`) is applied after the remapped sample in the same shader line, so it follows the template with no change. With no template the old sample runs.
+
+**Status chip** 「LED 版型：版型 1（1920×1080）」 / 「LED 版型：全部」 (`components/LedTemplateChip.tsx`, label from `ledTemplateChip`): in the workstation it sits in the LED source row next to the help link; in the editor it is a slim bar 「AE 即時」 above the 3D view. It only appears when the project has at least one custom template or the picture uses one. For AE live / local files it carries the toggle 「暫時用整張畫布看」 (shown as 「LED 版型：全部（暫時）」 while on).
+
+**Size check for live sources** (`liveSourceHint`; reuses the 1a rule `compareVideoToTemplate`): exact size or a uniform scale of the template canvas is fine (no message). If the file / frame is the size of the full canvas instead, a gentle hint: 「這個檔案是整張畫布的大小，但這首歌用的是「版型 1」…」 (offers 「暫時用整張畫布看」); if it matches another template's size, it asks whether the song picked the wrong template; if the shape fits nothing, it says the picture will be stretched. AE frames are compared loosely (aspect within 3%, like `ndiLedTexels`) because Half / Third and the helper's downscale do not round to 1 px. Only shown while a template is actually applied (not for the full canvas, a version, the temporary full view or the 版型 panel preview).
+
 ## 7. Tests
 
 - `cf-worker/ledTemplates.test.mjs`: 0034 on old data (backfill, old INSERTs still work, CHECKs), CRUD + validation, 製作-only writes / member reads / director 403, 全部 read-only, songs' selector, version snapshot frozen when the template is edited later, share video carries `template`, delete refused while in use, duplicate project copies.
 - `web/src/lib/ledTemplate.test.ts`: rotate/flip table (all 8 orientations), wrap-aware source span, uncovered fragment → black, scale detection (exact / 50% / 1 px rounding / aspect mismatch), screen list (auto vs manual), template checks (overlap, outside canvas, stretch), Chinese messages.
 - Shader: `ledSurface.test.ts` keeps proving the old path; a new test compares the GLSL remap against `mapUvToTemplate` through a JS port of the same expressions; `web/scripts/led-color-accuracy.mjs` before / after must be identical for the 全部 template.
+- `web/src/lib/ledLiveTemplate.test.ts`: which plan each source uses (version snapshot vs the song's current template vs the preview), 「暫時用整張畫布看」, chip text, size check (exact / scaled / full canvas / other template / stretch, loose AE rule).
 - Guard tests (emoji, native dialogs, English role words) cover the new UI files.

@@ -16,6 +16,9 @@ import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import AddVideoDialog from '../components/AddVideoDialog';
 import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
+import LedTemplateChip, { LedTemplateHint } from '../components/LedTemplateChip';
+import { useLedTemplates } from '../lib/useLedTemplates';
+import { chooseLedTemplate, ledTemplateChip, liveSourceHint, songTemplatePlan } from '../lib/ledLiveTemplate';
 import ShareSetlist from './ShareSetlist';
 import NotificationBell from '../components/NotificationBell';
 import OverflowMenu from '../components/OverflowMenu';
@@ -554,6 +557,43 @@ function StudioInner({ projectId }: { projectId: string }) {
   const versionVideoMode = !!selectedVersion && player.srcKey === selectedVersion.key;
   const videoMode = fileVideoMode || versionVideoMode;
 
+  // ── LED 版型（lib/ledLiveTemplate.ts）──
+  // 歌曲影片版本用那一版自己的快照；AE 即時、本地檔案照這首歌「現在」選的版型（暫時用整張畫布看：只有這個畫面，不存）
+  const ledTpls = useLedTemplates(projectId);
+  const reloadLedTpls = ledTpls.reload;
+  const tplReloadSong = useRef(selectedSongId);
+  useEffect(() => {
+    // 換歌時重讀一次版型清單（製作可能在別的視窗改過排法）；第一次已經讀過了
+    if (tplReloadSong.current === selectedSongId) return;
+    tplReloadSong.current = selectedSongId;
+    void reloadLedTpls();
+  }, [selectedSongId, reloadLedTpls]);
+  const songTplPlan = useMemo(() => songTemplatePlan(ledTpls.list, selectedSong?.templateId), [ledTpls.list, selectedSong?.templateId]);
+  const [ledFullView, setLedFullView] = useState(false);
+  useEffect(() => { setLedFullView(false); }, [selectedSongId]);
+  const [aeFrameSize, setAeFrameSize] = useState<{ width: number; height: number } | null>(null);
+  const customLedTemplates = useMemo(() => (ledTpls.list?.templates ?? []).filter(t => t.kind === 'custom'), [ledTpls.list]);
+  const ledChoice = useMemo(
+    () => chooseLedTemplate({
+      source,
+      versionPlan: versionVideoMode ? selectedVersion?.template ?? null : null,
+      songPlan: songTplPlan,
+      fullView: ledFullView,
+    }),
+    [source, versionVideoMode, selectedVersion?.template, songTplPlan, ledFullView],
+  );
+  const ledChip = useMemo(
+    () => ledTemplateChip(ledChoice, { source, songPlan: songTplPlan, list: ledTpls.list }),
+    [ledChoice, source, songTplPlan, ledTpls.list],
+  );
+  // 本地檔案現在的畫面大小（影片載好、圖片解碼好才知道）；AE 即時的由 StageScene 通知
+  const fileW = source === 'file' ? (media.active?.kind === 'video' ? (fileVideoMode && player.ready ? player.video.videoWidth : 0) : media.image?.naturalWidth ?? 0) : 0;
+  const fileH = source === 'file' ? (media.active?.kind === 'video' ? (fileVideoMode && player.ready ? player.video.videoHeight : 0) : media.image?.naturalHeight ?? 0) : 0;
+  const ledHint = useMemo(() => {
+    const frame = source === 'ndi' ? aeFrameSize : fileW > 0 && fileH > 0 ? { width: fileW, height: fileH } : null;
+    return liveSourceHint({ choice: ledChoice, frame, source, fullCanvas: ledTpls.list?.fullCanvas ?? null, templates: customLedTemplates });
+  }, [ledChoice, source, aeFrameSize, fileW, fileH, ledTpls.list?.fullCanvas, customLedTemplates]);
+
   // 拖進來 / 選的檔案加進本地檔案清單，第一個馬上放在 LED 上（只在這台電腦播，不上傳）
   const addFiles = useCallback((files: FileList | File[] | null | undefined) => {
     if (!files || files.length === 0) return;
@@ -1020,8 +1060,10 @@ function StudioInner({ projectId }: { projectId: string }) {
                   : media.active ? <><Icon icon={Image} size="xs" /> {media.active.name}</>
                   : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
               >
+                {ledChip && <LedTemplateChip chip={ledChip} onToggleFullView={() => setLedFullView(v => !v)} />}
                 <HelpLink anchor={HELP_ANCHORS.animSource} />
               </LedSourceSwitch>
+              <LedTemplateHint hint={ledHint} />
               {/* 這首歌交上來的影片：V3、V2、V1…（點哪一版就放到 LED 上）＋ 加影片 */}
               <SongVersionBar
                 status={versions.status}
@@ -1063,7 +1105,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                   ndiGuideHint="沒有 AE？按上面的「本地檔案」把影片放到 LED 上，或按「加影片」交給導演看"
                   ledVideo={videoMode && player.ready ? player.video : null}
                   ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
-                  ledTemplate={versionVideoMode ? selectedVersion?.template ?? null : null}
+                  ledTemplate={ledChoice.plan}
+                  onNdiFrameSize={setAeFrameSize}
                   poseAtFrame={poseAtFrame}
                   cueKey={selectedCueId}
                   crossfadeSeconds={cueTransitionSeconds(selectedCue)}

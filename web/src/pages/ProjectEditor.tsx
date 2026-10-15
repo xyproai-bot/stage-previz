@@ -50,6 +50,8 @@ import LedTemplatesDialog from '../components/LedTemplatesDialog';
 import { useLedTemplates } from '../lib/useLedTemplates';
 import { useLedPatternCanvas, type LedPatternSource } from '../lib/useLedPatternCanvas';
 import { setSongTemplate } from '../lib/ledTemplateApi';
+import { chooseLedTemplate, ledTemplateChip, liveSourceHint, songTemplatePlan } from '../lib/ledLiveTemplate';
+import LedTemplateChip, { LedTemplateHint } from '../components/LedTemplateChip';
 import SongVideosDialog from '../components/SongVideosDialog';
 import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { songTitle } from '../lib/songCode';
@@ -437,6 +439,24 @@ export default function ProjectEditor() {
   const proposalCues = useMemo(() => cues.filter(c => c.status === 'proposal'), [cues]);
   const selectedCue = useMemo(() => cues.find(c => c.id === selectedCueId) || null, [cues, selectedCueId]);
   const selectedSong = useMemo(() => songs.find(s => s.id === selectedSongId) || null, [songs, selectedSongId]);
+
+  // AE 即時照這首歌選的 LED 版型放到 LED 上（lib/ledLiveTemplate.ts）；版型面板開著的測試圖蓋過一切
+  const songTplPlan = useMemo(() => songTemplatePlan(ledTpls.list, selectedSong?.templateId), [ledTpls.list, selectedSong?.templateId]);
+  const [ledFullView, setLedFullView] = useState(false);          // 「暫時用整張畫布看」：只有這個畫面，不存
+  useEffect(() => { setLedFullView(false); }, [selectedSongId]);
+  const [aeFrameSize, setAeFrameSize] = useState<{ width: number; height: number } | null>(null);
+  const ledChoice = useMemo(
+    () => chooseLedTemplate({ source: 'ndi', previewPlan: tplPreview?.plan ?? null, songPlan: songTplPlan, fullView: ledFullView }),
+    [tplPreview?.plan, songTplPlan, ledFullView],
+  );
+  const ledChip = useMemo(
+    () => ledTemplateChip(ledChoice, { source: 'ndi', songPlan: songTplPlan, list: ledTpls.list }),
+    [ledChoice, songTplPlan, ledTpls.list],
+  );
+  const ledHint = useMemo(
+    () => liveSourceHint({ choice: ledChoice, frame: aeFrameSize, source: 'ndi', fullCanvas: ledTpls.list?.fullCanvas ?? null, templates: customLedTemplates }),
+    [ledChoice, aeFrameSize, ledTpls.list?.fullCanvas, customLedTemplates],
+  );
 
   const visibleSongs = useMemo(() => {
     let list = statusFilter === 'all' ? songs : songs.filter(s => s.status === statusFilter);
@@ -1167,7 +1187,7 @@ export default function ProjectEditor() {
                           <select
                             value={s.templateId && customLedTemplates.some(t => t.id === s.templateId) ? s.templateId : ''}
                             onChange={(e) => handleSongTemplate(s.id, e.target.value || null)}
-                            title="這首歌的影片做成哪個版型；選了以後，加影片會用版型的畫布大小檢查，3D 畫面也會照版型貼回。「全部」= 整張 LED 畫布"
+                            title="這首歌的影片做成哪個版型；選了以後，加影片會用版型的畫布大小檢查，3D 畫面（影片、AE 即時、本地檔案）也會照版型貼回。「全部」= 整張 LED 畫布"
                           >
                             <option value="">全部（整張畫布）</option>
                             {customLedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}（{t.canvas.width}×{t.canvas.height}）</option>)}
@@ -1214,7 +1234,17 @@ export default function ProjectEditor() {
               </div>
             </div>
           ) : (
+            <>
+            {/* LED 版型：AE 即時現在照哪個版型放到 LED 上（這首歌選的）；畫面大小跟版型對不上時提醒 */}
+            {ledChip && (
+              <div className="tpl-bar">
+                <span className="tpl-bar__label">AE 即時</span>
+                <LedTemplateChip chip={ledChip} onToggleFullView={() => setLedFullView(v => !v)} />
+              </div>
+            )}
+            <LedTemplateHint hint={ledHint} />
             <StageScene
+              onNdiFrameSize={setAeFrameSize}
               states={viewportStates}
               stageObjects={stageObjects}
               selectedObjectIds={selectedObjectIds}
@@ -1249,10 +1279,11 @@ export default function ProjectEditor() {
               projectName={projectMeta?.name}
               ledCanvas={view.ledCanvas}
               onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
-              ledTemplate={tplPreview?.plan ?? null}
+              ledTemplate={ledChoice.plan}
               ledPreviewCanvas={tplPreview ? tplPattern.canvas : null}
               ledPreviewVersion={tplPattern.version}
             />
+            </>
           )}
           {/* 機關時間軸：開「機關」分頁時排在 3D 畫面下面（右邊欄太窄） */}
           {rightTab === 'mechanisms' && mech.timelineOpen && mech.mechanisms.length > 0 && selectedSongId && stageObjects.length > 0 && (
