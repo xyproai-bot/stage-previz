@@ -18,6 +18,10 @@ export interface DraftItem {
   progress: number;
   /** 預覽（本機的 blob 網址，或已經在留言裡的縮圖） */
   preview: string | null;
+  /** 原圖的本機網址（貼在 3D 畫面上用，比預覽大；沒有 = 用預覽） */
+  full?: string | null;
+  /** 是拖進 3D 畫面的 → 傳好就自動貼上去（useStickerBridge） */
+  sticker?: boolean;
   attachment?: CommentAttachment;
   /** 本來就在留言裡（改留言） */
   existing?: boolean;
@@ -35,7 +39,7 @@ export interface AttachmentDraft {
   max: number;
   /** 有沒有可以用的上傳（沒有 = 不顯示加圖片） */
   enabled: boolean;
-  addFiles: (files: File[] | FileList) => void;
+  addFiles: (files: File[] | FileList, opts?: { sticker?: boolean }) => void;
   remove: (key: string) => void;
   retry: (key: string) => void;
   /** 送出成功 → clear(false)；取消 → clear(true)（拿掉還沒送出的） */
@@ -67,9 +71,11 @@ export function useAttachmentDraft(uploader: AttachmentUploader | null, resetKey
     aborts.current.get(key)?.abort();
     aborts.current.delete(key);
     prepared.current.delete(key);
-    const u = blobUrls.current.get(key);
-    if (u) URL.revokeObjectURL(u);
-    blobUrls.current.delete(key);
+    for (const k of [key, `${key}:full`]) {
+      const u = blobUrls.current.get(k);
+      if (u) URL.revokeObjectURL(u);
+      blobUrls.current.delete(k);
+    }
   }, []);
 
   const upload = useCallback(async (key: string) => {
@@ -93,7 +99,7 @@ export function useAttachmentDraft(uploader: AttachmentUploader | null, resetKey
     }
   }, [patch]);
 
-  const addFiles = useCallback((list: File[] | FileList) => {
+  const addFiles = useCallback((list: File[] | FileList, opts?: { sticker?: boolean }) => {
     const up = upRef.current;
     if (!up) return;
     const files = Array.from(list);
@@ -103,7 +109,7 @@ export function useAttachmentDraft(uploader: AttachmentUploader | null, resetKey
     for (const file of files.slice(0, take)) {
       const key = `d${++seq}`;
       countRef.current++;
-      setItems(l => [...l, { key, status: 'preparing', progress: 0, preview: null }]);
+      setItems(l => [...l, { key, status: 'preparing', progress: 0, preview: null, ...(opts?.sticker ? { sticker: true } : {}) }]);
       void (async () => {
         try {
           const img = await prepareImage(file);
@@ -111,7 +117,10 @@ export function useAttachmentDraft(uploader: AttachmentUploader | null, resetKey
           prepared.current.set(key, img);
           const url = URL.createObjectURL(img.thumb ?? img.blob);
           blobUrls.current.set(key, url);
-          patch(key, { preview: url });
+          // 貼在 3D 畫面上要看得清楚 → 另外留一個原圖的網址（沒有小縮圖就是同一個）
+          let full = url;
+          if (img.thumb) { full = URL.createObjectURL(img.blob); blobUrls.current.set(`${key}:full`, full); }
+          patch(key, { preview: url, full });
           await upload(key);
         } catch (e) {
           if (gone.current.has(key)) return;

@@ -13,6 +13,8 @@ import {
 import Icon from './Icon';
 import { attachmentSrc, type CommentAttachment } from '../lib/api';
 import type { AttachmentDraft } from '../lib/review/useAttachmentDraft';
+import type { StickerDraft } from '../lib/review/useReviewSession';
+import { stickerSourceOf } from '../lib/review/useStickerBridge';
 import { ACCEPT_ATTR, pastePlan } from '../lib/review/imagePrep';
 import { linkCards, shortenUrl, splitLinks, youtubeThumb, type LinkCard, type LinkKind } from '../lib/review/commentLinks';
 import './CommentAttachments.css';
@@ -83,13 +85,19 @@ export function AttachButton({ draft, disabled = false, compact = false }: { dra
   );
 }
 
-/** 還沒送出的圖片（縮圖、上傳中幾 %、失敗可以重試、拿掉） */
-export function AttachmentTray({ draft, disabled = false }: { draft: AttachmentDraft; disabled?: boolean }) {
+/**
+ * 還沒送出的圖片（縮圖、上傳中幾 %、失敗可以重試、拿掉）
+ * stickers 有給 → 傳好的圖片多一顆「放到畫面上」：貼在 3D 畫面上，跟這則留言一起存（再按一下拿下來，圖片還是會送出）
+ */
+export function AttachmentTray({ draft, disabled = false, stickers }: { draft: AttachmentDraft; disabled?: boolean; stickers?: StickerDraft }) {
   if (!draft.items.length) return null;
   return (
     <ul className="att-tray" aria-label="要一起送出的參考圖片">
-      {draft.items.map((it, i) => (
-        <li key={it.key} className={`att-tray__item is-${it.status}`} title={it.error || undefined}>
+      {draft.items.map((it, i) => {
+        const src = stickers ? stickerSourceOf(it) : null;
+        const placed = !!src && stickers!.has(src.id);
+        return (
+        <li key={it.key} className={`att-tray__item is-${it.status}${placed ? ' is-placed' : ''}`} title={it.error || undefined}>
           {it.preview ? <img src={it.preview} alt={`參考圖片 ${i + 1}`} /> : <span className="att-tray__blank" />}
           {(it.status === 'preparing' || it.status === 'uploading') && (
             <span className="att-tray__state">
@@ -105,8 +113,20 @@ export function AttachmentTray({ draft, disabled = false }: { draft: AttachmentD
           <button type="button" className="att-tray__remove" onClick={() => draft.remove(it.key)} disabled={disabled} title="拿掉這張" aria-label="拿掉這張圖片">
             <Icon icon={X} size="xs" />
           </button>
+          {src && (
+            <button
+              type="button"
+              className={'att-tray__place' + (placed ? ' is-on' : '')}
+              onClick={() => { if (placed) stickers!.remove(src.id); else stickers!.place(src); }}
+              disabled={disabled}
+              aria-pressed={placed}
+              title={placed ? '已經貼在 3D 畫面上了（按一下拿下來，圖片還是會一起送出）' : '把這張圖片貼到 3D 畫面上，可以移動、縮放、旋轉、調半透明，跟留言一起存'}
+              aria-label={placed ? `第 ${i + 1} 張圖片：已放在畫面上，按一下拿下來` : `第 ${i + 1} 張圖片：放到畫面上`}
+            >{placed ? '在畫面上' : '放到畫面上'}</button>
+          )}
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }

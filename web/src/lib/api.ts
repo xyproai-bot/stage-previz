@@ -1006,7 +1006,7 @@ export function commentExtrasBody(x: CommentExtras): Record<string, unknown> {
   if (x.timeEnd != null) out.timeEnd = x.timeEnd;
   if (x.view) out.view = x.view;
   if (x.cueId) out.cueId = x.cueId;
-  if (x.annotation && x.annotation.shapes.length) out.annotation = x.annotation;
+  if (x.annotation && (x.annotation.shapes.length || x.annotation.images?.length)) out.annotation = x.annotation;
   if (x.thumbnail) out.thumbnail = x.thumbnail;
   return out;
 }

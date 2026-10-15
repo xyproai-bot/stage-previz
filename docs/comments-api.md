@@ -95,7 +95,7 @@
 | `time` + `timeEnd` | 區段留言 0:12–0:18（`timeEnd` 沒有 = 一個時間點） | 結束 ≤ 開始、超過 1 小時 → 400（中文說明） |
 | `view` | 留言當下的攝影機 `{ position: [x,y,z], target: [x,y,z], fov, aspect }` | 壞掉的當沒帶（不擋留言） |
 | `cueId` | 留言當下的 cue | 格式不對當沒帶 |
-| `annotation` | 畫記 `{ v: 1, aspect, shapes: [{ t: 'pen'\|'arrow'\|'rect'\|'ellipse', c, w, p: [x0,y0,x1,y1,…] }] }`；座標 0~1（相對 3D 畫面，`aspect` = 畫的時候畫面的寬 / 高）；顏色只收 `#ff3b30 #ffcc00 #34c759 #0a84ff #ffffff`；最多 60 筆、一筆 400 點、全部 4000 點 | 400 |
+| `annotation` | 畫記 `{ v: 1, aspect, shapes: [{ t: 'pen'\|'arrow'\|'rect'\|'ellipse', c, w, p: [x0,y0,x1,y1,…] }] }`；座標 0~1（相對 3D 畫面，`aspect` = 畫的時候畫面的寬 / 高）；顏色只收 `#ff3b30 #ffcc00 #34c759 #0a84ff #ffffff`；最多 60 筆、一筆 400 點、全部 4000 點；也可以多一個 `images`（貼圖，看最下面〈貼圖〉） | 400 |
 | `thumbnail`（只有送） | `data:image/jpeg;base64,…`，留言當下抓一次 3D 畫面 + 畫記（約 480 px 寬），最多 150 KB | 不是 JPEG 400、太大 413 |
 | `thumbUrl`（只有讀） | `/api/comment-thumbs/<專案>/<留言>-<隨機碼>.jpg`（前面接 API 網址） | |
 
@@ -143,3 +143,29 @@
 5. 看圖：`GET /api/comment-attachments/<專案>/<32 hex>[-t].<副檔名>`，不用登入（網址猜不到），快取一年、`nosniff`
 6. 清掉：刪留言（含回覆）、刪歌 → R2 檔案一起刪；上傳了一天都沒送出的 → 排程清掉
 7. 額度：團隊一個人還沒送出的最多 24 張、一天 300 張；訪客（最近 24 小時）同一條連結 + 同一個 IP 20 張、同一張通行證 20 張、一條連結 100 張 → 429
+
+## 貼圖（貼在 3D 畫面上的參考圖片；不用 migration）
+
+貼圖存在畫記（`annotation`）裡，跟畫的筆、箭頭、方框、圓圈同一層，跟著留言的視角和時間一起存；點留言時攝影機飛到那個視角，貼圖出現在同樣的位置。
+格式和整理規則前後台共用 `web/src/lib/review/stickerRules.ts`（後台 `comments.mjs` 直接 import），畫面上的算法在 `web/src/lib/review/stickers.ts`。
+測試：`stickers.test.mjs`（後台，含走真的路由）、`web/src/lib/review/stickers.test.ts`。
+
+```jsonc
+"annotation": {
+  "v": 1, "aspect": 1.7778, "t": 12.5,
+  "shapes": [ /* 筆畫；只有貼圖的時候是空陣列 */ ],
+  "images": [
+    { "type": "image", "attachmentId": "ca_…", "x": 0.5, "y": 0.5, "w": 0.3, "h": 0.4, "rot": 15, "opacity": 0.6 }
+  ]
+}
+```
+
+- `x`、`y`：圖片**中心**在畫面上的位置（0~1，x 往右、y 往下，跟筆畫一樣相對「畫記當時的 3D 畫面」，`aspect` = 當時畫面的寬 / 高）。
+- `w`、`h`：圖片的寬 / 高，各自是畫面寬 / 高的比例（所以圖片的比例 = `w × aspect / h`）。夾在 0.02~2。
+- `rot`：順時針轉幾度（整理成 -180~180）；`opacity`：0.05~1。數字太大 / 太小夾回範圍，不擋留言。
+- `attachmentId` 只能用**這則留言自己的圖片**：發留言時一起帶的 `attachmentIds`（沒帶 `attachmentIds` 的舊版前端不可能有貼圖）。不在裡面 → 400「貼圖用的圖片要是這則留言附的圖片」。
+- 同一張圖片只能貼一次；一則最多 4 張貼圖（團隊的圖片上限；訪客最多 2 張圖片，貼圖自然最多 2 張）。格式不對 → 400「貼圖的格式不對，請重新放一次」。
+- 只有貼圖、沒有筆畫也算有畫記（`shapes: []`，`GET` 照樣會回 `annotation`）。沒有貼圖的畫記不會多 `images` 這個欄位，格式跟以前一樣。
+- 改留言（PATCH `attachmentIds`）拿掉圖片：貼圖用到那張圖片的，貼圖一起拿掉；筆畫不動；拿光了什麼都沒有 → 畫記整個沒有。PATCH 只改字、只改狀態：貼圖不動。貼圖本身不能改（要改就刪了重留）。
+- 舊版前端：只認 `shapes`，看到 `images` 直接略過（`parseAnnotation` 把看不懂的東西跳過、只有貼圖時當作沒有畫記）；不用 query flag，不會壞。
+- 縮圖（`thumbnail`）：前端送出時把貼圖也畫進去（貼圖在筆畫下面）；匯出（列印 / PDF）一樣只放縮圖。

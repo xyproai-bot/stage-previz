@@ -35,6 +35,7 @@ import { CommentSkeleton } from '../components/Skeleton';
 import { AttachButton, AttachmentDropZone, AttachmentTray } from '../components/CommentAttachments';
 import { memberUploader } from '../lib/review/attachmentsApi';
 import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachmentDraft';
+import { useStickerBridge } from '../lib/review/useStickerBridge';
 import { toast } from '../lib/toast';
 import { confirmDialog, splitQuestion } from '../components/dialogs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
@@ -932,6 +933,8 @@ function SongDetail({
     player, videoActive: videoMode, resetKey: song.id, viewApiRef,
     versions: { items: versions.items, currentKey: selected?.key ?? null, select: versions.select },
     cueId: selectedCueId, onCueStep: cueStep, onFocusComposer: focusComposer,
+    // 圖片貼到 3D 畫面上之後：手機把留言面板收下去、3D 畫面捲回來才看得到
+    onStickerPlaced: () => { if (isPhoneLayout()) setSheetOpen(false); if (isTouchDevice()) revealStage(stageRef.current); },
   });
   // 播放時離播放頭最近的留言（清單、時間軸上亮起來）
   const rootComments = useMemo(() => comments.filter(c => !c.parentId), [comments]);
@@ -1146,6 +1149,8 @@ function SongDetail({
                   showingLabel={openedComment ? `${openedComment.author}${(openedComment.annotation?.t ?? openedComment.time) > 0 ? ` · ${formatClockShort(openedComment.annotation?.t ?? openedComment.time)}` : ''}` : undefined}
                   onHideShowing={session.clearSelection}
                   onDone={focusComposer}
+                  stickers={session.stickers}
+                  showingAttachments={openedComment?.attachments}
                 />
               </StageScene>
               {/* 小播放器（子母畫面）：可以拖、可以收起來；在 3D 畫面裡面，不會蓋到下面的 cue 列 */}
@@ -1320,6 +1325,8 @@ function SongComments({
   // 參考圖片（貼上 / 拖進來 / 選檔案；換歌時還沒送出的拿掉）
   const uploader = useMemo(() => (user ? memberUploader(projectId, song.id) : null), [projectId, song.id, !!user]);  // eslint-disable-line react-hooks/exhaustive-deps
   const draft = useAttachmentDraft(uploader, song.id);
+  // 圖片檔拖進 3D 畫面、縮圖上的「放到畫面上」→ 貼在畫面上，跟留言一起存
+  useStickerBridge(session.stickers, draft);
   const [posting, setPosting] = useState(false);
   // 用戶可以「掛在某個時間」留言（從 timeline 來、或自己 toggle）
   const [attachTime, setAttachTime] = useState<number | null>(null);
@@ -1428,7 +1435,7 @@ function SongComments({
     try {
       // 作者 / 身分由後台依登入的人填；綁正在看的那一版；
       // 帶上區段、3D 視角、cue、畫記、縮圖（縮圖在按送出時抓一次；有畫記就用畫的那一格）
-      const extras = session.collect(videoActive ? attachTime : null);
+      const extras = session.collect(videoActive ? attachTime : null, draft.ids);
       const updated = await api.postSongComment(projectId, song.id, {
         text: t,
         anchor: attachAnchor ?? undefined,
@@ -1664,7 +1671,7 @@ function SongComments({
               </div>
             )}
           </AttachmentDropZone>
-          <AttachmentTray draft={draft} />
+          <AttachmentTray draft={draft} stickers={readOnly ? undefined : session.stickers} />
           <div className="att-compose-row">
             <AttachButton draft={draft} disabled={readOnly} />
             <button

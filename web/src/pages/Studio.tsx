@@ -25,6 +25,7 @@ import CommentThreadList from '../components/CommentThreadList';
 import { AttachButton, AttachmentDropZone, AttachmentTray } from '../components/CommentAttachments';
 import { memberUploader } from '../lib/review/attachmentsApi';
 import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachmentDraft';
+import { useStickerBridge } from '../lib/review/useStickerBridge';
 import { buildThreads, canPostComment, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, type CommentScope } from '../lib/commentThreads';
 import { lastReviewSentence, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
@@ -632,6 +633,8 @@ function StudioInner({ projectId }: { projectId: string }) {
     versions: { items: versions.items, currentKey: selectedVersion?.key ?? null, select: versions.select },
     beforeOpenVersion: () => chooseSource('version'),
     cueId: selectedCueId, onCueStep: cueStep, onSongStep: songStep, onFocusComposer: focusComposer,
+    // 圖片貼到 3D 畫面上之後：觸控裝置切到審片分頁、3D 畫面捲回來才看得到
+    onStickerPlaced: () => { if (isTouchDevice()) { setTab('review'); revealStage(stageRef.current); } },
   });
   const selectedRootComments = useMemo(() => (selectedComments ?? []).filter(c => !c.parentId), [selectedComments]);
   const activeCommentId = versionVideoMode ? playheadCommentId(selectedRootComments, player.time) : null;
@@ -1092,6 +1095,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                     showingLabel={openedComment ? `${openedComment.author}${(openedComment.annotation?.t ?? openedComment.time) > 0 ? ` · ${formatClockShort(openedComment.annotation?.t ?? openedComment.time)}` : ''}` : undefined}
                     onHideShowing={session.clearSelection}
                     onDone={focusComposer}
+                    stickers={session.stickers}
+                    showingAttachments={openedComment?.attachments}
                   />
                 </StageScene>
                 {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
@@ -1434,6 +1439,8 @@ function ReviewTab({
   // 參考圖片（貼上 / 拖進來 / 選檔案；換歌時還沒送出的拿掉）
   const uploader = useMemo(() => memberUploader(projectId, song.id), [projectId, song.id]);
   const draft = useAttachmentDraft(uploader, song.id);
+  // 圖片檔拖進 3D 畫面、縮圖上的「放到畫面上」→ 貼在畫面上，跟留言一起存
+  useStickerBridge(session.stickers, draft);
   const [attachTime, setAttachTime] = useState<number | null>(null);
   const [filterStatus, setFilterStatus] = useState<StatusFilter>(() => {
     try { return (localStorage.getItem('sp_comment_filter_studio') as StatusFilter) || 'all'; } catch { return 'all'; }
@@ -1481,7 +1488,7 @@ function ReviewTab({
     setPosting(true);
     try {
       // 帶上區段、3D 視角、cue、畫記、縮圖（縮圖在按送出時抓一次；有畫記就用畫的那一格）、參考圖片
-      const extras = session.collect(videoActive ? attachTime : null);
+      const extras = session.collect(videoActive ? attachTime : null, draft.ids);
       const updated = await api.postSongComment(projectId, song.id, {
         text, mentions: extractMentions(text, members), videoId: viewed?.id ?? null, attachmentIds: draft.ids, ...extras,
       });
@@ -1648,7 +1655,7 @@ function ReviewTab({
                 {...ro()}
               />
             </AttachmentDropZone>
-            <AttachmentTray draft={draft} />
+            <AttachmentTray draft={draft} stickers={readOnly ? undefined : session.stickers} />
             <div className="studio-review__compose-actions att-compose-row">
               <AttachButton draft={draft} disabled={readOnly} />
               <button className="btn btn--ghost" onClick={handlePost} disabled={posting || draft.busy || (!note.trim() && !draft.ids.length)} {...ro()}>

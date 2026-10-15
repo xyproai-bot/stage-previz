@@ -96,6 +96,27 @@
   padding: 0;
 }
 .att-tray__remove:hover:not(:disabled) { background: var(--danger); }
+/* 「放到畫面上」：縮圖底下一條（貼上去之後變亮） */
+.att-tray__place {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 20px;
+  padding: 0;
+  border: none;
+  background: rgba(0, 0, 0, 0.72);
+  color: #fff;
+  font-size: 10.5px;
+  line-height: 20px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.att-tray__place:hover:not(:disabled) { background: rgba(0, 0, 0, 0.9); }
+.att-tray__place.is-on,
+.att-tray__place.is-on:hover:not(:disabled) { background: var(--accent); color: #0b0c0e; font-weight: 700; }
+.att-tray__place:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.att-tray__item.is-placed { border-color: var(--accent); }
 
 /* 留言裡的連結 */
 .att-link { color: #7cc4ff; text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
@@ -251,6 +272,9 @@
   .att-tray__remove { width: 28px; height: 28px; }
   /* 縮圖上的 ✕：看起來 28px，點的範圍擴大到 40px */
   .att-tray__remove::after { content: ''; position: absolute; inset: -6px; }
+  /* 「放到畫面上」：看起來 24px，點的範圍往上擴大到 40px */
+  .att-tray__place { height: 24px; line-height: 24px; }
+  .att-tray__place::after { content: ''; position: absolute; inset: -16px 0 0 0; }
   .att-add { min-height: 40px; padding: 6px 12px; }
 }
 

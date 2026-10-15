@@ -388,6 +388,8 @@ export default function Share() {
     versions: { items: versions.items, currentKey: selectedVersion?.key ?? null, select: versions.select },
     beforeOpenVersion: () => chooseSource('version'),
     cueId: selectedCueId, onCueStep: cueStep, onFocusComposer: allowComments ? focusComposer : undefined,
+    // 圖片貼到 3D 畫面上之後：觸控裝置把 3D 畫面捲回來才看得到（手機的留言面板由 GuestCommentsPanel 收下去）
+    onStickerPlaced: () => { if (isTouchDevice()) revealStage(stageRef.current); },
   });
   const guestRoots = useMemo(() => guestComments.filter(c => !c.parentId), [guestComments]);
   const activeCommentId = versionVideoMode && allowComments ? playheadCommentId(guestRoots, local.time) : null;
@@ -578,6 +580,8 @@ export default function Share() {
                   showingLabel={openedComment ? `${openedComment.author}${(openedComment.annotation?.t ?? openedComment.time) > 0 ? ` · ${formatClockShort(openedComment.annotation?.t ?? openedComment.time)}` : ''}` : undefined}
                   onHideShowing={session.clearSelection}
                   onDone={focusComposer}
+                  stickers={allowComments ? session.stickers : undefined}
+                  showingAttachments={openedComment?.attachments}
                 />
               </StageScene>
               {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}

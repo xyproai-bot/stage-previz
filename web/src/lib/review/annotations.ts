@@ -7,7 +7,12 @@
 // 打開留言時畫面比例可能不一樣（手機 / iPad / 另一台電腦）：
 //   containBox    畫記放在畫面中間、比例跟當時一樣（左右或上下留黑邊）
 //   fitFov        配合 containBox 調鏡頭角度，讓當時整個畫面都看得到，畫記剛好疊在同樣的東西上
+//
+// 貼圖（貼在畫面上的參考圖片，stickerRules.ts / stickers.ts）跟筆畫存在同一層：annotation.images。
 
+import { MAX_ANN_IMAGES, sanitizeImageElement, type AnnImage } from './stickerRules';
+
+export type { AnnImage };
 export type AnnTool = 'pen' | 'arrow' | 'rect' | 'ellipse';
 
 export interface AnnShape {
@@ -27,6 +32,8 @@ export interface Annotation {
   /** 畫的那一格（影片秒數；沒在放影片 = 沒有）。區段留言先標 I / O 再畫時，打開留言先停在這一格 */
   t?: number;
   shapes: AnnShape[];
+  /** 貼圖（沒有 = 沒貼；舊版後台 / 舊留言沒有這個欄位）。只有貼圖時 shapes 是空陣列 */
+  images?: AnnImage[];
 }
 
 export const ANN_COLORS: readonly { value: string; label: string }[] = [
@@ -130,10 +137,13 @@ export function makeShape(tool: AnnTool, color: string, points: readonly number[
   return { t: tool, c, w: r4(width), p: [r4(x0), r4(y0), r4(x1), r4(y1)] };
 }
 
-/** 畫好的形狀 → 要存的畫記（沒有形狀 = null；超過上限的拿掉後面的）；time = 畫的那一格 */
-export function serializeAnnotation(shapes: readonly AnnShape[], aspect: number, time?: number | null): Annotation | null {
+/** 畫好的形狀（和貼圖）→ 要存的畫記（什麼都沒有 = null；超過上限的拿掉後面的）；time = 畫的那一格 */
+export function serializeAnnotation(
+  shapes: readonly AnnShape[], aspect: number, time?: number | null, images: readonly AnnImage[] = [],
+): Annotation | null {
   const list = shapes.filter(Boolean).slice(0, MAX_SHAPES);
-  if (list.length === 0 || !(aspect > 0)) return null;
+  const pics = uniqueImages(images);
+  if ((list.length === 0 && pics.length === 0) || !(aspect > 0)) return null;
   let total = 0;
   const out: AnnShape[] = [];
   for (const s of list) {
@@ -141,19 +151,35 @@ export function serializeAnnotation(shapes: readonly AnnShape[], aspect: number,
     if (total > MAX_TOTAL_POINTS) break;
     out.push({ t: s.t, c: s.c, w: r4(s.w), p: s.p.map(v => r4(clamp01(v))) });
   }
-  if (!out.length) return null;
+  if (!out.length && !pics.length) return null;
   const ann: Annotation = { v: 1, aspect: r4(Math.max(0.2, Math.min(6, aspect))), shapes: out };
+  if (pics.length) ann.images = pics;
   if (time != null && Number.isFinite(time) && time >= 0) ann.t = Math.round(time * 1000) / 1000;
   return ann;
 }
 
-/** 後台來的畫記（或亂掉的資料）→ 畫得出來的；不合格回 null */
+/** 貼圖整理好（格式不對的拿掉、同一張圖只留第一個、最多 MAX_ANN_IMAGES 張） */
+function uniqueImages(raw: readonly unknown[] | null | undefined): AnnImage[] {
+  const out: AnnImage[] = [];
+  const seen = new Set<string>();
+  for (const el of (raw || []).slice(0, MAX_ANN_IMAGES * 2)) {
+    const img = sanitizeImageElement(el);
+    if (!img || seen.has(img.attachmentId)) continue;
+    seen.add(img.attachmentId);
+    out.push(img);
+    if (out.length >= MAX_ANN_IMAGES) break;
+  }
+  return out;
+}
+
+/** 後台來的畫記（或亂掉的資料）→ 畫得出來的；不合格回 null。看不懂的貼圖略過（不會整個壞掉） */
 export function parseAnnotation(raw: unknown): Annotation | null {
   if (!raw || typeof raw !== 'object') return null;
-  const a = raw as { aspect?: unknown; shapes?: unknown };
-  if (!isNum(a.aspect) || a.aspect < 0.2 || a.aspect > 6 || !Array.isArray(a.shapes)) return null;
+  const a = raw as { aspect?: unknown; shapes?: unknown; images?: unknown };
+  if (!isNum(a.aspect) || a.aspect < 0.2 || a.aspect > 6) return null;
+  if (!Array.isArray(a.shapes) && !(a.shapes === undefined && Array.isArray(a.images))) return null;
   const shapes: AnnShape[] = [];
-  for (const s of a.shapes.slice(0, MAX_SHAPES)) {
+  for (const s of (Array.isArray(a.shapes) ? a.shapes : []).slice(0, MAX_SHAPES)) {
     if (!s || typeof s !== 'object') continue;
     const x = s as Partial<AnnShape>;
     if (!x.t || !ANN_TOOLS.includes(x.t)) continue;
@@ -163,9 +189,13 @@ export function parseAnnotation(raw: unknown): Annotation | null {
     if (x.t !== 'pen' && x.p.length !== 4) continue;
     shapes.push({ t: x.t, c: x.c.toLowerCase(), w: x.w, p: x.p.map(clamp01) });
   }
-  if (!shapes.length) return null;
+  const images = Array.isArray(a.images) ? uniqueImages(a.images) : [];
+  if (!shapes.length && !images.length) return null;
   const t = (raw as { t?: unknown }).t;
-  return isNum(t) && t >= 0 ? { v: 1, aspect: a.aspect, t, shapes } : { v: 1, aspect: a.aspect, shapes };
+  const out: Annotation = { v: 1, aspect: a.aspect, shapes };
+  if (images.length) out.images = images;
+  if (isNum(t) && t >= 0) out.t = t;
+  return out;
 }
 
 export interface Box { left: number; top: number; width: number; height: number }
@@ -286,8 +316,9 @@ export function drawAnnotation(ctx: Canvas2DLike, ann: Annotation, W: number, H:
   ctx.restore();
 }
 
-/** 留言上的小字：「畫記 3 筆」 */
+/** 留言上的小字：「畫記 3 筆」「貼圖 2 張」 */
 export function annotationSummary(ann: Annotation | null | undefined): string {
   const n = ann?.shapes.length ?? 0;
-  return n > 0 ? `畫記 ${n} 筆` : '';
+  const m = ann?.images?.length ?? 0;
+  return [n > 0 ? `畫記 ${n} 筆` : '', m > 0 ? `貼圖 ${m} 張` : ''].filter(Boolean).join('、');
 }

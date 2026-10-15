@@ -1,6 +1,6 @@
 // 審片的「一場」（導演頁、動畫師工作站、分享連結共用）：播放器快捷鍵、逐格、J/K/L、速度、時間碼、
 // 區段（I / O、拖時間軸）、打開留言（換版本 → 跳到那一格 → 攝影機飛過去 → 疊上畫記 → 區段循環）、畫記草稿、
-// 送出留言時要帶的東西（區段、視角、cue、畫記、縮圖）。
+// 貼圖草稿（貼在 3D 畫面上的參考圖片）、送出留言時要帶的東西（區段、視角、cue、畫記和貼圖、縮圖）。
 //
 // 規則（純函式）在同一個資料夾：reviewShortcuts.ts、playhead.ts、timecode.ts、annotations.ts、thumbnail.ts。
 // 3D 畫面的操作走 StageScene 的 viewApiRef（getView / flyTo / capture）。
@@ -16,9 +16,11 @@ import { nextShuttle, reviewActionFor, type Shuttle } from './reviewShortcuts';
 import { estimateFps, fpsFromFrameCount, stepFrameTime } from './timecode';
 import { loopSeekTarget, normalizeRange, seekLeavesRange } from './playhead';
 import {
-  DEFAULT_ANN_COLOR, parseAnnotation, serializeAnnotation, type AnnShape, type AnnTool, type Annotation,
+  DEFAULT_ANN_COLOR, parseAnnotation, serializeAnnotation, type AnnImage, type AnnShape, type AnnTool, type Annotation,
 } from './annotations';
 import { composeThumbnail, THUMB_MAX_WIDTH } from './thumbnail';
+import { MAX_ANN_IMAGES } from './stickerRules';
+import { newSticker } from './stickers';
 
 interface VersionLike { key: string; url: string | null; label: string; crossOrigin?: 'anonymous' | 'use-credentials' }
 
@@ -43,6 +45,45 @@ export interface ReviewSessionOptions {
   onFocusComposer?: () => void;
   /** false = 不聽鍵盤（例：對話框開著） */
   keyboard?: boolean;
+  /** 圖片放到畫面上之後（手機：把留言面板收下去、3D 畫面捲回來才看得到） */
+  onStickerPlaced?: () => void;
+}
+
+/** 貼在畫面上的圖片要畫的樣子：網址（本機預覽或後台的網址）和原本的大小 */
+export interface StickerSource { src: string; width: number; height: number }
+
+/** 留言框的圖片上傳（useAttachmentDraft）接到貼圖：把圖片檔拖進 3D 畫面 = 加進留言框 + 貼上去 */
+export interface StickerBridge { addFiles: (files: File[]) => void }
+
+/** 貼圖草稿：貼在 3D 畫面上、還沒送出的參考圖片（跟畫記同一層，送出時一起存） */
+export interface StickerDraft {
+  items: AnnImage[];
+  sources: Record<string, StickerSource>;
+  /** 貼圖是對著哪個比例的畫面貼的（第一張貼上去時 3D 畫面的寬 / 高） */
+  aspect: number;
+  selectedId: string | null;
+  /** 正在調整（貼圖可以拖、縮放、轉；不在調整 = 滑鼠穿過去，可以轉 3D 視角） */
+  editing: boolean;
+  /** 能不能把圖片檔直接拖進 3D 畫面（留言框有開圖片上傳才行） */
+  canDrop: boolean;
+  has: (attachmentId: string) => boolean;
+  /** 放到畫面上（已經在畫面上 = 選到它）；放不下回 false */
+  place: (a: { id: string; src: string; width: number; height: number }) => boolean;
+  /** 調整完一個動作（放開滑鼠 / 手指）→ 存起來 */
+  commit: (attachmentId: string, el: AnnImage) => void;
+  remove: (attachmentId: string) => void;
+  clearAll: () => void;
+  select: (attachmentId: string | null) => void;
+  /** 回到調整 */
+  edit: () => void;
+  /** 調整完了（貼圖留著，滑鼠穿過去） */
+  finish: () => void;
+  /** 把圖片檔拖進 3D 畫面；有收 → true */
+  dropFiles: (files: File[]) => boolean;
+  /** 留言框接上來 / 拿掉 */
+  register: (bridge: StickerBridge | null) => void;
+  /** 畫面上的 <img>（縮圖合成要用） */
+  imageRef: (attachmentId: string, el: HTMLImageElement | null) => void;
 }
 
 export interface AnnotationDraft {
@@ -92,8 +133,13 @@ export interface ReviewSession {
   clearSelection: () => void;
   // 畫記草稿
   draft: AnnotationDraft;
-  /** 送出留言時要帶的：時間（區段 / 畫的那一秒 / attachTime / 現在的時間）、視角、cue、畫記、縮圖 */
-  collect: (attachTime: number | null) => CommentExtras & { time: number };
+  // 貼圖草稿
+  stickers: StickerDraft;
+  /**
+   * 送出留言時要帶的：時間（區段 / 畫的那一秒 / attachTime / 現在的時間）、視角、cue、畫記和貼圖、縮圖
+   * attachmentIds = 這則留言要送出的圖片（貼圖只帶這幾張的）
+   */
+  collect: (attachTime: number | null, attachmentIds?: readonly string[]) => CommentExtras & { time: number };
   /** 沒特別選時間時，留言綁在影片現在的時間（預設要；留言框上面的 × 可以取消） */
   bindNow: boolean;
   setBindNow: (on: boolean) => void;
@@ -302,6 +348,8 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     const opts = optsRef.current;
     setSelectedId(c.id);
     setShowing(null);
+    setStkEditing(false);
+    setStkSelected(null);
     const ann = parseAnnotation(c.annotation);
     // 停在哪一格、要不要循環、要不要播（lib/playbackPolicy.ts）：點了區段留言（沒有畫記）→ 直接開始循環；
     // 其他 → 停在那一格給你看（有畫記的停在畫的那一格）
@@ -369,7 +417,10 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     setShowing(null);
     drawFrameRef.current = api.capture(THUMB_MAX_WIDTH);
     drawViewRef.current = api.getView();
-    setDrawAspect(api.aspect() || 16 / 9);
+    // 已經貼了貼圖 → 畫記跟貼圖用同一個畫面比例（存起來是同一層）
+    setDrawAspect(stkItemsRef.current.length ? stkAspectRef.current : api.aspect() || 16 / 9);
+    setStkEditing(false);
+    setStkSelected(null);
     setDrawTime(optsRef.current.videoActive ? video.currentTime : null);
     setShapes([]);
     setDrawActive(true);
@@ -397,20 +448,105 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     cancel: cancelDraw,
   };
 
+  // ── 貼圖草稿（貼在 3D 畫面上的參考圖片；3D 視角照樣可以轉，貼圖是貼在畫面上、不是貼在舞台上） ──
+  const [stkItems, setStkItems] = useState<AnnImage[]>([]);
+  const [stkSources, setStkSources] = useState<Record<string, StickerSource>>({});
+  const [stkAspect, setStkAspect] = useState(16 / 9);
+  const [stkSelected, setStkSelected] = useState<string | null>(null);
+  const [stkEditing, setStkEditing] = useState(false);
+  const [bridgeOn, setBridgeOn] = useState(false);
+  const stkItemsRef = useRef(stkItems);
+  stkItemsRef.current = stkItems;
+  const stkAspectRef = useRef(stkAspect);
+  stkAspectRef.current = stkAspect;
+  const drawAspectRef = useRef(drawAspect);
+  drawAspectRef.current = drawAspect;
+  const bridgeRef = useRef<StickerBridge | null>(null);
+  const imgEls = useRef(new Map<string, HTMLImageElement>());
+
+  const stickers: StickerDraft = {
+    items: stkItems, sources: stkSources, aspect: stkAspect, selectedId: stkSelected, editing: stkEditing, canDrop: bridgeOn,
+    has: (id) => stkItems.some(i => i.attachmentId === id),
+    place: (a) => {
+      const cur = stkItemsRef.current;
+      if (cur.some(i => i.attachmentId === a.id)) { setStkSelected(a.id); setStkEditing(true); return true; }
+      if (cur.length >= MAX_ANN_IMAGES) { toast.warn(`一則留言最多貼 ${MAX_ANN_IMAGES} 張圖片`); return false; }
+      let aspect = stkAspectRef.current;
+      if (cur.length === 0) {
+        // 第一張：記下現在 3D 畫面的比例（正在畫記就跟著畫記的）
+        aspect = drawActiveRef.current ? drawAspectRef.current : viewApiRef.current?.aspect() || 16 / 9;
+        stkAspectRef.current = aspect;
+        setStkAspect(aspect);
+      }
+      // 同時貼好幾張（一次拖進來很多張）：ref 先更新，後面那張才知道前面已經貼了
+      const next = [...cur, newSticker(a.id, a.width, a.height, aspect, cur.length)];
+      stkItemsRef.current = next;
+      setStkItems(next);
+      setStkSources(m => ({ ...m, [a.id]: { src: a.src, width: a.width, height: a.height } }));
+      setStkSelected(a.id);
+      setStkEditing(true);
+      setShowing(null);   // 正在看別人的畫記 → 收起來，才看得到自己貼的
+      optsRef.current.onStickerPlaced?.();
+      return true;
+    },
+    commit: (id, el) => {
+      const next = stkItemsRef.current.map(i => (i.attachmentId === id ? el : i));
+      stkItemsRef.current = next;
+      setStkItems(next);
+    },
+    remove: (id) => {
+      const next = stkItemsRef.current.filter(i => i.attachmentId !== id);
+      stkItemsRef.current = next;
+      setStkItems(next);
+      setStkSelected(cur => (cur === id ? null : cur));
+      if (next.length === 0) setStkEditing(false);
+    },
+    clearAll: () => { stkItemsRef.current = []; setStkItems([]); setStkSelected(null); setStkEditing(false); },
+    select: (id) => { setStkSelected(id); if (id) setStkEditing(true); },
+    edit: () => { setStkEditing(true); setStkSelected(cur => cur ?? stkItemsRef.current[stkItemsRef.current.length - 1]?.attachmentId ?? null); },
+    finish: () => { setStkEditing(false); setStkSelected(null); },
+    dropFiles: (files) => {
+      const b = bridgeRef.current;
+      const pics = files.filter(f => f.type.startsWith('image/'));
+      if (!b || !pics.length) return false;
+      b.addFiles(pics);
+      return true;
+    },
+    register: (b) => { bridgeRef.current = b; setBridgeOn(!!b); },
+    imageRef: (id, el) => { if (el) imgEls.current.set(id, el); else imgEls.current.delete(id); },
+  };
+  /** 縮圖合成用：畫面上已經載好的貼圖圖片 */
+  const getStickerImage = useCallback((id: string): CanvasImageSource | null => {
+    const el = imgEls.current.get(id);
+    return el && el.complete && el.naturalWidth > 0 ? el : null;
+  }, []);
+  const clearStickers = useCallback(() => {
+    stkItemsRef.current = [];
+    setStkItems([]);
+    setStkSources({});
+    setStkSelected(null);
+    setStkEditing(false);
+  }, []);
+
   // 換歌 → 全部重來
   useEffect(() => {
     clearSelection();
     clearMarks();
     cancelDraw();
+    clearStickers();
     stopReverse();
     setShuttle({ dir: 0, rate: 1 });
     setBindNow(true);
-  }, [resetKey, clearSelection, clearMarks, cancelDraw, stopReverse]);
+  }, [resetKey, clearSelection, clearMarks, cancelDraw, clearStickers, stopReverse]);
 
   const [bindNow, setBindNow] = useState(true);
-  const collect = useCallback((attachTime: number | null): CommentExtras & { time: number } => {
+  const collect = useCallback((attachTime: number | null, attachmentIds?: readonly string[]): CommentExtras & { time: number } => {
     const api = viewApiRef.current;
-    const ann = drawActive ? serializeAnnotation(shapes, drawAspect, drawTime) : null;
+    // 貼圖只帶這則留言真的要送出的圖片（拿掉的圖片，貼圖也不帶）
+    const images = attachmentIds ? stkItems.filter(i => attachmentIds.includes(i.attachmentId)) : stkItems;
+    const ann = drawActive || images.length
+      ? serializeAnnotation(drawActive ? shapes : [], drawActive ? drawAspect : stkAspect, drawActive ? drawTime : null, images)
+      : null;
     const view = (drawActive ? drawViewRef.current : null) ?? api?.getView() ?? null;
     let time = 0;
     let timeEnd: number | null = null;
@@ -419,15 +555,16 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     else if (attachTime != null) time = attachTime;
     else if (bindNow && optsRef.current.videoActive) time = video.currentTime;
     const frame = (drawActive ? drawFrameRef.current : null) ?? api?.capture(THUMB_MAX_WIDTH) ?? null;
-    const thumbnail = composeThumbnail(frame, ann);
+    const thumbnail = composeThumbnail(frame, ann, getStickerImage);
     return { time: Math.round(time * 1000) / 1000, timeEnd, view, cueId: optsRef.current.cueId, annotation: ann, thumbnail };
-  }, [viewApiRef, drawActive, shapes, drawAspect, drawTime, range, bindNow, video]);
+  }, [viewApiRef, drawActive, shapes, drawAspect, drawTime, stkItems, stkAspect, getStickerImage, range, bindNow, video]);
 
   const afterSend = useCallback(() => {
     clearMarks();
     cancelDraw();
+    clearStickers();
     setBindNow(true);
-  }, [clearMarks, cancelDraw]);
+  }, [clearMarks, cancelDraw, clearStickers]);
 
   // ── 鍵盤 ──
   const stateRef = useRef({ videoActive, shuttle, frameStep, applyShuttle, markIn, markOut, clearSelection, clearMarks, drawActive });
@@ -504,7 +641,7 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
     fps, frameStep, shuttle, speed: player.rate, setSpeed, timecode, toggleTimecode,
     marks, range, markIn, markOut, setMarks, clearMarks,
     loop, selectedId, showing, open, clearSelection,
-    draft, collect, afterSend, bindNow, setBindNow,
+    draft, stickers, collect, afterSend, bindNow, setBindNow,
   };
 }
 

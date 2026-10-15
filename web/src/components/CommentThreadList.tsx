@@ -7,7 +7,7 @@
 // 篩選 / 排序由頁面算好（scopeThreads + filterAndSortThreads）傳進來。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Brackets, Check, Clock, CornerDownRight, MapPin, Pencil, PenLine, RotateCcw, Trash2, Video, X } from 'lucide-react';
+import { Brackets, Check, Clock, CornerDownRight, ImageUp, MapPin, Pencil, PenLine, RotateCcw, Trash2, Video, X } from 'lucide-react';
 import Icon from './Icon';
 import * as api from '../lib/api';
 import type { Song, SongComment } from '../lib/api';
@@ -232,6 +232,9 @@ export default function CommentThreadList({
               {c.view && <span className="rvc-attach rvc-attach--view" title="記住了留言時的 3D 視角"><Icon icon={Video} size="xs" label="3D 視角" /></span>}
               {c.annotation && c.annotation.shapes?.length > 0 && (
                 <span className="rvc-attach rvc-attach--ann" title={`畫記 ${c.annotation.shapes.length} 筆`}><Icon icon={PenLine} size="xs" label="畫記" /></span>
+              )}
+              {c.annotation?.images && c.annotation.images.length > 0 && (
+                <span className="rvc-attach rvc-attach--ann" title={`貼圖 ${c.annotation.images.length} 張（點留言，貼圖會出現在當時的位置）`}><Icon icon={ImageUp} size="xs" label="貼圖" /></span>
               )}
               {c.anchor && c.anchor.type !== 'screen' && (
                 <span className="rvc-attach rvc-attach--3d" title="3D 位置"><Icon icon={MapPin} size="xs" label="3D 位置" /></span>

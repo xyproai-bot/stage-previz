@@ -5,7 +5,7 @@
 //   視角：送出時一定會記住現在的 3D 視角（大家點這則留言時攝影機會飛過來）——只是說明，不是按鈕
 // 還有「未解決 / 已解決 / 全部」和「跟著播放」（CommentFilterBar）。
 
-import { Brackets, Clock, Download, PenLine, Pencil, Video, X } from 'lucide-react';
+import { Brackets, Clock, Download, ImageUp, PenLine, Pencil, Video, X } from 'lucide-react';
 import Icon from './Icon';
 import type { ReviewSession } from '../lib/review/useReviewSession';
 import { formatClockShort, formatRange } from '../lib/review/timecode';
@@ -61,7 +61,13 @@ export function ReviewCompose({ session, videoActive, attachTime, onClearTime, c
           <Icon icon={Pencil} size="xs" /> 畫記
         </button>
       ) : null}
-      <span className="rv-note" title="送出時會記住現在的 3D 視角；大家點這則留言時，攝影機會飛到這裡">
+      {session.stickers.items.length > 0 && (
+        <span className="rv-chip rv-chip--sticker" title="貼在 3D 畫面上的參考圖片，會跟這則留言一起存；大家點這則留言時，貼圖會出現在同樣的位置">
+          <Icon icon={ImageUp} size="xs" /> 貼圖 <strong>{session.stickers.items.length}</strong> 張
+          <button type="button" className="rv-chip__x" onClick={session.stickers.clearAll} title="把貼圖都從畫面上拿掉（圖片還在留言裡）" aria-label="把貼圖都從畫面上拿掉"><Icon icon={X} size="xs" /></button>
+        </span>
+      )}
+      <span className="rv-note"title="送出時會記住現在的 3D 視角；大家點這則留言時，攝影機會飛到這裡">
         <Icon icon={Video} size="xs" /> 會記住現在的視角
       </span>
     </div>

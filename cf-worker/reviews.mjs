@@ -9,7 +9,7 @@
 
 import {
   sanitizeComment, commentToRow, rowToComment, commentPatch, MAX_COMMENTS_PER_SONG, COMMENT_ID_RE,
-  commentExtrasInput, decodeThumbnail, commentThumbKey,
+  commentExtrasInput, decodeThumbnail, commentThumbKey, checkAnnotationImages, pruneAnnotationImages,
 } from './comments.mjs';
 import {
   commentPostDecision, commentResolveDecision, commentReopenDecision, canModifyComment, commentAuthorRole,
@@ -315,6 +315,9 @@ export async function postComment(db, { me, thread, body, now = new Date(), r2 =
   // 0026：區段、3D 視角、cue、畫記、縮圖（舊版前端不帶 → 跟以前一樣）
   const ex = commentExtrasInput(raw);
   if (!ex.ok) return fail(400, ex.error);
+  // 貼圖只能用這則留言自己的圖片（一起送出的 attachmentIds）
+  const belong = checkAnnotationImages(ex.extras.annotation, att.ids);
+  if (!belong.ok) return fail(400, belong.error);
   Object.assign(c, ex.extras);
   const thumb = decodeThumbnail(raw.thumbnail);
   if (!thumb.ok) return fail(thumb.status, thumb.error);
@@ -462,6 +465,12 @@ export async function patchComment(db, { me, thread, body, now = new Date(), r2 
       changes.resolved_version = null;
       changes.resolved_by_user_id = null;
     }
+  }
+  // 拿掉圖片 → 貼在畫面上的那幾張貼圖也一起拿掉（畫記裡其他筆畫不動）
+  if (touchesImages && row.annotation_json) {
+    const before = comment.annotation ?? null;
+    const after = pruneAnnotationImages(before, att.ids);
+    if (after !== before) changes.annotation_json = after ? JSON.stringify(after) : null;
   }
   const keys = Object.keys(changes);
   const stmts = [];

@@ -1,0 +1,186 @@
+/* 貼圖：貼在 3D 畫面上的參考圖片（AnnotationLayer 裡面，位置跟畫記那一塊畫面一樣大）
+   沒在調整 = 滑鼠穿過去（3D 視角照樣可以轉）；調整中的貼圖、下面那一條才收滑鼠 */
+.stk-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+.stk-layer.is-showing .stk { animation: stk-fade-in 0.28s ease-out; }
+@keyframes stk-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .stk-layer.is-showing .stk { animation: none; } }
+
+.stk {
+  position: absolute;
+  transform-origin: 50% 50%;
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+.stk > img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.stk.is-editable {
+  pointer-events: auto;
+  cursor: move;
+  /* 手指 / 筆在貼圖上拖，不要捲動、縮放整頁 */
+  touch-action: none;
+  outline: 1px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: 0;
+}
+.stk.is-selected {
+  z-index: 2;
+  outline: 2px solid var(--accent);
+}
+
+/* 四個角：縮放 */
+.stk__handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 3px;
+  background: #fff;
+  border: 2px solid var(--accent);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  touch-action: none;
+}
+.stk__handle--nw { left: 0; top: 0; cursor: nwse-resize; }
+.stk__handle--ne { left: 100%; top: 0; cursor: nesw-resize; }
+.stk__handle--se { left: 100%; top: 100%; cursor: nwse-resize; }
+.stk__handle--sw { left: 0; top: 100%; cursor: nesw-resize; }
+
+/* 上面的圓點：旋轉 */
+.stk__rotline {
+  position: absolute;
+  left: 50%;
+  top: -26px;
+  width: 0;
+  height: 26px;
+  border-left: 1px solid var(--accent);
+  pointer-events: none;
+}
+.stk__rotate {
+  position: absolute;
+  left: 50%;
+  top: -40px;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  cursor: grab;
+  touch-action: none;
+}
+.stk__rotate:active { cursor: grabbing; }
+
+/* 手指：把手看起來不變，點的範圍擴大到 44px */
+@media (hover: none) and (pointer: coarse) {
+  .stk__handle { width: 18px; height: 18px; margin: -9px 0 0 -9px; }
+  .stk__handle::after, .stk__rotate::after { content: ''; position: absolute; inset: -13px; }
+  .stk__rotate { width: 20px; height: 20px; margin-left: -10px; top: -46px; }
+  .stk__rotline { top: -32px; height: 32px; }
+}
+
+/* 下面那一條：不透明度、刪除、完成 */
+.stk-panel {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 6px;
+  width: max-content;
+  max-width: calc(100% - 16px);
+  padding: 4px 8px;
+  background: rgba(16, 17, 20, 0.95);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  cursor: default;
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.stk-panel__opacity { display: inline-flex; align-items: center; gap: 6px; }
+.stk-panel__opacity input[type='range'] { width: 120px; accent-color: var(--accent); }
+.stk-panel__pct { min-width: 3.2em; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.stk-panel__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+.stk-panel__btn:hover { background: rgba(255, 255, 255, 0.08); }
+.stk-panel__btn:focus-visible, .stk-panel__opacity input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.stk-panel__btn--done { color: var(--accent); }
+.stk-panel__tip { flex-basis: 100%; text-align: center; color: var(--text-dim); font-size: 11px; white-space: normal; }
+.stk-panel__tip--touch { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .stk-panel__btn { min-width: 40px; height: 40px; }
+  .stk-panel__opacity input[type='range'] { width: 110px; height: 32px; }
+  .stk-panel__tip--mouse { display: none; }
+  .stk-panel__tip--touch { display: block; }
+}
+/* 很窄的畫面（手機直放）：滑桿縮短，說明只留一行 */
+@media (max-width: 420px) {
+  .stk-panel__opacity input[type='range'] { width: 84px; }
+}
+
+/* 沒在調整時，畫面左上角的小按鈕：貼圖 N 張 · 調整 */
+.stk-pill {
+  position: absolute;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 3px 10px 3px 8px;
+  border-radius: 999px;
+  background: rgba(16, 17, 20, 0.88);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  pointer-events: auto;
+  max-width: calc(100% - 16px);
+  white-space: nowrap;
+}
+.stk-pill:hover { background: rgba(32, 34, 40, 0.95); }
+.stk-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (hover: none) and (pointer: coarse) { .stk-pill { min-height: 40px; padding: 4px 14px 4px 12px; } }
+
+/* 圖片檔拖到 3D 畫面上時的提示 */
+.stk-drop {
+  position: absolute;
+  inset: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 2px dashed var(--accent);
+  border-radius: 12px;
+  background: rgba(16, 17, 20, 0.55);
+  color: var(--text);
+  font-size: 14px;
+  pointer-events: none;
+}

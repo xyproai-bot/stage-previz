@@ -22,6 +22,7 @@ import { toast } from '../lib/toast';
 import { AttachButton, AttachmentDropZone, AttachmentTray } from './CommentAttachments';
 import { guestUploader } from '../lib/review/attachmentsApi';
 import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachmentDraft';
+import { useStickerBridge } from '../lib/review/useStickerBridge';
 import './GuestCommentsPanel.css';
 
 /** 訪客的留言 → 留言串清單用的格式 */
@@ -70,6 +71,8 @@ export default function GuestCommentsPanel({
   // 參考圖片（訪客一則最多 2 張；換歌時還沒送出的拿掉）
   const uploader = useMemo(() => guestUploader(shareRef, songId, accessToken), [shareRef, songId, accessToken]);
   const draft = useAttachmentDraft(uploader, songId);
+  // 圖片檔拖進 3D 畫面、縮圖上的「放到畫面上」→ 貼在畫面上，跟留言一起存
+  useStickerBridge(session.stickers, draft);
   const [posting, setPosting] = useState(false);
   const [attachTime, setAttachTime] = useState<number | null>(null);
   const [status, setStatus] = useState<StatusFilter>('all');
@@ -119,6 +122,13 @@ export default function GuestCommentsPanel({
   // 開始畫記：iPad 把面板打開（邊畫邊寫說明）；手機要看著舞台畫，面板先收起來，畫好才拉上來（頁面送 openNonce）
   useEffect(() => { if (session.draft.active && !isPhoneLayout()) setCollapsed(false); }, [session.draft.active]);
   useEffect(() => { if (openNonce > 0) setCollapsed(false); }, [openNonce]);
+  // 圖片貼到 3D 畫面上：手機的面板收下去，才看得到畫面
+  const stickerCount = session.stickers.items.length;
+  const prevStickers = useRef(0);
+  useEffect(() => {
+    if (stickerCount > prevStickers.current && isPhoneLayout()) setCollapsed(true);
+    prevStickers.current = stickerCount;
+  }, [stickerCount]);
   // 手機：點一則留言 → 面板收下去，才看得到跳過去的那一格、3D 視角和畫記
   const openThread = useCallback((c: SongComment) => {
     if (isPhoneLayout()) setCollapsed(true);
@@ -145,7 +155,7 @@ export default function GuestCommentsPanel({
     if (!name) { setEditingName(true); toast.warn('先寫你的名字（只要寫一次）'); return; }
     setPosting(true);
     try {
-      const extras = session.collect(videoActive ? attachTime : null);
+      const extras = session.collect(videoActive ? attachTime : null, draft.ids);
       apply(await postGuestComment(shareRef, songId, accessToken ?? undefined, { guestName: name, text: t, videoId, attachmentIds: draft.ids, ...extras }));
       draft.clear(false);
       setText('');
@@ -242,7 +252,7 @@ export default function GuestCommentsPanel({
                 aria-label="留言"
               />
             </AttachmentDropZone>
-            <AttachmentTray draft={draft} />
+            <AttachmentTray draft={draft} stickers={session.stickers} />
             <div className="share-comments__actions">
               <AttachButton draft={draft} />
               <span className="share-comments__count">{text.length > GUEST_TEXT_MAX - 100 ? `${text.length}/${GUEST_TEXT_MAX}` : ''}</span>

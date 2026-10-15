@@ -11,7 +11,7 @@
 // 這裡的函式直接拿 D1 做事，回傳 { status, body }（跟 reviews.mjs 一樣）；純判斷另外 export 給 guestComments.test.mjs 測。
 
 import {
-  commentExtrasInput, decodeThumbnail, rowToGuestComment, guestAuthorLabel, COMMENT_ID_RE, MAX_COMMENTS_PER_SONG,
+  commentExtrasInput, checkAnnotationImages, decodeThumbnail, rowToGuestComment, guestAuthorLabel, COMMENT_ID_RE, MAX_COMMENTS_PER_SONG,
 } from './comments.mjs';
 import {
   insertCommentRow, putCommentThumb, projectMemberIds, insertNotifications, pickRecipients, newId,
@@ -217,6 +217,9 @@ export async function postGuestComment(db, { link, songId, body, ipKey, accessTo
   if (!text && !att.ids.length) return fail(400, '留言內容不能是空的');
   const ex = commentExtrasInput(raw);
   if (!ex.ok) return fail(400, ex.error);
+  // 貼圖只能用這則留言自己的圖片（訪客最多 2 張）
+  const belong = checkAnnotationImages(ex.extras.annotation, att.ids);
+  if (!belong.ok) return fail(400, belong.error);
   const thumb = decodeThumbnail(raw.thumbnail);
   if (!thumb.ok) return fail(thumb.status, thumb.error);
 

@@ -5,6 +5,7 @@
 // 0028：只有圖片、沒寫字的留言 → 資料庫存空字串；API 回 text =「（圖片）」+ noText: true（舊版畫面看到「（圖片）」，新版畫面不顯示這行字）
 
 import { IMAGE_ONLY_TEXT } from '../web/src/lib/review/attachmentRules.ts';
+import { sanitizeImageList, checkImagesBelong } from '../web/src/lib/review/stickerRules.ts';
 
 export const MAX_TEXT_LEN = 2000;
 export const MAX_COMMENTS_PER_SONG = 500;
@@ -21,6 +22,10 @@ const str = (v, max = 200) => (typeof v === 'string') ? v.slice(0, max) : '';
 //   annotation       畫記（畫在 3D 畫面上的筆、箭頭、方框、圓圈），座標 0~1、跟螢幕大小無關：
 //                    { v: 1, aspect, t?, shapes: [{ t: 'pen'|'arrow'|'rect'|'ellipse', c: '#ff3b30', w, p: [x0,y0,x1,y1,...] }] }
 //                    （最外層的 t = 畫的那一格；打開留言時先停在那一格）
+//                    貼圖（不用 migration，annotation_json 本來就是一整段 JSON）：貼在 3D 畫面上的參考圖片，跟筆畫同一層，多一個 images：
+//                    { …, images: [{ type: 'image', attachmentId, x, y, w, h, rot, opacity }] }
+//                    attachmentId 只能是這則留言自己的圖片（發留言時一起帶的 attachmentIds）；格式和整理規則在 web/src/lib/review/stickerRules.ts
+//                    只有貼圖、沒有筆畫也算有畫記（shapes 是空陣列）；舊版前端只認 shapes，看到 images 直接略過
 //   thumbUrl（只有讀）留言當下的畫面縮圖（含畫記），R2 comment-thumbs/…
 // 舊版前端不帶這些 → 跟以前一模一樣。規則跟 web/src/lib/annotations.ts 一樣（前端先擋，這裡最後把關）。
 // ─────────────────────────────────────────────
@@ -64,14 +69,18 @@ export function sanitizeAnnotation(a) {
   if (a === undefined || a === null) return { ok: true, value: null };
   const bad = (error = '畫記的格式不對，請重新畫一次') => ({ ok: false, error });
   if (typeof a !== 'object' || Array.isArray(a)) return bad();
-  if (!Array.isArray(a.shapes)) return bad();
-  if (a.shapes.length === 0) return { ok: true, value: null };
-  if (a.shapes.length > MAX_SHAPES) return bad(`畫記太多筆了（最多 ${MAX_SHAPES} 筆），請擦掉一些`);
+  // 只有貼圖、沒有筆畫的畫記：shapes 可以是空陣列（或沒帶）
+  if (!Array.isArray(a.shapes) && !(a.shapes === undefined && Array.isArray(a.images))) return bad();
+  const rawShapes = Array.isArray(a.shapes) ? a.shapes : [];
+  const imgs = sanitizeImageList(a.images);
+  if (!imgs.ok) return bad(imgs.error);
+  if (rawShapes.length === 0 && imgs.images.length === 0) return { ok: true, value: null };
+  if (rawShapes.length > MAX_SHAPES) return bad(`畫記太多筆了（最多 ${MAX_SHAPES} 筆），請擦掉一些`);
   if (!isNum(a.aspect) || a.aspect < 0.2 || a.aspect > 6) return bad();
   const clamp01 = (n) => round(Math.max(0, Math.min(1, n)), 4);
   let total = 0;
   const shapes = [];
-  for (const s of a.shapes) {
+  for (const s of rawShapes) {
     if (!s || typeof s !== 'object') return bad();
     if (!ANNOTATION_TOOLS.includes(s.t)) return bad();
     const color = typeof s.c === 'string' ? s.c.toLowerCase() : '';
@@ -87,10 +96,39 @@ export function sanitizeAnnotation(a) {
     shapes.push({ t: s.t, c: color, w: round(Math.max(0.001, s.w), 4), p: s.p.map(clamp01) });
   }
   const value = { v: 1, aspect: round(a.aspect, 4), shapes };
+  if (imgs.images.length) value.images = imgs.images;
   // t = 畫的那一格（影片秒數）：區段留言先標 I / O 再畫時，畫的那一格不一定是區段的開頭
   if (isNum(a.t) && a.t >= 0 && a.t <= MAX_VIDEO_SEC) value.t = round(a.t, 3);
   if (JSON.stringify(value).length > MAX_ANNOTATION_CHARS) return bad('畫記太複雜了，請擦掉一些');
   return { ok: true, value };
+}
+
+/**
+ * 貼圖只能用這則留言自己的圖片：annotation 裡每張貼圖的 attachmentId 都要在 attachmentIds 裡
+ * （發留言時 attachmentIds = 一起送出的圖片；沒帶 attachmentIds 的舊版前端也不可能有貼圖）
+ * @returns {{ ok: true } | { ok: false, error: string }}
+ */
+export function checkAnnotationImages(annotation, attachmentIds) {
+  return checkImagesBelong(annotation?.images, Array.isArray(attachmentIds) ? attachmentIds : []);
+}
+
+/**
+ * 改留言拿掉圖片之後：貼圖用到的圖片不在了 → 那幾張貼圖一起拿掉。
+ * 沒有貼圖要拿 → 原樣回傳同一個物件；拿完什麼都沒有了（沒有筆畫也沒有貼圖）→ null
+ */
+export function pruneAnnotationImages(annotation, keepIds) {
+  if (!annotation || !Array.isArray(annotation.images) || annotation.images.length === 0) return annotation ?? null;
+  const keep = new Set(keepIds || []);
+  const images = annotation.images.filter(i => keep.has(i?.attachmentId));
+  if (images.length === annotation.images.length) return annotation;
+  const next = { ...annotation };
+  if (images.length) next.images = images; else delete next.images;
+  return Array.isArray(next.shapes) && next.shapes.length ? next : null;
+}
+
+/** 這一段畫記有沒有東西可以畫（筆畫或貼圖） */
+export function annotationHasContent(ann) {
+  return !!ann && ((Array.isArray(ann.shapes) && ann.shapes.length > 0) || (Array.isArray(ann.images) && ann.images.length > 0));
 }
 
 /**
@@ -304,7 +342,7 @@ export function rowToComment(r) {
   if (view) out.view = view;                                        // 留言當下的 3D 視角
   if (r.cue_id) out.cueId = r.cue_id;
   const ann = parse(r.annotation_json);
-  if (ann && Array.isArray(ann.shapes) && ann.shapes.length) out.annotation = ann;  // 畫記
+  if (annotationHasContent(ann) && Array.isArray(ann.shapes)) out.annotation = ann;  // 畫記（筆畫和 / 或貼圖）
   const thumbUrl = thumbUrlFor(r.thumb_key);
   if (thumbUrl) out.thumbUrl = thumbUrl;
   if (r.guest_name) {
