@@ -20,6 +20,7 @@ export const HELP_ANCHORS = {
   prodModel: 'prod-model',
   prodNaming: 'prod-naming',
   prodCalibrate: 'prod-calibrate',
+  prodScaleProps: 'prod-scale-props',
   prodSongs: 'prod-songs',
   prodDrive: 'prod-drive',
   prodVideos: 'prod-videos',

@@ -19,8 +19,14 @@ import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, t
 import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
 import { hoistsOfRig } from '../lib/mechanisms/hoist';
 import { stageFrontDirection } from '../lib/stageCamera';
-import { FIGURE_HEIGHT_M, FIGURE_LABEL, MAX_STAND_ABOVE_DECK_M, canStandOnCategory, deckFootprint, defaultFigureSpots, figureSpotsFromExtent, findDeckLevel, gridCenter, pickFigureSpots } from '../lib/scaleReference';
+import { FIGURE_HEIGHT_M, FIGURE_LABEL, MAX_STAND_ABOVE_DECK_M, canStandOnCategory, deckFootprint, defaultFigureSpots, figureSpotsFromExtent, findDeckLevel, frontAxes, gridCenter, pickFigureSpots } from '../lib/scaleReference';
 import { buildWalkMesh, disposeWalkMesh, extractUpFaces, standingYAt, surfaceSignature } from '../lib/scaleReferenceScene';
+import {
+  STAGE_PROP_MAX, facingYaw, freeSpot, moveStagePropWith, newStagePropId, normalizeRotY, propsStandingOn, removeStageProp, rotateStagePropBy,
+  riserTopAt, sanitizeStagePropItem, stagePropSpec, type StagePropItem, type StagePropType,
+} from '../lib/stageProps';
+import { createStagePropsLayer } from '../lib/stagePropsScene';
+import ScalePropsPanel, { type ScalePart } from './ScalePropsPanel';
 import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
@@ -171,6 +177,10 @@ interface Props {
   scaleCorrection?: number;
   /** 有傳才顯示「設為已知距離 / 重設」— 只有 admin 能改校準 */
   onScaleCorrectionChange?: (n: number) => void;
+  /** 比例尺的樂手和器材（存在專案上全員共用，lib/stageProps.ts）；沒給 = 沒有 */
+  stageProps?: StagePropItem[];
+  /** 有傳才能新增 / 拖動 / 轉 / 刪除 — 只有製作、導演；沒傳 = 只能看 */
+  onStagePropsChange?: (next: StagePropItem[]) => void;
   /** 現場模式設定（專案預設 + 自己調過的）；沒傳用預設 */
   lookSettings?: LookSettings;
   /** 有傳才顯示「🎚 設定」面板（每個人都可以調自己的） */
@@ -248,6 +258,12 @@ export interface StageSceneQuery {
   groupBox(ids: string[]): { min: MechVec3; max: MechVec3 } | null;
 }
 
+const NO_STAGE_PROPS: StagePropItem[] = [];
+const NO_SKIP: ReadonlySet<string> = new Set<string>();
+/** 樂手和器材的自發光：現場（暗場）/ 快速（亮場景） */
+const PROP_BOOST_LIVE = 2.2;
+const PROP_BOOST_QUICK = 0.8;
+
 // 機關：每幀共用的暫存（不配置記憶體）
 const EMPTY_VALUES: MechanismValues = {};
 const mechTmpPos = new THREE.Vector3();
@@ -265,7 +281,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -476,6 +492,20 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // 比例尺輔助（人形 1.7 m + 1 m 網格，人形站在舞台面上、可以拖）— 給動畫師看實體大小
   const [showScaleRef, setShowScaleRef] = useState(false);
   const scaleRefGroupRef = useRef<THREE.Group | null>(null);
+  // 比例尺面板：人形 / 網格 / 樂手和器材各自顯示與否（只影響自己的畫面）+ 選到哪個樂手或器材
+  const [scaleParts, setScaleParts] = useState({ figures: true, grid: true, props: true });
+  const scalePartsRef = useRef(scaleParts);
+  scalePartsRef.current = scaleParts;
+  const [scalePanelOpen, setScalePanelOpen] = useState(false);
+  const [selectedPropId, setSelectedPropId] = useState<string | null>(null);
+  const selectedPropRef = useRef<string | null>(null);
+  selectedPropRef.current = selectedPropId;
+  const stagePropsRef = useRef(stageProps);
+  stagePropsRef.current = stageProps;
+  const onStagePropsChangeRef = useRef(onStagePropsChange);
+  onStagePropsChangeRef.current = onStagePropsChange;
+  // 比例尺 effect 建好的樂手和器材圖層：新增時要用它算站位；effect 拆掉時清空
+  const propsHostRef = useRef<{ layer: ReturnType<typeof createStagePropsLayer>; add: (type: StagePropType) => void } | null>(null);
 
   // 測距工具：點兩個點 → 畫線 + 距離（m）
   const [measureMode, setMeasureMode] = useState(false);
@@ -2609,14 +2639,53 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const stageCenter = footprint ? footprint.center : hasBox ? { x: (box.min.x + box.max.x) / 2, z: (box.min.z + box.max.z) / 2 } : { x: 0, z: 0 };
     const gc = gridCenter(stageCenter, centerFig.position.y);
     grid.position.set(gc.x, gc.y + 0.001 * unitsPerMeter, gc.z); // 比地板高一咪咪避免 z-fighting
+    grid.name = 'scale-reference-grid';
     group.add(grid);
+
+    // 舞台動過（機關、換 cue）→ 抓人形 / 樂手和器材的時候重抓一次朝上的面
+    const refreshWalk = () => {
+      const now = groundMeshes();
+      const sig = surfaceSignature(now);
+      if (sig === walkSig) return;
+      walkSig = sig;
+      disposeWalkMesh(walkMesh);
+      walkMesh = buildWalkMesh(extractUpFaces(now), capY);
+    };
+
+    // ── 樂手和器材（存在專案上全員共用，格式見 lib/stageProps.ts）──
+    // 這裡負責畫出來、新增時算站位（舞台前緣正中間，已經有東西就往左右找空位，面向觀眾）；拖動、選取在下面跟人形一起處理。
+    const layer = createStagePropsLayer(unitsPerMeter);
+    group.add(layer.group);
+    layer.sync(stagePropsRef.current, selectedPropRef.current);
+    layer.setBoost(renderModeRef.current === 'live' ? PROP_BOOST_LIVE : PROP_BOOST_QUICK);
+    const rightAxis = (() => { const a = frontAxes(front2); return { x: a.rx, z: a.rz }; })();
+    propsHostRef.current = {
+      layer,
+      add: (type) => {
+        const items = stagePropsRef.current;
+        const change = onStagePropsChangeRef.current;
+        if (!change || items.length >= STAGE_PROP_MAX) return;
+        refreshWalk();
+        const base = spots[1];
+        const free = freeSpot(items, { x: base.x / unitsPerMeter, z: base.z / unitsPerMeter }, rightAxis);
+        const at = standAt({ x: free.x * unitsPerMeter, z: free.z * unitsPerMeter });
+        const item = sanitizeStagePropItem({
+          id: newStagePropId(), type, x: at.x / unitsPerMeter, y: at.y / unitsPerMeter, z: at.z / unitsPerMeter, rotY: facingYaw(front2),
+        });
+        if (!item) return;
+        change([...items, item]);
+        selectedPropRef.current = item.id;
+        setSelectedPropId(item.id);
+      },
+    };
 
     scene.add(group);
     scaleRefGroupRef.current = group;
 
-    // ── 拖人形：按住人形拖，沿著舞台面滑（往下打光線找站的高度）──
+    // ── 拖人形、拖樂手和器材：按住拖，沿著舞台面滑（往下打光線找站的高度；樂手台的頂面也算，所以可以站上去）──
     // 鏡頭不轉、不會選到物件 / 改 cue / 加留言：用 capture 先攔下 pointerdown（比 OrbitControls、選取、gizmo 的監聽早），
     // 拖的時候也把 OrbitControls 關掉；手指（觸控）一樣走 pointer events。
+    // 樂手和器材：點一下選到（琥珀色 + 腳下圈圈），拖圈圈上的圓點自由轉；只有 onStagePropsChange 有給（製作、導演）才抓得到。
     const renderer = rendererRef.current;
     const camera = cameraRef.current;
     const orbit = orbitRef.current;
@@ -2629,10 +2698,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
       const tmp = new THREE.Vector3();
       const foot = new THREE.Vector3();
-      let drag: { fig: THREE.Sprite; pointerId: number; dx: number; dy: number } | null = null;
+      type Drag =
+        | { kind: 'fig'; fig: THREE.Sprite; pointerId: number; dx: number; dy: number }
+        | { kind: 'prop'; id: string; pointerId: number; dx: number; dy: number; start: StagePropItem[]; next: StagePropItem[]; skip: Set<string>; moved: boolean }
+        | { kind: 'rotate'; id: string; pointerId: number; start: StagePropItem[]; next: StagePropItem[]; a0: number; moved: boolean };
+      let drag: Drag | null = null;
       let hovering = false;
       let pending: PointerEvent | null = null;
       let raf = 0;
+      let tap: { pointerId: number; x: number; y: number } | null = null;
 
       const aim = (clientX: number, clientY: number) => {
         const rect = canvas.getBoundingClientRect();
@@ -2640,20 +2714,35 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         ray.setFromCamera(ndc, camera);
       };
       const figureAt = (e: PointerEvent): { fig: THREE.Sprite; distance: number } | null => {
+        if (!scalePartsRef.current.figures) return null;
         aim(e.clientX, e.clientY);
         const hit = ray.intersectObjects(figs, false)[0];
         return hit ? { fig: hit.object as THREE.Sprite, distance: hit.distance } : null;
       };
+      const propAt = (e: PointerEvent): { id: string; distance: number; handle: boolean } | null => {
+        if (!scalePartsRef.current.props || !onStagePropsChangeRef.current) return null;
+        aim(e.clientX, e.clientY);
+        const h = selectedPropRef.current ? layer.pickHandle(ray) : null;   // 圈圈上的轉動把手優先
+        if (h) return { ...h, handle: true };
+        const p = layer.pick(ray);
+        return p ? { ...p, handle: false } : null;
+      };
+      const selectProp = (id: string | null) => {
+        if (id && !selectedPropRef.current) setScalePanelOpen(true);   // 剛選到 → 展開面板，轉 / 刪的按鈕就在裡面
+        selectedPropRef.current = id;
+        setSelectedPropId(id);
+        layer.sync(stagePropsRef.current, id);
+      };
       // 別的工具（量測 / 加留言點 / 走路 / 拖 gizmo）用著的時候，不搶滑鼠
       const busy = () => !orbit.enabled || measureModeRef.current || addPinModeRef.current;
-      // 舞台動過（機關、換 cue）→ 抓人形的時候重抓一次朝上的面
-      const refreshWalk = () => {
-        const now = groundMeshes();
-        const sig = surfaceSignature(now);
-        if (sig === walkSig) return;
-        walkSig = sig;
-        disposeWalkMesh(walkMesh);
-        walkMesh = buildWalkMesh(extractUpFaces(now), capY);
+      // 腳站的地方：舞台面 + 別的樂手台的頂面（正在拖的和站在它上面的不算）
+      const stepTargets = (skip?: ReadonlySet<string>): THREE.Object3D[] => [...(walkMesh ? [walkMesh] : []), ...layer.walkables(skip)];
+      const itemOf = (items: readonly StagePropItem[], id: string) => items.find(i => i.id === id);
+      // 滑鼠在腳底水平面上的方位角（度），轉動把手用
+      const angleAt = (e: PointerEvent, it: StagePropItem): number | null => {
+        aim(e.clientX, e.clientY);
+        const p = ray.ray.intersectPlane(plane.set(plane.normal, -it.y * unitsPerMeter), tmp);
+        return p ? (Math.atan2(p.x - it.x * unitsPerMeter, p.z - it.z * unitsPerMeter) * 180) / Math.PI : null;
       };
 
       const applyDrag = () => {
@@ -2661,9 +2750,46 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const e = pending;
         pending = null;
         if (!drag || !e) return;
+        if (drag.kind === 'rotate') {
+          const it = itemOf(drag.start, drag.id);
+          const a = it ? angleAt(e, it) : null;
+          if (!it || a == null) return;
+          let rot = it.rotY + (a - drag.a0);
+          if (e.shiftKey) rot = Math.round(rot / 15) * 15;
+          drag.next = moveStagePropWith(drag.start, drag.id, { x: it.x, y: it.y, z: it.z, rotY: normalizeRotY(rot) });
+          drag.moved = true;
+          layer.sync(drag.next, drag.id);
+          return;
+        }
         // 瞄準「腳在畫面上的位置」（滑鼠 - 抓住時滑鼠離腳的距離）：光線穿過腳的地方就是它踩的那個面
         aim(e.clientX - drag.dx, e.clientY - drag.dy);
-        const hit = walkMesh ? ray.intersectObject(walkMesh, false)[0] : undefined;
+        if (drag.kind === 'prop') {
+          const it = itemOf(drag.next, drag.id);
+          if (!it) return;
+          const targets = stepTargets(drag.skip);
+          const hit = targets.length > 0 ? ray.intersectObjects(targets, false)[0] : undefined;
+          let x: number, y: number, z: number;
+          if (hit) {
+            x = hit.point.x; y = hit.point.y; z = hit.point.z;
+          } else {
+            // 瞄到舞台外面：在現在的高度那個水平面上滑，再往下打光線（比現在高 0.5 m 以內的頂面可以踩上去，滑出台緣就掉到下面）
+            const curY = it.y * unitsPerMeter;
+            const p = ray.ray.intersectPlane(plane.set(plane.normal, -curY), tmp);
+            if (!p) return;
+            x = p.x; z = p.z;
+            y = standingYAt(targets, x, z, curY + 0.5 * unitsPerMeter, floorY, downRay);
+          }
+          // 滑鼠指在樂手台的側面（光線穿過去打到底下的地板）→ 站到樂手台的頂面上
+          const onTop = riserTopAt(drag.start, drag.skip, x / unitsPerMeter, z / unitsPerMeter, y / unitsPerMeter);
+          if (onTop !== null) y = onTop * unitsPerMeter;
+          drag.next = moveStagePropWith(drag.start, drag.id, { x: x / unitsPerMeter, y: y / unitsPerMeter, z: z / unitsPerMeter, rotY: it.rotY });
+          drag.moved = true;
+          layer.sync(drag.next, drag.id);
+          return;
+        }
+        // 人形也可以站上樂手台（樂手和器材有顯示的時候）
+        const figTargets = scalePartsRef.current.props ? stepTargets() : (walkMesh ? [walkMesh] : []);
+        const hit = figTargets.length > 0 ? ray.intersectObjects(figTargets, false)[0] : undefined;
         let x: number, y: number, z: number;
         if (hit) {
           x = hit.point.x; y = hit.point.y; z = hit.point.z;
@@ -2672,43 +2798,68 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           const p = ray.ray.intersectPlane(plane.set(plane.normal, -drag.fig.position.y), tmp);
           if (!p) return;
           x = p.x; z = p.z;
-          y = standingYAt(walkMesh ? [walkMesh] : [], x, z, drag.fig.position.y + 0.05 * unitsPerMeter, floorY, downRay);
+          y = standingYAt(figTargets, x, z, drag.fig.position.y + 0.05 * unitsPerMeter, floorY, downRay);
+        }
+        if (scalePartsRef.current.props) {
+          const onTop = riserTopAt(stagePropsRef.current, NO_SKIP, x / unitsPerMeter, z / unitsPerMeter, y / unitsPerMeter);
+          if (onTop !== null) y = onTop * unitsPerMeter;
         }
         drag.fig.position.set(x, y, z);
         if (drag.fig === centerFig) placeLabel();
       };
 
-      const endDrag = () => {
+      const endDrag = (commit = true) => {
         if (!drag) return;
-        const { fig, pointerId } = drag;
+        const d = drag;
         drag = null;
-        (fig.material as THREE.SpriteMaterial).color.set(0xffffff);
+        if (d.kind === 'fig') (d.fig.material as THREE.SpriteMaterial).color.set(0xffffff);
+        else if (commit && d.moved) onStagePropsChangeRef.current?.(d.next);   // 放開才存（拖的時候只動畫面）
         orbit.enabled = true;
         canvas.style.cursor = hovering ? 'grab' : '';
-        try { canvas.releasePointerCapture(pointerId); } catch { /* 已經放掉了 */ }
+        try { canvas.releasePointerCapture(d.pointerId); } catch { /* 已經放掉了 */ }
       };
 
       const onDown = (e: PointerEvent) => {
         if (e.button !== 0 || drag || busy()) return;
         const f = figureAt(e);
-        if (!f) return;
-        // 人形被舞台擋住（站在牆 / 結構後面）→ 看不到就不抓，鏡頭照常轉
-        const blocker = ray.intersectObjects(visibleMeshes(() => true), false)[0];
-        if (blocker && blocker.distance < f.distance - 0.05 * unitsPerMeter) return;
+        const pr = propAt(e);
+        // 人形和樂手 / 器材都指到的話，抓比較近的；轉動把手畫在最上面，優先
+        const propHit = pr && (pr.handle || !f || pr.distance <= f.distance) ? pr : null;
+        const figHit = propHit ? null : f;
+        const hitDistance = propHit ? propHit.distance : figHit?.distance;
+        if (hitDistance === undefined) return;
+        // 被舞台擋住（站在牆 / 結構後面）→ 看不到就不抓，鏡頭照常轉（轉動把手不用檢查）
+        if (!propHit?.handle) {
+          const blocker = ray.intersectObjects(visibleMeshes(() => true), false)[0];
+          if (blocker && blocker.distance < hitDistance - 0.05 * unitsPerMeter) return;
+        }
         e.stopImmediatePropagation();
         e.preventDefault();
         refreshWalk();
-        // 抓住時滑鼠離腳的螢幕距離，拖的時候維持不變（人形不會跳到滑鼠位置）
+        // 抓住時滑鼠離腳的螢幕距離，拖的時候維持不變（東西不會跳到滑鼠位置）
         const rect = canvas.getBoundingClientRect();
-        foot.copy(f.fig.position).project(camera);
-        drag = {
-          fig: f.fig,
-          pointerId: e.pointerId,
-          dx: e.clientX - (rect.left + ((foot.x + 1) / 2) * rect.width),
-          dy: e.clientY - (rect.top + ((1 - foot.y) / 2) * rect.height),
+        const grabOffset = (p: THREE.Vector3) => {
+          foot.copy(p).project(camera);
+          return { dx: e.clientX - (rect.left + ((foot.x + 1) / 2) * rect.width), dy: e.clientY - (rect.top + ((1 - foot.y) / 2) * rect.height) };
         };
+        if (propHit) {
+          const start = stagePropsRef.current.slice();
+          const it = itemOf(start, propHit.id);
+          if (!it) return;
+          selectProp(propHit.id);
+          if (propHit.handle) {
+            const a0 = angleAt(e, it);
+            if (a0 == null) return;
+            drag = { kind: 'rotate', id: it.id, pointerId: e.pointerId, start, next: start, a0, moved: false };
+          } else {
+            const skip = new Set<string>([it.id, ...propsStandingOn(start, it.id)]);
+            drag = { kind: 'prop', id: it.id, pointerId: e.pointerId, ...grabOffset(new THREE.Vector3(it.x, it.y, it.z).multiplyScalar(unitsPerMeter)), start, next: start, skip, moved: false };
+          }
+        } else if (figHit) {
+          drag = { kind: 'fig', fig: figHit.fig, pointerId: e.pointerId, ...grabOffset(figHit.fig.position) };
+          (figHit.fig.material as THREE.SpriteMaterial).color.set(0xfff0b8);
+        }
         orbit.enabled = false;
-        (f.fig.material as THREE.SpriteMaterial).color.set(0xfff0b8);
         canvas.style.cursor = 'grabbing';
         try { canvas.setPointerCapture(e.pointerId); } catch { /* 不支援就算了，移出畫面才會斷 */ }
       };
@@ -2720,7 +2871,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           return;
         }
         if (e.pointerType === 'touch') return;
-        const over = !busy() && !!figureAt(e);
+        const over = !busy() && (!!figureAt(e) || !!propAt(e));
         if (over !== hovering) { hovering = over; canvas.style.cursor = over ? 'grab' : ''; }
       };
       const onUp = (e: PointerEvent) => {
@@ -2728,25 +2879,71 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         if (pending) applyDrag();   // 最後一個位置也套上
         endDrag();
       };
+      // 點一下空白處（沒拖）→ 取消選到的樂手或器材。抓到東西的 pointerdown 在上面就攔掉了，不會走到這裡
+      const onTapDown = (e: PointerEvent) => {
+        tap = e.button === 0 && selectedPropRef.current ? { pointerId: e.pointerId, x: e.clientX, y: e.clientY } : null;
+      };
+      const onTapUp = (e: PointerEvent) => {
+        const t = tap;
+        tap = null;
+        if (t && t.pointerId === e.pointerId && Math.hypot(e.clientX - t.x, e.clientY - t.y) < 6) selectProp(null);
+      };
 
       canvas.addEventListener('pointerdown', onDown, true);
+      canvas.addEventListener('pointerdown', onTapDown);
       canvas.addEventListener('pointermove', onMove);
       canvas.addEventListener('pointerup', onUp);
+      canvas.addEventListener('pointerup', onTapUp);
       canvas.addEventListener('pointercancel', onUp);
       stopDrag = () => {
         canvas.removeEventListener('pointerdown', onDown, true);
+        canvas.removeEventListener('pointerdown', onTapDown);
         canvas.removeEventListener('pointermove', onMove);
         canvas.removeEventListener('pointerup', onUp);
+        canvas.removeEventListener('pointerup', onTapUp);
         canvas.removeEventListener('pointercancel', onUp);
         if (raf) cancelAnimationFrame(raf);
         pending = null;
-        endDrag();
+        endDrag(false);
       };
       resetHover = () => { if (hovering) { hovering = false; canvas.style.cursor = ''; } };
     }
 
-    return () => { stopDrag(); resetHover(); disposeWalkMesh(walkMesh); };
+    return () => {
+      stopDrag(); resetHover(); disposeWalkMesh(walkMesh);
+      propsHostRef.current = null;
+      layer.dispose();
+    };
   }, [showScaleRef, scaleCorrection, modelVersion]);
+
+  // 比例尺面板的三個勾：人形 / 網格 / 樂手和器材（效果重建完再套，所以放在上面那個 effect 後面）
+  useEffect(() => {
+    const g = scaleRefGroupRef.current;
+    if (!g) return;
+    for (const c of g.children) {
+      if (c.name === 'scale-reference-person' || c.name === 'scale-reference-label') c.visible = scaleParts.figures;
+      else if (c.name === 'scale-reference-grid') c.visible = scaleParts.grid;
+      else if (c.name === 'scale-reference-props') c.visible = scaleParts.props;
+    }
+  }, [scaleParts, showScaleRef, scaleCorrection, modelVersion]);
+  // 專案上的樂手和器材 / 選到哪個變了 → 更新畫面；選到的被別人刪掉了就取消選取
+  useEffect(() => {
+    propsHostRef.current?.layer.sync(stageProps, selectedPropId);
+    if (selectedPropId && !stageProps.some(p => p.id === selectedPropId)) setSelectedPropId(null);
+  }, [stageProps, selectedPropId]);
+  // 現場（暗場）要亮一點才看得到灰色模型，快速模式（場景本來就亮）低一點
+  useEffect(() => {
+    propsHostRef.current?.layer.setBoost(renderMode === 'live' ? PROP_BOOST_LIVE : PROP_BOOST_QUICK);
+  }, [renderMode]);
+  // 比例尺關掉 / 切到只看模式 → 面板收起來、不留選取；開了別的彈出框 → 比例尺面板讓開（位置一樣會疊在一起）
+  useEffect(() => {
+    if (showScaleRef) return;
+    setScalePanelOpen(false);
+    setSelectedPropId(null);
+  }, [showScaleRef]);
+  useEffect(() => {
+    if (bookmarkPanelOpen || homeViewPanelOpen || ndiPopoverOpen) setScalePanelOpen(false);
+  }, [bookmarkPanelOpen, homeViewPanelOpen, ndiPopoverOpen]);
 
   // ── Walk mode：pointer lock + WASD keys ──
   useEffect(() => {
@@ -2968,6 +3165,29 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const openHomeViewPanel = () => { setHomeViewPanelOpen(o => !o); setBookmarkPanelOpen(false); setNdiPopoverOpen(false); };
   const openBookmarkPanel = () => { setBookmarkPanelOpen(o => !o); setHomeViewPanelOpen(false); setNdiPopoverOpen(false); };
   const resetTitle = homeView ? '重置攝影機（回到設定好的畫面）' : '重置攝影機（正面全景）';
+  // 比例尺：還沒開 → 打開並展開設定面板；已經開著 → 展開 / 收起設定面板（要關掉按面板裡的「關閉比例尺」）
+  const openScalePanel = () => {
+    setShowScaleRef(true);
+    setScalePanelOpen(o => (showScaleRef ? !o : true));
+    setBookmarkPanelOpen(false); setHomeViewPanelOpen(false); setNdiPopoverOpen(false);
+  };
+  const scaleTitle = showScaleRef ? '比例尺設定：人形、網格、樂手和器材' : '顯示比例尺：人形 1.7 m、每格 1 m 的網格、樂手和器材';
+  const scaleTool: ToolDef = {
+    id: 'scale', group: 'show', priority: 6,
+    render: (l) => toolBtn({ icon: PersonStanding, label: '比例尺', title: scaleTitle, labeled: l, active: showScaleRef, onClick: openScalePanel }),
+    menu: { icon: PersonStanding, label: showScaleRef ? '比例尺設定…' : '比例尺', checked: showScaleRef, hint: scaleTitle, onSelect: openScalePanel },
+  };
+  // 規則在 lib/stageProps.ts：只有 onStagePropsChange 有給的人（製作、導演）能改
+  const canEditProps = !!onStagePropsChange;
+  const selectedProp = selectedPropId ? stageProps.find(p => p.id === selectedPropId) : undefined;
+  const rotateSelectedProp = (deg: number) => {
+    if (selectedProp) onStagePropsChange?.(rotateStagePropBy(stageProps, selectedProp.id, deg));
+  };
+  const deleteSelectedProp = () => {
+    if (!selectedProp) return;
+    onStagePropsChange?.(removeStageProp(stageProps, selectedProp.id));
+    setSelectedPropId(null);
+  };
 
   const tools: ToolDef[] = [];
   if (!readOnly) {
@@ -3018,13 +3238,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       render: (l) => toolBtn({ icon: Grid3x3, label: '線框', title: wireframe ? '切回實心 (X)' : '線框模式：看穿模型 (X)', labeled: l, active: wireframe, pressed: wireframe, onClick: () => setWireframe(w => !w) }),
       menu: { icon: Grid3x3, label: '線框', shortcut: 'X', checked: wireframe, onSelect: () => setWireframe(w => !w) },
     });
-    if (showScaleButton) {
-      tools.push({
-        id: 'scale', group: 'show', priority: 6,
-        render: (l) => toolBtn({ icon: PersonStanding, label: '比例尺', title: showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形 1.7 m + 每格 1 m 網格，可以拖動人形', labeled: l, active: showScaleRef, pressed: showScaleRef, onClick: () => setShowScaleRef(s => !s) }),
-        menu: { icon: PersonStanding, label: '比例尺', checked: showScaleRef, hint: '人形 1.7 m + 1 m 網格，可拖動人形', onSelect: () => setShowScaleRef(s => !s) },
-      });
-    }
+    if (showScaleButton) tools.push(scaleTool);
     tools.push({
       id: 'labels', group: 'show', priority: 2,
       render: (l) => toolBtn({ icon: Tag, label: '名稱', title: (showLabels ? '隱藏物件名稱' : '顯示物件名稱') + (transportKeys ? '' : ' (L)'), labeled: l, active: showLabels, pressed: showLabels, onClick: () => setShowLabels(s => !s) }),
@@ -3040,6 +3254,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     ),
     menu: { icon: Video, label: '重置攝影機', hint: resetTitle, onSelect: resetCamera },
   });
+  // 只看模式（動畫師、分享連結）：專案上擺了樂手和器材才放比例尺，讓看的人也看得到（只能看，不能改）
+  if (viewer && showScaleButton && stageProps.length > 0) tools.push(scaleTool);
   if (onHomeViewChange && !viewer) {
     tools.push({
       id: 'home', group: 'camera', priority: 4, noSepBefore: true,
@@ -3189,6 +3405,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         onMenuOpenChange={setMoreMenuOpen}
         menuHeader={(hidden) => (hidden.has('cue') && cueName ? <>當前 cue：<strong>{cueName}</strong></> : null)}
       >
+        {scalePanelOpen && showScaleRef && (
+          <ScalePropsPanel
+            figures={scaleParts.figures}
+            grid={scaleParts.grid}
+            props={scaleParts.props}
+            onToggle={(part: ScalePart, on: boolean) => setScaleParts(s => ({ ...s, [part]: on }))}
+            count={stageProps.length}
+            canEdit={canEditProps}
+            selectedLabel={selectedProp ? stagePropSpec(selectedProp.type).label : null}
+            onAdd={(t) => propsHostRef.current?.add(t)}
+            onRotate={rotateSelectedProp}
+            onDelete={deleteSelectedProp}
+            onClose={() => setScalePanelOpen(false)}
+            onTurnOff={() => setShowScaleRef(false)}
+          />
+        )}
         {homeViewPanelOpen && onHomeViewChange && !viewer && (
           <HomeViewPanel
             view={displayedHomeView()}

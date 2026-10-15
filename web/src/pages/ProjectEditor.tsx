@@ -29,6 +29,8 @@ import DecisionDialog from '../components/DecisionDialog';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { pushRecentProject } from '../components/CommandPalette';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
+import { useStageProps } from '../lib/useStageProps';
+import { canEditStageProps } from '../lib/stageProps';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueTransitionSeconds, crossfadeLabel, NEW_CUE_CROSSFADE_SECONDS, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
 import { EditHistory, historyScope } from '../lib/editHistory';
@@ -173,6 +175,8 @@ export default function ProjectEditor() {
 
   // 機關 offset（per LED panel，公尺）+ 測距校準倍率 — 存在專案上，所有人共用，admin 才能改
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
+  // 比例尺的樂手和器材（全專案共用；製作、導演可以擺）
+  const band = useStageProps(projectId, canEditStageProps(user?.role === 'admin' ? 'admin' : null));
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
 
@@ -1180,6 +1184,8 @@ export default function ProjectEditor() {
               {...mech.sceneProps}
               scaleCorrection={view.scaleCorrection}
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+              stageProps={band.stageProps}
+              onStagePropsChange={band.onStagePropsChange}
               lookSettings={personalLook.effective}
               onLookSettingsChange={personalLook.set}
               lookCustomized={personalLook.customized}

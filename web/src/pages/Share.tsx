@@ -14,6 +14,7 @@ import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '.
 import { normalizeLookSettings } from '../lib/stageLook/lookSettings';
 import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import { normalizeHomeView } from '../lib/homeView';
+import { normalizeStageProps } from '../lib/stageProps';
 import { normalizeLedCanvas } from '../lib/ledCanvas';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
@@ -331,6 +332,8 @@ export default function Share() {
   const projectLook = useMemo(() => normalizeLookSettings(data?.lookSettings), [data]);
   const materialOverrides = useMemo(() => normalizeMaterialOverrides(data?.materialOverrides), [data]);
   const homeView = useMemo(() => normalizeHomeView(data?.homeView ?? null), [data]);
+  // 比例尺的樂手和器材（導演 / 製作擺的；訪客只能看）
+  const stageProps = useMemo(() => normalizeStageProps(data?.stageProps), [data]);
   const ledCanvas = useMemo(() => normalizeLedCanvas(data?.ledCanvas ?? null), [data]);
 
   // ── LED 上在放影片（歌曲影片 / 本地影片）→ 舞台、cue 列跟著影片時間走 ──
@@ -550,6 +553,7 @@ export default function Share() {
                 cueKey={selectedCueId}
                 crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                 scaleCorrection={data.scaleCorrection ?? 1}
+                stageProps={stageProps}
                 {...mech.sceneProps}
                 lookSettings={projectLook}
                 materialOverrides={materialOverrides}

@@ -44,6 +44,8 @@ import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, video
 import { resumeFileProblem, trackedVideoIds, useStalledUploads } from '../lib/stalledUploads';
 import { songTitle } from '../lib/songCode';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
+import { useStageProps } from '../lib/useStageProps';
+import { canEditStageProps } from '../lib/stageProps';
 import { crossfadeLabel, cueTransitionSeconds } from '../lib/cueTiming';
 import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import HelpLink from '../components/HelpLink';
@@ -114,6 +116,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   const [songsError, setSongsError] = useState<string | null>(null);
 
   const projectRole: ProjectRole | null = va.projectRole(myRole === undefined ? (user?.role ?? null) : myRole);
+  // 比例尺的樂手和器材：製作、導演可以擺，動畫師只能看（預覽別人的畫面時也只能看）
+  const band = useStageProps(projectId, canEditStageProps(projectRole) && !va.readOnly);
   // 動畫師只看：3D 工具列只剩重置攝影機、燈光照專案預設（不能自己調）
   const isAnimatorViewer = projectRole === 'animator';
 
@@ -1062,6 +1066,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                   bookmarkScope={projectId}
                   scaleCorrection={view.scaleCorrection}
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+                  stageProps={band.stageProps}
+                  onStagePropsChange={band.onStagePropsChange}
                   {...mech.sceneProps}
                   toolbarMode={isAnimatorViewer ? 'viewer' : 'full'}
                   lookSettings={isAnimatorViewer ? view.lookSettings : personalLook.effective}

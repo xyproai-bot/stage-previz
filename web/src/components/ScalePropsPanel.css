@@ -1,0 +1,76 @@
+/* 比例尺設定面板（位置規則跟 StageScene.css 的 .bm-popover 一樣：工具列下面、對齊工具列右邊、不超出 3D 區塊；
+   窄螢幕（390px）寬度跟著 3D 區塊縮，太高就捲動） */
+.stage-scene__toolbar-row > .sp-popover {
+  --pop-w: 300px;
+  position: absolute;
+  top: calc(100% + 6px);
+  right: max(0px, min(var(--tb-right, 0px), calc(100% - var(--pop-w))));
+  width: var(--pop-w);
+  max-width: 100%;
+  max-height: calc(var(--stage-h, 600px) - 70px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+/* 手機（窄螢幕）：3D 區塊常常很矮，面板貼著螢幕下緣、左右各留 8px，高度看螢幕不看 3D 區塊，390px 寬放得下 */
+@media (max-width: 520px) {
+  .stage-scene__toolbar-row > .sp-popover {
+    position: fixed;
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    max-width: none;
+    max-height: 62vh;
+    z-index: 200;
+  }
+}
+.sp-popover {
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  z-index: 50;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  font-size: 12px;
+  cursor: default;
+}
+.sp-popover__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+.sp-popover__body { padding: 8px 10px 4px; }
+.sp-popover__foot {
+  padding: 6px 10px 10px;
+  display: flex;
+  justify-content: flex-end;
+}
+.sp-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  cursor: pointer;
+}
+.sp-check input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--accent); }
+.sp-check small { color: var(--text-muted); margin-left: auto; text-align: right; }
+.sp-selected {
+  margin: 8px 0 4px;
+  padding: 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.sp-selected__name { margin-bottom: 6px; }
+.sp-row { display: flex; flex-wrap: wrap; gap: 4px; }
+.sp-del { color: var(--danger, #ff6b6b); }
+.sp-add { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.sp-add__title { font-weight: 600; margin-bottom: 6px; }
+.sp-add__group { margin-bottom: 8px; }
+.sp-add__label { color: var(--text-muted); margin-bottom: 4px; }
+.sp-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 4px; }
+.sp-chip { justify-content: center; white-space: nowrap; }
+.sp-hint { margin: 6px 0 4px; color: var(--text-muted); line-height: 1.5; }

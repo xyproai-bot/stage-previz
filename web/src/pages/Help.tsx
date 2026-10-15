@@ -69,7 +69,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
     id: A.producer, label: '製作', kicker: '製作', icon: ClipboardList, roles: ['producer'], children: [
       { id: A.prodProject, label: '建立專案' },
       { id: A.prodModel, label: '匯入 3D 模型', children: [{ id: A.prodNaming, label: '物件怎麼命名' }] },
-      { id: A.prodCalibrate, label: '測距校準' },
+      { id: A.prodCalibrate, label: '測距校準', children: [{ id: A.prodScaleProps, label: '比例尺：加樂手和器材' }] },
       { id: A.prodSongs, label: '歌曲和歌曲代號', children: [{ id: A.prodVideos, label: '影片版本（看、刪除）' }, { id: A.prodDrive, label: 'Google Drive 資料夾' }] },
       { id: A.prodAssign, label: '指派負責動畫師' },
       {
@@ -1078,6 +1078,22 @@ function ProducerChapter() {
           <li>量錯了再量一次就好；「<Ui>重設</Ui>」回到模型原本的尺寸。</li>
           <li>只有製作可以校準。</li>
         </ul>
+
+        <Section id={A.prodScaleProps} level={3} title="比例尺：加樂手和器材">
+          <p>
+            3D 工具列按「<Ui>比例尺</Ui>」會打開設定面板：可以勾選「<Ui>人形</Ui>」（三個 1.7 m 的人）、「<Ui>網格</Ui>」（每格 1 m）、「<Ui>樂手和器材</Ui>」。
+            下面的「<Ui>加樂手／器材</Ui>」分成「人物」（主唱、和聲、舞者、吉他手、貝斯手、鍵盤手、鼓手、打擊樂手、DJ、小提琴手、大提琴手、管樂手）
+            和「器材」（平台鋼琴、麥克風架、地板監聽喇叭、樂手台）。按一下就加在舞台前緣中間、面向觀眾，都是照真實尺寸做的灰色簡單模型，
+            拿來比對 LED 的大小、規劃誰站哪裡。
+          </p>
+          <ul className="help-list">
+            <li>點一下選到（變琥珀色，腳下出現圈圈）：按住拖可以沿著舞台面移動，拖到「<Ui>樂手台</Ui>」上就站在台上；樂手台移動或轉動時，站在上面的跟著走。</li>
+            <li>面板裡的「<Ui>轉 15°</Ui>」左右各一個；拖圈圈上的圓點可以自由轉（按住 Shift 每 15° 一格）；「<Ui>刪除</Ui>」把選到的拿掉。</li>
+            <li><strong>擺的位置全專案共用</strong>：導演頁、動畫師工作站、分享連結打開比例尺都看得到。</li>
+            <li><strong>製作和導演可以擺和改</strong>；動畫師和分享連結的人只能看。</li>
+            <li>位置用公尺存，換算依<Go to={A.prodCalibrate}>測距校準</Go>；校準改了以後，已經擺好的要再檢查一下。</li>
+          </ul>
+        </Section>
       </Section>
 
       <Section id={A.prodSongs} title="歌曲和歌曲代號">

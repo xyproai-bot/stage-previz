@@ -27,12 +27,18 @@
 //   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
 //   歌曲影片：貼連結交一版                                                    上面的人 + 這個專案的導演（videos.mjs videoLinkDecision）
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
+//   比例尺的樂手和器材（0033，stage-props）：看                                所有成員（分享連結：只看）
+//   比例尺的樂手和器材：新增 / 移動 / 轉 / 刪除                                admin、導演（canEditStageProps，規則在 web/src/lib/stageProps.ts）
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
 //   歌曲影片：最近刪除、救回來（30 天內）                                      admin（這個專案的 admin）
 //   只有全站 admin：建立 / 匯入 / 複製 / 封存 / 還原專案、專案結束清影片、Drive 帳號和資料夾綁定、
 //                   3D 檢視設定、專案狀態、Show 管理、用戶管理、邀請連結（建立 / 清單 / 撤銷）
 //   共用模型庫（/api/assets）：看清單 = 全站 admin 或某個專案的 admin（canBrowseSharedAssets）；改 = 全站 admin
+
+// 比例尺的樂手和器材：誰能改的規則跟前端共用同一個檔（純判斷）
+import { canEditStageProps, STAGE_PROPS_DENIED_MESSAGE } from '../web/src/lib/stageProps.ts';
+export { canEditStageProps };
 
 export const ROLES = ['admin', 'animator', 'director'];
 export const SONG_STATUSES = ['todo', 'in_review', 'approved', 'needs_changes'];
@@ -178,6 +184,7 @@ export function songStatusDecision({ role, userId, song, to, expected, hasReadyV
  *   'editor'       這個專案的 admin（canEditProjectContent）
  *   'globalAdmin'  只有全站 admin
  *   'shareManager' admin 或導演（canManageShareLinks）
+ *   'stageProps'   admin 或導演（canEditStageProps）：改比例尺的樂手和器材
  *   'songPatch'    改歌：只改狀態看 songStatusDecision，改其他欄位要 editor（handler 裡判斷）
  *   'projectPatch' 改專案：一般欄位 editor，Drive / 狀態 / 3D 檢視設定要全站 admin（handler 裡判斷）
  *   'videoUploader' 交影片：admin 或動畫師先放行，handler 裡再看這首歌指派給誰 / 這一版是誰交的（videos.mjs）
@@ -205,6 +212,12 @@ export function describeProjectRoute(method, segs) {
   }
 
   switch (sub) {
+    // 比例尺的樂手和器材（0033）：所有成員看、製作和導演整份存（PUT { props: [...] }）
+    case 'stage-props':
+      if (a) return null;
+      if (read) return r('stageProps.get', 'member');
+      return m === 'PUT' ? r('stageProps.put', 'stageProps') : bad('stageProps');
+
     case 'share-links':
       if (!a) {
         if (read || m === 'POST') return r('shareLinks', 'shareManager');
@@ -419,6 +432,8 @@ export function roleMeetsNeed(need, { role, globalRole }) {
       return canEditProjectContent(role);
     case 'shareManager':
       return canManageShareLinks(role);
+    case 'stageProps':
+      return canEditStageProps(role);
     case 'videoUploader':
       return role === 'admin' || role === 'animator';
     case 'videoLinker':
@@ -447,6 +462,8 @@ export function needDeniedMessage(need) {
       return '只有製作可以修改專案內容';
     case 'shareManager':
       return '只有製作或導演可以管理分享連結';
+    case 'stageProps':
+      return STAGE_PROPS_DENIED_MESSAGE;
     case 'videoUploader':
       return '導演可以貼連結交一版；上傳檔案請找負責的動畫師或製作';
     case 'videoLinker':

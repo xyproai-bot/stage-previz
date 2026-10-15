@@ -38,6 +38,8 @@ import { draftBlocksSend, useAttachmentDraft } from '../lib/review/useAttachment
 import { toast } from '../lib/toast';
 import { confirmDialog, splitQuestion } from '../components/dialogs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
+import { useStageProps } from '../lib/useStageProps';
+import { canEditStageProps } from '../lib/stageProps';
 import { cueTransitionSeconds } from '../lib/cueTiming';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
@@ -732,6 +734,8 @@ function SongDetail({
   const va = useViewAs();
   // 校準倍率、現場設定、LED 畫布大小（製作在管理頁設的，導演這邊只看）
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
+  // 比例尺的樂手和器材：製作、導演可以擺，其他人只能看（預覽別人的畫面時也只能看）
+  const band = useStageProps(projectId, canEditStageProps(projectRole) && !va.readOnly);
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
 
@@ -1109,6 +1113,8 @@ function SongDetail({
                 bookmarkScope={projectId}
                 scaleCorrection={view.scaleCorrection}
                 onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
+                stageProps={band.stageProps}
+                onStagePropsChange={band.onStagePropsChange}
                 {...mech.sceneProps}
                 lookSettings={personalLook.effective}
                 onLookSettingsChange={personalLook.set}

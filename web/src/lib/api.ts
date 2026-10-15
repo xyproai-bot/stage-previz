@@ -6,6 +6,7 @@ import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettin
 import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/materialOverrides';
 import { normalizeHomeView, type HomeView } from './homeView';
 import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
+import { normalizeStageProps, type StagePropItem } from './stageProps';
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
 import type { SongReviewFields } from './reviewApi';
 import { friendlyError } from './songReview';
@@ -308,6 +309,26 @@ export async function updateProjectViewSettings(
   await http(`/api/projects/${encodeURIComponent(projectId)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+    keepalive: opts?.keepalive,
+  });
+}
+
+// ─── 比例尺的樂手和器材（0033，全專案共用；製作、導演可以改，其他人只能看）──────
+// 格式和規則在 lib/stageProps.ts（後台 cf-worker 直接 import 同一個檔）
+
+export async function getProjectStageProps(projectId: string): Promise<StagePropItem[]> {
+  const data = await http<{ props?: unknown }>(`/api/projects/${encodeURIComponent(projectId)}/stage-props`);
+  return normalizeStageProps(data?.props ?? []);
+}
+
+export async function saveProjectStageProps(
+  projectId: string,
+  props: StagePropItem[],
+  opts?: { keepalive?: boolean },  // 關分頁時最後一次存檔用，瀏覽器才不會中途砍掉
+): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/stage-props`, {
+    method: 'PUT',
+    body: JSON.stringify({ props }),
     keepalive: opts?.keepalive,
   });
 }
@@ -1326,6 +1347,8 @@ export interface SharePublicData {
   homeView?: unknown;
   /** AE 畫布尺寸 { width, height }；null = 還沒填；舊版 worker 沒有 → undefined（用 normalizeLedCanvas 讀） */
   ledCanvas?: unknown;
+  /** 比例尺的樂手和器材（0033，只看；用 normalizeStageProps 讀）；舊版 worker 沒有 → undefined */
+  stageProps?: unknown;
   /**
    * 有密碼的連結：密碼對了後台發的通行證（8 小時）。之後的請求帶它（getShareSongCues 等的 access 參數），
    * 不用每次都送密碼；影片網址（streamUrl）後台已經接好通行證。沒密碼的連結 = null；舊版 worker 沒有 → undefined

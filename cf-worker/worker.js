@@ -28,6 +28,8 @@ import {
 import { isTrustedOrigin } from './origins.mjs';
 // 好讀分享網址的規則跟前端共用同一個檔（純判斷，wrangler 打包時會一起編進來）
 import { normalizeSlugInput, slugProblem, slugProblemMessage } from '../web/src/lib/shareSlug.ts';
+// 比例尺的樂手和器材（0033）：存檔格式和檢查規則也跟前端共用同一個檔
+import { checkStagePropsForSave, parseStoredStageProps, serializeStageProps } from '../web/src/lib/stageProps.ts';
 // 權限規則（誰在這個專案能做什麼）— 純判斷，access.test.mjs 有測
 import {
   projectRoleOf, canEditProjectContent, songStatusDecision,
@@ -446,6 +448,8 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'project.get':           return getProject(env, ctx);
     case 'project.patch':         return updateProject(request, env, ctx);
     case 'project.archive':       return archiveProject(request, env, projectId);
+    case 'stageProps.get':
+    case 'stageProps.put':        return handleStageProps(request, env, ctx);
     case 'shareLinks':
     case 'shareLinks.item':       return handleProjectShareLinks(request, env, ctx, segs[4] || null);
 
@@ -828,6 +832,25 @@ async function updateProject(request, env, ctx) {
     await logActivity(request, env, projectId, 'update', 'project', projectId, { name: before?.name, changes: body });
   }
   return jsonResp({ ok: true });
+}
+
+// 比例尺的樂手和器材（0033，projects.stage_props）：GET 所有成員都看得到；PUT 整份換掉，只有製作和導演
+// （權限在路由表 access.mjs 就擋了；格式和檢查在 web/src/lib/stageProps.ts，有一筆不對就整份拒絕）。
+// 拖一下就存一次，不寫活動紀錄（不然 audit log 會被洗版），也不動專案的更新時間
+async function handleStageProps(request, env, ctx) {
+  if (request.method === 'GET') {
+    const row = await env.DB.prepare(`SELECT stage_props FROM projects WHERE id = ? LIMIT 1`).bind(ctx.projectId).first();
+    if (!row) return jsonResp({ error: 'Not found' }, 404);
+    return jsonResp({ props: parseStoredStageProps(row.stage_props) });
+  }
+  const body = await readJsonLimited(request, 64 * 1024);
+  if (body.error) return jsonResp({ error: body.error }, body.status);
+  const check = checkStagePropsForSave(body.value && typeof body.value === 'object' ? body.value.props : undefined);
+  if (!check.ok) return jsonResp({ error: check.error }, 400);
+  const result = await env.DB.prepare(`UPDATE projects SET stage_props = ? WHERE id = ?`)
+    .bind(serializeStageProps(check.props), ctx.projectId).run();
+  if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true, props: check.props });
 }
 
 // 現場模式設定：範圍要跟 web/src/lib/stageLook/lookSettings.ts 的 LOOK_SETTING_RANGES 一致
@@ -5922,7 +5945,7 @@ async function handleShareRouter(request, env, url, ref) {
   if (sub === 'data' && request.method === 'GET') {
     // bundle 給 share viewer：project meta + songs + stage_objects + model
     const proj = await env.DB.prepare(
-      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view, led_canvas FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view, led_canvas, stage_props FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
     ).bind(link.project_id).first();
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
@@ -5975,6 +5998,8 @@ async function handleShareRouter(request, env, url, ref) {
       materialOverrides: safeJsonObj(proj.material_overrides, {}),
       homeView: proj.home_view ? safeJsonObj(proj.home_view, null) : null,
       ledCanvas: proj.led_canvas ? sanitizeLedCanvas(proj.led_canvas) : null,
+      // 比例尺的樂手和器材（0033；訪客只看）
+      stageProps: parseStoredStageProps(proj.stage_props),
       // 有密碼的連結：之後的請求帶這張通行證（X-Share-Access header），不用再送密碼
       access,
       // 0026：製作有沒有打開「允許看的人留言」（連結名稱是團隊內部用的，不給訪客）
