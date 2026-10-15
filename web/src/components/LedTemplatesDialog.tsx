@@ -18,7 +18,7 @@ import {
   addScreenToDraft, copyTemplateName, draftFromTemplate, draftSignature, draftToBody, draftToPlan, emptyDraft, nextTemplateName,
   patchDraftItems, removeScreensFromDraft, resetItemSize, type Draft, type ItemPatch, type ItemPatchEntry,
 } from '../lib/ledTemplateDraft';
-import { boundsOf, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection, selectionTag } from '../lib/ledTemplateSelect';
+import { boundsOf, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection, scaleGroupPct, scaleGroupTo, selectionTag } from '../lib/ledTemplateSelect';
 import {
   commit, fitCanvasToItems, newHistory, redo, rectToUv, setRotation, settle, transient, undo, type History,
 } from '../lib/ledTemplateEdit';
@@ -270,6 +270,29 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     }))) return;
     removeScreens(keys);
   }
+  /** 整組外框的寬 / 高欄位：左上角不動，整組每一塊的位置和大小乘同樣的倍數 */
+  const [lockGroupAspect, setLockGroupAspect] = useState(true);
+  const [groupPctText, setGroupPctText] = useState('100');
+  // 在寬 / 高欄位裡一個字一個字打（6 → 66 → 660）：每一個字都要從「開始打之前」的樣子算，不然中間縮太小的會回不來
+  const scaleBase = useRef<{ tag: string; at: number; rects: PixelRect[] } | null>(null);
+  const scaleGroupField = (axis: 'w' | 'h', n: number) => {
+    const tag = selectionTag(`g:${axis}`, selected);
+    const now = Date.now();
+    const b = scaleBase.current;
+    const base = b && b.tag === tag && now - b.at <= 600 ? b.rects : selItems.map(i => i.dest);
+    scaleBase.current = { tag, at: now, rects: base };
+    const rects = scaleGroupTo(base, { [axis]: n }, lockGroupAspect);
+    apply(d => patchDraftItems(d, movePatches(selItems, rects)), { tag });
+  };
+  /** 「整組縮放 %」：50 = 縮成一半大，以整組外框的左上角為準 */
+  const applyGroupPct = () => {
+    const n = Number(groupPctText.trim());
+    if (!/^\d+$/.test(groupPctText.trim()) || n < 1 || n > 1000) { toast.warn('縮放比例請填 1 到 1000 的整數（50 = 縮成一半大，200 = 放大一倍）'); return; }
+    if (n === 100) return;
+    const rects = scaleGroupPct(selItems.map(i => i.dest), n);
+    apply(d => patchDraftItems(d, movePatches(selItems, rects)), {});
+    setGroupPctText('100');
+  };
   /** 數字欄位改整組外框的左 / 上：整組一起平移 */
   const moveGroup = (axis: 'x' | 'y', n: number) => apply(d => {
     const cur = d.items.filter(i => selSet.has(i.key));
@@ -673,13 +696,39 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
             )}
             {mode === 'template' && groupBox && (
               <div className="ledtpl-sel" role="group" aria-label={`選到 ${selItems.length} 塊螢幕`}>
-                <h4>已選 {selItems.length} 塊 <small className="muted">整組的外框 {groupBox.w} × {groupBox.h}，改左、上就是整組一起移動</small></h4>
-                <div className="ledtpl-sel__grid ledtpl-sel__grid--2">
-                  {(['x', 'y'] as const).map(k => (
-                    <label key={k}>{k === 'x' ? '整組的左' : '整組的上'}
-                      <NumField value={groupBox[k]} min={-65536} label={k === 'x' ? '整組的左' : '整組的上'} onChange={(n) => moveGroup(k, n)} />
+                <h4>已選 {selItems.length} 塊 <small className="muted">整組的外框 {groupBox.w} × {groupBox.h}：改左、上是整組一起移動，改寬、高是整組一起縮放（左上角不動）</small></h4>
+                <div className="ledtpl-sel__grid">
+                  {(['x', 'y', 'w', 'h'] as const).map(k => {
+                    const name = k === 'x' ? '整組左' : k === 'y' ? '整組上' : k === 'w' ? '整組寬' : '整組高';
+                    return (
+                      <label key={k}>{name.slice(2)}
+                        <NumField
+                          value={groupBox[k]}
+                          min={k === 'w' || k === 'h' ? 1 : -65536}
+                          label={name}
+                          onChange={(n) => (k === 'x' || k === 'y' ? moveGroup(k, n) : scaleGroupField(k, n))}
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="ledtpl-sel__row">
+                  <label className="ledtpl-check" title="改寬或高的時候，另一邊照整組的長寬比跟著變">
+                    <input type="checkbox" checked={lockGroupAspect} onChange={(e) => setLockGroupAspect(e.target.checked)} /> 鎖長寬比
+                  </label>
+                  <form className="ledtpl-sel__pct" onSubmit={(e) => { e.preventDefault(); applyGroupPct(); }}>
+                    <label>整組縮放 %
+                      <input
+                        className="ledtpl-sel__pctinput"
+                        inputMode="numeric"
+                        value={groupPctText}
+                        aria-label="整組縮放百分比"
+                        title="50 = 縮成一半大、200 = 放大一倍，以整組外框的左上角為準"
+                        onChange={(e) => setGroupPctText(e.target.value)}
+                      />
                     </label>
-                  ))}
+                    <button type="submit" className="btn btn--ghost">縮放</button>
+                  </form>
                 </div>
                 <ul className="ledtpl-sel__names" aria-label="選到的螢幕">
                   {selItems.map(i => {

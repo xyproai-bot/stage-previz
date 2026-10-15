@@ -1,4 +1,4 @@
-// LED 版型編輯器的「複選」純邏輯（不碰 DOM / three / 網路）：Shift / Ctrl 點選、框選、整組一起移動（對整組的外框吸附）、整組微調、各自轉 90° / 翻轉。
+// LED 版型編輯器的「複選」純邏輯（不碰 DOM / three / 網路）：Shift / Ctrl 點選、框選、整組一起移動（對整組的外框吸附）、整組微調、整組縮放、各自轉 90° / 翻轉。
 // 畫面（滑鼠、鍵盤）在 components/LedTemplateCanvas.tsx；清單和數字欄位在 components/LedTemplatesDialog.tsx。這裡只算數字，所以可以單元測試。
 //
 // 選取 = 螢幕代號（key）的陣列，順序就是「選的先後」；沒有重複。
@@ -7,7 +7,7 @@
 import type { CanvasSize, PixelRect } from './ledMap';
 import type { PlacementInput } from './ledTemplate';
 import type { ItemPatchEntry } from './ledTemplateDraft';
-import { nudgeRect, rectsOverlap, rotatePlacement90, snapMove, snapTargets, type SnapGuide, type SnapTargets } from './ledTemplateEdit';
+import { nudgeRect, rectsOverlap, rotatePlacement90, snapLine, snapMove, snapTargets, type SnapGuide, type SnapTargets } from './ledTemplateEdit';
 
 export type Selection = readonly string[];
 
@@ -143,3 +143,110 @@ export const flipPatches = (items: readonly Placed[], axis: 'h' | 'v'): ItemPatc
 
 /** 復原的「同一步」標籤：同一組螢幕連按微調 / 一直改同一個數字，合成一步（選的順序不同也算同一組） */
 export const selectionTag = (prefix: string, keys: Selection): string => `${prefix}:${[...keys].sort().join(',')}`;
+
+// ───────────────────────── 整組縮放 ─────────────────────────
+
+/** 整組外框上的八個把手：四個角（預設等比例縮放）和四條邊（只縮那一個方向） */
+export type GroupHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+export const GROUP_HANDLES: readonly GroupHandle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+export const isCornerHandle = (h: GroupHandle): boolean => h.length === 2;
+
+/**
+ * 以 anchor 為不動點，每一塊的位置（離 anchor 多遠）和大小都乘上同樣的倍數（sx 橫向、sy 直向，要大於 0）。
+ * 用「邊」四捨五入成整數（不是用寬高），所以原本貼在一起的兩塊縮完還是貼在一起，不會出現 1 像素的縫；
+ * 每一塊的寬高至少 1 像素。
+ */
+export function scaleRects(start: readonly PixelRect[], anchor: { x: number; y: number }, sx: number, sy: number): PixelRect[] {
+  const X = (v: number) => Math.round(anchor.x + (v - anchor.x) * sx);
+  const Y = (v: number) => Math.round(anchor.y + (v - anchor.y) * sy);
+  return start.map(r => {
+    const x0 = X(r.x), x1 = X(r.x + r.w), y0 = Y(r.y), y1 = Y(r.y + r.h);
+    return { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) };
+  });
+}
+
+export interface GroupScale { rects: PixelRect[]; box: PixelRect; guides: SnapGuide[]; sx: number; sy: number }
+
+/**
+ * 拖著整組外框的把手縮放：對面的那個角（或那條邊）不動，整組每一塊的位置和大小都乘上同樣的倍數。
+ * rawX / rawY = 滑鼠在畫布上的位置（可以有小數）。
+ *   角落：keepAspect = true（預設的樣子）鎖整組的長寬比，以拉得比較多的那一邊為準；false（按住 Shift）橫直各縮各的。
+ *   邊：只縮那一個方向。
+ *   不會翻過去（拖過對面就停在 1 像素），每一塊至少 1 像素，位置和大小都是整數。
+ *   snap = true：被拖的那條邊靠近「沒被選到的螢幕的邊」或畫布的邊就吸過去（鎖長寬比時，吸到的那一邊決定倍數，另一邊跟著算）。
+ */
+export function snapGroupScale(
+  start: readonly PixelRect[], handle: GroupHandle, rawX: number, rawY: number, targets: SnapTargets,
+  opts: { threshold: number; snap: boolean; keepAspect: boolean },
+): GroupScale {
+  const box = boundsOf(start);
+  if (!box) return { rects: [], box: { x: 0, y: 0, w: 0, h: 0 }, guides: [], sx: 1, sy: 1 };
+  const west = handle.includes('w'), east = handle.includes('e'), north = handle.includes('n'), south = handle.includes('s');
+  const movesX = west || east, movesY = north || south;
+  const lock = movesX && movesY && opts.keepAspect;
+  const ax = west ? box.x + box.w : box.x;        // 不動的那一側
+  const ay = north ? box.y + box.h : box.y;
+  // 被拖的那條邊離不動的那一側多遠（至少 1，不翻過去）
+  const lenX = (edge: number) => Math.max(1, west ? ax - edge : edge - ax);
+  const lenY = (edge: number) => Math.max(1, north ? ay - edge : edge - ay);
+  const mx = Math.round(rawX), my = Math.round(rawY);
+  const trySnap = (v: number, lines: readonly number[]) => {
+    if (!opts.snap) return null;
+    const s = snapLine([v], lines, opts.threshold);
+    return s ? { edge: v + s.delta, at: s.at, dist: Math.abs(s.delta) } : null;
+  };
+  const guides: SnapGuide[] = [];
+  let newW = box.w, newH = box.h;
+  if (!lock) {
+    if (movesX) {
+      const s = trySnap(mx, targets.xs);
+      if (s) guides.push({ axis: 'x', at: s.at });
+      newW = lenX(s ? s.edge : mx);
+    }
+    if (movesY) {
+      const s = trySnap(my, targets.ys);
+      if (s) guides.push({ axis: 'y', at: s.at });
+      newH = lenY(s ? s.edge : my);
+    }
+  } else {
+    const sxs = trySnap(mx, targets.xs), sys = trySnap(my, targets.ys);
+    let drive: 'x' | 'y';
+    if (sxs && sys) drive = sxs.dist <= sys.dist ? 'x' : 'y';
+    else if (sxs) drive = 'x';
+    else if (sys) drive = 'y';
+    else drive = lenX(mx) / box.w >= lenY(my) / box.h ? 'x' : 'y';
+    if (drive === 'x') {
+      newW = lenX(sxs ? sxs.edge : mx);
+      newH = Math.max(1, Math.round(box.h * (newW / box.w)));
+      if (sxs) guides.push({ axis: 'x', at: sxs.at });
+    } else {
+      newH = lenY(sys ? sys.edge : my);
+      newW = Math.max(1, Math.round(box.w * (newH / box.h)));
+      if (sys) guides.push({ axis: 'y', at: sys.at });
+    }
+  }
+  const sx = newW / box.w, sy = newH / box.h;
+  const anchor = { x: movesX ? ax : box.x, y: movesY ? ay : box.y };
+  const nb = { x: movesX && west ? ax - newW : box.x, y: movesY && north ? ay - newH : box.y, w: newW, h: newH };
+  return { rects: scaleRects(start, anchor, sx, sy), box: nb, guides, sx, sy };
+}
+
+/** 數字欄位改整組外框的寬 / 高：左上角不動；lockAspect = 只給一邊時另一邊照長寬比跟著變 */
+export function scaleGroupTo(start: readonly PixelRect[], target: { w?: number; h?: number }, lockAspect: boolean): PixelRect[] {
+  const box = boundsOf(start);
+  if (!box) return [];
+  let w = target.w === undefined ? box.w : Math.max(1, Math.round(target.w));
+  let h = target.h === undefined ? box.h : Math.max(1, Math.round(target.h));
+  if (lockAspect && target.w !== undefined && target.h === undefined) h = Math.max(1, Math.round(box.h * (w / box.w)));
+  else if (lockAspect && target.h !== undefined && target.w === undefined) w = Math.max(1, Math.round(box.w * (h / box.h)));
+  return scaleRects(start, { x: box.x, y: box.y }, w / box.w, h / box.h);
+}
+
+/** 「整組縮放 %」：50 = 縮成一半大、200 = 放大一倍，以整組外框的左上角為準；不合理的百分比（0、負的、不是數字）= 不動 */
+export function scaleGroupPct(start: readonly PixelRect[], pct: number): PixelRect[] {
+  const box = boundsOf(start);
+  if (!box) return [];
+  if (!Number.isFinite(pct) || pct <= 0) return start.map(r => ({ ...r }));
+  const f = pct / 100;
+  return scaleRects(start, { x: box.x, y: box.y }, f, f);
+}

@@ -4,12 +4,13 @@ import { FlipHorizontal2, FlipVertical2, Maximize, Redo2, RotateCw, Undo2, ZoomI
 import Icon from './Icon';
 import { useCanvasView } from '../lib/useCanvasView';
 import {
-  flaggedKeys, gridStep, SNAP_SCREEN_PX, snapResize, snapTargets,
+  flaggedKeys, gridStep, SNAP_SCREEN_PX, snapTargets,
   type Handle, type SnapGuide, type SnapTargets, type View,
 } from '../lib/ledTemplateEdit';
 import {
   applyMarquee, boundsOf, flipPatches, groupTargets, isAdditive, marqueeBox, marqueeHits, movePatches, nudgeRects, pressSelect, releaseSelect,
-  rotatePatches, sameSelection, selectAllKeys, selectionTag, snapGroupMove, type PressPending, type Selection,
+  GROUP_HANDLES, isCornerHandle, rotatePatches, sameSelection, selectAllKeys, selectionTag, snapGroupMove, snapGroupScale,
+  type GroupHandle, type PressPending, type Selection,
 } from '../lib/ledTemplateSelect';
 import type { ItemPatch, ItemPatchEntry } from '../lib/ledTemplateDraft';
 import { panelHue, type CanvasSize, type PixelRect } from '../lib/ledMap';
@@ -21,7 +22,8 @@ import './LedTemplateCanvas.css';
 /**
  * 版型畫布（拖拉編輯）：版型的畫布 + 每塊放進去的螢幕（長方形，寫著名字和「實際 W×H → 這個版型 w×h」）。
  *   點一下選一塊，Shift / Ctrl（Cmd）點 = 加選或取消選，空白處拖曳 = 框選（碰到的都選，Shift / Ctrl 加選），Ctrl+A 全選，點空白處取消選取。
- *   拖曳移動（選了好幾塊就整組一起動，吸附的是整組的外框）、單選時拖四個角縮放（Shift 鎖長寬比）、方向鍵微調整組（Shift 10 px）、
+ *   拖曳移動（選了好幾塊就整組一起動，吸附的是整組的外框）、拖角落縮放（預設鎖長寬比，按住 Shift 橫直各縮各的；選了好幾塊
+ *   就是拖虛線外框的角落或邊，整組每一塊的位置和大小乘同樣的倍數）、方向鍵微調整組（Shift 10 px）、
  *   Delete 拿掉選到的（好幾塊只問一次）、Ctrl+Z / Ctrl+Shift+Z 復原重做（整組一個動作 = 一步）。
  *   位置、大小一定是整數；靠近沒選到的螢幕的邊或畫布的邊會吸過去（按住 Alt 不吸附）。
  *   重疊、超出畫布的畫紅框。滾輪縮放、按住空白鍵拖曳（或中鍵拖曳）平移、手機平板雙指縮放平移。
@@ -69,11 +71,17 @@ type Pt = { x: number; y: number };
 type Drag =
   | { kind: 'move'; keys: string[]; startRects: PixelRect[]; anchor: string; baseSel: string[]; pending: PressPending; startPt: Pt; startClient: Pt; targets: SnapTargets; started: boolean }
   | { kind: 'resize'; key: string; handle: Handle; startRect: PixelRect; targets: SnapTargets }
+  | { kind: 'gscale'; handle: GroupHandle; keys: string[]; startRects: PixelRect[]; targets: SnapTargets }
   | { kind: 'marquee'; startPt: Pt; startClient: Pt; base: string[]; additive: boolean; last: string[]; started: boolean }
   | { kind: 'pan'; startLocal: Pt; startView: View };
 
 const HANDLES: Handle[] = ['nw', 'ne', 'sw', 'se'];
 const CURSOR: Record<Handle, string> = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize' };
+const GROUP_CURSOR: Record<GroupHandle, string> = {
+  nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: 'nesw-resize', n: 'ns-resize', s: 'ns-resize', e: 'ew-resize', w: 'ew-resize',
+};
+/** 整組外框在畫面上短於這個長度（像素）的那一邊，不放邊的把手（會跟角落的把手疊在一起） */
+const EDGE_HANDLE_MIN_PX = 44;
 const MOVE_SLOP_PX = 3;
 const STRETCH_TOLERANCE = 0.02;
 
@@ -103,7 +111,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
   /** 選到的螢幕（照版型裡的順序） */
   const selItems = useMemo(() => placed.filter(i => selectedSet.has(i.key)), [placed, selectedSet]);
   const selKeys = useMemo(() => selItems.map(i => i.key), [selItems]);
-  /** 剛好只選一塊才有縮放把手 */
+  /** 剛好只選一塊：那一塊自己的四個角把手（選了好幾塊是整組外框的把手） */
   const sel = selItems.length === 1 ? selItems[0] : null;
   const groupBox = useMemo(() => (selItems.length > 1 ? boundsOf(selItems.map(i => i.dest)) : null), [selItems]);
 
@@ -139,7 +147,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
     setGuides([]);
     setGrabbing(false);
     setMarquee(null);
-    if (d && (d.kind === 'resize' || (d.kind === 'move' && d.started))) onGesture('end');
+    if (d && (d.kind === 'resize' || d.kind === 'gscale' || (d.kind === 'move' && d.started))) onGesture('end');
     if (release) { try { api.hostRef.current?.releasePointerCapture(release.pointerId); } catch { /* 已經放開了 */ } }
   }
 
@@ -160,6 +168,15 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
     if (e.button === 1 || spaceRef.current) { dragRef.current = { kind: 'pan', startLocal: api.local(e), startView: view }; setGrabbing(true); return; }
     if (handleEl && sel) {
       dragRef.current = { kind: 'resize', key: sel.key, handle: handleEl.dataset.handle as Handle, startRect: sel.dest, targets: targetsFor(sel.key) };
+      onGesture('start');
+      return;
+    }
+    if (handleEl && groupBox) {
+      // 複選：拖整組外框的把手 = 整組一起縮放（一次拖曳 = 復原一步）
+      dragRef.current = {
+        kind: 'gscale', handle: handleEl.dataset.handle as GroupHandle, keys: selKeys, startRects: selItems.map(i => i.dest),
+        targets: groupTargets(canvas, placed, selKeys),
+      };
       onGesture('start');
       return;
     }
@@ -211,10 +228,16 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
       const r = snapGroupMove(d.startRects, p.x - d.startPt.x, p.y - d.startPt.y, d.targets, { threshold, snap });
       setGuides(r.guides);
       onPatch(movePatches(d.keys.map(key => ({ key })), r.rects), 'live');
-    } else {
-      const r = snapResize(d.startRect, d.handle, p.x, p.y, d.targets, { threshold, snap, keepAspect: e.shiftKey });
+    } else if (d.kind === 'gscale') {
+      // 角落預設鎖整組的長寬比，按住 Shift 橫直各縮各的；邊只縮那一個方向
+      const r = snapGroupScale(d.startRects, d.handle, p.x, p.y, d.targets, { threshold, snap, keepAspect: !e.shiftKey });
       setGuides(r.guides);
-      onPatch([{ key: d.key, patch: { dest: r.rect } }], 'live');
+      onPatch(movePatches(d.keys.map(key => ({ key })), r.rects), 'live');
+    } else {
+      // 單塊縮放 = 只有一塊的整組縮放：跟整組同一套規則（角落預設鎖長寬比，按住 Shift 橫直各縮各的）
+      const r = snapGroupScale([d.startRect], d.handle, p.x, p.y, d.targets, { threshold, snap, keepAspect: !e.shiftKey });
+      setGuides(r.guides);
+      onPatch([{ key: d.key, patch: { dest: r.rects[0] } }], 'live');
     }
   }
 
@@ -408,6 +431,22 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           />
         )}
 
+        {groupBox && (() => {
+          const b = groupBox;
+          const x0 = sx(b.x), x1 = sx(b.x + b.w), y0 = sy(b.y), y1 = sy(b.y + b.h);
+          const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+          const pos: Record<GroupHandle, Pt> = { nw: { x: x0, y: y0 }, n: { x: mx, y: y0 }, ne: { x: x1, y: y0 }, e: { x: x1, y: my }, se: { x: x1, y: y1 }, s: { x: mx, y: y1 }, sw: { x: x0, y: y1 }, w: { x: x0, y: my } };
+          const wideEnough = x1 - x0 >= EDGE_HANDLE_MIN_PX, tallEnough = y1 - y0 >= EDGE_HANDLE_MIN_PX;
+          return GROUP_HANDLES.filter(hd => isCornerHandle(hd) || (hd === 'n' || hd === 's' ? wideEnough : tallEnough)).map(hd => (
+            <span
+              key={hd}
+              data-handle={hd}
+              className={'ltc__handle' + (isCornerHandle(hd) ? '' : ' ltc__handle--edge')}
+              style={{ transform: `translate(${pos[hd].x}px, ${pos[hd].y}px)`, cursor: GROUP_CURSOR[hd] }}
+            />
+          ));
+        })()}
+
         {sel && (() => {
           const b = sel.dest;
           const pos: Record<Handle, Pt> = {
@@ -431,7 +470,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           <div className="ltc__empty muted">版型裡還沒有螢幕。在右邊的清單按「加入版型」，就會放在畫布上，再用滑鼠拖到想要的位置。</div>
         )}
       </div>
-      <p className="ltc__hint ltc__hint--wrap muted">空白處拖曳框選（Shift / Ctrl 加選，Ctrl+A 全選）· 拖曳螢幕移動，選了好幾塊就一起動 · 只選一塊時拖角落縮放（Shift 鎖長寬比）· 方向鍵微調 1 像素（Shift 10 像素）· 靠近邊會吸附（Alt 不吸附）· 滾輪縮放 · 按住空白鍵拖曳、滑鼠中鍵拖曳或雙指平移</p>
+      <p className="ltc__hint ltc__hint--wrap muted">空白處拖曳框選（Shift / Ctrl 加選，Ctrl+A 全選）· 拖曳螢幕移動，選了好幾塊就一起動 · 拖角落縮放（預設鎖長寬比，Shift 可以自由拉；選了好幾塊就是整組一起縮放，拖虛線外框的角落或邊）· 方向鍵微調 1 像素（Shift 10 像素）· 靠近邊會吸附（Alt 不吸附）· 滾輪縮放 · 按住空白鍵拖曳、滑鼠中鍵拖曳或雙指平移</p>
     </div>
   );
 }

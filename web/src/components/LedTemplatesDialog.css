@@ -285,8 +285,14 @@
   width: 100%;
   padding: 2px 4px;
 }
-.ledtpl-sel__grid--2 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.ledtpl-sel__pct {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+}
+.ledtpl-sel__pctinput {
+  width: 64px;
+  padding: 2px 4px;
 }
 .ledtpl-sel__names {
   list-style: none;

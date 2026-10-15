@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   applyMarquee, boundsOf, clickSelect, flipPatches, groupTargets, isAdditive, marqueeBox, marqueeHits, moveGroupTo, movePatches,
-  nudgeRects, pressSelect, pruneSelection, releaseSelect, rotatePatches, sameSelection, selectAllKeys, selectionTag, snapGroupMove,
+  nudgeRects, pressSelect, pruneSelection, releaseSelect, rotatePatches, sameSelection, scaleGroupPct, scaleGroupTo, scaleRects,
+  selectAllKeys, selectionTag, snapGroupMove, snapGroupScale,
 } from './ledTemplateSelect';
-import { commit, newHistory, redo, settle, snapMove, snapTargets, transient, undo } from './ledTemplateEdit';
+import { commit, newHistory, redo, settle, snapMove, snapResize, snapTargets, transient, undo } from './ledTemplateEdit';
 import { patchDraftItems, removeScreensFromDraft, type Draft } from './ledTemplateDraft';
 
 const C = { width: 1000, height: 400 };
@@ -291,6 +292,224 @@ describe('復原：一次動作 = 一步', () => {
     }
     expect(h.past.length).toBe(1);
     expect(boundsOf(dests(h.present, keys))!.x).toBe(130);
+  });
+});
+
+describe('整組縮放', () => {
+  // 三塊：外框 x 100～500、y 100～200（寬 400、高 100）
+  const rects = dests(draft3, ['a', 'b', 'c']);
+  const T = snapTargets(C, []);
+  const free = { threshold: 8, snap: false, keepAspect: false };
+  const lock = { threshold: 8, snap: false, keepAspect: true };
+
+  it('scaleRects：位置（離不動點多遠）和大小乘同樣的倍數', () => {
+    const out = scaleRects(rects, { x: 100, y: 100 }, 2, 3);
+    expect(out[0]).toEqual({ x: 100, y: 100, w: 200, h: 150 });
+    expect(out[1]).toEqual({ x: 400, y: 160, w: 120, h: 240 });   // x: 100 + 150×2、y: 100 + 20×3
+    expect(out[2]).toEqual({ x: 700, y: 100, w: 200, h: 150 });
+  });
+
+  it('scaleRects：用「邊」四捨五入，貼在一起的兩塊縮完還是貼在一起；位置大小都是整數', () => {
+    const touching = [{ x: 0, y: 0, w: 33, h: 10 }, { x: 33, y: 0, w: 33, h: 10 }, { x: 66, y: 0, w: 34, h: 10 }];
+    const out = scaleRects(touching, { x: 0, y: 0 }, 0.37, 1);
+    expect(out[0].x + out[0].w).toBe(out[1].x);
+    expect(out[1].x + out[1].w).toBe(out[2].x);
+    expect(out.every(r => Number.isInteger(r.x) && Number.isInteger(r.y) && Number.isInteger(r.w) && Number.isInteger(r.h))).toBe(true);
+    expect(out[2].x + out[2].w).toBe(37);   // 100 × 0.37
+  });
+
+  it('scaleRects：再小每一塊也至少 1 像素', () => {
+    const out = scaleRects(rects, { x: 100, y: 100 }, 0.001, 0.001);
+    expect(out.every(r => r.w >= 1 && r.h >= 1)).toBe(true);
+  });
+
+  it('右下角（se）：左上角不動，整組乘同樣的倍數', () => {
+    // 外框 400×100，把右下角拖到 (900, 300) → 寬 800（×2）；鎖比例所以高 200
+    const r = snapGroupScale(rects, 'se', 900, 300, T, lock);
+    expect(r.box).toEqual({ x: 100, y: 100, w: 800, h: 200 });
+    expect(r.sx).toBe(2);
+    expect(r.sy).toBe(2);
+    expect(r.rects[0]).toEqual({ x: 100, y: 100, w: 200, h: 100 });
+    expect(r.rects[1]).toEqual({ x: 400, y: 140, w: 120, h: 160 });
+    expect(boundsOf(r.rects)).toEqual(r.box);
+  });
+
+  it('左上角（nw）：右下角（500, 200）不動', () => {
+    const r = snapGroupScale(rects, 'nw', 300, 150, T, lock);   // 寬 400 → 200（×0.5）
+    expect(r.box).toEqual({ x: 300, y: 150, w: 200, h: 50 });
+    expect(boundsOf(r.rects)).toEqual({ x: 300, y: 150, w: 200, h: 50 });
+    const b = boundsOf(r.rects)!;
+    expect(b.x + b.w).toBe(500);
+    expect(b.y + b.h).toBe(200);
+  });
+
+  it('右上角（ne）、左下角（sw）也是對面的角不動', () => {
+    const ne = snapGroupScale(rects, 'ne', 700, 50, T, lock);   // 左下角 (100, 200) 不動；寬 600（×1.5）
+    expect(ne.box).toEqual({ x: 100, y: 50, w: 600, h: 150 });
+    const sw = snapGroupScale(rects, 'sw', 0, 140, T, lock);    // 右上角 (500, 100) 不動；橫向 ×1.25、直向只有 ×0.4 → 以橫向為準
+    expect(sw.box).toEqual({ x: 0, y: 100, w: 500, h: 125 });
+  });
+
+  it('邊（e / w / n / s）：只縮那一個方向，對面的邊不動，另一個方向完全不動', () => {
+    const e = snapGroupScale(rects, 'e', 300, 999, T, lock);   // 就算 keepAspect 也只縮橫向
+    expect(e.box).toEqual({ x: 100, y: 100, w: 200, h: 100 });
+    expect(e.sy).toBe(1);
+    expect(e.rects.map(r => [r.y, r.h])).toEqual(rects.map(r => [r.y, r.h]));
+    const w = snapGroupScale(rects, 'w', 300, 0, T, lock);
+    expect(w.box).toEqual({ x: 300, y: 100, w: 200, h: 100 });
+    const s = snapGroupScale(rects, 's', 0, 300, T, lock);
+    expect(s.box).toEqual({ x: 100, y: 100, w: 400, h: 200 });
+    expect(s.rects.map(r => [r.x, r.w])).toEqual(rects.map(r => [r.x, r.w]));
+    const n = snapGroupScale(rects, 'n', 0, 150, T, lock);
+    expect(n.box).toEqual({ x: 100, y: 150, w: 400, h: 50 });
+  });
+
+  it('鎖長寬比（預設）：以拉得比較多的那一邊為準，長寬比不變', () => {
+    // 外框 400×100：橫向拉到 ×2，直向只拉到 ×1.2 → 以橫向為準
+    const a = snapGroupScale(rects, 'se', 900, 220, T, lock);
+    expect(a.box.w).toBe(800);
+    expect(a.box.h).toBe(200);
+    // 直向拉到 ×3、橫向 ×1.1 → 以直向為準
+    const b = snapGroupScale(rects, 'se', 540, 400, T, lock);
+    expect(b.box.h).toBe(300);
+    expect(b.box.w).toBe(1200);
+  });
+
+  it('Shift（keepAspect = false）：橫直各縮各的', () => {
+    const r = snapGroupScale(rects, 'se', 900, 220, T, free);
+    expect(r.box).toEqual({ x: 100, y: 100, w: 800, h: 120 });
+    expect(r.sx).toBe(2);
+    expect(r.sy).toBeCloseTo(1.2, 10);
+    expect(r.rects[1].h).toBe(96);   // 80 × 1.2
+  });
+
+  it('不會翻過去：拖過對面就停在 1 像素，每一塊至少 1 像素', () => {
+    const r = snapGroupScale(rects, 'se', 0, 0, T, free);
+    expect(r.box.w).toBe(1);
+    expect(r.box.h).toBe(1);
+    expect(r.rects.every(x => x.w >= 1 && x.h >= 1)).toBe(true);
+    const l = snapGroupScale(rects, 'nw', 9999, 9999, T, lock);
+    expect(l.box.w).toBeGreaterThanOrEqual(1);
+    expect(l.box.h).toBeGreaterThanOrEqual(1);
+    expect(l.rects.every(x => x.w >= 1 && x.h >= 1)).toBe(true);
+  });
+
+  it('滑鼠位置有小數也會先四捨五入，結果都是整數', () => {
+    const r = snapGroupScale(rects, 'se', 733.4, 217.6, T, free);
+    expect(r.box).toEqual({ x: 100, y: 100, w: 633, h: 118 });
+    expect(r.rects.every(x => [x.x, x.y, x.w, x.h].every(Number.isInteger))).toBe(true);
+  });
+
+  it('吸附：被拖的邊靠近沒被選到的螢幕的邊就吸過去（自由縮放）', () => {
+    const t = groupTargets(C, draft3.items, ['a', 'b', 'c']);   // 有 d 的左邊 700、畫布邊 1000…
+    const r = snapGroupScale(rects, 'se', 697, 230, t, { threshold: 8, snap: true, keepAspect: false });
+    expect(r.box.x + r.box.w).toBe(700);
+    expect(r.guides).toContainEqual({ axis: 'x', at: 700 });
+    expect(r.box.h).toBe(130);   // y 沒有靠近的線（目標是 300 / 350 / 400，差太多）
+  });
+
+  it('吸附：鎖長寬比時，吸到的那一邊決定倍數，另一邊照比例跟著算', () => {
+    const t = groupTargets(C, draft3.items, ['a', 'b', 'c']);
+    const r = snapGroupScale(rects, 'se', 697, 200, t, { threshold: 8, snap: true, keepAspect: true });
+    expect(r.box).toEqual({ x: 100, y: 100, w: 600, h: 150 });   // 右邊吸到 700 → ×1.5 → 高 150
+    expect(r.guides).toContainEqual({ axis: 'x', at: 700 });
+  });
+
+  it('吸附：吸畫布的邊；組裡面自己的邊不會吸', () => {
+    const t = groupTargets(C, draft3.items, ['a', 'b', 'c']);
+    const r = snapGroupScale(rects, 'se', 600, 397, t, { threshold: 8, snap: true, keepAspect: false });
+    expect(r.box.y + r.box.h).toBe(400);   // 畫布下緣
+    // 滑鼠到 b 的右邊（310）附近：b 是選到的，不是吸附的線
+    const near = snapGroupScale(rects, 'se', 312, 150, t, { threshold: 8, snap: true, keepAspect: false });
+    expect(near.box.w).toBe(212);
+  });
+
+  it('Alt（snap = false）不吸附', () => {
+    const t = groupTargets(C, draft3.items, ['a', 'b', 'c']);
+    const r = snapGroupScale(rects, 'se', 697, 230, t, { threshold: 8, snap: false, keepAspect: false });
+    expect(r.box.w).toBe(597);
+    expect(r.guides).toEqual([]);
+  });
+
+  it('只選一塊也一樣：等於縮那一塊自己', () => {
+    const one = [draft3.items[0].dest];   // (100,100,100,50)
+    const r = snapGroupScale(one, 'se', 300, 100, T, free);
+    expect(r.rects[0]).toEqual({ x: 100, y: 100, w: 200, h: 1 });
+  });
+
+  it('單塊縮放走同一套：自由縮放（Shift）時跟原本的單塊縮放 snapResize 結果一樣', () => {
+    const start = { x: 100, y: 100, w: 200, h: 100 };
+    const t = snapTargets(C, [{ x: 500, y: 0, w: 100, h: 400 }]);
+    for (const hd of ['nw', 'ne', 'sw', 'se'] as const) {
+      for (const [mx, my, snap] of [[330.4, 190.2, true], [497, 60, true], [10, 10, false], [150, 400, true], [100, 100, true]] as const) {
+        const a = snapGroupScale([start], hd, mx, my, t, { threshold: 8, snap, keepAspect: false });
+        const b = snapResize(start, hd, mx, my, t, { threshold: 8, snap });
+        expect(a.rects[0]).toEqual(b.rect);
+      }
+    }
+  });
+
+  it('單塊縮放鎖長寬比（預設）：長寬比不變', () => {
+    const start = { x: 100, y: 100, w: 200, h: 100 };
+    const r = snapGroupScale([start], 'se', 500, 250, snapTargets(C, []), { threshold: 8, snap: false, keepAspect: true });
+    expect(r.rects[0]).toEqual({ x: 100, y: 100, w: 400, h: 200 });
+  });
+
+  it('沒有東西 = 空', () => {
+    expect(snapGroupScale([], 'se', 10, 10, T, lock).rects).toEqual([]);
+    expect(scaleGroupTo([], { w: 10 }, true)).toEqual([]);
+    expect(scaleGroupPct([], 50)).toEqual([]);
+  });
+
+  it('scaleGroupPct：50 = 縮成一半，左上角不動；200 = 放大一倍', () => {
+    const half = scaleGroupPct(rects, 50);
+    expect(boundsOf(half)).toEqual({ x: 100, y: 100, w: 200, h: 50 });
+    expect(half[0]).toEqual({ x: 100, y: 100, w: 50, h: 25 });
+    expect(half[1]).toEqual({ x: 175, y: 110, w: 30, h: 40 });
+    expect(boundsOf(scaleGroupPct(rects, 200))).toEqual({ x: 100, y: 100, w: 800, h: 200 });
+    expect(scaleGroupPct(rects, 100)).toEqual(rects);
+  });
+
+  it('scaleGroupPct：不合理的百分比不動；縮很小每一塊也至少 1 像素', () => {
+    expect(scaleGroupPct(rects, 0)).toEqual(rects);
+    expect(scaleGroupPct(rects, -5)).toEqual(rects);
+    expect(scaleGroupPct(rects, Number.NaN)).toEqual(rects);
+    expect(scaleGroupPct(rects, 0.1).every(r => r.w >= 1 && r.h >= 1)).toBe(true);
+  });
+
+  it('scaleGroupTo：改寬或高，左上角不動；鎖長寬比時另一邊照比例，沒鎖就不動', () => {
+    expect(boundsOf(scaleGroupTo(rects, { w: 200 }, true))).toEqual({ x: 100, y: 100, w: 200, h: 50 });
+    expect(boundsOf(scaleGroupTo(rects, { w: 200 }, false))).toEqual({ x: 100, y: 100, w: 200, h: 100 });
+    expect(boundsOf(scaleGroupTo(rects, { h: 300 }, true))).toEqual({ x: 100, y: 100, w: 1200, h: 300 });
+    expect(boundsOf(scaleGroupTo(rects, { h: 300 }, false))).toEqual({ x: 100, y: 100, w: 400, h: 300 });
+    const tiny = scaleGroupTo(rects, { w: 0 }, false);   // 寬最小 1，每一塊至少 1 像素
+    expect(tiny.every(r => r.w >= 1 && r.h >= 1)).toBe(true);
+    expect(boundsOf(tiny)!.w).toBeLessThanOrEqual(3);
+  });
+
+  it('一次拖曳 = 復原一步：拖的途中只換現在的樣子，放開記一步，復原整組回原樣', () => {
+    const keys = ['a', 'b', 'c'];
+    const sel = draft3.items.filter(i => keys.includes(i.key));
+    const t = groupTargets(C, draft3.items, keys);
+    let h = newHistory(draft3);
+    for (const [mx, my] of [[520, 210], [640, 240], [900, 300]] as const) {
+      const g = snapGroupScale(sel.map(i => i.dest), 'se', mx, my, t, { threshold: 4, snap: true, keepAspect: true });
+      h = transient(h, patchDraftItems(h.present, movePatches(sel, g.rects)));
+    }
+    h = settle(h, draft3);
+    expect(h.past.length).toBe(1);
+    expect(boundsOf(dests(h.present, keys))).toEqual({ x: 100, y: 100, w: 800, h: 200 });
+    expect(h.present.items[3]).toBe(draft3.items[3]);   // 沒選到的 d 不動
+    const u = undo(h);
+    expect(u.present).toBe(draft3);
+  });
+
+  it('縮完的大小跟標準大小差太多，「被拉伸」的判斷照原本的規則算（大小直接寫在草稿裡）', () => {
+    const g = snapGroupScale(dests(draft3, ['a', 'b']), 'se', 700, 300, T, free);
+    const next = patchDraftItems(draft3, movePatches([draft3.items[0], draft3.items[1]], g.rects));
+    expect(next.items[0].dest.w).toBeGreaterThan(draft3.items[0].dest.w);
+    expect(next.items[0].rotate).toBe(0);   // 只改位置大小，轉動翻轉不動
+    expect(next.items[1].flipH).toBe(true);
   });
 });
 

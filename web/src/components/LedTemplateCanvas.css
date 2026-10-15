@@ -201,12 +201,26 @@
   position: absolute;
   inset: -10px;
 }
+/* 整組外框四條邊中間的把手：比角落的小一點、圓的 */
+.ltc__handle--edge {
+  left: -5px;
+  top: -5px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
 @media (pointer: coarse) {
   .ltc__handle {
     left: -9px;
     top: -9px;
     width: 18px;
     height: 18px;
+  }
+  .ltc__handle--edge {
+    left: -8px;
+    top: -8px;
+    width: 16px;
+    height: 16px;
   }
   .ltc__handle::after {
     inset: -12px;
