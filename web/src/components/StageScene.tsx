@@ -2670,7 +2670,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const free = freeSpot(items, { x: base.x / unitsPerMeter, z: base.z / unitsPerMeter }, rightAxis);
         const at = standAt({ x: free.x * unitsPerMeter, z: free.z * unitsPerMeter });
         const item = sanitizeStagePropItem({
-          id: newStagePropId(), type, x: at.x / unitsPerMeter, y: at.y / unitsPerMeter, z: at.z / unitsPerMeter, rotY: facingYaw(front2),
+          id: newStagePropId(), type, x: at.x / unitsPerMeter, y: at.y / unitsPerMeter, z: at.z / unitsPerMeter,
+          // 地板監聽喇叭是對著樂手（背對觀眾），其他面向觀眾
+          rotY: type === 'monitor' ? normalizeRotY(facingYaw(front2) + 180) : facingYaw(front2),
         });
         if (!item) return;
         change([...items, item]);
