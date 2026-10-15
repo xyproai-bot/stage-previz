@@ -4,6 +4,7 @@ import Icon from './Icon';
 import NumField from './NumField';
 import LedTemplateCanvas, { type ItemPatch, type PatchHow } from './LedTemplateCanvas';
 import LedSplitCanvas from './LedSplitCanvas';
+import LedTemplateLayers from './LedTemplateLayers';
 import { confirmDialog, promptDialog, toast } from './dialogs';
 import {
   createLedScreen, createLedTemplate, deleteLedScreen, deleteLedTemplate, updateLedTemplate,
@@ -24,6 +25,10 @@ import { panelColor, type PixelRect } from '../lib/ledMap';
 import { downloadBlob } from '../lib/ledMapDraw';
 import { guideFileName } from '../lib/ledTemplatePattern';
 import { renderTemplateGuidePng } from '../lib/ledTemplateDraw';
+import { layoutFromSpans } from '../lib/ledTemplateContent';
+import { wholeCanvasLayout, type LayerBackdrop } from '../lib/ledTemplateContentDraw';
+import { useLedFullMap } from '../lib/useLedFullMap';
+import { useTemplateBackdrop } from '../lib/useTemplateBackdrop';
 import type { LedPatternSource } from '../lib/useLedPatternCanvas';
 import { isPhoneLayout } from '../lib/viewportVars';
 import type { LedCanvas } from '../lib/ledCanvas';
@@ -37,6 +42,8 @@ import './LedTemplatesDialog.css';
  *   面板開著的時候，3D 的 LED 顯示這個版型的測試圖（每塊螢幕不同顏色 + 名字 + 指著上方的箭頭 + 像素格），放錯、轉錯一眼就看得出來。
  *   「下載模板圖」= 版型畫布大小的 PNG，給動畫師當 AE 的參考圖層。「複製版型」= 複製一份再改名字。
  *   「全部」是現在的整張 LED 畫布（每塊螢幕的真實點數都從它來），不能改。
+ *   版型畫布上：每塊螢幕的框裡畫「對位圖內容」（整張畫布的測試圖裡屬於這塊螢幕的那一段，照轉動、翻轉擺進來）；最底下可以墊一張自己載入的「底圖」
+ *   （只存在這台電腦的瀏覽器裡，不上傳）。對位圖內容和底圖都只是編輯時的參考，不會存進版型。
  * 純邏輯：lib/ledTemplateEdit.ts / ledTemplateDraft.ts / ledTemplatePattern.ts（有單元測試）
  * 說明：docs/superpowers/specs/2026-10-15-led-canvas-templates-design.md
  */
@@ -80,6 +87,9 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
   const [mode, setMode] = useState<'template' | 'full'>('template');
   const [busy, setBusy] = useState(false);
   const [spans, setSpans] = useState<Record<string, SrcSpan>>({});
+  /** 問了很多次 3D 畫面都沒有 LED 的範圍（沒有模型）：對位圖內容改畫整張畫布一張 */
+  const [sceneGaveUp, setSceneGaveUp] = useState(false);
+  const [contentOn, setContentOn] = useState(true);
   const histRef = useRef(hist);
   histRef.current = hist;
   const gestureBase = useRef<Draft | null>(null);
@@ -96,10 +106,12 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     if (!open) return;
     let tries = 0;
     let timer = 0;
+    setSceneGaveUp(false);
     const grab = () => {
       const s = getSpans();
       if (s && Object.keys(s).length > 0) setSpans(s);
       else if (tries++ < 12) timer = window.setTimeout(grab, 700);
+      else setSceneGaveUp(true);
     };
     grab();
     return () => window.clearTimeout(timer);
@@ -169,6 +181,30 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     }, wait);
   }, [source]);
   useEffect(() => () => { window.clearTimeout(previewTimer.current); onPreviewRef.current(null); }, []);
+
+  // 對位圖內容：整張畫布的測試圖（跟 3D 的 LED 沒有影片時顯示的同一張），排法 / 畫布大小換了才重畫一次，拖曳時一直用同一張
+  const sceneReady = Object.keys(spans).length > 0;
+  const fullW = fullCanvas?.width ?? 0, fullH = fullCanvas?.height ?? 0;
+  const mapLayout = useMemo(() => {
+    if (!open || phone || !contentOn || !fullW || !fullH) return null;
+    const canvas = { width: fullW, height: fullH };
+    if (sceneReady) {
+      const lay = layoutFromSpans(ledObjects, spans, canvas);
+      if (lay.panels.length > 0) return lay;
+    }
+    return sceneGaveUp ? wholeCanvasLayout(canvas) : null;
+  }, [open, phone, contentOn, fullW, fullH, sceneReady, spans, ledObjects, sceneGaveUp]);
+  const fullMap = useLedFullMap(mapLayout);
+  const contentNote = fullMap.error
+    ? `對位圖內容畫不出來：${fullMap.error}`
+    : fullMap.busy ? '畫圖中…' : !mapLayout ? '等 3D 畫面載好…' : '';
+
+  // 底圖：存在這台電腦的瀏覽器裡（專案 + 版型），不上傳
+  const backdrop = useTemplateBackdrop(projectId, open && !phone && draft ? draft.id : undefined);
+  const backdropLayer = useMemo<LayerBackdrop | null>(
+    () => (backdrop.picture ? { image: backdrop.picture.image, width: backdrop.picture.width, height: backdrop.picture.height, prefs: backdrop.prefs } : null),
+    [backdrop.picture, backdrop.prefs],
+  );
 
   const issues = useMemo(() => {
     if (!plan) return [];
@@ -254,7 +290,11 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
       setSavedSig(draftSignature(kept));
       const newId = await afterSave(v.body.name);
       toast.success(`版型「${v.body.name}」存好了`);
-      if (!draft.id && newId) { loadedFor.current = ''; setSelectedTpl(newId); }
+      if (!draft.id && newId) {
+        await backdrop.adopt(projectId, null, newId);   // 還沒存的時候載入的底圖，跟著換成真正的版型代號
+        loadedFor.current = '';
+        setSelectedTpl(newId);
+      }
     } catch (e) {
       toast.error('沒有存好：' + msg(e));
     } finally {
@@ -308,6 +348,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     setBusy(true);
     try {
       await deleteLedTemplate(projectId, draft.id);
+      void backdrop.purge(projectId, draft.id);
       setHist(null); setSavedSig(''); setSelectedTpl(''); loadedFor.current = '';
       await onChanged();
       toast.success('版型刪掉了');
@@ -501,6 +542,18 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                 onRemove={removeScreen}
                 onUndo={doUndo}
                 onRedo={doRedo}
+                fullMap={fullMap.map}
+                showContent={contentOn}
+                backdrop={backdropLayer}
+                layersBar={(
+                  <LedTemplateLayers
+                    contentOn={contentOn}
+                    onContentOn={setContentOn}
+                    contentNote={contentNote}
+                    backdrop={backdrop}
+                    canvas={{ width: draft.width, height: draft.height }}
+                  />
+                )}
               />
             ) : (
               <LedSplitCanvas

@@ -233,6 +233,120 @@
   }
 }
 
+/* 底圖 + 每塊螢幕框裡的對位圖內容（一張 canvas，夾在格線和框之間） */
+.ltc__pix {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+.ltc__guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+/* 框裡有畫面了：框本身變透明，只留邊框；名字、大小、箭頭墊半透明的底，壓在格線上也看得清楚 */
+.ltc__item.has-pix {
+  background: transparent;
+}
+.ltc__item.has-pix.is-selected {
+  background: hsla(var(--hue), 60%, 50%, 0.08);
+}
+.ltc__item.has-pix.is-bad {
+  background: hsla(350, 80%, 45%, 0.18);
+}
+.ltc__item.has-pix .ltc__label {
+  right: auto;
+  max-width: calc(100% - 32px);
+  padding: 2px 6px 3px;
+  background: rgba(8, 9, 12, 0.66);
+  border-radius: 4px;
+  text-shadow: none;
+}
+.ltc__item.has-pix .ltc__arrow {
+  background: rgba(8, 9, 12, 0.66);
+  border-radius: 4px;
+  padding: 1px;
+  box-sizing: border-box;
+}
+
+/* 畫布上方的底層開關列 */
+.ltc__layerbox {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ltc__layers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 12px;
+}
+.ltc__layers--size {
+  padding: 5px 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-md);
+}
+.ltc__layers--size .ui-icon {
+  color: var(--warn);
+}
+.ltc__layers-note {
+  font-size: 11px;
+}
+.ltc__layers-file {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.ltc__opacity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  color: var(--text-dim);
+}
+.ltc__opacity input[type='range'] {
+  width: 110px;
+  accent-color: var(--accent);
+}
+.ltc__opacity input[type='range']:disabled {
+  opacity: 0.4;
+}
+.ltc__opacity output {
+  min-width: 34px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text);
+}
+.ltc__seg {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.ltc__seg button {
+  min-height: 32px;
+  padding: 0 10px;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  border: none;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ltc__seg button.is-on {
+  background: var(--accent-dim);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
 /* 整張畫布（切螢幕） */
 .ltc__piece {
   position: absolute;

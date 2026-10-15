@@ -1,5 +1,5 @@
-import { useMemo, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { FlipHorizontal2, FlipVertical2, Maximize, Redo2, RotateCw, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
 import Icon from './Icon';
 import { useCanvasView } from '../lib/useCanvasView';
@@ -10,6 +10,7 @@ import {
 import { panelHue, type CanvasSize, type PixelRect } from '../lib/ledMap';
 import { defaultDestSize, screenSizeLabel, type PlacementInput, type ScreenDef } from '../lib/ledTemplate';
 import { upDirection, upText } from '../lib/ledTemplatePattern';
+import { drawLayers, type FullMap, type LayerBackdrop } from '../lib/ledTemplateContentDraw';
 import './LedTemplateCanvas.css';
 
 /**
@@ -17,6 +18,8 @@ import './LedTemplateCanvas.css';
  *   拖曳移動、拖四個角縮放（Shift 鎖長寬比）、方向鍵微調（Shift 10 px）、Delete 拿掉、Ctrl+Z / Ctrl+Shift+Z 復原重做。
  *   位置、大小一定是整數；靠近別塊螢幕的邊或畫布的邊會吸過去（按住 Alt 不吸附）。
  *   重疊、超出畫布的畫紅框。滾輪縮放、空白處拖曳（或中鍵）平移、手機平板雙指縮放。
+ *   每塊螢幕的框裡可以畫「對位圖內容」（整張畫布的測試圖裡屬於這塊螢幕的那一段，照轉動、翻轉擺進來），
+ *   最底下可以墊一張自己載入的「底圖」；兩個都畫在同一張 canvas 上（lib/ledTemplateContentDraw.ts），框和字還是網頁元素。
  * 數字怎麼算：lib/ledTemplateEdit.ts（有單元測試）。
  */
 
@@ -40,6 +43,14 @@ interface Props {
   onRemove: (key: string) => void;
   onUndo: () => void;
   onRedo: () => void;
+  /** 整張畫布的測試圖（畫好留著的那張）；還沒有 = null */
+  fullMap?: FullMap | null;
+  /** 框裡畫對位圖內容 */
+  showContent?: boolean;
+  /** 底圖（含開關、不透明度、怎麼擺）；沒有 = null */
+  backdrop?: LayerBackdrop | null;
+  /** 工具列下面那排開關 */
+  layersBar?: ReactNode;
 }
 
 type Pt = { x: number; y: number };
@@ -58,12 +69,13 @@ export function zoomText(zoom: number): string {
   return `${pct >= 10 ? Math.round(pct) : Number(pct.toFixed(1))}%`;
 }
 
-export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo }: Props) {
+export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo, fullMap = null, showContent = false, backdrop = null, layersBar = null }: Props) {
   const api = useCanvasView(canvas, resetKey);
   const { view, size } = api;
   const dragRef = useRef<Drag | null>(null);
   const [guides, setGuides] = useState<SnapGuide[]>([]);
   const [grabbing, setGrabbing] = useState(false);
+  const pixRef = useRef<HTMLCanvasElement>(null);
 
   const defByKey = useMemo(() => new Map(defs.map(d => [d.key, d])), [defs]);
   const placed = useMemo(() => items.filter(i => defByKey.has(i.key)), [items, defByKey]);
@@ -199,6 +211,27 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
 
   const ordered = useMemo(() => [...placed].sort((a, b) => (a.key === selected ? 1 : 0) - (b.key === selected ? 1 : 0)), [placed, selected]);
 
+  // 底圖 + 框裡的對位圖內容：畫在一張 canvas 上（整張畫布的測試圖是畫好留著的，這裡只是剪一塊貼進框裡）
+  const contentShown = showContent && !!fullMap && fullMap.canvas.width > 0;
+  const dpr = typeof window === 'undefined' ? 1 : Math.min(2, window.devicePixelRatio || 1);
+  useLayoutEffect(() => {
+    const el = pixRef.current;
+    if (!el || size.w <= 0 || size.h <= 0) return;
+    const pw = Math.round(size.w * dpr), ph = Math.round(size.h * dpr);
+    if (el.width !== pw || el.height !== ph) { el.width = pw; el.height = ph; }
+    const ctx = el.getContext('2d');
+    if (!ctx) return;
+    try {
+      drawLayers(ctx, {
+        canvas, view, size, dpr, backdrop,
+        content: contentShown && fullMap ? { map: fullMap, spanOf: (k: string) => defByKey.get(k)?.src ?? null } : null,
+        items: ordered.map(i => ({ key: i.key, dest: i.dest, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV })),
+      });
+    } catch (e) {
+      console.warn('[ledTemplate] canvas layers draw failed:', e);
+    }
+  }, [canvas, view, size, dpr, backdrop, contentShown, fullMap, defByKey, ordered]);
+
   return (
     <div className="ltc">
       <div className="ltc__toolbar" role="toolbar" aria-label="版型畫布工具">
@@ -214,6 +247,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
         <button className="ltc__btn" onClick={() => sel && onPatch(sel.key, { flipH: !sel.flipH }, {})} disabled={!sel} aria-pressed={!!sel?.flipH} title="左右翻轉（轉完再翻）"><Icon icon={FlipHorizontal2} /> <span className="ltc__btn-text">左右翻轉</span></button>
         <button className="ltc__btn" onClick={() => sel && onPatch(sel.key, { flipV: !sel.flipV }, {})} disabled={!sel} aria-pressed={!!sel?.flipV} title="上下翻轉（轉完再翻）"><Icon icon={FlipVertical2} /> <span className="ltc__btn-text">上下翻轉</span></button>
       </div>
+      {layersBar}
 
       <div
         ref={api.hostRef}
@@ -231,6 +265,9 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           <rect x={sx(0)} y={sy(0)} width={canvas.width * view.zoom} height={canvas.height * view.zoom} className="ltc__canvas" />
           <path d={gridPath.minor} className="ltc__grid" />
           <path d={gridPath.major} className="ltc__grid ltc__grid--major" />
+        </svg>
+        <canvas ref={pixRef} className="ltc__pix" style={{ width: size.w, height: size.h }} aria-hidden="true" />
+        <svg className="ltc__guides" width={size.w} height={size.h} aria-hidden="true">
           <rect x={sx(0)} y={sy(0)} width={canvas.width * view.zoom} height={canvas.height * view.zoom} className="ltc__canvas-edge" />
           {guides.map((g, i) => (g.axis === 'x'
             ? <line key={i} x1={sx(g.at)} x2={sx(g.at)} y1={0} y2={size.h} className="ltc__guide" />
@@ -257,7 +294,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
             <div
               key={it.key}
               data-key={it.key}
-              className={'ltc__item' + (it.key === selected ? ' is-selected' : '') + (bad ? ' is-bad' : '') + (grabbing && it.key === selected ? ' is-grabbing' : '')}
+              className={'ltc__item' + (it.key === selected ? ' is-selected' : '') + (bad ? ' is-bad' : '') + (grabbing && it.key === selected ? ' is-grabbing' : '') + (contentShown ? ' has-pix' : '')}
               style={style}
               title={tip}
             >
