@@ -19,6 +19,8 @@ import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, t
 import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
 import { hoistsOfRig } from '../lib/mechanisms/hoist';
 import { stageFrontDirection } from '../lib/stageCamera';
+import { FIGURE_HEIGHT_M, FIGURE_LABEL, MAX_STAND_ABOVE_DECK_M, canStandOnCategory, deckFootprint, defaultFigureSpots, figureSpotsFromExtent, findDeckLevel, gridCenter, pickFigureSpots } from '../lib/scaleReference';
+import { buildWalkMesh, disposeWalkMesh, extractUpFaces, standingYAt, surfaceSignature } from '../lib/scaleReferenceScene';
 import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
 import HomeViewPanel from './HomeViewPanel';
@@ -471,7 +473,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // Wireframe / X-ray 模式（debug 看穿模型結構）
   const [wireframe, setWireframe] = useState(false);
 
-  // 比例尺輔助（人形剪影 + 1m 網格）— 給動畫師看實體大小
+  // 比例尺輔助（人形 1.7 m + 1 m 網格，人形站在舞台面上、可以拖）— 給動畫師看實體大小
   const [showScaleRef, setShowScaleRef] = useState(false);
   const scaleRefGroupRef = useRef<THREE.Group | null>(null);
 
@@ -2404,8 +2406,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     });
   }, [wireframe, states, stageObjects, modelVersion]);
 
-  // ── 比例尺輔助：人形剪影 + 每格 1 公尺的網格 ──
+  // ── 比例尺輔助：人形（站在舞台面上、可以拖）+ 每格 1 公尺的網格 ──
   // 用 scaleCorrection 把真實公尺換算成 scene units，所以校準後尺寸就會對得起來。
+  // 人形站哪：把舞台（不含 LED）所有朝上的面依高度加總面積，最大的那一層 = 舞台面（桁架 / 屋頂的頂面小很多，不會被當成地板）；
+  // 舞台面正面那一側的前緣往內縮，左 / 中 / 右各一個，往下打光線站上去（算法在 lib/scaleReference.ts）。
+  // 模型載入 / 換了（modelVersion）、校準倍率變了就重新擺；拖動只在這次開著的時候有效，不存檔。
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
@@ -2415,11 +2420,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       scene.remove(scaleRefGroupRef.current);
       scaleRefGroupRef.current.traverse((c) => {
         const m = c as THREE.Mesh;
+        const sp = c as THREE.Sprite;
         if (m.isMesh) {
           m.geometry?.dispose?.();
           const mat = m.material as THREE.Material | THREE.Material[];
           if (Array.isArray(mat)) mat.forEach(x => x?.dispose?.());
           else mat?.dispose?.();
+        } else if (sp.isSprite) {
+          (sp.material as THREE.SpriteMaterial).map?.dispose?.();
+          sp.material.dispose();
         }
       });
       scaleRefGroupRef.current = null;
@@ -2433,63 +2442,311 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     // 1 公尺對應幾個 scene unit
     const unitsPerMeter = 1 / scaleCorrection;
 
-    // 網格：20m × 20m，每格 1m
+    // ── 舞台面：哪些 mesh 可以站（不含 LED、走位點、表演者）──
+    const categoryOf = new Map<string, string>();
+    for (const o of stageObjectsRef.current || []) categoryOf.set(o.id, o.category);
+    for (const s of statesRef.current || []) if (!categoryOf.has(s.objectId)) categoryOf.set(s.objectId, s.category);
+    const visibleMeshes = (include: (id: string) => boolean): THREE.Mesh[] => {
+      const out: THREE.Mesh[] = [];
+      meshesRef.current.forEach((obj, id) => {
+        if (!include(id)) return;
+        obj.updateWorldMatrix(true, true);
+        obj.traverseVisible((c) => { if ((c as THREE.Mesh).isMesh) out.push(c as THREE.Mesh); });
+      });
+      return out;
+    };
+    const groundMeshes = () => visibleMeshes(id => canStandOnCategory(categoryOf.get(id)));
+    const ledRoots = [...meshesRef.current].filter(([id]) => categoryOf.get(id) === 'led_panel').map(([, o]) => o);
+    const front = stageFrontDirection(ledRoots);
+    const front2 = { x: front.x, z: front.z };
+
+    // 朝上的面 → 面積最大的那一層 = 舞台面 → 它的前後左右範圍
+    const ground = groundMeshes();
+    const faces = extractUpFaces(ground);
+    const level = findDeckLevel(faces, unitsPerMeter);
+    const footprint = level == null ? null : deckFootprint(faces, level, front2, unitsPerMeter);
+    // 往下 / 沿著滑鼠打光線只打「舞台面 + 3.5 m 以內」的朝上的面（比整個模型快很多，也不會站到桁架、屋頂上）
+    const capY = level == null ? Infinity : level + MAX_STAND_ABOVE_DECK_M * unitsPerMeter;
+    let walkMesh = buildWalkMesh(faces, capY);
+    let walkSig = surfaceSignature(ground);
+
+    // 光線沒打到東西時站的高度 = 舞台外框最低點
+    const box = new THREE.Box3();
+    for (const m of ground) box.expandByObject(m);
+    const hasBox = !box.isEmpty();
+    const floorY = hasBox ? box.min.y : 0;
+    const downRay = new THREE.Raycaster();
+
+    const spots = footprint
+      ? figureSpotsFromExtent(footprint.extent, front2, unitsPerMeter)
+      : hasBox ? pickFigureSpots(box, front2, unitsPerMeter) : defaultFigureSpots(unitsPerMeter);
+
+    // 一個站位 → 人形腳底的位置：從舞台面上方往下打光線，站在打到的最高的水平面上
+    const standAt = (spot: { x: number; z: number }): THREE.Vector3 => {
+      const targets = walkMesh ? [walkMesh] : [];
+      if (footprint) {
+        // 站位剛好在舞台面的形狀外面（斜角、缺口）→ 往舞台面的重心一步步找，找到真的有舞台面的地方
+        for (let k = 0; k <= 10; k++) {
+          const x = spot.x + (footprint.centroid.x - spot.x) * (k / 10);
+          const z = spot.z + (footprint.centroid.z - spot.z) * (k / 10);
+          const y = standingYAt(targets, x, z, footprint.level + 1 * unitsPerMeter, Number.NaN, downRay);
+          if (!Number.isNaN(y) && Math.abs(y - footprint.level) <= 0.3 * unitsPerMeter) return new THREE.Vector3(x, y, z);
+        }
+      }
+      // 沒有舞台面可以對：從模型上方往下打，站最高的水平面；打不到就站在外框最低點
+      const top = (hasBox ? box.max.y : 0) + 1 * unitsPerMeter;
+      return new THREE.Vector3(spot.x, standingYAt(targets, spot.x, spot.z, top, floorY, downRay), spot.z);
+    };
+
+    // ── 人形：淺色填色 + 深色外框，亮的暗的舞台都看得到 ──
+    const FIG_W = 160, FIG_H = 320;
+    const makePersonTexture = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = FIG_W;
+      canvas.height = FIG_H;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.lineWidth = 5;
+        ctx.strokeStyle = '#1a1a1a';
+        ctx.fillStyle = '#e6e6e6';
+        const cx = FIG_W / 2;
+        // 頭
+        ctx.beginPath();
+        ctx.arc(cx, 34, 22, 0, Math.PI * 2);
+        ctx.fill(); ctx.stroke();
+        // 身體 + 手臂 + 兩條腿（一個輪廓）
+        ctx.beginPath();
+        ctx.moveTo(cx - 20, 64);
+        ctx.lineTo(cx + 20, 64);
+        ctx.quadraticCurveTo(cx + 46, 66, cx + 50, 92);   // 右肩
+        ctx.lineTo(cx + 56, 168);                          // 右手臂外側
+        ctx.lineTo(cx + 42, 170);
+        ctx.lineTo(cx + 36, 112);                          // 右手臂內側
+        ctx.lineTo(cx + 32, 184);                          // 右腰
+        ctx.lineTo(cx + 30, 312);                          // 右腿外側
+        ctx.lineTo(cx + 6, 312);
+        ctx.lineTo(cx + 2, 196);                           // 胯
+        ctx.lineTo(cx - 2, 196);
+        ctx.lineTo(cx - 6, 312);
+        ctx.lineTo(cx - 30, 312);
+        ctx.lineTo(cx - 32, 184);
+        ctx.lineTo(cx - 36, 112);
+        ctx.lineTo(cx - 42, 170);
+        ctx.lineTo(cx - 56, 168);
+        ctx.lineTo(cx - 50, 92);
+        ctx.quadraticCurveTo(cx - 46, 66, cx - 20, 64);
+        ctx.closePath();
+        ctx.fill(); ctx.stroke();
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      return tex;
+    };
+    // 畫面上人形頭頂到腳底（含外框）佔 FIG_H 裡的 [FIG_TOP, FIG_BOTTOM]（頭頂 y = 34 - 22 - 2.5，腳底 y = 312 + 2.5）
+    const FIG_TOP = 9.5, FIG_BOTTOM = 314.5;
+    const figureHeightUnits = FIGURE_HEIGHT_M * unitsPerMeter * (FIG_H / (FIG_BOTTOM - FIG_TOP));
+    const personTex = makePersonTexture();
+    const makePerson = () => {
+      const mat = new THREE.SpriteMaterial({ map: personTex, transparent: true, depthTest: true, depthWrite: false, toneMapped: false, fog: false });
+      const sprite = new THREE.Sprite(mat);
+      sprite.scale.set(figureHeightUnits * (FIG_W / FIG_H), figureHeightUnits, 1);
+      sprite.center.set(0.5, 1 - FIG_BOTTOM / FIG_H);   // 腳底對準站的高度（sprite 的 center：0 = 底、1 = 頂）
+      sprite.renderOrder = 5;
+      sprite.name = 'scale-reference-person';
+      return sprite;
+    };
+
+    // 「1.7 m」的小字，跟著中間那個人形
+    const makeLabel = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 96;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.font = 'bold 60px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 10;
+        ctx.strokeStyle = '#1a1a1a';
+        ctx.strokeText(FIGURE_LABEL, 128, 50);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillText(FIGURE_LABEL, 128, 50);
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false, fog: false });
+      const sprite = new THREE.Sprite(mat);
+      const h = 0.36 * unitsPerMeter;
+      sprite.scale.set(h * (256 / 96), h, 1);
+      sprite.center.set(0.5, 0);
+      sprite.renderOrder = 6;
+      sprite.name = 'scale-reference-label';
+      return sprite;
+    };
+
+    // 站好
+    const figs: THREE.Sprite[] = spots.map((spot) => {
+      const p = makePerson();
+      p.position.copy(standAt(spot));
+      group.add(p);
+      return p;
+    });
+    const centerFig = figs[1];
+    const label = makeLabel();
+    const placeLabel = () => label.position.set(centerFig.position.x, centerFig.position.y + (FIGURE_HEIGHT_M + 0.1) * unitsPerMeter, centerFig.position.z);
+    placeLabel();
+    group.add(label);
+
+    // 網格：20m × 20m，每格 1m，中心在舞台正中間、高度跟中間人形站的地面一樣
     const gridSize = 20 * unitsPerMeter;
     const gridDiv = 20;
     const grid = new THREE.GridHelper(gridSize, gridDiv, 0x10c78a, 0x2a5d4a);
     (grid.material as THREE.LineBasicMaterial).transparent = true;
     (grid.material as THREE.LineBasicMaterial).opacity = 0.55;
-    grid.position.y = 0.001 * unitsPerMeter; // 比地板高一咪咪避免 z-fighting
+    const stageCenter = footprint ? footprint.center : hasBox ? { x: (box.min.x + box.max.x) / 2, z: (box.min.z + box.max.z) / 2 } : { x: 0, z: 0 };
+    const gc = gridCenter(stageCenter, centerFig.position.y);
+    grid.position.set(gc.x, gc.y + 0.001 * unitsPerMeter, gc.z); // 比地板高一咪咪避免 z-fighting
     group.add(grid);
-
-    // 人形剪影 — 用 canvas 畫一個簡單的火柴人 silhouette，做成 sprite billboard
-    const makePerson = () => {
-      const canvas = document.createElement('canvas');
-      canvas.width = 64;
-      canvas.height = 160;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.fillStyle = '#1a1a1a';
-        // 頭
-        ctx.beginPath();
-        ctx.arc(32, 18, 12, 0, Math.PI * 2);
-        ctx.fill();
-        // 身 + 腿（梯形 → 兩腿）
-        ctx.beginPath();
-        ctx.moveTo(22, 30);
-        ctx.lineTo(42, 30);
-        ctx.lineTo(48, 90);
-        ctx.lineTo(36, 90);
-        ctx.lineTo(34, 158);
-        ctx.lineTo(28, 158);
-        ctx.lineTo(30, 90);
-        ctx.lineTo(16, 90);
-        ctx.closePath();
-        ctx.fill();
-      }
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      const mat = new THREE.SpriteMaterial({ map: tex, transparent: true, opacity: 0.75, depthTest: true, depthWrite: false });
-      const sprite = new THREE.Sprite(mat);
-      // 高 1.7m，寬比例 64/160
-      const heightUnits = 1.7 * unitsPerMeter;
-      sprite.scale.set(heightUnits * (64 / 160), heightUnits, 1);
-      // sprite 的 anchor 是中心，要把腳移到 y=0
-      sprite.center.set(0.5, 0); // 0=底, 1=頂
-      return sprite;
-    };
-
-    // 放兩個人形（左前 / 右前），距離 ~3m
-    const p1 = makePerson();
-    p1.position.set(-3 * unitsPerMeter, 0, 1 * unitsPerMeter);
-    group.add(p1);
-    const p2 = makePerson();
-    p2.position.set(3 * unitsPerMeter, 0, 1 * unitsPerMeter);
-    group.add(p2);
 
     scene.add(group);
     scaleRefGroupRef.current = group;
-  }, [showScaleRef, scaleCorrection]);
+
+    // ── 拖人形：按住人形拖，沿著舞台面滑（往下打光線找站的高度）──
+    // 鏡頭不轉、不會選到物件 / 改 cue / 加留言：用 capture 先攔下 pointerdown（比 OrbitControls、選取、gizmo 的監聽早），
+    // 拖的時候也把 OrbitControls 關掉；手指（觸控）一樣走 pointer events。
+    const renderer = rendererRef.current;
+    const camera = cameraRef.current;
+    const orbit = orbitRef.current;
+    let stopDrag: () => void = () => {};
+    let resetHover: () => void = () => {};
+    if (renderer && camera && orbit) {
+      const canvas = renderer.domElement;
+      const ray = new THREE.Raycaster();
+      const ndc = new THREE.Vector2();
+      const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+      const tmp = new THREE.Vector3();
+      const foot = new THREE.Vector3();
+      let drag: { fig: THREE.Sprite; pointerId: number; dx: number; dy: number } | null = null;
+      let hovering = false;
+      let pending: PointerEvent | null = null;
+      let raf = 0;
+
+      const aim = (clientX: number, clientY: number) => {
+        const rect = canvas.getBoundingClientRect();
+        ndc.set(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+        ray.setFromCamera(ndc, camera);
+      };
+      const figureAt = (e: PointerEvent): { fig: THREE.Sprite; distance: number } | null => {
+        aim(e.clientX, e.clientY);
+        const hit = ray.intersectObjects(figs, false)[0];
+        return hit ? { fig: hit.object as THREE.Sprite, distance: hit.distance } : null;
+      };
+      // 別的工具（量測 / 加留言點 / 走路 / 拖 gizmo）用著的時候，不搶滑鼠
+      const busy = () => !orbit.enabled || measureModeRef.current || addPinModeRef.current;
+      // 舞台動過（機關、換 cue）→ 抓人形的時候重抓一次朝上的面
+      const refreshWalk = () => {
+        const now = groundMeshes();
+        const sig = surfaceSignature(now);
+        if (sig === walkSig) return;
+        walkSig = sig;
+        disposeWalkMesh(walkMesh);
+        walkMesh = buildWalkMesh(extractUpFaces(now), capY);
+      };
+
+      const applyDrag = () => {
+        raf = 0;
+        const e = pending;
+        pending = null;
+        if (!drag || !e) return;
+        // 瞄準「腳在畫面上的位置」（滑鼠 - 抓住時滑鼠離腳的距離）：光線穿過腳的地方就是它踩的那個面
+        aim(e.clientX - drag.dx, e.clientY - drag.dy);
+        const hit = walkMesh ? ray.intersectObject(walkMesh, false)[0] : undefined;
+        let x: number, y: number, z: number;
+        if (hit) {
+          x = hit.point.x; y = hit.point.y; z = hit.point.z;
+        } else {
+          // 瞄到舞台外面：在人形現在的高度那個水平面上滑，再往下打光線（滑出台緣就掉到下面的地板）
+          const p = ray.ray.intersectPlane(plane.set(plane.normal, -drag.fig.position.y), tmp);
+          if (!p) return;
+          x = p.x; z = p.z;
+          y = standingYAt(walkMesh ? [walkMesh] : [], x, z, drag.fig.position.y + 0.05 * unitsPerMeter, floorY, downRay);
+        }
+        drag.fig.position.set(x, y, z);
+        if (drag.fig === centerFig) placeLabel();
+      };
+
+      const endDrag = () => {
+        if (!drag) return;
+        const { fig, pointerId } = drag;
+        drag = null;
+        (fig.material as THREE.SpriteMaterial).color.set(0xffffff);
+        orbit.enabled = true;
+        canvas.style.cursor = hovering ? 'grab' : '';
+        try { canvas.releasePointerCapture(pointerId); } catch { /* 已經放掉了 */ }
+      };
+
+      const onDown = (e: PointerEvent) => {
+        if (e.button !== 0 || drag || busy()) return;
+        const f = figureAt(e);
+        if (!f) return;
+        // 人形被舞台擋住（站在牆 / 結構後面）→ 看不到就不抓，鏡頭照常轉
+        const blocker = ray.intersectObjects(visibleMeshes(() => true), false)[0];
+        if (blocker && blocker.distance < f.distance - 0.05 * unitsPerMeter) return;
+        e.stopImmediatePropagation();
+        e.preventDefault();
+        refreshWalk();
+        // 抓住時滑鼠離腳的螢幕距離，拖的時候維持不變（人形不會跳到滑鼠位置）
+        const rect = canvas.getBoundingClientRect();
+        foot.copy(f.fig.position).project(camera);
+        drag = {
+          fig: f.fig,
+          pointerId: e.pointerId,
+          dx: e.clientX - (rect.left + ((foot.x + 1) / 2) * rect.width),
+          dy: e.clientY - (rect.top + ((1 - foot.y) / 2) * rect.height),
+        };
+        orbit.enabled = false;
+        (f.fig.material as THREE.SpriteMaterial).color.set(0xfff0b8);
+        canvas.style.cursor = 'grabbing';
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* 不支援就算了，移出畫面才會斷 */ }
+      };
+      const onMove = (e: PointerEvent) => {
+        if (drag) {
+          if (e.pointerId !== drag.pointerId) return;
+          pending = e;
+          if (!raf) raf = requestAnimationFrame(applyDrag);
+          return;
+        }
+        if (e.pointerType === 'touch') return;
+        const over = !busy() && !!figureAt(e);
+        if (over !== hovering) { hovering = over; canvas.style.cursor = over ? 'grab' : ''; }
+      };
+      const onUp = (e: PointerEvent) => {
+        if (!drag || e.pointerId !== drag.pointerId) return;
+        if (pending) applyDrag();   // 最後一個位置也套上
+        endDrag();
+      };
+
+      canvas.addEventListener('pointerdown', onDown, true);
+      canvas.addEventListener('pointermove', onMove);
+      canvas.addEventListener('pointerup', onUp);
+      canvas.addEventListener('pointercancel', onUp);
+      stopDrag = () => {
+        canvas.removeEventListener('pointerdown', onDown, true);
+        canvas.removeEventListener('pointermove', onMove);
+        canvas.removeEventListener('pointerup', onUp);
+        canvas.removeEventListener('pointercancel', onUp);
+        if (raf) cancelAnimationFrame(raf);
+        pending = null;
+        endDrag();
+      };
+      resetHover = () => { if (hovering) { hovering = false; canvas.style.cursor = ''; } };
+    }
+
+    return () => { stopDrag(); resetHover(); disposeWalkMesh(walkMesh); };
+  }, [showScaleRef, scaleCorrection, modelVersion]);
 
   // ── Walk mode：pointer lock + WASD keys ──
   useEffect(() => {
@@ -2764,8 +3021,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (showScaleButton) {
       tools.push({
         id: 'scale', group: 'show', priority: 6,
-        render: (l) => toolBtn({ icon: PersonStanding, label: '比例尺', title: showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形剪影 + 1m 網格', labeled: l, active: showScaleRef, pressed: showScaleRef, onClick: () => setShowScaleRef(s => !s) }),
-        menu: { icon: PersonStanding, label: '比例尺', checked: showScaleRef, hint: '人形剪影 + 1m 網格', onSelect: () => setShowScaleRef(s => !s) },
+        render: (l) => toolBtn({ icon: PersonStanding, label: '比例尺', title: showScaleRef ? '隱藏比例尺輔助' : '顯示比例尺輔助：人形 1.7 m + 每格 1 m 網格，可以拖動人形', labeled: l, active: showScaleRef, pressed: showScaleRef, onClick: () => setShowScaleRef(s => !s) }),
+        menu: { icon: PersonStanding, label: '比例尺', checked: showScaleRef, hint: '人形 1.7 m + 1 m 網格，可拖動人形', onSelect: () => setShowScaleRef(s => !s) },
       });
     }
     tools.push({
