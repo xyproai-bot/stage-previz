@@ -10,6 +10,7 @@
 import type { ProjectRole } from './mockData';
 import type { ShareSongVideo, SongVideo, SongVideoStatus } from './videoApi';
 import { parseServerTime } from './serverTime';
+import { parsePlan, type LedTemplatePlan } from './ledTemplate';
 
 export interface VersionItem {
   /** 'v:<影片 id>'（版本）或 'd:<Drive 檔案 id>'（舊的 Drive 影片） */
@@ -35,6 +36,8 @@ export interface VersionItem {
   status: SongVideoStatus;
   /** 成員看到的完整資料（刪除權限要看誰交的）；分享連結 / Drive = null */
   video: SongVideo | null;
+  /** 這一版做的時候用的 LED 版型排法（沒有 = 整張畫布，Drive 舊影片也是） */
+  template: LedTemplatePlan | null;
 }
 
 export const versionKey = (id: string) => `v:${id}`;
@@ -57,6 +60,7 @@ export function itemFromVideo(v: SongVideo, absolute: (u: string) => string): Ve
     crossOrigin: 'anonymous',
     status: v.status,
     video: v,
+    template: parsePlan(v.template),
   };
 }
 
@@ -77,6 +81,7 @@ export function itemFromShareVideo(v: ShareSongVideo, absolute: (u: string) => s
     crossOrigin: 'anonymous',
     status: 'ready',
     video: null,
+    template: parsePlan(v.template),
   };
 }
 
@@ -112,6 +117,7 @@ export function itemsFromLegacyDrive(files: LegacyDriveVideo[]): VersionItem[] {
     crossOrigin: f.crossOrigin,
     status: 'ready' as const,
     video: null,
+    template: null,
   }));
 }
 

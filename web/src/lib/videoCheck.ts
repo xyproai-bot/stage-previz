@@ -6,6 +6,7 @@
 // 本地檔案（localVideo.ts）和貼連結的版本第一次播的時候，也用這裡的話。
 
 import type { CanvasSize } from './ledMap';
+import { templateVideoNote } from './ledTemplate';
 
 /** 寬度超過這個：很多電腦（筆電、iPad）播不動 */
 export const MAX_SAFE_WIDTH = 8192;
@@ -173,6 +174,8 @@ export interface VideoCheck {
   warnings: CheckWarning[];
   /** 一行說明：1920×1080 · 3:00 · 約 25 Mbps · H.264（讀不到的不寫） */
   summary: string;
+  /** 不是提醒、只是告訴你的事（例：影片剛好是 LED 版型的 50%，播放時自動放大貼回）；沒有就不會有這個欄位 */
+  notes?: string[];
 }
 
 export interface CheckInput {
@@ -183,6 +186,8 @@ export interface CheckInput {
   ledCanvas?: CanvasSize | null;
   /** 檔案裡的影像編碼（讀不到 = null） */
   codec?: CodecInfo | null;
+  /** 這首歌選的 LED 版型（整張畫布 / 沒選 = null → 照專案的 LED 畫布比）：影片大小跟版型畫布比，剛好等比例縮放就接受、標百分比，比例不一樣才提醒變形 */
+  template?: { name: string; canvas: CanvasSize } | null;
 }
 
 /** 秒數 → 3:00 / 1:02:03 */
@@ -243,7 +248,9 @@ function blockDetail(input: CheckInput): string | null {
 
 /** 試播結果 + 檔案大小 + LED 畫布 → 要不要擋、要提醒什麼 */
 export function assessVideo(input: CheckInput): VideoCheck {
-  const { probe, sizeBytes, ledCanvas, codec } = input;
+  const { probe, sizeBytes, codec, template } = input;
+  // 選了版型：影片是跟版型畫布比（不是整張 LED 畫布）
+  const ledCanvas = template ? template.canvas : input.ledCanvas;
   const summaryParts: string[] = [];
   if (probe.ok) {
     summaryParts.push(dims(probe.width, probe.height));
@@ -273,15 +280,22 @@ export function assessVideo(input: CheckInput): VideoCheck {
       text: `位元率大約 ${Math.round(mbps)} Mbps（檔案大小 ÷ 長度），超過 ${HIGH_BITRATE_MBPS}：筆電播起來可能會卡。H.264 的 4K 建議 20–40 Mbps`,
     });
   }
-  const cw = canvasWarning({ width: probe.width, height: probe.height }, ledCanvas);
-  if (cw) warnings.push(cw);
+  let notes: string[] | undefined;
+  if (template) {
+    const tn = templateVideoNote({ width: probe.width, height: probe.height }, template);
+    if (tn?.level === 'warn') warnings.push({ kind: 'canvasStretch', text: tn.text });
+    else if (tn) notes = [tn.text];
+  } else {
+    const cw = canvasWarning({ width: probe.width, height: probe.height }, ledCanvas);
+    if (cw) warnings.push(cw);
+  }
   if (codec?.family === 'hevc') {
     warnings.push({
       kind: 'codec',
       text: `這支是 ${codec.label}：你這台電腦播得了，但不是每台電腦都能播（要看顯示卡和瀏覽器），導演、客戶那邊可能看不到。建議改輸出 H.264 MP4`,
     });
   }
-  return { block: null, warnings, summary };
+  return { block: null, warnings, summary, ...(notes ? { notes } : {}) };
 }
 
 // ─── 版本第一次播的時候（貼連結的版本沒辦法先檢查）───

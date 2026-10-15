@@ -75,6 +75,7 @@ import {
 } from './invites.mjs';
 // 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
 import * as mech from './mechanisms.mjs';
+import * as ledTpl from './ledTemplates.mjs';
 // 登入狀態什麼時候失效（重設登入碼 / 停用帳號 → 那個人其他裝置的登入失效）
 import {
   SESSION_TTL_SEC, sessionIssuedAtSec, sessionTokenExp, sessionTokenHash, sessionAllowed,
@@ -345,7 +346,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.groupId, route.deletedVideoId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.groupId, route.deletedVideoId, route.tplId, route.screenId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -534,6 +535,19 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         : deleteCueState(request, env, projectId, cueId, objId);
 
     // 機關（mechanisms.mjs）
+    // LED 畫布版型（ledTemplates.mjs）
+    case 'ledTemplates.list':     return mechResp(ledTpl.listTemplates(env, ctx));
+    case 'ledTemplates.create':   return mechResp(ledTpl.createTemplate(request, env, ctx, mechLog(request, env, projectId)));
+    case 'ledTemplates.item':
+      return mechResp(request.method === 'PATCH'
+        ? ledTpl.updateTemplate(request, env, ctx, route.tplId, mechLog(request, env, projectId))
+        : ledTpl.deleteTemplate(request, env, ctx, route.tplId, mechLog(request, env, projectId)));
+    case 'ledScreens.create':     return mechResp(ledTpl.createScreen(request, env, ctx, mechLog(request, env, projectId)));
+    case 'ledScreens.item':
+      return mechResp(request.method === 'PATCH'
+        ? ledTpl.updateScreen(request, env, ctx, route.screenId, mechLog(request, env, projectId))
+        : ledTpl.deleteScreen(request, env, ctx, route.screenId, mechLog(request, env, projectId)));
+
     case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
     case 'mechanisms.create':     return mechResp(mech.createMechanism(request, env, ctx, mechLog(request, env, projectId)));
     case 'mechanisms.reorder':    return mechResp(mech.reorderMechanisms(request, env, ctx, mechLog(request, env, projectId)));
@@ -1055,6 +1069,12 @@ async function duplicateProject(request, env, projectId) {
   // 7. 機關（定義、帶的物件、每個 cue 的位置）。舊的機關滑桿欄位（mechanism_offsets）不再寫：0023 已經轉成機關、跟著上面一起複製
   const mechCopy = await mech.copyMechanismsToProject(env, projectId, newId, objIdMap, cueIdMap);
 
+  // 8. LED 畫布版型（0034）：版型、手動切的螢幕、每首歌選的版型
+  await ledTpl.copyTemplatesToProject(
+    env, projectId, newId, objIdMap,
+    (oldSongs.results || []).filter(x => x.template_id && songIdMap.get(x.id)).map(x => ({ songId: songIdMap.get(x.id), templateId: x.template_id })),
+  );
+
   await logActivity(request, env, newId, 'create', 'project', newId, {
     name: newName,
     duplicatedFrom: projectId,
@@ -1255,6 +1275,8 @@ async function exportProject(request, env, projectId) {
     stageObjects, songs, cues, cueObjectStates: states,
     // 機關：mechanisms / mechanismObjects / cueMechanismPositions（資料庫原樣；舊的匯出檔沒有）
     ...(await mech.exportMechanisms(env, projectId)),
+    // LED 畫布版型（0034）：ledTemplates / ledTemplateScreens / ledScreens（songs 列上的 template_id 指到這裡；舊的匯出檔沒有）
+    ...(await ledTpl.exportTemplates(env, projectId)),
   };
   return new Response(JSON.stringify(payload, null, 2), {
     status: 200,
@@ -1364,6 +1386,10 @@ async function importProject(request, env) {
 
   // 機關（舊的匯出檔沒有 → 什麼都不做）
   await mech.importMechanisms(env, newId, body, objIdMap, cueIdMap);
+  await ledTpl.importTemplates(
+    env, newId, body, objIdMap,
+    (body.songs || []).filter(x => x.template_id && songIdMap.get(x.id)).map(x => ({ songId: songIdMap.get(x.id), templateId: x.template_id })),
+  );
 
   await logActivity(request, env, newId, 'create', 'project', newId, {
     name: newName,
@@ -1543,7 +1569,7 @@ const SONG_NAME_MAX = 80;
 
 async function listSongs(env, projectId) {
   const query = () => env.DB.prepare(`
-    SELECT s.id, s.name, s."order", s.animator_user_id, s.status, s.created_at, s.code,
+    SELECT s.id, s.name, s."order", s.animator_user_id, s.status, s.created_at, s.code, s.template_id,
       (SELECT COUNT(*) FROM cues c WHERE c.song_id = s.id AND c.status = 'master') AS cue_count,
       (SELECT COUNT(*) FROM cues c WHERE c.song_id = s.id AND c.status = 'proposal') AS proposal_count
     FROM songs s
@@ -1566,6 +1592,8 @@ async function listSongs(env, projectId) {
     animatorUserId: s.animator_user_id, status: s.status,
     createdAt: s.created_at,
     cueCount: s.cue_count, proposalCount: s.proposal_count,
+    // 這首歌選的 LED 版型（0034；沒選 = 整張畫布 = null）
+    templateId: s.template_id || null,
     // 最新可以播的影片版本（沒有 = null）；版本清單：GET /songs/:id/videos
     latestVideoId: latest.get(s.id)?.id || null,
     latestVideoVersion: latest.get(s.id)?.version ?? null,
@@ -1639,6 +1667,7 @@ async function updateSong(request, env, ctx, songId) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
 
   const before = ctx.song;  // router 已經確認這首歌屬於這個專案
+  if ('templateId' in body && !('template_id' in body)) body.template_id = body.templateId;
 
   const touchesContent = SONG_CONTENT_FIELDS.some(k => k in body);
   if (touchesContent && !canEditProjectContent(role)) {
@@ -1680,6 +1709,12 @@ async function updateSong(request, env, ctx, songId) {
     const taken = songCodeTakenBy(c.code, others);
     if (taken) return jsonResp({ error: `代號 ${c.code} 已經是「${taken.name}」在用了`, codeTaken: true }, 409);
     sets.push('code = ?'); values.push(c.code);
+  }
+  if ('template_id' in body) {
+    // LED 版型（0034）：null / 「全部」= 整張畫布；其他要是這個專案的版型
+    const t = await ledTpl.resolveTemplateChoice(env, projectId, body.template_id);
+    if (!t.ok) return jsonResp({ error: t.error }, 400);
+    sets.push('template_id = ?'); values.push(t.id);
   }
   if ('drive_folder_id' in body) {
     const f = body.drive_folder_id;
@@ -4747,6 +4782,9 @@ function videoToApi(v, { streamUrl = null, latestId = null, upload = null, dupli
     // 跟更早交的哪一版是同一個檔案（storage.mjs duplicateMarks；沒有 = null）；還在算指紋 → fingerprintPending
     duplicateOf,
     fingerprintPending,
+    // 這一版做的時候用的 LED 版型和當時的排法（0034；沒有 = 整張畫布）
+    templateId: v.template_id || null,
+    template: ledTpl.snapshotToApi(v.template_snapshot),
     ...(upload ? { upload } : {}),
   };
 }
@@ -4767,6 +4805,7 @@ function videoToShareApi(v, streamUrl) {
     createdAt: v.created_at,
     readyAt: v.ready_at || null,
     streamUrl,
+    template: ledTpl.snapshotToApi(v.template_snapshot),
   };
 }
 
@@ -4907,6 +4946,8 @@ async function createVideoUpload(request, env, ctx) {
     // 瀏覽器交之前算好的檔案指紋（videoFingerprint.ts；格式不對就不存，之後排程從 R2 算）
     storage.cleanFingerprint(body?.fingerprint),
   ).run();
+  // LED 版型（0034）：記下這一版做的時候用的版型（前端帶 templateId；沒帶 = 歌現在選的）
+  await ledTpl.stampVideoTemplates(env, projectId, [{ id, songId: song.id }], 'templateId' in (body || {}) ? (body.templateId ?? null) : undefined);
   return songVideoResponse(env, ctx, { id }, 201);
 }
 
@@ -5279,6 +5320,7 @@ async function createVideoFromLink(request, env, ctx) {
     plan.partSize, src.copyKind, src.copyUrl ?? null, src.copyTokenId ?? null, src.rangeSupported ? 'range' : 'single',
     me.id, t, t,
   ).run();
+  await ledTpl.stampVideoTemplates(env, projectId, [{ id, songId: song.id }], 'templateId' in (body || {}) ? (body.templateId ?? null) : undefined);
   runInBackground(request, runVideoCopyJobs(env, { videoId: id, ...videoRequestStep(env) }));
   return songVideoResponse(env, ctx, { id }, 202);
 }
@@ -5498,8 +5540,10 @@ async function queueDriveVideoVersions(env, proj, pairs) {
   if (!plan.length) return 0;
   const base = Date.now();
   const partSize = copyPartSize(env);
+  const createdRows = [];
   const stmts = plan.map((p, i) => {
     const id = 'sv_' + randHex(8);
+    createdRows.push({ id, songId: p.songId });
     const created = new Date(base + i).toISOString();  // 一批裡也照 Drive 時間排
     const ok = p.status === 'processing';
     return env.DB.prepare(`
@@ -5517,6 +5561,7 @@ async function queueDriveVideoVersions(env, proj, pairs) {
     );
   });
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
+  await ledTpl.stampVideoTemplates(env, proj.id, createdRows).catch(() => {});
   return plan.filter(p => p.status === 'processing').length;
 }
 

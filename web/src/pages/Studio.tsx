@@ -1060,6 +1060,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   ndiGuideHint="沒有 AE？按上面的「本地檔案」把影片放到 LED 上，或按「加影片」交給導演看"
                   ledVideo={videoMode && player.ready ? player.video : null}
                   ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
+                  ledTemplate={versionVideoMode ? selectedVersion?.template ?? null : null}
                   poseAtFrame={poseAtFrame}
                   cueKey={selectedCueId}
                   crossfadeSeconds={cueTransitionSeconds(selectedCue)}

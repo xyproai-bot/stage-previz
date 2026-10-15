@@ -194,7 +194,7 @@ export function songStatusDecision({ role, userId, song, to, expected, hasReadyV
  *
  * @param {string} method
  * @param {string[]} segs  url.pathname.split('/').filter(Boolean)
- * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, videoId?: string, partNumber?: string, mechId?: string, allowArchived?: boolean} | null}
+ * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, videoId?: string, partNumber?: string, mechId?: string, tplId?: string, screenId?: string, allowArchived?: boolean} | null}
  *          null = 沒有這個路徑（404）或方法不對（405，見 methodNotAllowed）
  */
 export function describeProjectRoute(method, segs) {
@@ -306,6 +306,23 @@ export function describeProjectRoute(method, segs) {
       if (!a || b) return null;
       if (m === 'PATCH' || m === 'DELETE') return r('mechGroups.item', 'editor', { groupId: a });
       return bad('mechGroups.item');
+
+    // LED 畫布版型（設計：docs/superpowers/specs/2026-10-15-led-canvas-templates-design.md；API：docs/led-templates-api.md）
+    case 'led-templates':
+      if (!a) {
+        if (read) return r('ledTemplates.list', 'member');
+        if (m === 'POST') return r('ledTemplates.create', 'editor');
+        return bad('ledTemplates');
+      }
+      if (b) return null;
+      if (m === 'PATCH' || m === 'DELETE') return r('ledTemplates.item', 'editor', { tplId: a });
+      return bad('ledTemplates.item');
+    // 手動切的螢幕（一個模型物件裡有好幾塊螢幕時，在整張畫布上框出來；讀在 GET …/led-templates 的 screens 裡）
+    case 'led-screens':
+      if (!a) return m === 'POST' ? r('ledScreens.create', 'editor') : bad('ledScreens');
+      if (b) return null;
+      if (m === 'PATCH' || m === 'DELETE') return r('ledScreens.item', 'editor', { screenId: a });
+      return bad('ledScreens.item');
 
     case 'cue-templates':
       if (read) return r('cueTemplates.list', 'member');
@@ -502,7 +519,7 @@ export function animatorAssignmentDecision(uid, memberRole) {
 /**
  * 改歌（PATCH songs/:id）的 body 裡，除了狀態以外的欄位 → 需要 editor
  */
-export const SONG_CONTENT_FIELDS = ['name', 'order', 'animator_user_id', 'drive_folder_id', 'code'];
+export const SONG_CONTENT_FIELDS = ['name', 'order', 'animator_user_id', 'drive_folder_id', 'code', 'template_id'];
 
 // ─────────────────────────────────────────────
 // 留言

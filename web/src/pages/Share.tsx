@@ -564,6 +564,7 @@ export default function Share() {
                 ndiGuideHint="沒有 AE？按上面的「本地檔案」把影片或圖片拖進來"
                 ledVideo={videoMode && local.ready ? local.video : null}
                 ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
+                ledTemplate={versionVideoMode ? selectedVersion?.template ?? null : null}
                 poseAtFrame={poseAtFrame}
                 projectName={data.project.name}
                 ledCanvas={ledCanvas}

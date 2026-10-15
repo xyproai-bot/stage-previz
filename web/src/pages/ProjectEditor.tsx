@@ -46,6 +46,9 @@ import type { ProjectMember } from '../lib/mockData';
 import { SONG_STATUS_LABEL } from '../lib/songReview';
 import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
+import LedTemplatesDialog from '../components/LedTemplatesDialog';
+import { useLedTemplates } from '../lib/useLedTemplates';
+import { setSongTemplate } from '../lib/ledTemplateApi';
 import SongVideosDialog from '../components/SongVideosDialog';
 import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { songTitle } from '../lib/songCode';
@@ -55,7 +58,7 @@ import PhoneEditNote from '../components/PhoneEditNote';
 import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
-  Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
+  Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, LayoutPanelLeft, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
   Palette, Pencil, Plus, Redo2, RotateCcw, Search, Shapes, Sprout, Trash2, Undo2, Upload, UserPlus, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -189,6 +192,14 @@ export default function ProjectEditor() {
   const [storyboardOpen, setStoryboardOpen] = useState(false);
   useEscapeClose(storyboardOpen, () => setStoryboardOpen(false));
   const [shareOpen, setShareOpen] = useState(false);
+  // LED 畫布版型（數字表單；每首歌選用哪個）
+  const ledTpls = useLedTemplates(projectId);
+  const [ledTplOpen, setLedTplOpen] = useState(false);
+  const customLedTemplates = useMemo(() => (ledTpls.list?.templates ?? []).filter(t => t.kind === 'custom'), [ledTpls.list]);
+  const ledObjectInfos = useMemo(
+    () => stageObjects.filter(o => o.category === 'led_panel').map(o => ({ id: o.id, name: o.displayName || o.meshName, order: o.order })),
+    [stageObjects],
+  );
   // 從專案卡片的「客戶畫面」→「建立分享連結」過來 → 一進來就打開分享連結視窗
   const location = useLocation();
   useEffect(() => {
@@ -580,6 +591,20 @@ export default function ProjectEditor() {
       toast.error('指派沒有存到：' + friendlyError(e));
     }
   }
+  // 每首歌選的 LED 版型（null = 整張畫布）
+  async function handleSongTemplate(songId: string, templateId: string | null) {
+    if (!projectId) return;
+    const before = songs.find(s => s.id === songId)?.templateId ?? null;
+    if (before === templateId) return;
+    setSongs(list => list.map(s => s.id === songId ? { ...s, templateId } : s));
+    try {
+      await setSongTemplate(projectId, songId, templateId);
+      void ledTpls.reload();
+    } catch (e) {
+      setSongs(list => list.map(s => s.id === songId ? { ...s, templateId: before } : s));
+      toast.error('版型沒有存到：' + friendlyError(e));
+    }
+  }
   async function moveSong(songId: string, direction: -1 | 1) {
     if (!projectId) return;
     const idx = songs.findIndex(s => s.id === songId);
@@ -922,6 +947,7 @@ export default function ProjectEditor() {
     { key: 'diff', label: '對比', menuLabel: '兩個 cue 對比', title: '兩個 cue 並排對比', icon: Columns2, onSelect: () => setDiffOpen(true), disabled: !selectedSong || masterCues.length < 2, secondary: true },
     { key: 'import', label: '匯入 Cue', menuLabel: '從別首歌匯入 cue', title: '從別首歌匯入 cue（巡迴複製、跨專案沿用）', icon: Import, onSelect: () => setImportCuesOpen(true), disabled: !selectedSong, secondary: true },
     { key: 'search', label: '搜留言', menuLabel: '搜尋留言', title: '搜尋專案內所有歌的留言', icon: Search, onSelect: () => setCommentSearchOpen(true), secondary: true },
+    ...(ledTpls.loaded && !ledTpls.list ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => setLedTplOpen(true), secondary: true }]),
     { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
     { key: 'invite', label: '邀請', menuLabel: '邀請連結', title: '邀請連結：傳給導演 / 動畫師，點開就加進這個專案（不用登入碼）', icon: UserPlus, onSelect: () => setInviteOpen(true) },
     { key: 'drive', label: 'Drive', menuLabel: projectMeta?.drive_folder_id ? 'Drive 來源（已設定）' : 'Drive 來源', title: 'Drive 來源設定', icon: Cloud, onSelect: () => setDriveOpen(true), secondary: true },
@@ -1123,6 +1149,19 @@ export default function ProjectEditor() {
                           )}
                         </select>
                       </label>
+                      {customLedTemplates.length > 0 && (
+                        <label className="song-item__assign" onClick={(e) => e.stopPropagation()}>
+                          <span>LED 版型</span>
+                          <select
+                            value={s.templateId && customLedTemplates.some(t => t.id === s.templateId) ? s.templateId : ''}
+                            onChange={(e) => handleSongTemplate(s.id, e.target.value || null)}
+                            title="這首歌的影片做成哪個版型；選了以後，加影片會用版型的畫布大小檢查，3D 畫面也會照版型貼回。「全部」= 整張 LED 畫布"
+                          >
+                            <option value="">全部（整張畫布）</option>
+                            {customLedTemplates.map(t => <option key={t.id} value={t.id}>{t.name}（{t.canvas.width}×{t.canvas.height}）</option>)}
+                          </select>
+                        </label>
+                      )}
                     </div>
                   </li>
                 );
@@ -1340,6 +1379,16 @@ export default function ProjectEditor() {
           refreshCueStates();
           refreshModel();
         }}
+      />
+
+      <LedTemplatesDialog
+        open={ledTplOpen}
+        projectId={projectId || ''}
+        onClose={() => setLedTplOpen(false)}
+        list={ledTpls.list}
+        ledObjects={ledObjectInfos}
+        getSpans={() => mech.sceneQueryRef.current?.ledSpans?.() ?? null}
+        onChanged={ledTpls.reload}
       />
 
       <ModelVersionsDialog

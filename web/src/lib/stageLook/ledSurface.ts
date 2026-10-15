@@ -6,11 +6,15 @@
 //      - 快速：只有 LED 畫面（不受燈光、反光影響）
 //      - 現場：LED 畫面 + 表面反光「照相機曲線多亮了多少」；主畫面那一次 alpha 寫 0，
 //        ledOutputPass.ts 看到就不做 tone mapping / 曝光 → 正面看 = 原檔像素
+//   4. LED 畫布版型（uLedTplOn；lib/ledTemplate.ts）：影片是「版型畫布」時，每塊螢幕用自己的範圍把整張畫布的 UV 換成版型貼圖上的位置
+//      （轉 90° / 翻轉也在這裡），沒放進版型的螢幕黑的。只換「去貼圖哪裡取色」，像素格照舊用真實點數；
+//      uLedTplOn = 0（沒有版型 / 「全部」）時走原本那一行，顏色一個位元都不會變。
 //   數學跟 ledColorMath.ts 一樣（有單元測試）。黑亮底色 / 反射在 configureLedMaterial 設。
 
 import * as THREE from 'three';
 import { VIEW_FALLOFF_FLAT_COS2 } from './ledColorMath';
 import type { NdiColorLut } from '../ndiColor';
+import { MAX_SCREENS_PER_OBJECT, type TemplateUniformData } from '../ledTemplate';
 
 export const LED_SURFACE = {
   /** 畫面暗的地方：接近黑、會反光的 LED 面板 */
@@ -67,6 +71,16 @@ export interface LedSurfaceUniforms {
   uLedGridFill: { value: number };
   uLedViewFalloff: { value: number };
   uLedMode: { value: number };
+  /** LED 畫布版型：0 = 不用（原本的取色）；1 = 用下面的陣列 */
+  uLedTplOn: { value: number };
+  uLedTplCount: { value: number };
+  /** 每塊螢幕 4 個數字（vec4[MAX]，攤平）：src = us vs ul vl；dst = x0 y0 x1 y1；mat = a00 a01 a10 a11 */
+  uLedTplSrc: { value: Float32Array };
+  uLedTplDst: { value: Float32Array };
+  uLedTplMat: { value: Float32Array };
+  /** 每塊 2 個數字（vec2[MAX]，攤平） */
+  uLedTplOff: { value: Float32Array };
+  uLedTplHalf: { value: THREE.Vector2 };
 }
 
 export function createLedSurfaceUniforms(): LedSurfaceUniforms {
@@ -77,6 +91,13 @@ export function createLedSurfaceUniforms(): LedSurfaceUniforms {
     uLedGridFill: { value: LED_SURFACE.gridFill },
     uLedViewFalloff: { value: 0 },
     uLedMode: { value: 0 },
+    uLedTplOn: { value: 0 },
+    uLedTplCount: { value: 0 },
+    uLedTplSrc: { value: new Float32Array(MAX_SCREENS_PER_OBJECT * 4) },
+    uLedTplDst: { value: new Float32Array(MAX_SCREENS_PER_OBJECT * 4) },
+    uLedTplMat: { value: new Float32Array(MAX_SCREENS_PER_OBJECT * 4) },
+    uLedTplOff: { value: new Float32Array(MAX_SCREENS_PER_OBJECT * 2) },
+    uLedTplHalf: { value: new THREE.Vector2(0, 0) },
   };
 }
 
@@ -135,6 +156,14 @@ export function usesLedColorLut(tex: THREE.Texture | null | undefined): boolean 
 }
 
 const LED_UNIFORM_DECL = /* glsl */`
+#define LED_TPL_MAX ${MAX_SCREENS_PER_OBJECT}
+uniform float uLedTplOn;
+uniform int uLedTplCount;
+uniform vec4 uLedTplSrc[LED_TPL_MAX];
+uniform vec4 uLedTplDst[LED_TPL_MAX];
+uniform vec4 uLedTplMat[LED_TPL_MAX];
+uniform vec2 uLedTplOff[LED_TPL_MAX];
+uniform vec2 uLedTplHalf;
 uniform float uLedOn;
 uniform vec2 uLedTexels;
 uniform float uLedGridStrength;
@@ -202,7 +231,29 @@ vec3 ledApplyColorLut( vec3 lin ) {
 // AE 即時的貼圖（LED_COLOR_LUT）套顏色校正
 const LED_EMISSIVE_MAP = /* glsl */`
 #ifdef USE_EMISSIVEMAP
-  vec4 emissiveColor = texture2D( emissiveMap, vEmissiveMapUv );
+  // LED 畫布版型：整張畫布的 UV → 這塊螢幕在版型貼圖上的 UV（lib/ledTemplate.ts mapUvToTemplate 同一套算法）；沒開 = 原本的 UV
+  vec2 ledSampleUv = vEmissiveMapUv;
+  float ledCovered = 1.0;
+  if ( uLedTplOn > 0.5 ) {
+    ledCovered = 0.0;
+    for ( int i = 0; i < LED_TPL_MAX; i ++ ) {
+      if ( i >= uLedTplCount ) break;
+      vec4 s = uLedTplSrc[ i ];
+      vec2 d = vEmissiveMapUv - s.xy;
+      d -= floor( d + 1e-5 );
+      if ( d.x <= s.z + 1e-5 && d.y <= s.w + 1e-5 ) {
+        vec2 l = clamp( d / s.zw, 0.0, 1.0 );
+        vec4 m = uLedTplMat[ i ];
+        vec2 t = vec2( m.x * l.x + m.y * l.y, m.z * l.x + m.w * l.y ) + uLedTplOff[ i ];
+        vec4 r = uLedTplDst[ i ];
+        vec2 lo = r.xy + uLedTplHalf;
+        ledSampleUv = clamp( mix( r.xy, r.zw, t ), lo, max( lo, r.zw - uLedTplHalf ) );
+        ledCovered = 1.0;
+        break;
+      }
+    }
+  }
+  vec4 emissiveColor = texture2D( emissiveMap, ledSampleUv );
   #ifdef LED_DECODE_VIDEO
   emissiveColor.rgb = mix( pow( emissiveColor.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), emissiveColor.rgb * 0.0773993808, vec3( lessThanEqual( emissiveColor.rgb, vec3( 0.04045 ) ) ) );
   #endif
@@ -210,6 +261,7 @@ const LED_EMISSIVE_MAP = /* glsl */`
   if ( uLedColorLutOn > 0.5 ) emissiveColor.rgb = ledApplyColorLut( emissiveColor.rgb );
   #endif
   totalEmissiveRadiance *= emissiveColor.rgb;
+  if ( ledCovered < 0.5 ) totalEmissiveRadiance = vec3( 0.0 );
 #endif
 `;
 
@@ -302,6 +354,23 @@ export function updateLedSurface(material: THREE.MeshStandardMaterial, params: P
   if (params.gridStrength !== undefined) u.uLedGridStrength.value = params.gridStrength;
   if (params.viewFalloff !== undefined) u.uLedViewFalloff.value = params.viewFalloff;
   if (params.mode !== undefined) u.uLedMode.value = MODE_VALUE[params.mode];
+}
+
+/**
+ * LED 畫布版型：這個材質（一個 LED 物件）的螢幕放法；null = 不用版型（原本的取色，整張畫布）。
+ * 資料由 lib/ledTemplate.ts 的 buildObjectUniforms 算好（0 塊 = 這個物件不在版型裡 → 整個黑的）
+ */
+export function setLedTemplate(material: THREE.MeshStandardMaterial, data: TemplateUniformData | null): void {
+  const u = material.userData.ledSurface as LedSurfaceUniforms | undefined;
+  if (!u) return;
+  if (!data) { u.uLedTplOn.value = 0; return; }
+  u.uLedTplOn.value = 1;
+  u.uLedTplCount.value = data.count;
+  u.uLedTplSrc.value.set(data.src);
+  u.uLedTplDst.value.set(data.dst);
+  u.uLedTplMat.value.set(data.mat);
+  u.uLedTplOff.value.set(data.off);
+  u.uLedTplHalf.value.set(data.half[0], data.half[1]);
 }
 
 const WHITE = new THREE.Color(0xffffff);

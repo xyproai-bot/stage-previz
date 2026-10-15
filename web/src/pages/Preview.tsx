@@ -1135,6 +1135,7 @@ function SongDetail({
                   setPendingCommentAnchor(anchor);
                 })}
                 ledVideo={videoMode && player.ready ? player.video : null}
+                ledTemplate={videoMode ? selected?.template ?? null : null}
                 poseAtFrame={poseAtFrame}
                 viewApiRef={viewApiRef}
                 transportKeys

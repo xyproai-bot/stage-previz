@@ -73,6 +73,10 @@ export interface SongVideo {
   duplicateOf?: { videoId: string; label: string; songId: string; songCode: string | null; songName: string; sameSong: boolean } | null;
   /** 剛交好、後台還在算指紋（算完才知道有沒有重複）→ 清單會再更新 */
   fingerprintPending?: boolean;
+  /** 這一版做的時候用的 LED 版型 id（沒有 = 整張畫布；舊的後台沒有這欄） */
+  templateId?: string | null;
+  /** 那個版型當時的排法（快照；版型之後改了也不變）；格式見 lib/ledTemplate.ts parsePlan，沒有 = 整張畫布 */
+  template?: unknown;
 }
 
 export interface SongVideoList {
@@ -88,6 +92,8 @@ export interface SongVideoFields {
   code: string | null;
   latestVideoId: string | null;
   latestVideoVersion: number | null;
+  /** 這首歌選的 LED 版型 id（沒選 = 整張畫布；舊的後台沒有這欄） */
+  templateId?: string | null;
 }
 
 /** 分享連結看到的一版（不含說明、誰交的、原始連結） */
@@ -106,6 +112,8 @@ export interface ShareSongVideo {
   readyAt: string | null;
   /** 相對路徑；有密碼的連結已經接好 ?access=<通行證>，直接 absoluteVideoUrl() 當 src */
   streamUrl: string;
+  /** 這一版做的時候用的 LED 版型排法（沒有 = 整張畫布；舊的後台沒有這欄） */
+  template?: unknown;
 }
 
 /** 分享頁 /data 回傳的 songs[] 多的欄位 */

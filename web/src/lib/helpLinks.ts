@@ -39,6 +39,7 @@ export const HELP_ANCHORS = {
   prodMechSheet: 'prod-mech-sheet',
   prodMechConvert: 'prod-mech-convert',
   prodLedCanvas: 'prod-led-canvas',
+  prodLedTemplate: 'prod-led-template',
   prodView: 'prod-view',
   prodShare: 'prod-share',
   prodInvite: 'prod-invite',

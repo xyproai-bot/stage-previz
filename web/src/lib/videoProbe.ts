@@ -89,7 +89,8 @@ export async function sniffVideoCodec(file: Blob): Promise<CodecInfo | null> {
 /** 選好檔案 → 試播 + 讀編碼 → 要不要擋、要提醒什麼 */
 export async function checkVideoFile(
   file: File, ledCanvas: CanvasSize | null | undefined, timeoutMs = PROBE_TIMEOUT_MS,
+  template: { name: string; canvas: CanvasSize } | null = null,
 ): Promise<{ check: VideoCheck; probe: ProbeResult; codec: CodecInfo | null }> {
   const [probe, codec] = await Promise.all([probeVideoFile(file, timeoutMs), sniffVideoCodec(file)]);
-  return { check: assessVideo({ probe, sizeBytes: file.size, ledCanvas, codec }), probe, codec };
+  return { check: assessVideo({ probe, sizeBytes: file.size, ledCanvas, codec, template }), probe, codec };
 }

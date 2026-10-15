@@ -14,6 +14,8 @@ import { detectVideoLink, videoLinkHint } from '../lib/videoLink';
 import { songTitle } from '../lib/songCode';
 import { friendlyError } from '../lib/songReview';
 import { fingerprintBlob } from '../lib/videoFingerprint';
+import { useLedTemplates } from '../lib/useLedTemplates';
+import { toast } from '../lib/toast';
 import { checkDuplicateVideo, duplicateWarning, type DuplicateMatch } from '../lib/storageApi';
 import './AddVideoDialog.css';
 
@@ -23,7 +25,8 @@ interface Props {
   open: boolean;
   onClose: () => void;
   projectId: string;
-  song: { id: string; name: string; code?: string | null };
+  /** templateId：這首歌選的 LED 版型（沒選 = 整張畫布）；影片大小改成跟版型畫布比 */
+  song: { id: string; name: string; code?: string | null; templateId?: string | null };
   /** 這首歌的工作（上傳中 / 複製中…） */
   jobs: readonly VideoJob[];
   /** 能不能上傳檔案、貼連結（製作、負責的動畫師） */
@@ -66,6 +69,11 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
   const localRef = useRef<HTMLInputElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const label = songTitle(song);
+  // LED 版型：這首歌選了版型 → 影片大小跟版型畫布比（剛好等比例縮放就接受、標百分比；比例不一樣才提醒變形）
+  const ledTemplates = useLedTemplates(projectId);
+  const songTemplate = song.templateId ? ledTemplates.list?.templates.find(t => t.id === song.templateId && t.kind === 'custom') ?? null : null;
+  const songTemplateRef = useRef<typeof songTemplate>(null);
+  songTemplateRef.current = songTemplate;
   // 播不了也硬要傳：只有製作可以（有些瀏覽器播得了，例如 Mac 的 Safari）
   const { user } = useAuth();
   const canForce = user?.role === 'admin';
@@ -129,7 +137,7 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
     if (list.length > 1) setFileError(`一次交一個檔案：先交「${file.name}」，其他的請再拖一次`);
     const token = ++checkTokenRef.current;
     setFileCheck({ phase: 'checking', file });
-    void checkVideoFile(file, ledCanvas).then(async ({ check }) => {
+    void checkVideoFile(file, ledCanvas, undefined, songTemplateRef.current ? { name: songTemplateRef.current.name, canvas: songTemplateRef.current.canvas } : null).then(async ({ check }) => {
       if (checkTokenRef.current !== token) return;
       if (check.block) { setFileCheck({ phase: 'checked', file, check, fingerprint: null, duplicates: [] }); return; }
       // 播得了 → 比對這個專案有沒有一模一樣的檔案（只讀頭、中、尾，一兩秒）；比對不了就算了，不擋
@@ -142,7 +150,11 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
         duplicates = await checkDuplicateVideo(projectId, song.id, fingerprint);
       } catch { /* 比對不了：照常交 */ }
       if (checkTokenRef.current !== token) return;
-      if (check.warnings.length === 0 && duplicates.length === 0) beginUpload(file, fingerprint);
+      if (check.warnings.length === 0 && duplicates.length === 0) {
+        beginUpload(file, fingerprint);
+        // 剛好等比例縮放的影片：接受，告訴他（不擋）
+        for (const n of check.notes ?? []) toast.info(n, 9000);
+      }
       else setFileCheck({ phase: 'checked', file, check, fingerprint, duplicates });
     });
   };
@@ -284,7 +296,9 @@ export default function AddVideoDialog({ open, onClose, projectId, song, jobs, c
               {fileError && <div className="addvid__error" role="alert">{fileError}</div>}
               {!fileCheck && (
                 <div className="addvid__hint">
-                  AE 請輸出 H.264 的 MP4，大小跟 LED 畫布一樣{ledCanvas ? `（${ledCanvas.width}×${ledCanvas.height}）` : ''}。
+                  {songTemplate
+                    ? <>這首歌用版型「{songTemplate.name}」：AE 請輸出 H.264 的 MP4，大小是版型畫布（{songTemplate.canvas.width}×{songTemplate.canvas.height}）；剛好等比例縮放的也可以。</>
+                    : <>AE 請輸出 H.264 的 MP4，大小跟 LED 畫布一樣{ledCanvas ? `（${ledCanvas.width}×${ledCanvas.height}）` : ''}。</>}
                   {' '}<a href={helpUrl(HELP_ANCHORS.animAeExport)} target="_blank" rel="noopener">AE 輸出設定</a>
                 </div>
               )}

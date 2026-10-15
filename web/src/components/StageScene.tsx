@@ -38,12 +38,12 @@ import { NdiAutostartNote, NdiChecklist, NdiGuideCard, NdiSourcePicker, ndiCardK
 import { HELP_ANCHORS, helpUrl, ndiHelpAnchor } from '../lib/helpLinks';
 import LookSettingsPanel from './LookSettingsPanel';
 import { DEFAULT_LOOK_SETTINGS, type LookSettings } from '../lib/stageLook/lookSettings';
-import { buildLedEmitters, type LedEmitter } from '../lib/stageLook/ledEmitters';
+import { buildLedEmitters, type LedEmitter, type UvRect } from '../lib/stageLook/ledEmitters';
 import { LedLightRig, type LedLightProps } from '../lib/stageLook/ledLightRig';
 import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { AdaptiveQuality, QUALITY, detectQualityProfile, type QualityLevel } from '../lib/stageLook/quality';
-import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut, setLedTemplate, updateLedSurface } from '../lib/stageLook/ledSurface';
 import { pickNdiColorCurve, type NdiColorLut } from '../lib/ndiColor';
 import { readPixels } from '../lib/ndiFrameGrab';
 import NdiColorCalibrationDialog, { colorCurveLabel, useNdiCalibration } from './NdiColorCalibration';
@@ -63,10 +63,11 @@ import { toast } from '../lib/toast';
 import StageToolbar, { type ToolDef, type ToolMenuSection } from './StageToolbar';
 import { LED_CANVAS_RANGE, normalizeLedCanvas, type LedCanvas } from '../lib/ledCanvas';
 import {
-  buildLedLayout, canvasSourceText, layoutToCsv, layoutToJson, ledMapFileName, parseCanvasInput, resolveLedCanvas, testPatternSize, todayString,
+  buildLedLayout, canvasSourceText, layoutPanel, layoutToCsv, layoutToJson, ledMapFileName, parseCanvasInput, resolveLedCanvas, testPatternSize, todayString,
   type CanvasSize, type LedLayout, type LedMapMeta,
 } from '../lib/ledMap';
-import { ledPanelInputs, type LedSceneObject } from '../lib/ledMapScene';
+import { collectUvTriangles, ledPanelInputs, type LedSceneObject } from '../lib/ledMapScene';
+import { buildObjectUniforms, mapUvRectToTemplate, spanFromAxes, spanFromUv, type LedTemplatePlan, type Placement, type SrcSpan } from '../lib/ledTemplate';
 import { downloadBlob, drawTestPattern, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
 import './StageScene.css';
@@ -204,6 +205,11 @@ interface Props {
   /** 本地圖片（分享頁拖進來的檔案，要先載好）：當靜態畫面放在 LED 上；跟 ledVideo 都有給時影片優先 */
   ledImage?: HTMLImageElement | null;
   /**
+   * LED 畫布版型（lib/ledTemplate.ts）：ledVideo / ledImage 是「版型畫布」時給，每塊螢幕從版型畫布上自己的位置取畫面（轉 90° / 翻轉也照做），
+   * 沒放進版型的螢幕顯示黑的；像素格照真實點數。沒給 / null = 整張畫布（跟以前一樣）。測試圖、AE 即時（NDI）不受影響。
+   */
+  ledTemplate?: LedTemplatePlan | null;
+  /**
    * 每一幀問一次：有回傳位置 → 舞台照這個擺（分享頁跟著影片時間走，暫停 / 拉時間軸都會跟）；
    * 回傳 null → 照平常（換 cue 滑過去）。用函式而不是 states，才不會每幀重跑 React。
    */
@@ -256,6 +262,8 @@ export interface StageSceneQuery {
   groupCenter(ids: string[]): MechVec3 | null;
   /** 這些物件在 cue 位置（沒加機關）時的外框（翻轉從外框算轉軸）；都找不到 → null */
   groupBox(ids: string[]): { min: MechVec3; max: MechVec3 } | null;
+  /** 每個 LED 物件（stage object id）在整張 LED 畫布上的範圍（從模型的 UV 算；LED 畫布版型的螢幕清單用） */
+  ledSpans?(): Record<string, SrcSpan>;
 }
 
 const NO_STAGE_PROPS: StagePropItem[] = [];
@@ -281,7 +289,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -455,6 +463,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const ndiDownscaleRef = useRef<number | null>(null);
   const projectCanvasRef = useRef<LedCanvas | null>(null);
   projectCanvasRef.current = normalizeLedCanvas(ledCanvas);
+  // LED 畫布版型：現在用的版型、每個 LED 物件在整張畫布上的範圍（從模型的 UV 算，一個物件只算一次）、燈光取色的位置換算
+  const ledTemplateRef = useRef<LedTemplatePlan | null>(null);
+  ledTemplateRef.current = ledTemplate;
+  const ledSpanCacheRef = useRef<WeakMap<THREE.Object3D, SrcSpan | null>>(new WeakMap());
+  const ledTemplateRemapRef = useRef<Map<string, (r: UvRect) => UvRect | null>>(new Map());
   const ndiColorLutRef = useRef<NdiColorLut | null>(null);
   // 按 × 收起引導卡片：記住是哪一步收的，換到別的問題會再出現
   const [ndiCardHiddenFor, setNdiCardHiddenFor] = useState<string | null>(null);
@@ -1212,7 +1225,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           const props = ledLightPropsRef.current;
           const fallback: LedLightProps = { brightness: 1, castStrength: 1, tint: new THREE.Color(1, 1, 1) };
           rig.updateColors(
-            (id, uv) => { const src = sources.get(id); return src ? reader.sample(src, uv) : null; },
+            (id, uv) => {
+              const src = sources.get(id);
+              if (!src) return null;
+              // 版型：燈光顏色從版型畫布上這塊螢幕的位置取；沒放進版型的螢幕 = 黑的
+              const remap = ledTemplateRemapRef.current.get(id);
+              if (!remap) return reader.sample(src, uv);
+              const r = remap(uv);
+              return r ? reader.sample(src, r) : [0, 0, 0];
+            },
             (id) => props.get(id) || fallback,
             lookRef.current.ledLightStrength,
           );
@@ -1224,9 +1245,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             const iw = img?.videoWidth || img?.width || 1;
             const ih = img?.videoHeight || img?.height || 1;
             // AE 即時：看收到的大小跟 LED 畫布（或小程序回報縮了幾倍）算一共幾顆 LED；其他貼圖一個像素 = 一顆
+            // 版型：影片是版型畫布（可能縮小），像素格一律用整張畫布的真實點數
+            const tplNative = ledTemplateRef.current && tex && tex === ledMediaTextureRef.current ? projectCanvasRef.current : null;
             const texels: [number, number] = tex && tex === liveTexture
               ? ndiLedTexels({ width: iw, height: ih }, projectCanvasRef.current, ndiDownscaleRef.current)
-              : [iw, ih];
+              : tplNative ? [tplNative.width, tplNative.height] : [iw, ih];
             updateLedSurface(mat, {
               on: !!tex,
               texels,
@@ -1685,6 +1708,19 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         const box = baseBox(ids);
         if (box.isEmpty()) return null;
         return { min: { x: box.min.x, y: box.min.y, z: box.min.z }, max: { x: box.max.x, y: box.max.y, z: box.max.z } };
+      },
+      ledSpans: () => {
+        const list: { id: string; category: string }[] = stageObjectsRef.current
+          ? stageObjectsRef.current.map(o => ({ id: o.id, category: o.category }))
+          : (statesRef.current || []).map(s => ({ id: s.objectId, category: s.category }));
+        const out: Record<string, SrcSpan> = {};
+        for (const o of list) {
+          if (o.category !== 'led_panel') continue;
+          const mesh = meshesRef.current.get(o.id);
+          const span = mesh ? ledObjectSpan(mesh) : null;
+          if (span) out[o.id] = span;
+        }
+        return out;
       },
     };
     sceneQueryRef.current = query;
@@ -2190,6 +2226,16 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     }
   }
 
+  // LED 物件在整張畫布上的範圍（UV 外框，會繞回、可以跨接縫）：同一個物件只算一次
+  function ledObjectSpan(obj: THREE.Object3D): SrcSpan | null {
+    const cache = ledSpanCacheRef.current;
+    if (cache.has(obj)) return cache.get(obj) ?? null;
+    const lay = layoutPanel({ id: 'span', name: 'span', tris: collectUvTriangles(obj) }, { width: 1, height: 1 }, 0);
+    const span = lay ? spanFromAxes(lay.u, lay.v) : null;
+    cache.set(obj, span);
+    return span;
+  }
+
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
   useEffect(() => {
     const scene = sceneRef.current;
@@ -2245,6 +2291,16 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         ledTexture = testPatternTex;
       }
 
+      // LED 畫布版型：這個物件的螢幕放法（只對「本地影片 / 圖片」那張版型畫布；測試圖、imageUrl、NDI 都是整張畫布）
+      let tplData: ReturnType<typeof buildObjectUniforms> | null = null;
+      if (ledTemplate && isLed && ledTexture && ledTexture === ledMediaTextureRef.current) {
+        const srcFor = (p: Placement): SrcSpan | null => (p.uv ? spanFromUv(p.uv) : ledObjectSpan(obj));
+        tplData = buildObjectUniforms(ledTemplate, id, srcFor);
+        ledTemplateRemapRef.current.set(id, (r) => mapUvRectToTemplate(ledTemplate, id, srcFor, r));
+      } else {
+        ledTemplateRemapRef.current.delete(id);
+      }
+
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
         // LED 也放進 LED_LAYER → 環境光的 CubeCamera 只拍這層
@@ -2267,6 +2323,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // 畫面 = emissiveMap × tint × 亮度，正面看 = 原檔顏色（不壓色、不吃曝光；ledSurface.ts + ledOutputPass.ts）
           // 像素顆粒 / 側看變暗也在 ledSurface shader
           configureLedMaterial(m, { mode: 'live', texture: ledTexture, tint: ledTint, brightness: ledBrightness });
+          setLedTemplate(m, tplData);
           ledMaterials.add(m);
           // selected highlight：LED 不洗白，這裡只在沒畫面、沒亮度時加一點點當提示
           if (isSelected && ledBrightness < 0.05 && !ledTexture) {
@@ -2277,6 +2334,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // === LED in Quick mode（有畫面）===
           // 快速模式：給動畫師 1:1 對顏色 → 只有畫面，不打燈、不反光、不壓色（以前放在 map 會被燈光打暗一大半）
           configureLedMaterial(m, { mode: 'quick', texture: ledTexture });
+          setLedTemplate(m, tplData);
           ledMaterials.add(m);
         } else {
           // === 一般物件 / Quick mode 的 LED（沒貼圖時）===
@@ -2285,6 +2343,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // 沒模型時的方塊替身：建立時就是 category 顏色，所以「原值」本身就是 category 顏色
           // emissive 只在 selected 時 highlight
           updateLedSurface(m, { on: false, mode: 'off' });
+          setLedTemplate(m, null);
           applyMaterialSettings(m, materialOverrides?.[m.name], {
             color: mat.color, roughness: mat.roughness, metalness: mat.metalness, opacity: mat.opacity,
           });
@@ -2342,7 +2401,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, testPatternTex, forceTestPattern]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, ledTemplate, testPatternTex, forceTestPattern]);
 
   // ── 淡入淡出的半透明 shader 先編好（不然第一次換 cue 淡入淡出會卡一下）──
   // 模型載好 / 切模式 / 改材質 / 換 LED 畫面 / 畫質換了（燈數會變）→ 等畫面穩一點再編

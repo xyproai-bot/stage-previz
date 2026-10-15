@@ -175,3 +175,29 @@ describe('playCheckNotes：版本第一次播之後，版本列上寫什麼', ()
     expect(playCheckNotes(null, { includeWarnings: true })).toEqual({ error: null, warnings: [] });
   });
 });
+
+describe('選了 LED 版型：影片大小跟版型畫布比', () => {
+  const ok = (w: number, h: number) => ({ ok: true as const, width: w, height: h, durationSec: 60 });
+  const template = { name: '中間底幕', canvas: { width: 4400, height: 1012 } };
+  const full = { width: 8800, height: 2024 };
+  it('剛好等於版型畫布：沒有提醒、沒有說明（就算比整張 LED 畫布小很多）', () => {
+    const r = assessVideo({ probe: ok(4400, 1012), ledCanvas: full, template });
+    expect(r.warnings).toEqual([]);
+    expect(r.notes).toBeUndefined();
+  });
+  it('剛好是版型的一半：接受，寫成說明（不是提醒），標 50%', () => {
+    const r = assessVideo({ probe: ok(2200, 506), ledCanvas: full, template });
+    expect(r.warnings).toEqual([]);
+    expect(r.notes).toEqual(['影片是版型「中間底幕」的 50%（2200×506，版型是 4400×1012）：播放時自動放大貼回，LED 像素格照真實點數畫']);
+  });
+  it('比例不一樣：提醒會變形（跟版型畫布比，不是跟整張 LED 畫布比）', () => {
+    const r = assessVideo({ probe: ok(1920, 1080), ledCanvas: full, template: { name: '細條', canvas: { width: 4000, height: 500 } } });
+    expect(r.warnings.map(w => w.kind)).toEqual(['canvasStretch']);
+    expect(r.warnings[0].text).toContain('版型「細條」是 4000×500，比例不一樣');
+  });
+  it('沒選版型（null）：跟以前一樣照整張 LED 畫布比', () => {
+    const r = assessVideo({ probe: ok(1920, 1080), ledCanvas: { width: 3840, height: 2160 }, template: null });
+    expect(r.warnings.map(w => w.kind)).toEqual(['canvasBlur']);
+    expect(r.notes).toBeUndefined();
+  });
+});
