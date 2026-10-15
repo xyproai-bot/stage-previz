@@ -44,6 +44,7 @@ import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { AdaptiveQuality, QUALITY, detectQualityProfile, type QualityLevel } from '../lib/stageLook/quality';
 import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut, setLedTemplate, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { ensureOwnLedMaterials } from '../lib/stageLook/ledOwnMaterial';
 import { pickNdiColorCurve, type NdiColorLut } from '../lib/ndiColor';
 import { readPixels } from '../lib/ndiFrameGrab';
 import NdiColorCalibrationDialog, { colorCurveLabel, useNdiCalibration } from './NdiColorCalibration';
@@ -2329,6 +2330,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       } else {
         ledTemplateRemapRef.current.delete(id);
       }
+
+      // LED 物件各自一份材質：模型裡的 LED 通常共用同一個材質，版型 / 亮度 / 色調 / 選取是每個物件的設定，
+      // 共用的話後面的物件會蓋掉前面的（只剩最後一塊有畫面）。細節見 lib/stageLook/ledOwnMaterial.ts
+      if (isLed) ensureOwnLedMaterials(obj);
 
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
