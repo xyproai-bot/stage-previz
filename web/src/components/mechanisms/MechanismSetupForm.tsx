@@ -123,8 +123,8 @@ export default function MechanismSetupForm({
 
   // 可以裝上去的機關：不是自己、不是裝在自己底下的
   const parentOptions = useMemo(() => {
-    // 對開的機關不能當別的機關的上層
-    const all = mechanisms.filter(m => m.variant !== 'split');
+    // 對開、吊掛（整組和吊點）的機關不能當別的機關的上層
+    const all = mechanisms.filter(m => !m.variant);
     if (!editing) return all;
     const below = new Set<string>([editing.id]);
     let grew = true;

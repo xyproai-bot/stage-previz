@@ -66,7 +66,7 @@ describe('呼叫後台', () => {
     const list = await listMechanisms('p 1');
     expect(list[0].id).toBe('m1');
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://proxy.haimiaan.com/api/projects/p%201/mechanisms?mech=2');
+    expect(url).toBe('https://proxy.haimiaan.com/api/projects/p%201/mechanisms?mech=3');
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer tok');
     localStorage.removeItem('sp_session_token');
   });
@@ -99,7 +99,7 @@ describe('呼叫後台', () => {
     vi.stubGlobal('fetch', f);
     expect((await getShareSongPositions({ kind: 'slug', key: 'show-k7p2' }, 's1', 'acc'))[0].value).toBe(2);
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://proxy.haimiaan.com/api/s/show-k7p2/songs/s1/mechanism-positions?mech=2');
+    expect(url).toBe('https://proxy.haimiaan.com/api/s/show-k7p2/songs/s1/mechanism-positions?mech=3');
     expect((init.headers as Record<string, string>)['x-share-access']).toBe('acc');
   });
 
@@ -150,5 +150,27 @@ describe('呼叫後台', () => {
       : json(200, { ok: true, dryRun: true, converted: 3, skipped: [], positions: 3, rowsChanged: 6 }))));
     expect((await getMechanismSheet('p')).mechanisms[0].id).toBe('m');
     expect((await convertCuePositions('p', 'm', true)).converted).toBe(3);
+  });
+
+  it('吊掛：整組沒有位置；吊點帶所屬整組和位置，缺了就當一般機關（舊後台沒有這幾欄 → 一般機關）', () => {
+    const rig = parseMechanism({ id: 'r', variant: 'hoist_rig', objectIds: ['a'] });
+    expect([rig.variant, rig.rigId, rig.attach]).toEqual(['hoist_rig', null, null]);
+    const h = parseMechanism({ id: 'h', variant: 'hoist', rigId: 'r', rigIndex: 1, attach: { x: 1, y: 2, z: 3 } });
+    expect([h.variant, h.rigId, h.rigIndex, h.attach]).toEqual(['hoist', 'r', 1, { x: 1, y: 2, z: 3 }]);
+    expect(parseMechanism({ id: 'h', variant: 'hoist', rigId: 'r', rigIndex: 1 }).variant).toBeNull();
+    expect(parseMechanism({ id: 'h', variant: 'hoist', attach: { x: 1, y: 2, z: 3 } }).variant).toBeNull();
+    const old = parseMechanism({ id: 'm' });
+    expect([old.variant, old.rigId, old.rigIndex, old.attach]).toEqual([null, null, null, null]);
+  });
+
+  it('新增整組吊掛：POST 帶 variant 和 hoists', async () => {
+    const f = vi.fn(async () => json(201, { mechanism: { id: 'r', variant: 'hoist_rig' }, hoists: [] }));
+    vi.stubGlobal('fetch', f);
+    const m = await createMechanism('p', {
+      variant: 'hoist_rig', name: '吊板', objectIds: ['a'], hoists: [{ attach: { x: 0, y: 1, z: 0 } }, { attach: { x: 1, y: 1, z: 0 } }],
+    });
+    expect(m.variant).toBe('hoist_rig');
+    const [, init] = (f.mock.calls as unknown as [string, RequestInit][])[0];
+    expect(JSON.parse(init.body as string).hoists).toHaveLength(2);
   });
 });

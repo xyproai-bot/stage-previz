@@ -11,8 +11,11 @@
 // 模型的縮放永遠不動；公尺 → 場景單位用專案的測距校準倍率換算。
 
 export type MechanismKind = 'linear' | 'rotary';
-/** 機關的變體：沒有 = 一般機關；'split' = 對開（兩邊往反方向動，一個位置）。之後的階段還會有吊掛 */
-export type MechanismVariant = 'split';
+/**
+ * 機關的變體：沒有 = 一般機關；'split' = 對開（兩邊往反方向動，一個位置）；
+ * 吊掛（v2 第 4 階段）：'hoist_rig' = 整組吊掛（帶動物件，自己沒有位置）、'hoist' = 它的一個吊點（直線往上，有自己的位置，沒有物件）
+ */
+export type MechanismVariant = 'split' | 'hoist_rig' | 'hoist';
 /** 對開的哪一邊（A 邊 = 機關本來的方向；B 邊 = 鏡像） */
 export type MechanismSide = 'a' | 'b';
 export interface MechanismPreset { name: string; value: number }
@@ -71,6 +74,10 @@ export interface Mechanism {
   groupId?: string | null;
   /** 這一排裡的第幾個（0 起算；花樣「依序」「波浪」照這個順序） */
   groupIndex?: number | null;
+  /** v2 第 4 階段（0032）：只有吊點（variant = 'hoist'）：屬於哪一組吊掛、第幾個吊點（0 起算）、吊點在物件上的位置（場景單位，cue 位置的座標） */
+  rigId?: string | null;
+  rigIndex?: number | null;
+  attach?: MechVec3 | null;
 }
 
 /** 一排機關一次建立時選的選項（編輯時看得到原本選的） */
@@ -125,6 +132,10 @@ export interface MechanismInput {
   variant: MechanismVariant | null;
   mirror: MechanismMirror | null;
   objectSides: Record<string, MechanismSide>;
+  /** 只有吊點（variant = 'hoist'）；其他一律 null */
+  rigId?: string | null;
+  rigIndex?: number | null;
+  attach?: MechVec3 | null;
 }
 
 export const MECH_LIMITS = {
@@ -148,6 +159,9 @@ export const MECH_LIMITS = {
   groupMembersMax: 64,
   groupNameMax: 40,
   bulkPositionsMax: 200,
+  /** 吊掛：一組最少 / 最多幾個吊點 */
+  hoistsMin: 2,
+  hoistsMax: 4,
 } as const;
 
 /** 給畫面用：單位 */
@@ -191,7 +205,8 @@ function normalize(v: MechVec3): MechVec3 | null {
 // ─────────────────────────────────────────────
 
 export type MechanismField =
-  | 'groupName' | 'namePrefix' | 'name' | 'kind' | 'variant' | 'axis' | 'pivot' | 'mirror' | 'travel' | 'maxSpeed' | 'presets' | 'objectIds' | 'parentId';
+  | 'groupName' | 'namePrefix' | 'name' | 'kind' | 'variant' | 'axis' | 'pivot' | 'mirror' | 'travel' | 'maxSpeed' | 'presets' | 'objectIds' | 'parentId'
+  | 'attach' | 'rigId' | 'hoists';
 
 export const MECH_MESSAGES = {
   nameEmpty: '機關名稱不能空白',
@@ -232,10 +247,25 @@ export const MECH_MESSAGES = {
   bulkDuplicate: '同一個機關在這一次只能出現一次',
   bulkForeign: '有機關不在這個專案裡',
   groupEmpty: '這一排已經沒有機關了',
+  // 吊掛（0032）
+  hoistAsParent: '吊掛的機關不能當別的機關的上層',
+  hoistHasChildren: '有機關裝在它上面，不能改成吊掛',
+  hoistConvert: '吊掛的機關不能轉換 cue 位置',
+  hoistVariantLocked: '吊掛要用「新增吊掛」建立，不能把一般機關改成吊掛，也不能把吊掛改回一般機關',
+  hoistRigValue: '這是整組吊掛，沒有自己的位置，請設定它的每個吊點',
+  hoistDeleteOne: '吊掛至少要有 2 個吊點，要減少吊點請編輯整組吊掛；要整組刪掉請刪除吊掛',
+  hoistCount: '吊掛要有 2 到 4 個吊點',
+  hoistAttach: '吊點的位置要填 X、Y、Z 三個數字',
+  hoistRig: '找不到這個吊點屬於哪一組吊掛',
+  hoistRigIndex: '吊點的編號不正確',
+  hoistSame: '兩個吊點不能在同一個位置，請把它們分開',
+  hoistLine: '三個以上的吊點不能排成一直線，請把其中一個移開',
+  hoistForeign: '有吊點不是這一組吊掛的',
+  hoistObjects: '吊掛要先選好帶動的物件',
 } as const;
 
 /** 專案裡其他機關（檢查名稱重複、裝在哪個機關上） */
-export interface MechanismSibling { id: string; name: string; parentId: string | null; variant?: MechanismVariant | null }
+export interface MechanismSibling { id: string; name: string; parentId: string | null; variant?: MechanismVariant | null; rigId?: string | null }
 
 export interface NormalizeContext {
   /** 修改：原本的機關（沒送的欄位用原本的） */
@@ -246,6 +276,8 @@ export interface NormalizeContext {
   siblings?: MechanismSibling[];
   /** 這個專案的所有物件 id（有給才檢查「物件在不在這個專案」） */
   projectObjectIds?: Set<string> | null;
+  /** 吊點：這組吊掛是同一次新增的，id 還不存在（不檢查「找得到這組吊掛」） */
+  pendingRigId?: string | null;
 }
 
 export type NormalizeResult =
@@ -259,7 +291,10 @@ export function mechanismToInput(m: Pick<Mechanism, keyof MechanismInput>): Mech
     travelMin: m.travelMin, travelMax: m.travelMax, defaultValue: m.defaultValue, maxSpeed: m.maxSpeed,
     presets: m.presets.map(p => ({ ...p })), parentId: m.parentId, objectIds: [...m.objectIds],
     consoleLabel: m.consoleLabel, metadata: m.metadata,
-    variant: m.variant === 'split' ? 'split' : null,
+    variant: m.variant === 'split' || m.variant === 'hoist_rig' || m.variant === 'hoist' ? m.variant : null,
+    rigId: m.variant === 'hoist' ? (m.rigId ?? null) : null,
+    rigIndex: m.variant === 'hoist' ? (m.rigIndex ?? null) : null,
+    attach: m.variant === 'hoist' && m.attach ? { ...m.attach } : null,
     mirror: m.variant === 'split' && m.mirror
       ? { axis: { ...m.mirror.axis }, pivot: m.mirror.pivot ? { ...m.mirror.pivot } : null, consoleLabel: m.mirror.consoleLabel }
       : null,
@@ -273,7 +308,13 @@ export function blankMechanismInput(): MechanismInput {
     name: '', kind: 'linear', axis: { x: 0, y: 1, z: 0 }, pivot: null,
     travelMin: 0, travelMax: 1, defaultValue: 0, maxSpeed: null, presets: [], parentId: null,
     objectIds: [], consoleLabel: null, metadata: null, variant: null, mirror: null, objectSides: {},
+    rigId: null, rigIndex: null, attach: null,
   };
+}
+
+/** 有自己位置的機關（吊掛的整組 'hoist_rig' 沒有位置：不排進 cue 的位置、速度檢查、時間軸、總表） */
+export function valueAxes<T extends { variant?: MechanismVariant | null }>(mechs: T[]): T[] {
+  return mechs.some(m => m.variant === 'hoist_rig') ? mechs.filter(m => m.variant !== 'hoist_rig') : mechs;
 }
 
 /**
@@ -281,11 +322,23 @@ export function blankMechanismInput(): MechanismInput {
  * 回傳第一個錯誤（error / field）和每個欄位的錯誤（errors，畫面在欄位旁邊顯示）。
  */
 export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}): NormalizeResult {
-  const r: Record<string, unknown> = isObj(raw) ? raw : {};
+  const r: Record<string, unknown> = isObj(raw) ? { ...raw } : {};
   const base = ctx.existing ?? blankMechanismInput();
   const has = (k: string) => Object.prototype.hasOwnProperty.call(r, k) && r[k] !== undefined;
   const errors: Partial<Record<MechanismField, string>> = {};
   const fail = (f: MechanismField, m: string) => { if (!errors[f]) errors[f] = m; };
+
+  // 變化類型：對開 / 吊掛（整組）/ 吊點
+  const varRaw = has('variant') ? r.variant : base.variant;
+  const variant: MechanismVariant | null = varRaw === 'split' || varRaw === 'hoist_rig' || varRaw === 'hoist' ? varRaw : null;
+  if (varRaw !== null && varRaw !== undefined && variant === null) fail('variant', MECH_MESSAGES.variant);
+  // 吊掛的整組和吊點一定是「往上的直線」；整組自己沒有行程 / 位置 / 速度（只帶物件）；吊點沒有物件、不裝在別的機關上
+  const isRig = variant === 'hoist_rig', isHoist = variant === 'hoist';
+  if (isRig || isHoist) {
+    r.kind = 'linear'; r.axis = { x: 0, y: 1, z: 0 }; r.pivot = null; r.mirror = null; r.objectSides = {};
+    if (isRig) { r.travelMin = 0; r.travelMax = 1; r.defaultValue = 0; r.maxSpeed = null; r.presets = []; r.consoleLabel = null; }
+    if (isHoist) { r.objectIds = []; r.parentId = null; }
+  }
 
   // 名稱
   const name = (has('name') ? String(r.name ?? '') : base.name).trim().slice(0, MECH_LIMITS.nameMax);
@@ -298,11 +351,6 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
   const kindRaw = has('kind') ? r.kind : base.kind;
   const kind: MechanismKind = kindRaw === 'rotary' ? 'rotary' : 'linear';
   if (kindRaw !== 'linear' && kindRaw !== 'rotary') fail('kind', MECH_MESSAGES.kind);
-
-  // 變化類型（目前只有對開）
-  const varRaw = has('variant') ? r.variant : base.variant;
-  const variant: MechanismVariant | null = varRaw === 'split' ? 'split' : null;
-  if (varRaw !== null && varRaw !== undefined && varRaw !== 'split') fail('variant', MECH_MESSAGES.variant);
 
   // 方向 / 轉軸
   const axisRaw = has('axis') ? vec3(r.axis) : base.axis;
@@ -421,9 +469,31 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
     else if (check === 'cycle') fail('parentId', MECH_MESSAGES.parentCycle);
     else if (check === 'depth') fail('parentId', MECH_MESSAGES.parentDepth);
     else if (siblings.find(s => s.id === parentId)?.variant === 'split') fail('parentId', MECH_MESSAGES.splitAsParent);
+    else if (siblings.find(s => s.id === parentId)?.variant) fail('parentId', MECH_MESSAGES.hoistAsParent);
   }
   if (variant === 'split' && ctx.selfId && (ctx.siblings || []).some(s => s.parentId === ctx.selfId)) {
     fail('variant', MECH_MESSAGES.splitHasChildren);
+  }
+  if (isRig && ctx.selfId && (ctx.siblings || []).some(s => s.parentId === ctx.selfId)) {
+    fail('variant', MECH_MESSAGES.hoistHasChildren);
+  }
+
+  // 吊點：屬於哪一組吊掛、第幾個、在物件上的位置（場景單位）
+  let rigId: string | null = null, rigIndex: number | null = null, attach: MechVec3 | null = null;
+  if (isHoist) {
+    const rr = has('rigId') ? r.rigId : base.rigId;
+    rigId = typeof rr === 'string' && ID_RE.test(rr) ? rr : null;
+    if (!rigId) fail('rigId', MECH_MESSAGES.hoistRig);
+    else if (rigId !== ctx.pendingRigId) {
+      const rig = (ctx.siblings || []).find(s => s.id === rigId);
+      if (!rig || rig.variant !== 'hoist_rig') fail('rigId', MECH_MESSAGES.hoistRig);
+    }
+    const ri = num(has('rigIndex') ? r.rigIndex : base.rigIndex);
+    if (Number.isInteger(ri) && ri >= 0 && ri < MECH_LIMITS.hoistsMax) rigIndex = ri;
+    else fail('rigId', MECH_MESSAGES.hoistRigIndex);
+    const av = has('attach') ? vec3(r.attach) : (base.attach ? vec3(base.attach) : null);
+    if (!av || [av.x, av.y, av.z].some(c => Math.abs(c) > MECH_LIMITS.pivotAbs)) fail('attach', MECH_MESSAGES.hoistAttach);
+    else attach = av;
   }
 
   const clRaw = has('consoleLabel') ? r.consoleLabel : base.consoleLabel;
@@ -432,14 +502,14 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
   const mdRaw = has('metadata') ? r.metadata : base.metadata;
   const metadata = isObj(mdRaw) ? mdRaw : null;
 
-  const order: MechanismField[] = ['name', 'kind', 'variant', 'axis', 'pivot', 'mirror', 'travel', 'maxSpeed', 'presets', 'objectIds', 'parentId'];
+  const order: MechanismField[] = ['name', 'kind', 'variant', 'axis', 'pivot', 'mirror', 'travel', 'maxSpeed', 'presets', 'objectIds', 'parentId', 'rigId', 'attach'];
   const first = order.find(f => errors[f]);
   if (first) return { ok: false, error: errors[first]!, field: first, errors };
   return {
     ok: true,
     value: {
       name, kind, axis: axis!, pivot, travelMin, travelMax, defaultValue, maxSpeed, presets, parentId,
-      objectIds, consoleLabel, metadata, variant, mirror, objectSides,
+      objectIds, consoleLabel, metadata, variant, mirror, objectSides, rigId, rigIndex, attach,
     },
   };
 }

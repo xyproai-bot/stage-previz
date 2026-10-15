@@ -58,6 +58,17 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     const out: TlRow[] = [];
     for (const it of layoutMechanisms(mechanisms, mech.groups)) {
       if (it.type === 'single') { out.push({ key: it.mech.id, kind: 'mech', mech: it.mech, member: false }); continue; }
+      if (it.type === 'rig') {
+        // 吊掛：整組是一個可以收起來的標題行，每個吊點是它的成員
+        const gid = 'rig:' + it.rig.id;
+        const isCollapsed = collapsed.has(gid);
+        out.push({
+          key: 'g:' + gid, kind: 'group', group: { id: gid, name: it.rig.name, order: it.rig.order, settings: null, updatedAt: '' },
+          members: it.hoists, collapsed: isCollapsed,
+        });
+        if (!isCollapsed) for (const m of it.hoists) out.push({ key: m.id, kind: 'mech', mech: m, member: true });
+        continue;
+      }
       const isCollapsed = collapsed.has(it.group.id);
       out.push({ key: 'g:' + it.group.id, kind: 'group', group: it.group, members: it.members, collapsed: isCollapsed });
       if (!isCollapsed) for (const m of it.members) out.push({ key: m.id, kind: 'mech', mech: m, member: true });

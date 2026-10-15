@@ -3,15 +3,17 @@
 //   下面：設定機關（新增 / 編輯 / 刪除 / 排序；表單直接展開在這裡，3D 畫面照樣能轉、能選物件）
 //   匯出機關總表（CSV，用 Excel 打開）
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChartGantt, ChevronDown, ChevronRight, Cog, FileSpreadsheet, LoaderCircle, Pencil, Plus, Rows3, TriangleAlert, Waves } from 'lucide-react';
+import { ArrowDown, ArrowUp, Cable, ChartGantt, ChevronDown, ChevronRight, Cog, FileSpreadsheet, LoaderCircle, Pencil, Plus, Rows3, TriangleAlert, Waves } from 'lucide-react';
 import Icon from '../Icon';
 import type { Cue, StageObject } from '../../lib/api';
 import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
 import { formatMechValue } from '../../lib/mechanisms/motion';
-import { speedUnitOf, type Mechanism, type MechanismGroup, type MechanismInput, type MechVec3 } from '../../lib/mechanisms/model';
+import { speedUnitOf, type Mechanism, type MechanismGroup, type MechVec3 } from '../../lib/mechanisms/model';
 import { flipLabel } from '../../lib/mechanisms/flip';
 import { countSides } from '../../lib/mechanisms/split';
 import { layoutMechanisms, moveLayoutItem, valueRange } from '../../lib/mechanisms/group';
+import { analyzeHoist, hoistWarnings, tiltText } from '../../lib/mechanisms/hoist';
+import { formatFieldNumber, parseNumberInput } from '../../lib/numberField';
 import * as mapi from '../../lib/mechanisms/mechanismApi';
 import { buildMechanismSheetCsv, downloadMechanismSheet, sheetFileName } from '../../lib/mechanisms/cueSheet';
 import { toast } from '../../lib/toast';
@@ -20,6 +22,7 @@ import MechanismCueRow from './MechanismCueRow';
 import MechanismSetupForm from './MechanismSetupForm';
 import MechanismBatchForm from './MechanismBatchForm';
 import MechanismGroupForm from './MechanismGroupForm';
+import MechanismHoistForm from './MechanismHoistForm';
 import MechanismPatternPanel from './MechanismPatternPanel';
 import HelpLink from '../HelpLink';
 import { HELP_ANCHORS } from '../../lib/helpLinks';
@@ -59,6 +62,10 @@ export default function MechanismTab({
   const [patternFor, setPatternFor] = useState<string | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
   const [batchOpen, setBatchOpen] = useState(false);
+  // 吊掛（v2 第 4 階段）：哪一組在編輯（'new' = 新增）、哪幾組的「這個 cue 的機關位置」收起來了、哪一組開著「一起動」
+  const [hoistFormFor, setHoistFormFor] = useState<string | 'new' | null>(null);
+  const [closedRigs, setClosedRigs] = useState<Set<string>>(() => new Set());
+  const [togetherFor, setTogetherFor] = useState<string | null>(null);
   const toggle = (set: Set<string>, id: string) => { const n = new Set(set); if (n.has(id)) n.delete(id); else n.add(id); return n; };
   // 在時間軸點到某一排裡的機關 → 這裡也把那一排展開，看得到是哪一個
   const focusedGroupId = mechanisms.find(m => m.id === mech.focusedId)?.groupId ?? null;
@@ -68,7 +75,7 @@ export default function MechanismTab({
       setOpenSetup(s => (s.has(focusedGroupId) ? s : new Set(s).add(focusedGroupId)));
     }
   }, [focusedGroupId, mech.focusedId]);
-  useEffect(() => { if (!selectedCue) setPatternFor(null); }, [selectedCue]);
+  useEffect(() => { if (!selectedCue) { setPatternFor(null); setTogetherFor(null); } }, [selectedCue]);
   const masters = useMemo(() => cues.filter(c => c.status === 'master').sort((a, b) => a.order - b.order), [cues]);
   const cueName = useMemo(() => {
     const byId = new Map(cues.map(c => [c.id, c.name]));
@@ -107,7 +114,8 @@ export default function MechanismTab({
     }
   }
 
-  async function save(editing: Mechanism | null, input: MechanismInput, moveObjects: boolean) {
+  async function save(editing: Mechanism | null, input: mapi.MechanismPayload, moveObjects: boolean) {
+    const inputName = String(input.name ?? editing?.name ?? '');
     setBusy(true);
     const send = async (move: boolean) => {
       if (editing) {
@@ -124,11 +132,12 @@ export default function MechanismTab({
       } catch (e) {
         const err = e as mapi.MechanismApiError;
         if (err.status !== 409 || !err.data?.conflicts?.length) throw e;
-        if (!(await confirmDialog({ title: `要把它移到「${input.name}」嗎？`, message: err.message, confirmLabel: '移過來' }))) return;
+        if (!(await confirmDialog({ title: `要把它移到「${inputName}」嗎？`, message: err.message, confirmLabel: '移過來' }))) return;
         await send(true);
       }
-      toast.success(editing ? `已儲存「${input.name}」` : `已新增「${input.name}」`);
+      toast.success(editing ? `已儲存「${inputName}」` : `已新增「${inputName}」`);
       setEditingId(null);
+      setHoistFormFor(null);
     } catch (e) {
       toast.error('機關沒有存到：' + msg(e));
     } finally {
@@ -149,6 +158,27 @@ export default function MechanismTab({
       await mech.remove(m.id);
       setEditingId(null);
       toast.success(`已刪除「${m.name}」`);
+    } catch (e) {
+      toast.error('刪除失敗：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeRig(rig: Mechanism, hoists: Mechanism[]) {
+    const positions = hoists.reduce((n, h) => n + h.cueCount, 0);
+    const ok = await confirmDialog({
+      title: `刪除吊掛「${rig.name}」？`,
+      message: `會一起刪掉它的 ${hoists.length} 個吊點，和 ${positions} 筆 cue 裡設定的吊點位置，不能復原。帶動的物件會留在原地。`,
+      confirmLabel: '刪除',
+      destructive: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await mech.remove(rig.id);
+      setHoistFormFor(null);
+      toast.success(`已刪除吊掛「${rig.name}」`);
     } catch (e) {
       toast.error('刪除失敗：' + msg(e));
     } finally {
@@ -380,6 +410,131 @@ export default function MechanismTab({
     );
   };
 
+  // ── 吊掛（v2 第 4 階段） ──
+  const msPerMeter = 1 / (scaleCorrection > 0 ? scaleCorrection : 1);
+  const rigDef = (rigId: string) => mech.hoistRigs.find(r => r.rigId === rigId);
+  /** 整組現在的傾斜字和提醒（拖滑桿時照畫面上現在的高度；沒在拖就用這個 cue 的檢查，含走過來路上的提醒） */
+  const rigView = (rig: Mechanism, hoists: Mechanism[]) => {
+    const def = rigDef(rig.id);
+    if (!def) return null;
+    const h = def.hoistIds.map(id => (mech.targets[id] ?? hoists.find(x => x.id === id)?.defaultValue ?? 0) * msPerMeter);
+    const previewing = def.hoistIds.some(id => id in mech.preview);
+    const stored = !previewing && selectedCue ? mech.hoistChecks?.get(selectedCue.id)?.get(rig.id) : undefined;
+    return { tilt: tiltText(analyzeHoist(def.solver, h), front), warnings: stored ? stored.warnings : hoistWarnings(def.solver, h, msPerMeter) };
+  };
+
+  /** 「這個 cue 的機關位置」裡的一組吊掛：標題（傾斜、一起動）+ 每個吊點那一列 */
+  const cueRig = (rig: Mechanism, hoists: Mechanism[]) => {
+    const open = !closedRigs.has(rig.id);
+    const view = rigView(rig, hoists);
+    const problems = hoists.filter(h => cueCheck?.items[h.id]?.status === 'tooFast').length;
+    return (
+      <li key={rig.id} className="mech-group">
+        <div className="mech-group__head">
+          <button type="button" className="mech-icon-btn" aria-expanded={open} aria-label={open ? `收起「${rig.name}」` : `展開「${rig.name}」`}
+            onClick={() => { setClosedRigs(s => toggle(s, rig.id)); mech.setFocusedId(rig.id); }}><Icon icon={open ? ChevronDown : ChevronRight} /></button>
+          <Icon icon={Cable} size="sm" />
+          <span className="mech-group__name" title={rig.name}>{rig.name}</span>
+          <span className="muted small">{hoists.length} 個吊點</span>
+          {view && <span className="mech-hoist__tilt">{view.tilt}</span>}
+          {problems > 0 && <span className="mech-group__flag" title={`有 ${problems} 個吊點來不及到位，展開看是哪幾個`}><Icon icon={TriangleAlert} size="sm" /> {problems}</span>}
+          <span className="grow" />
+          <button type="button" className="btn btn--ghost btn--sm" disabled={!selectedCue || busy || togetherFor === rig.id}
+            title={selectedCue ? '所有吊點一次拉到同一個高度（整片平著升降，像單點吊）' : '先在上面選一個 cue，位置是設在 cue 上的'}
+            onClick={() => { setTogetherFor(rig.id); mech.setFocusedId(rig.id); }}><Icon icon={ArrowUp} /> 一起動</button>
+        </div>
+        {!view && (
+          <div className="mech-warn" role="status">
+            <Icon icon={TriangleAlert} size="sm" className="mech-warn__icon" />
+            <span>這組吊掛的吊點位置算不出來，物件不會動：按「設定機關」裡的「編輯」，把吊點分開（兩個吊點不能在同一個位置，三個以上不能排成一直線）</span>
+          </div>
+        )}
+        {view?.warnings.map(w => (
+          <div key={w} className="mech-warn" role="status">
+            <Icon icon={TriangleAlert} size="sm" className="mech-warn__icon" />
+            <span>{w}</span>
+          </div>
+        ))}
+        {togetherFor === rig.id && selectedCue && (
+          <RigTogether
+            key={selectedCue.id}
+            hoists={hoists}
+            start={mean(hoists.map(h => mech.targets[h.id] ?? h.defaultValue))}
+            disabled={busy}
+            onApply={async (value) => {
+              const items = hoists.map(h => ({ mechanismId: h.id, value: Math.min(h.travelMax, Math.max(h.travelMin, value)) }));
+              if (items.some(it => it.value !== value)) toast.info('有吊點的行程到不了這個高度，已停在行程的邊界');
+              if (await mech.applyPositions(selectedCue.id, items)) setTogetherFor(null);
+            }}
+            onClose={() => setTogetherFor(null)}
+          />
+        )}
+        {open && <ul className="mech-rows mech-rows--member">{hoists.map(cueRow)}</ul>}
+      </li>
+    );
+  };
+
+  /** 「設定機關」裡的一組吊掛：標題 + 編輯，展開後是每個吊點 */
+  const setupRig = (rig: Mechanism, hoists: Mechanism[], index: number) => {
+    const open = openSetup.has(rig.id);
+    return (
+      <li key={rig.id} className={'mech-setup-item mech-setup-group' + (mech.focusedId === rig.id || hoists.some(h => h.id === mech.focusedId) ? ' is-focused' : '')}>
+        <div className="mech-setup-item__row" onClick={() => { setOpenSetup(s => toggle(s, rig.id)); mech.setFocusedId(rig.id); }}>
+          <button type="button" className="mech-icon-btn" aria-expanded={open} aria-label={open ? `收起「${rig.name}」` : `展開「${rig.name}」`}
+            onClick={e => { e.stopPropagation(); setOpenSetup(s => toggle(s, rig.id)); }}><Icon icon={open ? ChevronDown : ChevronRight} /></button>
+          <div className="mech-setup-item__main">
+            <span className="mech-setup-item__name"><Icon icon={Cable} size="sm" /> {rig.name}</span>
+            <span className="muted small">吊掛 · {hoists.length} 個吊點 · {rig.objectIds.length} 個物件</span>
+          </div>
+          <div className="mech-setup-item__actions" onClick={e => e.stopPropagation()}>
+            <button type="button" className="mech-icon-btn" title="上移" aria-label="上移" disabled={index === 0} onClick={() => move(index, -1)}><Icon icon={ArrowUp} /></button>
+            <button type="button" className="mech-icon-btn" title="下移" aria-label="下移" disabled={index === layout.length - 1} onClick={() => move(index, 1)}><Icon icon={ArrowDown} /></button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setHoistFormFor(rig.id); setEditingId(null); setBatchOpen(false); setEditingGroupId(null); mech.setFocusedId(rig.id); }} disabled={hoistFormFor === rig.id}>
+              <Icon icon={Pencil} /> 編輯吊掛
+            </button>
+          </div>
+        </div>
+        {hoistFormFor === rig.id && hoistForm(rig, hoists)}
+        {open && (
+          <ul className="mech-setup-list mech-setup-list--member">
+            {hoists.map(h => (
+              <li key={h.id} className={'mech-setup-item' + (mech.focusedId === h.id ? ' is-focused' : '')}>
+                <div className="mech-setup-item__row" onClick={() => mech.setFocusedId(h.id)}>
+                  <div className="mech-setup-item__main">
+                    <span className="mech-setup-item__name">{h.name}</span>
+                    <span className="muted small">
+                      {formatMechValue(h.travelMin, 'linear', false)} ~ {formatMechValue(h.travelMax, 'linear')}
+                      {h.maxSpeed !== null && ` · ${formatMechValue(h.maxSpeed, 'linear', false)} ${speedUnitOf('linear')}`}
+                      {` · ${h.cueCount} 個 cue 有設定`}
+                    </span>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </li>
+    );
+  };
+
+  const hoistForm = (rig: Mechanism | null, hoists: Mechanism[]) => (
+    <MechanismHoistForm
+      key={rig?.id ?? 'new-rig'}
+      editing={rig}
+      hoists={hoists}
+      mechanisms={mechanisms}
+      stageObjects={stageObjects}
+      selectedObjectIds={selectedObjectIds}
+      scaleCorrection={scaleCorrection}
+      front={front ?? { x: 0, y: 0, z: 1 }}
+      groupBox={(ids) => mech.sceneQueryRef.current?.groupBox(ids) ?? null}
+      busy={busy}
+      onSave={(payload, moving) => save(rig, payload, moving)}
+      onCancel={() => setHoistFormFor(null)}
+      onDelete={rig ? () => void removeRig(rig, hoists) : undefined}
+    />
+  );
+
   /** 「設定機關」裡一個機關那一列（index = 在清單的第幾項；一排裡面的成員不能單獨上下移，傳 null） */
   const setupItem = (m: Mechanism, index: number | null) => {
     const kids = children(m);
@@ -512,7 +667,7 @@ export default function MechanismTab({
           </div>
         ) : (
           <ul className="mech-rows">
-            {layout.map(it => (it.type === 'single' ? cueRow(it.mech) : cueGroup(it.group, it.members)))}
+            {layout.map(it => (it.type === 'single' ? cueRow(it.mech) : it.type === 'rig' ? cueRig(it.rig, it.hoists) : cueGroup(it.group, it.members)))}
           </ul>
         )}
       </section>
@@ -521,11 +676,15 @@ export default function MechanismTab({
         <header className="mech-section__head">
           <h3 className="mech-section__title">設定機關</h3>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setBatchOpen(true); setEditingId(null); setEditingGroupId(null); }} disabled={batchOpen}
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setHoistFormFor('new'); setBatchOpen(false); setEditingId(null); setEditingGroupId(null); }} disabled={hoistFormFor === 'new'}
+              title="好幾個吊點拉到不同的高度，整片物件就會傾斜（飛行、吊掛的燈架 / 螢幕）">
+              <Icon icon={Cable} /> 新增吊掛
+            </button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setBatchOpen(true); setEditingId(null); setEditingGroupId(null); setHoistFormFor(null); }} disabled={batchOpen}
               title="用 3D 畫面選取的好幾個物件，一個物件一個機關，編號、名稱、方向、行程一次設好">
               <Icon icon={Rows3} /> 一次建立多個
             </button>
-            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setEditingId('new'); setBatchOpen(false); }} disabled={editingId === 'new'}>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => { setEditingId('new'); setBatchOpen(false); setHoistFormFor(null); }} disabled={editingId === 'new'}>
               <Icon icon={Plus} /> 新增機關
             </button>
           </span>
@@ -537,6 +696,7 @@ export default function MechanismTab({
           </div>
         )}
         {editingId === 'new' && formFor(null)}
+        {hoistFormFor === 'new' && hoistForm(null, [])}
         {batchOpen && (
           <MechanismBatchForm
             mechanisms={mechanisms}
@@ -553,10 +713,44 @@ export default function MechanismTab({
         )}
         {mechanisms.length > 0 && (
           <ul className="mech-setup-list">
-            {layout.map((it, i) => (it.type === 'single' ? setupItem(it.mech, i) : setupGroup(it.group, it.members, i)))}
+            {layout.map((it, i) => (it.type === 'single' ? setupItem(it.mech, i) : it.type === 'rig' ? setupRig(it.rig, it.hoists, i) : setupGroup(it.group, it.members, i)))}
           </ul>
         )}
       </section>
+    </div>
+  );
+}
+
+const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+
+/** 一組吊掛的「一起動」：所有吊點一次拉到同一個高度（整片平著升降，像單點吊）；存成這個 cue 的位置，復原一步全退回去 */
+function RigTogether({ hoists, start, disabled, onApply, onClose }: {
+  hoists: Mechanism[];
+  start: number;
+  disabled: boolean;
+  onApply: (value: number) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [text, setText] = useState(() => formatFieldNumber(start, 3));
+  const [msg2, setMsg2] = useState<string | null>(null);
+  const run = () => {
+    const v = parseNumberInput(text);
+    if (v === null) { setMsg2('高度要是數字'); return; }
+    setMsg2(null);
+    void onApply(v);
+  };
+  return (
+    <div className="mech-hoist__together" role="group" aria-label="所有吊點一起動">
+      <span>全部拉到</span>
+      <label className="num-field">
+        <input type="text" inputMode="decimal" aria-label="所有吊點拉到幾公尺" value={text} autoFocus
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); run(); } else if (e.key === 'Escape') onClose(); }} />
+        <span className="num-field__unit" aria-hidden="true">m</span>
+      </label>
+      <button type="button" className="btn btn--primary btn--sm" disabled={disabled} onClick={run}>套用到 {hoists.length} 個吊點</button>
+      <button type="button" className="btn btn--ghost btn--sm" onClick={onClose}>取消</button>
+      {msg2 && <span className="field-error small" role="alert">{msg2}</span>}
     </div>
   );
 }

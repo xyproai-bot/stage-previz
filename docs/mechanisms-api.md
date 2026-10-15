@@ -53,7 +53,10 @@
   "mirror": null,               // 只有對開：B 邊 { axis, pivot（旋轉才有）, consoleLabel }
   "objectSides": {},            // 只有對開：{ [物件 id]: "a" | "b" }（沒寫 = A 邊）
   "groupId": null,              // v2 第 3 階段：屬於哪一排（沒有 = null）
-  "groupIndex": null            // 這一排裡的第幾個（0 起算）
+  "groupIndex": null,           // 這一排裡的第幾個（0 起算）
+  "rigId": null,                // v2 第 4 階段（0032）：只有吊點（variant = "hoist"）：屬於哪一組吊掛
+  "rigIndex": null,             // 第幾個吊點（0 起算）
+  "attach": null                // 吊點在物件上的位置 { x, y, z }（場景單位，cue 位置的座標）
 }
 ```
 
@@ -65,7 +68,18 @@
   - 改回一般機關：`PATCH { "variant": null }` → `mirror` 和每個物件的邊都清掉。換邊：`PATCH { "objectSides": {...} }`。只改名字、行程這類不會動到邊。
   - 對開不能用「轉換 cue 位置」（400「對開的機關不能轉換 cue 位置（兩邊的物件動法不一樣）」）。
 - **翻轉**：`kind: "rotary"`，`axis` / `pivot` 由畫面從帶動物件的外框算好（`hingeFromBox`，`flip.ts`）；`metadata.setup = { hinge: "top" | "bottom" | "left" | "right" | "front" | "back", positive: "first" | "second" }` 只是讓編輯時看得到原本的選擇（後台不看它、舊版前端也照樣存回來）。
-- **舊版前端相容**：讀機關和位置的網址要帶 `?mech=2`（新版畫面一律帶；`GET …/mechanisms`、`…/mechanism-sheet`、`…/songs/:s/mechanism-positions`、分享連結的 `…/data` 和 `…/mechanism-positions`）。**沒帶（還在跑的舊版前端）→ 後台不給 `variant` 不是空的機關，也不給它們的位置**：對開的零件在舊版畫面是靜止的，不會往錯的方向動；翻轉是普通的旋轉機關，舊版照樣看得到、會動。新增 / 修改的回應一律給完整的。
+- **舊版前端相容**：讀機關和位置的網址要帶 `?mech=N`（新版畫面一律帶；`GET …/mechanisms`、`…/mechanism-sheet`、`…/songs/:s/mechanism-positions`、分享連結的 `…/data` 和 `…/mechanism-positions`）。**沒帶（最舊的前端）→ 後台只給一般機關（`variant` 是空的）和它們的位置**；`?mech=2`（第 2、3 階段的畫面，看得懂對開）→ 一般 + 對開；`?mech=3`（第 4 階段，看得懂吊掛）→ 全部。看不懂的 variant 後台不給，它們的零件在舊畫面是靜止的，不會往錯的方向動；翻轉是普通的旋轉機關，舊版照樣看得到、會動。新增 / 修改的回應一律給完整的。
+
+### 吊掛（`variant: "hoist_rig"` / `"hoist"`、`rigId`、`rigIndex`、`attach`）
+
+- 一組吊掛 = 一個**整組**（`variant: "hoist_rig"`，帶動物件，自己沒有位置；`kind` 固定 `linear`、行程 0~1 只是湊數）+ **2 ~ 4 個吊點**（`variant: "hoist"`，往上的直線，有自己的行程、最高速度、控台編號、每個 cue 的位置和延遲；沒有物件、不裝在別的機關上）。整組可以裝在別的機關上（轉台），但整組和吊點都不能當別的機關的上層（400「吊掛的機關不能當別的機關的上層」）。
+- 吊點的值 h = 這個吊點被拉高幾公尺（0 = cue 裡原本的位置）；`attach` = 吊點在物件上的位置（場景單位）。物件是硬的，畫面照 h 算姿勢（`web/src/lib/mechanisms/hoist.ts`）：2 個吊點沿著兩點的連線轉到高度差剛好等於 h₂ − h₁（轉不到 → 斜到垂直為止並提醒）；3 個吊點用最小的轉動把吊點平面轉到通過三個目標點的平面；4 個吊點用最小平方法找平面（四點不共面 → 提醒）。吊點的重心升高 h 的平均，永遠沒有繞垂直軸轉。
+- 新增：`POST …/mechanisms` body `{ variant: "hoist_rig", name, objectIds, parentId?, hoists: [{ name?, attach, travelMin?, travelMax?, maxSpeed?, consoleLabel?, defaultValue?, presets? }], moveObjects? }`，一個交易建好整組和吊點（吊點沒給名字 = 「整組名稱 吊點 N」，行程預設 0 ~ 5 m）→ 201 `{ mechanism（整組）, hoists }`。物件已經在別的機關 → 409，問過後帶 `moveObjects: true`。吊點不能單獨新增（400「吊掛要用「新增吊掛」建立…」）。
+- 檢查（400，`field`）：吊點要 2 到 4 個（`hoists`）、要有物件（`objectIds`）、兩個吊點不能在同一個位置 / 三個以上不能排一直線（`attach`，水平位置要分開）、位置要填 X、Y、Z 三個數字（`attach`）、行程（`travel`）、名稱不能重複（`name`）。
+- 修改整組：`PATCH …/mechanisms/:rig` body `{ name?, objectIds?, parentId?, metadata?, hoists? }`；`hoists` 有送 = 整個換成這份清單：有 `id` 的改那個吊點、沒有 `id` 的新增、原本有卻沒列出來的刪掉（連同每個 cue 的位置）→ `{ mechanism, hoists, outOfRangeCount }`。
+- 修改單一吊點：`PATCH …/mechanisms/:hoist` 只能改名稱、行程、預設位置、最高速度、常用位置、控台編號；`attach`、`rigId`、`variant`、物件、方向都鎖住（送了也不動）。吊點不能單獨刪（400「吊掛至少要有 2 個吊點…」）；刪整組 `DELETE …/mechanisms/:rig` 連吊點和它們每個 cue 的位置一起刪（`removedPositions`）。一般機關不能改成吊掛、吊掛也不能改回一般（400）。
+- 位置：吊點跟普通機關一樣用 `PUT …/cues/:c/mechanisms/:hoist` 和一次寫很多個；**整組沒有自己的位置**（400「這是整組吊掛，沒有自己的位置，請設定它的每個吊點」，一次寫很多個時整批不動）。吊掛不能用「轉換 cue 位置」。
+- 舊版前端相容：正式站上還在跑的前端讀機關帶 `?mech=2`（或沒帶）→ 整組和吊點、它們的位置都不給，物件在舊畫面是靜止的；它存別的機關、排序、沿用 cue 都不會動到吊掛（沿用 cue 時吊點的位置和延遲照樣複製）。複製專案 / 匯出匯入帶著整組和吊點（新 id、吊點接回新的整組；吊點不到 2 個或位置不合的整組連同吊點略過；舊的匯出檔沒有這些欄位 → 都是一般機關）。
 
 ### 一排機關（`mechanism_groups`、`groupId`、`groupIndex`）
 
@@ -87,14 +101,14 @@
 
 | | 網址 | 送 | 回傳 |
 |---|---|---|---|
-| GET | `/api/projects/:p/mechanisms?mech=2` | | `{ mechanisms: Mechanism[], groups: MechanismGroup[] }`（照順序；沒帶 `?mech=2` 不含對開，也沒有 `groups`） |
+| GET | `/api/projects/:p/mechanisms?mech=3` | | `{ mechanisms: Mechanism[], groups: MechanismGroup[] }`（照順序；`?mech=3` 才含吊掛，`?mech=2` 含對開不含吊掛，沒帶只有一般機關也沒有 `groups`） |
 | POST | `/api/projects/:p/mechanisms/batch` | `{ base, objectIds, namePrefix, groupName?, numbering?, overrides?, moveObjects? }` | 201 `{ group, mechanisms }`（一次建立 N 個，見「一排機關」） |
 | PATCH | `/api/projects/:p/mechanism-groups/:g` | `{ name?, travelMin?, travelMax?, defaultValue?, maxSpeed?, presets? }` | `{ group, mechanisms, outOfRangeCount }`（共用設定套到每個成員） |
 | DELETE | `/api/projects/:p/mechanism-groups/:g[?dissolve=1]` | | 解散 `{ ok, dissolved, mechanisms }`；刪除 `{ ok, removedMechanisms, removedPositions }` |
 | PUT | `/api/projects/:p/songs/:s/cues/:c/mechanism-positions` | `{ items: [{ mechanismId, value, delaySec?, durationSec? }] }`（1 ~ 200 列） | `{ ok, items }`（一個交易；`value: null` = 回到沿用） |
-| POST | `/api/projects/:p/mechanisms` | 機關的欄位（不用 id / order / cueCount）+ `moveObjects?: true` | 201 `{ mechanism }` |
+| POST | `/api/projects/:p/mechanisms` | 機關的欄位（不用 id / order / cueCount）+ `moveObjects?: true`；整組吊掛：`variant: "hoist_rig"` + `hoists` | 201 `{ mechanism }`（吊掛多 `hoists`） |
 | POST | `/api/projects/:p/mechanisms/reorder` | `{ ids: string[] }` | `{ ok }` |
-| PATCH | `/api/projects/:p/mechanisms/:m` | 要改的欄位 + `moveObjects?: true` | `{ mechanism, outOfRangeCount }`（有幾個 cue 存的值超出新的行程） |
+| PATCH | `/api/projects/:p/mechanisms/:m` | 要改的欄位 + `moveObjects?: true`；整組吊掛可以帶 `hoists` | `{ mechanism, outOfRangeCount }`（有幾個 cue 存的值超出新的行程；吊掛多 `hoists`） |
 | DELETE | `/api/projects/:p/mechanisms/:m` | | `{ ok, removedPositions }`（一起刪掉幾個 cue 的位置） |
 | GET | `/api/projects/:p/songs/:s/mechanism-positions` | | `{ positions: [{ cueId, mechanismId, value, delaySec, durationSec, updatedAt }] }`（每個 cue **自己存的**；沿用的在前端算） |
 | PUT | `/api/projects/:p/songs/:s/cues/:c/mechanisms/:m` | `{ value?, delaySec?, durationSec? }`（沒送的欄位不改；`null` = 跟著 cue；只送時間時這個 cue 要已經有自己的位置） | `{ ok, value, clamped, delaySec, durationSec }`（存的是夾進行程後的值） |
@@ -115,6 +129,7 @@
 |---|---|---|
 | 400 | 檢查沒過（還會帶 `field`：name / kind / variant / axis / pivot / mirror / travel / maxSpeed / presets / objectIds / parentId） | 「機關名稱不能空白」「這個專案已經有叫「…」的機關」「機關類型不正確」「方向不正確」「轉軸中心要是數字」「行程的最高要比最低大」「行程要填數字」「最高速度要是正的數字，或留空不檢查」「常用位置最多 12 個」「常用位置的名稱重複了：「…」」「一個機關最多帶 200 個物件」「有物件不在這個專案裡」「不能選自己，或裝在自己上面的機關」「機關一層套一層最多 4 層」「找不到要裝上去的機關」「機關的變化類型不正確」「對開的 B 邊方向不正確」「對開的 B 邊轉軸中心要是數字」「對開的機關不能當別的機關的上層」「有機關裝在它上面，不能改成對開」 |
 | 400 | 一排：一次建立 / 改一排（`field`：objectIds / namePrefix / groupName / variant，還有上面單獨新增的欄位） | 「一排至少要 2 個機關，請多選幾個物件」「一次最多建立 64 個機關」「名稱開頭太長了（最多 N 個字，後面還要接編號）」「這個專案已經有叫「…」的一排機關」「這一排的名字不能空白」「這一排的名字最多 40 個字」「一次建立的機關不能是對開，請一個一個設定」 |
+| 400 | 吊掛（`field`：hoists / objectIds / attach / travel / name / variant / value） | 「吊掛要有 2 到 4 個吊點」「吊掛要先選好帶動的物件」「吊點的位置要填 X、Y、Z 三個數字」「兩個吊點不能在同一個位置，請把它們分開」「三個以上的吊點不能排成一直線，請把其中一個移開」「吊掛至少要有 2 個吊點，要減少吊點請編輯整組吊掛；要整組刪掉請刪除吊掛」「這是整組吊掛，沒有自己的位置，請設定它的每個吊點」「吊掛要用「新增吊掛」建立，不能把一般機關改成吊掛，也不能把吊掛改回一般機關」「吊掛的機關不能轉換 cue 位置」 |
 | 400 | 一次寫很多個位置（`field`：items / value / delaySec / durationSec） | 「一次最多設定 200 個機關的位置」「每一列都要有機關和位置」「同一個機關在這一次只能出現一次」「有機關不在這個專案裡」 |
 | 400 | PUT 每個 cue 的位置不是數字 | 「位置要是數字」 |
 | 400 | PUT 的秒數不對（`field`：delaySec / durationSec） | 「延遲要是 0 到 3600 秒，或留空跟著 cue」「走幾秒要是 0 到 3600 秒，或留空跟著轉場」 |

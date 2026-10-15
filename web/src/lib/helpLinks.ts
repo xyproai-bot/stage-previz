@@ -35,6 +35,7 @@ export const HELP_ANCHORS = {
   prodMechTiming: 'prod-mech-timing',
   prodMechSplit: 'prod-mech-split',
   prodMechGroup: 'prod-mech-group',
+  prodMechHoist: 'prod-mech-hoist',
   prodMechSheet: 'prod-mech-sheet',
   prodMechConvert: 'prod-mech-convert',
   prodLedCanvas: 'prod-led-canvas',

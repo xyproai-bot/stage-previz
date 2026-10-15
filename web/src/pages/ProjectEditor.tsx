@@ -219,7 +219,7 @@ export default function ProjectEditor() {
   const bumpHistory = useCallback(() => setHistoryVersion(v => v + 1), []);
   // 機關（右邊「機關」分頁）：每個 cue 的機關位置、定義、速度檢查；改了也記在同一份復原
   const mech = useEditorMechanisms({
-    projectId, songId: selectedSongId, cues, selectedCueId, canEdit: true,
+    projectId, songId: selectedSongId, cues, selectedCueId, canEdit: true, scaleCorrection: view.scaleCorrection,
     history: { push: (scope, step) => historyRef.current.push(scope, step), bump: bumpHistory },
   });
   const currentHistoryScope = historyScope(selectedCueId);

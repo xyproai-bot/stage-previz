@@ -1352,8 +1352,8 @@ export function shareAccessHeaders(access?: string): Record<string, string> {
 export async function getSharePublicData(ref: ShareRef, password?: string, access?: string): Promise<SharePublicData> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...shareAccessHeaders(access) };
   if (password) headers['x-share-password'] = password;
-  // ?mech=2：新版畫面看得懂機關 v2 的對開；沒帶的舊版前端後台不給對開的機關（零件靜止，不會往錯的方向動）
-  const r = await fetch(`${apiBase()}${shareApiPath(ref)}/data?mech=2`, { headers });
+  // ?mech=3：新版畫面看得懂機關 v2 的對開和吊掛；沒帶的舊版前端後台不給（零件靜止，不會往錯的方向動）
+  const r = await fetch(`${apiBase()}${shareApiPath(ref)}/data?mech=3`, { headers });
   if (!r.ok) throw await shareError(r);
   return r.json();
 }

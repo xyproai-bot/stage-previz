@@ -14,6 +14,8 @@ import {
 } from '../web/src/lib/mechanisms/model.ts';
 import { planCueConversion } from '../web/src/lib/mechanisms/convert.ts';
 import { planBatch, planGroupPatch, groupMembers, parseBulkPositions, isNumbering } from '../web/src/lib/mechanisms/group.ts';
+import { planHoistRig } from '../web/src/lib/mechanisms/hoistRig.ts';
+import { hoistGeometryProblem, hoistsOfRig } from '../web/src/lib/mechanisms/hoist.ts';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const newId = (prefix, i = 0) => prefix + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + (i ? String(i) : '');
@@ -47,7 +49,10 @@ export function rowToMechanism(row, objectIds = [], cueCount = 0, sides = {}) {
   const isRotary = row.kind === 'rotary';
   const axisA = vec(row.axis, { x: 0, y: 1, z: 0 });
   const mraw = row.variant === 'split' ? parseJson(row.mirror, null) : null;
-  let variant = row.variant === 'split' ? 'split' : null;
+  let variant = row.variant === 'split' || row.variant === 'hoist_rig' || row.variant === 'hoist' ? row.variant : null;
+  // 吊掛（0032）：吊點要有所屬的整組和位置，不然當一般機關（沒有物件，不會動到任何東西）
+  const attach = vec(row.attach, null);
+  if (variant === 'hoist' && (!attach || !row.rig_id)) variant = null;
   let mirror = null;
   if (variant === 'split') {
     const mAxis = mraw ? vec(mraw.axis, null) : null;
@@ -88,6 +93,10 @@ export function rowToMechanism(row, objectIds = [], cueCount = 0, sides = {}) {
     variant,
     mirror,
     objectSides,
+    // 吊掛（0032）：只有吊點有；舊資料 / 舊後台沒有 → null
+    rigId: variant === 'hoist' ? row.rig_id : null,
+    rigIndex: variant === 'hoist' && row.rig_index != null && Number.isFinite(Number(row.rig_index)) ? Number(row.rig_index) : null,
+    attach: variant === 'hoist' ? attach : null,
     // 一排（0031）：舊資料 / 舊後台沒有 → null
     groupId: row.group_id || null,
     groupIndex: Number.isFinite(Number(row.group_index)) && row.group_index !== null ? Number(row.group_index) : null,
@@ -123,8 +132,11 @@ export function inputToColumns(v) {
     parent_id: v.parentId,
     console_label: v.consoleLabel,
     metadata: v.metadata ? JSON.stringify(v.metadata) : null,
-    variant: v.variant === 'split' ? 'split' : null,
+    variant: v.variant === 'split' || v.variant === 'hoist_rig' || v.variant === 'hoist' ? v.variant : null,
     mirror: v.variant === 'split' && v.mirror ? JSON.stringify(v.mirror) : null,
+    rig_id: v.variant === 'hoist' ? v.rigId ?? null : null,
+    rig_index: v.variant === 'hoist' ? v.rigIndex ?? null : null,
+    attach: v.variant === 'hoist' && v.attach ? JSON.stringify(v.attach) : null,
   };
 }
 
@@ -160,8 +172,9 @@ export function conflictMessage(c) {
  * mech2：呼叫的畫面看得懂機關 v2（網址帶 ?mech=2）。false（還在跑的舊版前端）→ 不給對開這類 variant 不是空的機關，
  *   它帶的零件在舊版畫面是靜止的，不會往錯的方向動；只查一個 id（新增 / 修改後回傳）一律給
  */
-export async function loadMechanisms(env, projectId, onlyId = null, { mech2 = true } = {}) {
-  const where = (onlyId ? 'm.project_id = ? AND m.id = ?' : 'm.project_id = ?') + (mech2 || onlyId ? '' : ' AND m.variant IS NULL');
+export async function loadMechanisms(env, projectId, onlyId = null, { mech2 = true, mech3 = mech2 } = {}) {
+  const cond = variantCond('m', { mech2, mech3 });
+  const where = (onlyId ? 'm.project_id = ? AND m.id = ?' : 'm.project_id = ?') + (cond && !onlyId ? ` AND ${cond}` : '');
   const binds = onlyId ? [projectId, onlyId] : [projectId];
   const [mr, or] = await env.DB.batch([
     env.DB.prepare(
@@ -192,9 +205,23 @@ export async function loadMechanisms(env, projectId, onlyId = null, { mech2 = tr
   return (mr.results || []).map(r => rowToMechanism(r, objs.get(r.id) || [], r.cue_count, sides.get(r.id) || {}));
 }
 
-/** 網址帶 ?mech=2 → 這個畫面看得懂機關 v2（對開…） */
-export function wantsMech2(request) {
-  try { return Number(new URL(request.url).searchParams.get('mech')) >= 2; } catch { return false; }
+/** 網址帶 ?mech=N → 這個畫面看得懂機關 v2 的第幾級（沒帶 / 不是數字 = 0） */
+export function mechLevel(request) {
+  try { const n = Number(new URL(request.url).searchParams.get('mech')); return Number.isFinite(n) ? n : 0; } catch { return 0; }
+}
+/** ?mech=2 以上 → 看得懂對開 */
+export function wantsMech2(request) { return mechLevel(request) >= 2; }
+/** ?mech=3 以上 → 看得懂吊掛（正式站上 ?mech=2 的版本看不懂 'hoist_rig' / 'hoist'，不給它） */
+export function wantsMech3(request) { return mechLevel(request) >= 3; }
+
+/**
+ * 讀機關 / 位置時 variant 的條件（SQL，沒有條件 = ''）：
+ *   沒有 mech2 → 只給一般機關；mech2 沒有 mech3 → 一般 + 對開；都有 → 全部
+ */
+function variantCond(alias, { mech2, mech3 }) {
+  if (!mech2) return `${alias}.variant IS NULL`;
+  if (!mech3) return `(${alias}.variant IS NULL OR ${alias}.variant = 'split')`;
+  return '';
 }
 
 /** 這個專案的「一排」機關（照順序） */
@@ -205,19 +232,20 @@ export async function loadMechanismGroups(env, projectId) {
   return (r.results || []).map(rowToGroup);
 }
 
-export async function listMechanisms(env, ctx, { mech2 = true } = {}) {
+export async function listMechanisms(env, ctx, { mech2 = true, mech3 = mech2 } = {}) {
   // groups：只給新版畫面（網址帶 ?mech=2）；舊版前端的回應跟以前一模一樣
-  const mechanisms = await loadMechanisms(env, ctx.projectId, null, { mech2 });
+  const mechanisms = await loadMechanisms(env, ctx.projectId, null, { mech2, mech3 });
   return ok(mech2 ? { mechanisms, groups: await loadMechanismGroups(env, ctx.projectId) } : { mechanisms });
 }
 
 /** 一首歌每個 cue 自己設的機關位置；masterOnly = 分享連結（只看得到正式 cue） */
-export async function loadSongPositions(env, songId, { masterOnly = false, mech2 = true } = {}) {
+export async function loadSongPositions(env, songId, { masterOnly = false, mech2 = true, mech3 = mech2 } = {}) {
+  const cond = variantCond('m', { mech2, mech3 });
   const r = await env.DB.prepare(
     `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec, p.updated_at
        FROM cue_mechanism_positions p
        JOIN cues c ON c.id = p.cue_id
-       ${mech2 ? '' : 'JOIN mechanisms m ON m.id = p.mechanism_id AND m.variant IS NULL'}
+       ${cond ? `JOIN mechanisms m ON m.id = p.mechanism_id AND ${cond}` : ''}
       WHERE c.song_id = ?${masterOnly ? ` AND c.status = 'master'` : ''}
       ORDER BY c."order" ASC`
   ).bind(songId).all();
@@ -234,13 +262,14 @@ function rowToPosition(r) {
   };
 }
 
-export async function listSongPositions(env, ctx, songId, { mech2 = true } = {}) {
-  return ok({ positions: await loadSongPositions(env, songId, { mech2 }) });
+export async function listSongPositions(env, ctx, songId, { mech2 = true, mech3 = mech2 } = {}) {
+  return ok({ positions: await loadSongPositions(env, songId, { mech2, mech3 }) });
 }
 
 /** 機關總表：整個專案每首歌的正式 cue + 每個 cue 自己設的位置（一次拿完） */
-export async function mechanismSheet(env, ctx, { mech2 = true } = {}) {
+export async function mechanismSheet(env, ctx, { mech2 = true, mech3 = mech2 } = {}) {
   const pid = ctx.projectId;
+  const cond = variantCond('m', { mech2, mech3 });
   const [songsR, cuesR, posR] = await env.DB.batch([
     env.DB.prepare(`SELECT id, name, code, "order" FROM songs WHERE project_id = ? ORDER BY "order" ASC, created_at ASC`).bind(pid),
     env.DB.prepare(
@@ -253,7 +282,7 @@ export async function mechanismSheet(env, ctx, { mech2 = true } = {}) {
       `SELECT p.cue_id, p.mechanism_id, p.value, p.delay_sec, p.duration_sec, p.updated_at
          FROM cue_mechanism_positions p
          JOIN cues c ON c.id = p.cue_id JOIN songs s ON s.id = c.song_id
-         ${mech2 ? '' : 'JOIN mechanisms m ON m.id = p.mechanism_id AND m.variant IS NULL'}
+         ${cond ? `JOIN mechanisms m ON m.id = p.mechanism_id AND ${cond}` : ''}
         WHERE s.project_id = ? AND c.status = 'master'`
     ).bind(pid),
   ]);
@@ -270,7 +299,7 @@ export async function mechanismSheet(env, ctx, { mech2 = true } = {}) {
   return ok({
     songs: (songsR.results || []).map(s => ({ id: s.id, name: s.name, code: s.code || null, order: s.order, cues: bySong.get(s.id) || [] })),
     positions: (posR.results || []).map(rowToPosition),
-    mechanisms: await loadMechanisms(env, pid, null, { mech2 }),
+    mechanisms: await loadMechanisms(env, pid, null, { mech2, mech3 }),
   });
 }
 
@@ -280,7 +309,7 @@ export async function mechanismSheet(env, ctx, { mech2 = true } = {}) {
 
 async function projectFacts(env, projectId) {
   const [sibR, objR, memR] = await env.DB.batch([
-    env.DB.prepare(`SELECT id, name, parent_id, variant FROM mechanisms WHERE project_id = ?`).bind(projectId),
+    env.DB.prepare(`SELECT id, name, parent_id, variant, rig_id FROM mechanisms WHERE project_id = ?`).bind(projectId),
     env.DB.prepare(`SELECT id, display_name, mesh_name FROM stage_objects WHERE project_id = ?`).bind(projectId),
     env.DB.prepare(
       `SELECT mo.stage_object_id, mo.mechanism_id, m.name AS mechanism_name
@@ -290,7 +319,10 @@ async function projectFacts(env, projectId) {
   ]);
   const objects = objR.results || [];
   return {
-    siblings: (sibR.results || []).map(s => ({ id: s.id, name: s.name, parentId: s.parent_id || null, variant: s.variant === 'split' ? 'split' : null })),
+    siblings: (sibR.results || []).map(s => ({
+      id: s.id, name: s.name, parentId: s.parent_id || null,
+      variant: s.variant === 'split' || s.variant === 'hoist_rig' || s.variant === 'hoist' ? s.variant : null, rigId: s.rig_id || null,
+    })),
     projectObjectIds: new Set(objects.map(o => o.id)),
     objectNames: new Map(objects.map(o => [o.id, (o.display_name && String(o.display_name).trim()) || o.mesh_name])),
     memberships: memR.results || [],
@@ -319,6 +351,9 @@ function membershipStatements(env, mechId, objectIds, conflicts, sides = {}) {
 export async function createMechanism(request, env, ctx, log) {
   const body = await readJson(request);
   if (!body) return bad('Invalid JSON');
+  // 吊掛（0032）：整組 + 吊點一次建立；吊點不能單獨新增
+  if (body.variant === 'hoist') return bad(MECH_MESSAGES.hoistVariantLocked, 400, { field: 'variant' });
+  if (body.variant === 'hoist_rig') return createHoistRig(body, env, ctx, log);
   const facts = await projectFacts(env, ctx.projectId);
   const n = normalizeMechanismInput(body, { siblings: facts.siblings, projectObjectIds: facts.projectObjectIds });
   if (!n.ok) return bad(n.error, 400, { field: n.field });
@@ -346,11 +381,25 @@ export async function createMechanism(request, env, ctx, log) {
   return ok({ mechanism }, 201);
 }
 
+/** 吊點的這些欄位不能從單獨修改改（位置、屬於哪一組、整組的樣子要用「編輯吊掛」整組一起改） */
+const HOIST_LOCKED_KEYS = ['variant', 'rigId', 'rigIndex', 'attach', 'kind', 'axis', 'pivot', 'objectIds', 'parentId', 'mirror', 'objectSides'];
+const isHoistVariant = (v) => v === 'hoist' || v === 'hoist_rig';
+
 export async function updateMechanism(request, env, ctx, mechId, log) {
-  const body = await readJson(request);
+  let body = await readJson(request);
   if (!body) return bad('Invalid JSON');
   const [existing] = await loadMechanisms(env, ctx.projectId, mechId);
   if (!existing) return bad('這個專案裡找不到這個機關', 404);
+  // 吊掛（0032）：一般機關不能改成吊掛、吊掛也不能改回一般
+  if (body.variant !== undefined && (body.variant ?? null) !== (existing.variant ?? null)
+    && (isHoistVariant(body.variant) || isHoistVariant(existing.variant))) {
+    return bad(MECH_MESSAGES.hoistVariantLocked, 400, { field: 'variant' });
+  }
+  if (existing.variant === 'hoist_rig') return updateHoistRig(body, env, ctx, existing, log);
+  if (existing.variant === 'hoist') {
+    body = { ...body };
+    for (const k of HOIST_LOCKED_KEYS) delete body[k];
+  }
   const facts = await projectFacts(env, ctx.projectId);
   const n = normalizeMechanismInput(body, {
     existing: mechanismToInput(existing), selfId: mechId, siblings: facts.siblings, projectObjectIds: facts.projectObjectIds,
@@ -386,11 +435,22 @@ export async function updateMechanism(request, env, ctx, mechId, log) {
 
 export async function deleteMechanism(request, env, ctx, mechId, log) {
   const before = await env.DB.prepare(
-    `SELECT m.name, m.group_id, (SELECT COUNT(*) FROM cue_mechanism_positions p WHERE p.mechanism_id = m.id) AS n
+    `SELECT m.name, m.group_id, m.variant, (SELECT COUNT(*) FROM cue_mechanism_positions p WHERE p.mechanism_id = m.id) AS n
        FROM mechanisms m WHERE m.id = ? AND m.project_id = ?`
   ).bind(mechId, ctx.projectId).first();
   if (!before) return bad('這個專案裡找不到這個機關', 404);
-  const stmts = [env.DB.prepare(`DELETE FROM mechanisms WHERE id = ? AND project_id = ?`).bind(mechId, ctx.projectId)];
+  // 吊掛（0032）：吊點不能單獨刪（整組至少要 2 個吊點）；刪整組 = 連吊點和它們每個 cue 的位置一起刪
+  if (before.variant === 'hoist') return bad(MECH_MESSAGES.hoistDeleteOne, 400);
+  const stmts = [];
+  let hoistPositions = 0;
+  if (before.variant === 'hoist_rig') {
+    const hp = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM cue_mechanism_positions p JOIN mechanisms x ON x.id = p.mechanism_id WHERE x.rig_id = ?`
+    ).bind(mechId).first();
+    hoistPositions = Number(hp?.n) || 0;
+    stmts.push(env.DB.prepare(`DELETE FROM mechanisms WHERE rig_id = ? AND project_id = ?`).bind(mechId, ctx.projectId));
+  }
+  stmts.push(env.DB.prepare(`DELETE FROM mechanisms WHERE id = ? AND project_id = ?`).bind(mechId, ctx.projectId));
   // 一排裡最後一個機關刪掉了 → 這一排也不留空殼（舊版前端刪機關也走這裡）
   if (before.group_id) {
     stmts.push(env.DB.prepare(
@@ -398,9 +458,109 @@ export async function deleteMechanism(request, env, ctx, mechId, log) {
     ).bind(before.group_id, ctx.projectId));
   }
   await env.DB.batch(stmts);
-  const removedPositions = Number(before.n) || 0;
-  await log?.('delete', 'mechanism', mechId, { name: before.name, removedPositions });
+  const removedPositions = (Number(before.n) || 0) + hoistPositions;
+  await log?.('delete', 'mechanism', mechId, { name: before.name, removedPositions, variant: before.variant || undefined });
   return ok({ ok: true, removedPositions });
+}
+
+// ─────────────────────────────────────────────
+// 吊掛（0032）：整組 + 2～4 個吊點一次新增 / 修改
+// ─────────────────────────────────────────────
+
+const insertMechanismRow = (env, id, projectId, c, order, rigId = null) => env.DB.prepare(
+  `INSERT INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
+                           presets, parent_id, console_label, "order", metadata, variant, mirror, rig_id, rig_index, attach, edited_at)
+   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, datetime('now'))`
+).bind(id, projectId, c.name, c.kind, c.axis, c.pivot, c.travel_min, c.travel_max, c.default_value, c.max_speed,
+  c.presets, c.parent_id, c.console_label, order, c.metadata, c.variant, rigId, c.rig_index, c.attach);
+
+async function nextMechanismOrder(env, projectId) {
+  const maxRow = await env.DB.prepare(`SELECT COALESCE(MAX("order"), -1) AS m FROM mechanisms WHERE project_id = ?`).bind(projectId).first();
+  const maxOrder = Number(maxRow?.m);
+  return Number.isFinite(maxOrder) ? maxOrder + 1 : 0;
+}
+
+/**
+ * POST …/mechanisms  body: { variant: 'hoist_rig', name, objectIds, parentId?, hoists: [{ name?, attach, travelMin?, travelMax?, maxSpeed?, consoleLabel?, defaultValue?, presets? }], moveObjects? }
+ * 一個交易建好整組和 2～4 個吊點；物件已經在別的機關 → 409（跟單獨新增一樣，問使用者後帶 moveObjects: true 再送）。
+ * 回 201 { mechanism（整組）, hoists }
+ */
+async function createHoistRig(body, env, ctx, log) {
+  const facts = await projectFacts(env, ctx.projectId);
+  const plan = planHoistRig(body, { siblings: facts.siblings, projectObjectIds: facts.projectObjectIds });
+  if (!plan.ok) return bad(plan.error, 400, { field: plan.field });
+  const { rig, hoists } = plan.value;
+  const conflicts = findObjectConflicts(rig.objectIds, facts.memberships, facts.objectNames, null);
+  if (conflicts.length && body.moveObjects !== true) return bad(conflictMessage(conflicts[0]), 409, { conflicts });
+  const first = await nextMechanismOrder(env, ctx.projectId);
+  const rigId = newId('mech_');
+  const stmts = [
+    insertMechanismRow(env, rigId, ctx.projectId, inputToColumns(rig), first),
+    ...membershipStatements(env, rigId, rig.objectIds, conflicts, {}),
+  ];
+  const hoistIds = hoists.map((h, i) => {
+    const id = newId('mech_', i + 1);
+    stmts.push(insertMechanismRow(env, id, ctx.projectId, inputToColumns(h.input), first + 1 + i, rigId));
+    return id;
+  });
+  await env.DB.batch(stmts);
+  await log?.('create', 'mechanism', rigId, { name: rig.name, variant: 'hoist_rig', objects: rig.objectIds.length, hoists: hoists.length, moved: conflicts.length || undefined });
+  const all = await loadMechanisms(env, ctx.projectId);
+  return ok({ mechanism: all.find(m => m.id === rigId), hoists: hoistsOfRig(all, rigId) }, 201);
+}
+
+/**
+ * PATCH …/mechanisms/:rig  body: { name?, objectIds?, parentId?, metadata?, hoists? }
+ * hoists 有送 = 整個換成這份清單：有 id 的改那個吊點、沒有 id 的新增、原本有卻沒列出來的刪掉（連同每個 cue 的位置）。
+ * 回 { mechanism, hoists, outOfRangeCount }
+ */
+async function updateHoistRig(body, env, ctx, existing, log) {
+  const all = await loadMechanisms(env, ctx.projectId);
+  const facts = await projectFacts(env, ctx.projectId);
+  const plan = planHoistRig(body, {
+    existing: { rig: existing, hoists: hoistsOfRig(all, existing.id) },
+    siblings: facts.siblings, projectObjectIds: facts.projectObjectIds,
+  });
+  if (!plan.ok) return bad(plan.error, 400, { field: plan.field });
+  const { rig, hoists, removeIds, hoistsTouched } = plan.value;
+  const touchesObjects = Array.isArray(body.objectIds);
+  const conflicts = touchesObjects ? findObjectConflicts(rig.objectIds, facts.memberships, facts.objectNames, existing.id) : [];
+  if (conflicts.length && body.moveObjects !== true) return bad(conflictMessage(conflicts[0]), 409, { conflicts });
+
+  const rc = inputToColumns(rig);
+  const stmts = [
+    env.DB.prepare(
+      `UPDATE mechanisms SET name = ?, parent_id = ?, metadata = ?, edited_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ? AND project_id = ?`
+    ).bind(rc.name, rc.parent_id, rc.metadata, existing.id, ctx.projectId),
+    ...(touchesObjects ? membershipStatements(env, existing.id, rig.objectIds, conflicts, {}) : []),
+  ];
+  if (hoistsTouched) {
+    for (const id of removeIds) stmts.push(env.DB.prepare(`DELETE FROM mechanisms WHERE id = ? AND rig_id = ? AND project_id = ?`).bind(id, existing.id, ctx.projectId));
+    let next = await nextMechanismOrder(env, ctx.projectId);
+    hoists.forEach((h, i) => {
+      const c = inputToColumns(h.input);
+      if (h.id) {
+        stmts.push(env.DB.prepare(
+          `UPDATE mechanisms SET name = ?, travel_min = ?, travel_max = ?, default_value = ?, max_speed = ?, presets = ?, console_label = ?,
+                  attach = ?, rig_index = ?, edited_at = datetime('now'), updated_at = datetime('now')
+            WHERE id = ? AND rig_id = ? AND project_id = ?`
+        ).bind(c.name, c.travel_min, c.travel_max, c.default_value, c.max_speed, c.presets, c.console_label, c.attach, i, h.id, existing.id, ctx.projectId));
+      } else {
+        stmts.push(insertMechanismRow(env, newId('mech_', i + 1), ctx.projectId, c, next++, existing.id));
+      }
+    });
+  }
+  await env.DB.batch(stmts);
+  const out = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM cue_mechanism_positions p JOIN mechanisms m ON m.id = p.mechanism_id
+      WHERE m.rig_id = ? AND (p.value < m.travel_min OR p.value > m.travel_max)`
+  ).bind(existing.id).first();
+  const changes = {};
+  for (const k of Object.keys(body)) if (k !== 'moveObjects') changes[k] = k === 'hoists' ? `${hoists.length} 個吊點` : body[k];
+  await log?.('update', 'mechanism', existing.id, { name: rig.name, changes });
+  const fresh = await loadMechanisms(env, ctx.projectId);
+  return ok({ mechanism: fresh.find(m => m.id === existing.id), hoists: hoistsOfRig(fresh, existing.id), outOfRangeCount: Number(out?.n) || 0 });
 }
 
 export async function reorderMechanisms(request, env, ctx, log) {
@@ -552,6 +712,7 @@ export async function putCuePosition(request, env, ctx, cueId) {
   const p = parseCuePositionBody(body);
   if (!p.ok) return bad(p.error, 400, { field: p.field });
   const m = ctx.mechanism;
+  if (m.variant === 'hoist_rig') return bad(MECH_MESSAGES.hoistRigValue, 400, { field: 'value' });
   const setDelay = p.delaySec !== undefined ? 1 : 0;
   const setDuration = p.durationSec !== undefined ? 1 : 0;
   const delay = p.delaySec ?? null, duration = p.durationSec ?? null;
@@ -605,9 +766,10 @@ export async function putCuePositionsBulk(request, env, ctx, cueId) {
   if (!body) return bad('Invalid JSON');
   const p = parseBulkPositions(body);
   if (!p.ok) return bad(p.error, 400, { field: p.field });
-  const mechs = (await env.DB.prepare(`SELECT id, travel_min, travel_max FROM mechanisms WHERE project_id = ?`).bind(ctx.projectId).all()).results || [];
+  const mechs = (await env.DB.prepare(`SELECT id, travel_min, travel_max, variant FROM mechanisms WHERE project_id = ?`).bind(ctx.projectId).all()).results || [];
   const byId = new Map(mechs.map(m => [m.id, m]));
   if (p.items.some(it => !byId.has(it.mechanismId))) return bad(MECH_MESSAGES.bulkForeign, 400, { field: 'items' });
+  if (p.items.some(it => byId.get(it.mechanismId).variant === 'hoist_rig')) return bad(MECH_MESSAGES.hoistRigValue, 400, { field: 'items' });
   const touch = () => env.DB.prepare(
     `UPDATE mechanisms SET edited_at = datetime('now') WHERE id IN (SELECT mechanism_id FROM cue_mechanism_positions WHERE cue_id = ?)`
   ).bind(cueId);
@@ -705,7 +867,7 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
   mechs.forEach((raw, i) => {
     if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string') return;
     const m = rowToMechanism(raw);
-    const n = normalizeMechanismInput({ ...m, parentId: null, objectIds: [] }, {});
+    const n = normalizeMechanismInput({ ...m, parentId: null, objectIds: [] }, { pendingRigId: m.rigId });
     if (!n.ok) return;
     // 從舊滑桿轉來的：換成新物件的 mlx_ / mly_ id（舊網站改滑桿時還找得到、不會多出一個）
     const legacyObj = raw.legacy_object_id && (raw.legacy_axis === 'x' || raw.legacy_axis === 'y')
@@ -716,6 +878,7 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     if (n.value.variant === 'split') splitIds.add(id);
     rows.push({
       id, c: inputToColumns(n.value), order: m.order, parentOld: m.parentId,
+      oldId: raw.id, variant: n.value.variant, rigOld: n.value.rigId, attach: n.value.attach, rigIndex: n.value.rigIndex,
       groupOld: typeof raw.group_id === 'string' && raw.group_id ? raw.group_id : null,
       groupIndex: Number.isInteger(raw.group_index) && raw.group_index >= 0 ? raw.group_index : null,
       legacyObj, legacyAxis: legacyObj ? raw.legacy_axis : null,
@@ -723,6 +886,18 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
       editedAt: legacyObj ? (raw.edited_at ?? null) : 'now',
     });
   });
+  // 吊掛（0032）：整組要有 2～4 個位置分得開的吊點才匯入；不完整的整組連同吊點一起略過（舊的匯出檔沒有吊掛）
+  const goodRigs = new Set();
+  for (const rr of rows.filter(r => r.variant === 'hoist_rig')) {
+    const hs = rows.filter(r => r.variant === 'hoist' && r.rigOld === rr.oldId);
+    if (hs.length >= 2 && hs.length <= 4 && !hoistGeometryProblem(hs.sort((a, b) => (a.rigIndex ?? 0) - (b.rigIndex ?? 0)).map(h => h.attach))) goodRigs.add(rr.oldId);
+  }
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i];
+    const keep = r.variant === 'hoist_rig' ? goodRigs.has(r.oldId) : r.variant === 'hoist' ? goodRigs.has(r.rigOld) : true;
+    if (!keep) { idMap.delete(r.oldId); rows.splice(i, 1); }
+  }
+  if (!rows.length) return { mechanisms: 0, objects: 0, positions: 0, groups: 0 };
   // 一排機關（0031）：有成員被匯入的才建，新 id；先建一排、再建機關（機關指到一排）
   const groupMap = new Map();
   const stmts = [];
@@ -742,15 +917,17 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     const gid = r.groupOld && groupMap.has(r.groupOld) ? groupMap.get(r.groupOld) : null;
     stmts.push(env.DB.prepare(
       `INSERT OR IGNORE INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
-                               presets, parent_id, console_label, "order", metadata, variant, mirror, group_id, group_index, legacy_object_id, legacy_axis, edited_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
+                               presets, parent_id, console_label, "order", metadata, variant, mirror, group_id, group_index, rig_index, attach, legacy_object_id, legacy_axis, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
     ).bind(r.id, projectId, r.c.name, r.c.kind, r.c.axis, r.c.pivot, r.c.travel_min, r.c.travel_max, r.c.default_value,
       r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata, r.c.variant, r.c.mirror,
-      gid, gid ? r.groupIndex : null, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
+      gid, gid ? r.groupIndex : null, r.c.rig_index, r.c.attach, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
   }
   for (const r of rows) {
     const p = r.parentOld ? idMap.get(r.parentOld) : null;
     if (p && p !== r.id) stmts.push(env.DB.prepare(`UPDATE mechanisms SET parent_id = ? WHERE id = ?`).bind(p, r.id));
+    // 吊點接回它的整組（整組都建好了才接）
+    if (r.variant === 'hoist' && idMap.get(r.rigOld)) stmts.push(env.DB.prepare(`UPDATE mechanisms SET rig_id = ? WHERE id = ?`).bind(idMap.get(r.rigOld), r.id));
   }
   let objects = 0, positions = 0;
   const seenObj = new Set();
@@ -799,12 +976,12 @@ export async function snapshotCuePositions(env, projectId, cueId, snapshot) {
   if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return 0;
   const entries = Object.entries(snapshot).filter(([id, v]) => ID_RE.test(id) && Number.isFinite(Number(v))).slice(0, 500);
   if (!entries.length) return 0;
-  const mechs = (await env.DB.prepare(`SELECT id, travel_min, travel_max FROM mechanisms WHERE project_id = ?`).bind(projectId).all()).results || [];
+  const mechs = (await env.DB.prepare(`SELECT id, travel_min, travel_max, variant FROM mechanisms WHERE project_id = ?`).bind(projectId).all()).results || [];
   const byId = new Map(mechs.map(m => [m.id, m]));
   const stmts = [];
   for (const [id, v] of entries) {
     const m = byId.get(id);
-    if (!m) continue;
+    if (!m || m.variant === 'hoist_rig') continue;
     stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO cue_mechanism_positions (cue_id, mechanism_id, value) VALUES (?, ?, ?)`)
       .bind(cueId, id, clampValue(Number(v), Number(m.travel_min), Number(m.travel_max))));
   }
@@ -883,6 +1060,7 @@ export async function convertCuePositions(request, env, ctx, mechId, log) {
   const [mech] = await loadMechanisms(env, ctx.projectId, mechId);
   if (!mech) return bad('這個專案裡找不到這個機關', 404);
   if (mech.variant === 'split') return bad(MECH_MESSAGES.splitConvert, 400);
+  if (isHoistVariant(mech.variant)) return bad(MECH_MESSAGES.hoistConvert, 400);
   if (mech.cueCount > 0) return bad('這個機關已經有 cue 設了位置，只有還沒在 cue 裡設過位置的機關可以轉', 409);
   if (!mech.objectIds.length) return bad('這個機關還沒有選要帶的物件', 400);
   const pid = ctx.projectId;

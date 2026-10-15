@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "node --test loginThrottle.test.mjs origins.test.mjs access.test.mjs cueStates.test.mjs sharePassword.test.mjs comments.test.mjs videos.test.mjs loginCodes.test.mjs invites.test.mjs scripts/hash-login-codes.test.mjs reviews.test.mjs reviewsRoutes.test.mjs mechanisms.test.mjs sessions.test.mjs modelKeys.test.mjs clientErrors.test.mjs backups.test.mjs downloads.test.mjs ops.test.mjs guestComments.test.mjs framelikeRoutes.test.mjs legacyMechanismOffsets.test.mjs directorLink.test.mjs mechanismTiming.test.mjs commentAttachments.test.mjs storage.test.mjs mechanismSplit.test.mjs mechanismGroups.test.mjs"
+    "test": "node --test loginThrottle.test.mjs origins.test.mjs access.test.mjs cueStates.test.mjs sharePassword.test.mjs comments.test.mjs videos.test.mjs loginCodes.test.mjs invites.test.mjs scripts/hash-login-codes.test.mjs reviews.test.mjs reviewsRoutes.test.mjs mechanisms.test.mjs sessions.test.mjs modelKeys.test.mjs clientErrors.test.mjs backups.test.mjs downloads.test.mjs ops.test.mjs guestComments.test.mjs framelikeRoutes.test.mjs legacyMechanismOffsets.test.mjs directorLink.test.mjs mechanismTiming.test.mjs commentAttachments.test.mjs storage.test.mjs mechanismSplit.test.mjs mechanismGroups.test.mjs mechanismHoist.test.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.150.0"

@@ -11,7 +11,8 @@ import type { HistoryStep } from '../editHistory';
 import { historyScope } from '../editHistory';
 import { STOP_LIVE_REFRESH, isProjectGoneError, useLiveRefresh } from '../liveRefresh';
 import { toast } from '../toast';
-import { clampValue, type CueMechanismPosition, type Mechanism, type MechanismGroup, type MechanismTimings, type MechanismValues } from './model';
+import { clampValue, valueAxes, type CueMechanismPosition, type Mechanism, type MechanismGroup, type MechanismTimings, type MechanismValues } from './model';
+import { buildHoistRigs, checkHoistRigs, type HoistCueItem } from './hoist';
 import type { BulkPositionItem } from './group';
 import { defaultRow, ownTimingsByCue, ownValuesByCue, resolveSongMechanisms, valuesOf, type ResolvedRow } from './track';
 import { buildMechanismTimeline, checkSongMechanisms, ownMoveFor, sortMasters, type MechanismMotion, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
@@ -42,14 +43,16 @@ function usePlayback(
   selectedCueId: string | null,
   video?: HTMLVideoElement | null,
 ) {
+  // 有自己位置的機關（吊掛的整組沒有，只有它的每個吊點有）
+  const axes = useMemo(() => (mechanisms ? valueAxes(mechanisms) : null), [mechanisms]);
   const resolved = useMemo(
-    () => (mechanisms ? resolveSongMechanisms(mechanisms, cues, ownValuesByCue(positions)) : new Map<string, ResolvedRow>()),
-    [mechanisms, cues, positions],
+    () => (axes ? resolveSongMechanisms(axes, cues, ownValuesByCue(positions)) : new Map<string, ResolvedRow>()),
+    [axes, cues, positions],
   );
   const selectedRow = useMemo<ResolvedRow>(() => {
-    if (!mechanisms) return {};
-    return (selectedCueId && resolved.get(selectedCueId)) || defaultRow(mechanisms);
-  }, [mechanisms, resolved, selectedCueId]);
+    if (!axes) return {};
+    return (selectedCueId && resolved.get(selectedCueId)) || defaultRow(axes);
+  }, [axes, resolved, selectedCueId]);
   const targets = useMemo(() => valuesOf(selectedRow), [selectedRow]);
   // 每個 cue 自己設的延遲 / 走幾秒（不沿用）
   const timings = useMemo(() => ownTimingsByCue(positions), [positions]);
@@ -59,13 +62,13 @@ function usePlayback(
 
   // 影片時間軸（只有正式 cue、有設影片時間的）；每幀 StageScene 問 mechanismAtFrame
   const timeline = useMemo<MechanismTimeline | null>(() => {
-    if (!mechanisms || mechanisms.length === 0) return null;
+    if (!axes || axes.length === 0) return null;
     const masters = sortMasters(cues);
-    return buildMechanismTimeline(mechanisms, masters, id => {
+    return buildMechanismTimeline(axes, masters, id => {
       const row = resolved.get(id);
       return row ? valuesOf(row) : null;
     }, ownMoveFor(resolved, timings));
-  }, [mechanisms, cues, resolved, timings]);
+  }, [axes, cues, resolved, timings]);
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
   const videoRef = useRef(video);
@@ -75,7 +78,7 @@ function usePlayback(
     const v = videoRef.current;
     return tl && v ? tl.valuesAt(v.currentTime) : null;
   }, []);
-  return { resolved, selectedRow, targets, timings, selectedTimings, timeline, timelineRef, mechanismAtFrame };
+  return { axes, resolved, selectedRow, targets, timings, selectedTimings, timeline, timelineRef, mechanismAtFrame };
 }
 
 const EMPTY_TIMINGS: MechanismTimings = {};
@@ -205,6 +208,8 @@ export function useEditorMechanisms(o: {
   selectedCueId: string | null;
   canEdit: boolean;
   history?: EditorHistory;
+  /** 測距校準倍率（吊掛的傾斜 / 共面提醒要把公尺換成場景單位）；沒給 = 1 */
+  scaleCorrection?: number;
 }) {
   const { projectId, songId, selectedCueId } = o;
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
@@ -265,9 +270,23 @@ export function useEditorMechanisms(o: {
     return keys.length ? { ...pb.targets, ...preview } : pb.targets;
   }, [pb.targets, preview]);
   const check = useMemo<SongCheck | null>(
-    () => (mechanisms && mechanisms.length ? checkSongMechanisms(mechanisms, o.cues, pb.resolved, pb.timings) : null),
-    [mechanisms, o.cues, pb.resolved, pb.timings],
+    () => (pb.axes && pb.axes.length ? checkSongMechanisms(pb.axes, o.cues, pb.resolved, pb.timings) : null),
+    [pb.axes, o.cues, pb.resolved, pb.timings],
   );
+  // 吊掛（v2 第 4 階段）：每個 cue、每一組吊掛的傾斜和提醒（到位時 + 走過來的路上四個吊點不在同一個平面上 / 兩點吊不起來）
+  const scale = o.scaleCorrection && o.scaleCorrection > 0 ? o.scaleCorrection : 1;
+  const hoistRigs = useMemo(() => buildHoistRigs(mechanisms), [mechanisms]);
+  const hoistChecks = useMemo(() => {
+    if (hoistRigs.length === 0 || !check) return null;
+    const itemOf = (cueId: string, hoistId: string): HoistCueItem | null => {
+      const r = pb.resolved.get(cueId)?.[hoistId];
+      const c = check.cues.get(cueId)?.items[hoistId];
+      if (!r || !c) return null;
+      const moving = c.status === 'ok' || c.status === 'tooFast' || c.status === 'noSpeed';
+      return { value: r.value, from: c.from, delay: c.delay, duration: moving ? Math.max(c.available ?? 0, c.need ?? 0) : 0 };
+    };
+    return checkHoistRigs(hoistRigs, sortMasters(o.cues).map(c => c.id), itemOf, 1 / scale);
+  }, [hoistRigs, check, pb.resolved, o.cues, scale]);
 
   // ── 本地更新（存成功後先套到畫面上） ──
   /** value = null → 刪掉這一列（時間一起清掉）；timing 沒給 → 照舊 */
@@ -480,9 +499,11 @@ export function useEditorMechanisms(o: {
     if (!projectId) throw new Error('no project');
     const r = await mapi.updateMechanism(projectId, mechId, patch);
     // 物件被移走的別的機關也要更新 → 整個重讀
-    if (patch.objectIds) await refreshDefs(); else replaceMech(r.mechanism);
+    // 整組吊掛換了吊點（新增 / 刪除 / 改位置）：吊點和它們的位置都可能變 → 一起重讀
+    if (patch.hoists) await Promise.all([refreshDefs(), refreshPositions()]);
+    else if (patch.objectIds) await refreshDefs(); else replaceMech(r.mechanism);
     return r;
-  }, [projectId, refreshDefs]);
+  }, [projectId, refreshDefs, refreshPositions]);
   const remove = useCallback(async (mechId: string) => {
     if (!projectId) throw new Error('no project');
     const r = await mapi.deleteMechanism(projectId, mechId);
@@ -531,6 +552,8 @@ export function useEditorMechanisms(o: {
     commitValue, clearValue, previewValue, create, update, remove, reorder,
     /** 一排機關（v2 第 3 階段）：分組、一次建立、共用設定、花樣（一次存很多個位置）、花樣預覽 */
     groups, createBatch, updateGroup, removeGroup, applyPositions, previewValues,
+    /** 吊掛（v2 第 4 階段）：每一組的吊點資料、每個 cue 的傾斜和提醒 */
+    hoistRigs, hoistChecks,
     /** 延遲 / 走幾秒（v2）、機關時間軸 */
     commitTiming, timings: pb.timings, timeline: pb.timeline, setPreviewTime, previewTimeRef, timelineOpen, setTimelineOpen,
     /** 「照機器速度播放」：換 cue 時照機器速度（預設關 = 照轉場秒數） */
@@ -538,8 +561,12 @@ export function useEditorMechanisms(o: {
     refreshDefs, refreshPositions, sceneProps,
     /** 目前 cue 的機關值（從目前 3D 畫面建立 cue 時一起存） */
     currentValues: pb.targets,
-    /** 這首歌有幾個 cue 的機關來不及到位 */
-    problemCount: check?.problemCueIds.length ?? 0,
+    /** 這首歌有幾個 cue 的機關來不及到位（含吊掛提醒） */
+    problemCount: (() => {
+      const bad = new Set(check?.problemCueIds ?? []);
+      if (hoistChecks) for (const [cueId, row] of hoistChecks) for (const c of row.values()) if (c.warnings.length) bad.add(cueId);
+      return bad.size;
+    })(),
   };
 }
 

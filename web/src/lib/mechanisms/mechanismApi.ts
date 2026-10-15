@@ -46,10 +46,11 @@ export interface ConvertResult {
 const enc = encodeURIComponent;
 const base = (projectId: string) => `/api/projects/${enc(projectId)}`;
 /**
- * 機關 v2 第 2 階段起，讀機關和位置的網址要帶這個：新版畫面看得懂對開，才給對開的機關；
- * 沒帶（還在跑的舊版前端）後台就不給，對開的零件在舊版畫面是靜止的，不會往錯的方向動
+ * 機關 v2 起，讀機關和位置的網址要帶這個：新版畫面看得懂的機關，後台才給。
+ *   沒帶（最舊的前端）→ 只給一般機關；?mech=2（第 2、3 階段的畫面，看得懂對開）→ 一般 + 對開；
+ *   ?mech=3（第 4 階段：看得懂吊掛）→ 全部。吊掛的零件在舊畫面是靜止的，不會往錯的方向動
  */
-export const MECH_V2 = 'mech=2';
+export const MECH_V2 = 'mech=3';
 
 async function toError(resp: Response): Promise<MechanismApiError> {
   let data: MechanismApiError['data'] = {};
@@ -108,7 +109,7 @@ export function parseMechanism(raw: unknown): Mechanism {
   const axis = vec(r.axis, { x: 0, y: 1, z: 0 });
   // 對開（v2）：舊後台沒有這三欄 → 一般機關；B 邊的方向壞掉 → 直線用反方向、旋轉當一般機關
   const mraw = (r.mirror && typeof r.mirror === 'object' ? r.mirror : null) as Record<string, unknown> | null;
-  let variant: 'split' | null = r.variant === 'split' ? 'split' : null;
+  let variant: Mechanism['variant'] = r.variant === 'split' ? 'split' : null;
   let mirror: MechanismMirror | null = null;
   if (variant === 'split') {
     if (mraw) {
@@ -124,6 +125,12 @@ export function parseMechanism(raw: unknown): Mechanism {
   const sidesRaw = (r.objectSides && typeof r.objectSides === 'object' ? r.objectSides : {}) as Record<string, unknown>;
   const objectSides: Record<string, MechanismSide> = {};
   if (variant === 'split') for (const id of objectIds) objectSides[id] = sidesRaw[id] === 'b' ? 'b' : 'a';
+  // 吊掛（v2 第 4 階段）：整組沒有位置；吊點要有所屬的整組和位置，不然當一般機關（沒有物件，不會動到任何東西）
+  const attachRaw = r.attach && typeof r.attach === 'object' ? r.attach as Partial<MechVec3> : null;
+  const attach = attachRaw && [attachRaw.x, attachRaw.y, attachRaw.z].every(c => typeof c === 'number' && Number.isFinite(c))
+    ? { x: attachRaw.x as number, y: attachRaw.y as number, z: attachRaw.z as number } : null;
+  if (r.variant === 'hoist_rig') variant = 'hoist_rig';
+  else if (r.variant === 'hoist' && attach && typeof r.rigId === 'string' && r.rigId) variant = 'hoist';
   return {
     id: String(r.id ?? ''),
     name: typeof r.name === 'string' ? r.name : '',
@@ -148,6 +155,9 @@ export function parseMechanism(raw: unknown): Mechanism {
     // 一排（v2 第 3 階段）：舊後台沒有這兩欄 → 不在任何一排裡
     groupId: typeof r.groupId === 'string' && r.groupId ? r.groupId : null,
     groupIndex: typeof r.groupIndex === 'number' && Number.isFinite(r.groupIndex) ? r.groupIndex : null,
+    rigId: variant === 'hoist' ? String(r.rigId) : null,
+    rigIndex: variant === 'hoist' && typeof r.rigIndex === 'number' && Number.isFinite(r.rigIndex) ? r.rigIndex : null,
+    attach: variant === 'hoist' ? attach : null,
   };
 }
 
@@ -198,7 +208,21 @@ export async function listMechanismsAndGroups(projectId: string): Promise<{ mech
   return { mechanisms: parseMechanisms(d.mechanisms), groups: parseGroups(d.groups) };
 }
 
-export type MechanismPayload = Partial<MechanismInput> & { moveObjects?: boolean };
+/** 一個吊點要送的內容（見 hoistRig.ts；有 id = 改原本的吊點，沒有 = 新增） */
+export interface HoistPayload {
+  id?: string;
+  name?: string;
+  attach: MechVec3;
+  travelMin?: number;
+  travelMax?: number;
+  maxSpeed?: number | null;
+  consoleLabel?: string | null;
+  defaultValue?: number;
+  presets?: MechanismPreset[];
+}
+
+/** 新增 / 修改整組吊掛時多一個 hoists（整個換成這份清單；沒送 = 吊點不動） */
+export type MechanismPayload = Partial<MechanismInput> & { moveObjects?: boolean; hoists?: HoistPayload[] };
 
 /** 新增；物件已經在別的機關 → 丟 409（data.conflicts），問使用者後帶 moveObjects: true 再送 */
 export async function createMechanism(projectId: string, input: MechanismPayload): Promise<Mechanism> {

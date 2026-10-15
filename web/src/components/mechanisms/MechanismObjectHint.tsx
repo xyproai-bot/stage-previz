@@ -14,6 +14,14 @@ export default function MechanismObjectHint({ objectId }: { objectId: string }) 
   const mech = useContext(Ctx);
   const m = mech?.mechanisms.find(x => x.objectIds.includes(objectId));
   if (!mech || !m) return null;
+  if (m.variant === 'hoist_rig') {
+    return (
+      <div className="mech-object-hint" role="note">
+        <Icon icon={Cog} size="sm" />
+        <span>這個物件在吊掛「{m.name}」上，畫面上的位置還要加上吊點拉高的高度。要改請到「機關」分頁</span>
+      </div>
+    );
+  }
   const value = mech.targets[m.id] ?? m.defaultValue;
   return (
     <div className="mech-object-hint" role="note">

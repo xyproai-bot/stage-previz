@@ -412,7 +412,7 @@ async function loadProjectContext(env, me, projectId, route) {
   if (route.mechId) {
     at.mechanism = stmts.length;
     stmts.push(env.DB.prepare(
-      `SELECT id, kind, travel_min, travel_max FROM mechanisms WHERE id = ? AND project_id = ? LIMIT 1`
+      `SELECT id, kind, travel_min, travel_max, variant FROM mechanisms WHERE id = ? AND project_id = ? LIMIT 1`
     ).bind(route.mechId, projectId));
   }
   if (route.groupId) {
@@ -530,7 +530,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         : deleteCueState(request, env, projectId, cueId, objId);
 
     // 機關（mechanisms.mjs）
-    case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx, { mech2: mech.wantsMech2(request) }));
+    case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
     case 'mechanisms.create':     return mechResp(mech.createMechanism(request, env, ctx, mechLog(request, env, projectId)));
     case 'mechanisms.reorder':    return mechResp(mech.reorderMechanisms(request, env, ctx, mechLog(request, env, projectId)));
     case 'mechanisms.item':
@@ -544,8 +544,8 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         ? mech.updateMechanismGroup(request, env, ctx, route.groupId, mechLog(request, env, projectId))
         : mech.deleteMechanismGroup(request, env, ctx, route.groupId, mechLog(request, env, projectId), { dissolve: url.searchParams.get('dissolve') === '1' }));
     case 'mechPositions.bulk':    return mechResp(mech.putCuePositionsBulk(request, env, ctx, cueId));
-    case 'mechanisms.sheet':      return mechResp(mech.mechanismSheet(env, ctx, { mech2: mech.wantsMech2(request) }));
-    case 'mechPositions.list':    return mechResp(mech.listSongPositions(env, ctx, songId, { mech2: mech.wantsMech2(request) }));
+    case 'mechanisms.sheet':      return mechResp(mech.mechanismSheet(env, ctx, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
+    case 'mechPositions.list':    return mechResp(mech.listSongPositions(env, ctx, songId, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
     case 'mechPositions.item':
       return mechResp(request.method === 'PUT'
         ? mech.putCuePosition(request, env, ctx, cueId)
@@ -5970,7 +5970,7 @@ async function handleShareRouter(request, env, url, ref) {
       // 舊的全專案機關滑桿：新前端不讀了；正式站還在跑的舊版前端讀機關時會先用它（只讀，後台不再收修改）
       mechanismOffsets: safeJsonObj(proj.mechanism_offsets, {}),
       // 機關（定義）；每個 cue 的位置：GET songs/:songId/mechanism-positions
-      mechanisms: await mech.loadMechanisms(env, link.project_id, null, { mech2: mech.wantsMech2(request) }).catch(() => []),
+      mechanisms: await mech.loadMechanisms(env, link.project_id, null, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }).catch(() => []),
       lookSettings: safeJsonObj(proj.look_settings, {}),
       materialOverrides: safeJsonObj(proj.material_overrides, {}),
       homeView: proj.home_view ? safeJsonObj(proj.home_view, null) : null,
@@ -6069,7 +6069,7 @@ async function handleShareRouter(request, env, url, ref) {
     }
     if (wantMechPositions) {
       // 每個 cue 自己設的機關位置（只有正式 cue；跟管理頁同一套沿用規則在前端算）
-      return jsonResp({ positions: await mech.loadSongPositions(env, songId, { masterOnly: true, mech2: mech.wantsMech2(request) }) });
+      return jsonResp({ positions: await mech.loadSongPositions(env, songId, { masterOnly: true, mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }) });
     }
     if (wantStates) {
       // 跟管理頁 / 導演頁同一份計算（loadCueStates）→ 沒改的物件一樣沿用前面 cue 的位置

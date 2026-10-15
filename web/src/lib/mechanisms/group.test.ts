@@ -141,7 +141,7 @@ describe('清單怎麼排', () => {
   ];
   it('一排排在第一個成員的位置，成員接在後面、照編號排', () => {
     const items = layoutMechanisms(list, [g1, g2]);
-    expect(items.map(i => (i.type === 'single' ? i.mech.id : `${i.group.id}[${i.members.map(m => m.id).join(',')}]`)))
+    expect(items.map(i => (i.type === 'single' ? i.mech.id : i.type === 'group' ? `${i.group.id}[${i.members.map(m => m.id).join(',')}]` : i.rig.id)))
       .toEqual(['s1', 'g1[a1,a2,a3]', 's2', 'g2[b1]']);
     expect(flattenLayout(items)).toEqual(['s1', 'a1', 'a2', 'a3', 's2', 'b1']);
     expect(groupMembers(list, 'g1').map(m => m.id)).toEqual(['a1', 'a2', 'a3']);
@@ -157,6 +157,22 @@ describe('清單怎麼排', () => {
     expect(moveLayoutItem(items, 2, -1)).toEqual(['s1', 's2', 'a1', 'a2', 'a3', 'b1']);
     expect(moveLayoutItem(items, 0, -1)).toBeNull();
     expect(moveLayoutItem(items, 3, 1)).toBeNull();
+  });
+  it('吊掛：整組排在自己的位置，後面接它的吊點（照吊點編號）；吊點不單獨排；上下移整組一起移', () => {
+    const attach = { x: 0, y: 1, z: 0 };
+    const withRig = [
+      mech({ id: 's1', name: '轉台' }),
+      mech({ id: 'h2', name: '吊點 2', variant: 'hoist', rigId: 'r', rigIndex: 1, attach }),
+      mech({ id: 'r', name: '吊板', variant: 'hoist_rig' }),
+      mech({ id: 'h1', name: '吊點 1', variant: 'hoist', rigId: 'r', rigIndex: 0, attach }),
+      mech({ id: 's2', name: '布幕' }),
+      mech({ id: 'orphan', name: '孤兒', variant: 'hoist', rigId: 'ghost', rigIndex: 0, attach }),
+    ];
+    const items = layoutMechanisms(withRig, []);
+    expect(items.map(i => (i.type === 'single' ? i.mech.id : i.type === 'rig' ? `${i.rig.id}[${i.hoists.map(h => h.id).join(',')}]` : '?')))
+      .toEqual(['s1', 'r[h1,h2]', 's2', 'orphan']);   // 找不到整組的吊點當一般機關
+    expect(flattenLayout(items)).toEqual(['s1', 'r', 'h1', 'h2', 's2', 'orphan']);
+    expect(moveLayoutItem(items, 1, 1)).toEqual(['s1', 's2', 'r', 'h1', 'h2', 'orphan']);
   });
   it('位置範圍', () => {
     expect(valueRange([1.5, 0.5, 2])).toEqual({ min: 0.5, max: 2 });

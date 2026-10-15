@@ -6,10 +6,11 @@
 // 數字：公尺 3 位小數（毫米）、度 1 位、秒 1 位、速度 m/秒 3 位 / °/秒 1 位；時間用影片時間 m:ss.s。
 
 import {
-  LINEAR_DIRECTIONS, ROTARY_AXES, matchLinearDirection, matchRotaryAxis, presetAt, splitConsoleLabel, splitSideGeometry, splitSideName, unitOf,
+  LINEAR_DIRECTIONS, ROTARY_AXES, matchLinearDirection, matchRotaryAxis, presetAt, splitConsoleLabel, splitSideGeometry, splitSideName, unitOf, valueAxes,
   type CueMechanismPosition, type Mechanism, type MechanismSide, type MechVec3,
 } from './model';
 import { FLIP_HINGES, flipSetupOf } from './flip';
+import { hoistsOfRig } from './hoist';
 import { ownTimingsByCue, ownValuesByCue, resolveSongMechanisms } from './track';
 import { checkSongMechanisms, cueGoTimes, formatSeconds, type MechCheck, type MotionCue } from './motion';
 
@@ -70,7 +71,8 @@ function checkText(c: MechCheck, cueNo: (id: string) => number, kind: Mechanism[
 
 /** 表格的每一行（還沒變成 CSV） */
 export function sheetRows(input: SheetInput): Cell[][] {
-  const mechs = [...input.mechanisms].sort((a, b) => a.order - b.order);
+  // 整組吊掛沒有自己的位置：不排進總表（每個吊點一行）
+  const mechs = valueAxes([...input.mechanisms]).sort((a, b) => a.order - b.order);
   const own = ownValuesByCue(input.positions);
   const timings = ownTimingsByCue(input.positions);
   const rows: Cell[][] = [];
@@ -159,6 +161,12 @@ export function sheetLegend(mechanisms: Mechanism[], front?: MechVec3 | null): s
   const f = front ?? { x: 0, y: 0, z: 1 };
   const lines = ['# 機關說明 Axes'];
   for (const m of [...mechanisms].sort((a, b) => a.order - b.order)) {
+    if (m.variant === 'hoist_rig') {
+      // 整組吊掛只出現在說明裡（它沒有自己的位置）；每個吊點是下面一行行的往上直線
+      const names = hoistsOfRig(mechanisms, m.id).map(h => h.name);
+      lines.push(`# ${m.name}：整組吊掛，${names.length} 個吊點（${names.join('、')}）；每個吊點的數字 = 它被拉高幾公尺（0 = cue 裡原本的位置），各吊點高度不一樣時整片會跟著傾斜`);
+      continue;
+    }
     const unit = unitOf(m.kind);
     const u = (v: number) => (unit === '°' ? `${trimNum(v)}°` : `${trimNum(v)} m`);
     for (const side of m.variant === 'split' ? (['a', 'b'] as const) : [null]) {

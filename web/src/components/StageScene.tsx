@@ -17,6 +17,7 @@ import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline'
 import type { Mechanism, MechanismTimings, MechanismValues, MechVec3 } from '../lib/mechanisms/model';
 import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type RigMechanism } from '../lib/mechanisms/pose';
 import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
+import { hoistsOfRig } from '../lib/mechanisms/hoist';
 import { stageFrontDirection } from '../lib/stageCamera';
 import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
@@ -1742,14 +1743,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
-    const m = focusedMechanismId ? rig.byId.get(focusedMechanismId) : undefined;
-    if (!m) return;
+    const focusedDef = focusedMechanismId ? (mechanisms || []).find(x => x.id === focusedMechanismId) : undefined;
+    // 吊掛：點到整組 = 畫每個吊點的行程；點到一個吊點 = 畫那一個（都從吊點在物件上的位置往上畫）
+    const hoistDefs = focusedDef?.variant === 'hoist_rig' ? hoistsOfRig(mechanisms || [], focusedDef.id)
+      : focusedDef?.variant === 'hoist' ? [focusedDef] : null;
+    const m = hoistDefs ? undefined : focusedMechanismId ? rig.byId.get(focusedMechanismId) : undefined;
+    if (!m && !(hoistDefs && hoistDefs.length)) return;
     // 畫在哪：機關帶的第一個物件（通常就是升降台 / 轉台本身）；沒有 → 裝在它上面的機關帶的物件
     // 對開：A 邊、B 邊各畫一條（B 邊用鏡像的方向 / 轉軸中心）
-    const def = (mechanisms || []).find(x => x.id === m.id);
+    const def = m ? (mechanisms || []).find(x => x.id === m.id) : undefined;
     const presets = def?.presets.map(p => p.value) || [];
     const geoms: ReturnType<typeof travelGeometry>[] = [];
-    for (const node of [m, rig.mirrors.get(m.id)]) {
+    for (const node of m ? [m, rig.mirrors.get(m.id)] : []) {
       if (!node) continue;
       let ids = def?.objectIds.filter(id => rig.chains.get(id)?.[0] === node).slice(0, 1) ?? [];
       if (ids.length === 0 && !node.side) ids = [...rig.chains].filter(([, chain]) => chain.includes(node)).map(([id]) => id);
@@ -1757,6 +1762,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const center = box.isEmpty() ? node.pivot.clone() : box.getCenter(new THREE.Vector3());
       const size = box.isEmpty() ? 1 : Math.max(box.getSize(new THREE.Vector3()).length() * 0.5, 0.2);
       geoms.push(travelGeometry(node, center, size, presets));
+    }
+    for (const h of hoistDefs ?? []) {
+      const node = rig.byId.get(h.id);
+      if (!node || !h.attach) continue;
+      geoms.push(travelGeometry(node, new THREE.Vector3(h.attach.x, h.attach.y, h.attach.z), 1.5, h.presets.map(p => p.value)));
     }
     const color = new THREE.Color(0xffaa44);
     const lineMat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false });
@@ -1769,7 +1779,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const o of [...lines, ticks]) { o.renderOrder = 999; o.frustumCulled = false; group.add(o); }
     // 外層的機關（這個機關裝在哪個機關上）
     const outer: RigMechanism[] = [];
-    for (let cur = m.parentId ? rig.byId.get(m.parentId) : undefined; cur && outer.length < 4 && !outer.includes(cur); cur = cur.parentId ? rig.byId.get(cur.parentId) : undefined) {
+    // 吊點沒有自己的上層；整組裝在哪個機關上，行程線就跟著那個機關動
+    const parentOf = m ? m.parentId : (mechanisms || []).find(x => x.id === (hoistDefs?.[0]?.rigId ?? ''))?.parentId ?? null;
+    for (let cur = parentOf ? rig.byId.get(parentOf) : undefined; cur && outer.length < 4 && !outer.includes(cur); cur = cur.parentId ? rig.byId.get(cur.parentId) : undefined) {
       outer.push(cur);
     }
     scene.add(group);

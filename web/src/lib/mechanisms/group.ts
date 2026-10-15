@@ -10,6 +10,7 @@ import {
   type GroupNumbering, type Mechanism, type MechanismField, type MechanismGroup, type MechanismGroupSettings, type MechanismInput,
   type MechanismSibling, type MechVec3,
 } from './model.ts';
+import { hoistsOfRig } from './hoist.ts';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -208,7 +209,9 @@ export function groupMembers(mechanisms: Mechanism[], groupId: string): Mechanis
 
 export type LayoutItem =
   | { type: 'single'; mech: Mechanism }
-  | { type: 'group'; group: MechanismGroup; members: Mechanism[] };
+  | { type: 'group'; group: MechanismGroup; members: Mechanism[] }
+  /** 一組吊掛（v2 第 4 階段）：整組 + 它的吊點（照吊點編號） */
+  | { type: 'rig'; rig: Mechanism; hoists: Mechanism[] };
 
 /**
  * 機關清單 → 要畫的順序：一排排在它第一個成員的位置，後面接它所有的成員；
@@ -217,8 +220,12 @@ export type LayoutItem =
 export function layoutMechanisms(mechanisms: Mechanism[], groups: MechanismGroup[]): LayoutItem[] {
   const byId = new Map(groups.map(g => [g.id, g]));
   const done = new Set<string>();
+  const rigIds = new Set(mechanisms.filter(m => m.variant === 'hoist_rig').map(m => m.id));
   const out: LayoutItem[] = [];
   for (const m of mechanisms) {
+    // 吊掛：整組排在它自己的位置，後面接它的吊點；吊點不單獨排（找不到整組的才當一般機關）
+    if (m.variant === 'hoist_rig') { out.push({ type: 'rig', rig: m, hoists: hoistsOfRig(mechanisms, m.id) }); continue; }
+    if (m.variant === 'hoist' && m.rigId && rigIds.has(m.rigId)) continue;
     const g = m.groupId ? byId.get(m.groupId) : undefined;
     if (!g) { out.push({ type: 'single', mech: m }); continue; }
     if (done.has(g.id)) continue;
@@ -233,6 +240,7 @@ export function flattenLayout(items: LayoutItem[]): string[] {
   const out: string[] = [];
   for (const it of items) {
     if (it.type === 'single') out.push(it.mech.id);
+    else if (it.type === 'rig') { out.push(it.rig.id); for (const h of it.hoists) out.push(h.id); }
     else for (const m of it.members) out.push(m.id);
   }
   return out;
