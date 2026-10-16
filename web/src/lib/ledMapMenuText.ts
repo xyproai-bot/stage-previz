@@ -1,0 +1,46 @@
+// 3D 工具列「⋯」→ LED 對位圖 那一段的下載選項怎麼叫（純函式，ledMapMenuText.test.ts 有測）。
+//   這首歌沒有用自己排的版型 → 跟以前一模一樣（整張畫布的對位圖 / AE 合成腳本 / 位置表）
+//   這首歌用了版型 → 每個下載都有兩個：「（版型 1）」跟著版型、「（整張畫布）」還是整張畫布的
+
+export type LedDownloadKind = 'png' | 'jsx' | 'csv' | 'json';
+export type LedDownloadScope = 'plain' | 'full' | { template: string };
+
+const PLAIN: Record<LedDownloadKind, string> = {
+  png: '下載對位圖（PNG）',
+  jsx: '下載 AE 合成腳本（.jsx）',
+  csv: '下載位置表（CSV）',
+  json: '下載位置表（JSON）',
+};
+
+const BASE: Record<LedDownloadKind, string> = {
+  png: '下載對位圖',
+  jsx: '下載 AE 合成腳本',
+  csv: '下載位置表 CSV',
+  json: '下載位置表 JSON',
+};
+
+export function ledMapMenuLabel(kind: LedDownloadKind, scope: LedDownloadScope): string {
+  if (scope === 'plain') return PLAIN[kind];
+  return `${BASE[kind]}（${scope === 'full' ? '整張畫布' : scope.template}）`;
+}
+
+/** 滑鼠停上去的說明：版型的下載說清楚是版型畫布、和整張畫布差在哪 */
+export function ledMapMenuHint(kind: LedDownloadKind, scope: LedDownloadScope): string | undefined {
+  const name = typeof scope === 'object' ? scope.template : null;
+  switch (kind) {
+    case 'png':
+      return name !== null
+        ? `這首歌用的版型「${name}」的模板圖：版型畫布大小，每塊螢幕的長方形、名字、像素大小、指著上方的箭頭，放進 AE 當參考圖層`
+        : '每塊 LED 在 AE 畫布上的位置：名字、x y w h、每 100 px 格線；可以直接放進 AE 當參考圖層';
+    case 'jsx':
+      return name !== null
+        ? `在 AE 按「File > Scripts > Run Script File…」（檔案 > 指令碼 > 執行指令碼檔案）跑：自動建好版型「${name}」大小的合成，每塊螢幕一個外框，模板圖放在最下面（都是導引圖層，不會算圖出去）`
+        : '在 AE 按「File > Scripts > Run Script File…」（檔案 > 指令碼 > 執行指令碼檔案）跑：自動建好畫布大小的合成，每塊 LED 的外框、名字都是導引圖層（不會算圖出去）';
+    case 'csv':
+      return name !== null
+        ? `Excel 打得開：版型「${name}」每塊螢幕的位置、轉向、翻轉、實際點數、比例，和它在整張畫布上的位置（給 LED 工程師、d3 操作員）`
+        : 'Excel 打得開：每塊 LED 的名字和 x、y、w、h';
+    case 'json':
+      return name !== null ? `給程式讀：跟 CSV 一樣的內容（版型「${name}」）` : '給 AE 腳本 / 程式讀';
+  }
+}

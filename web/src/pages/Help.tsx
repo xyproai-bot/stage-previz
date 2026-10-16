@@ -135,6 +135,8 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       },
       { id: A.use, label: '每次使用' },
       { id: A.resolution, label: '建議的預覽解析度' },
+      { id: A.aeNoE3d, label: 'AE 裡不要放 E3D 舞台' },
+      { id: A.aeSpeedTips, label: 'AE 預覽變順的小技巧' },
       { id: A.aeLiveColor, label: 'AE 即時的顏色（校正）' },
       { id: A.chooseSource, label: '有好幾台 AE：選來源' },
       {
@@ -1414,6 +1416,9 @@ function ProducerChapter() {
           <li><strong>框裡的對位圖內容</strong>：版型畫布上每塊螢幕的框裡，預設會畫出這塊螢幕在整張畫布上的測試圖（名字、位置大小、格線、彩條），照你設的轉動、翻轉和縮放擺進來，跟貼回 3D 之後那塊 LED 上看到的一樣，所以排的時候就看得出方向對不對。不想看就按畫布上方的「<Ui>對位圖內容</Ui>」關掉。</li>
           <li><strong>底圖</strong>：按「<Ui>載入底圖…</Ui>」選一張本機圖片（PNG、JPG、WebP，例如客戶給的這個排法的對位圖），會墊在版型畫布最底下讓你對位，可以調「<Ui>不透明度</Ui>」、用「<Ui>底圖</Ui>」開關隱藏。要對著底圖排的話，把「<Ui>對位圖內容</Ui>」關掉，框下面的底圖就看得到。底圖只存在這台電腦的瀏覽器裡，不會上傳（換電腦要重新載入）；底圖跟版型畫布大小不一樣時，可以選「<Ui>照畫布大小拉伸</Ui>」或「<Ui>照原尺寸放左上</Ui>」。這兩樣只是編輯時的參考，不會存進版型，也不會出現在下載的模板圖裡。</li>
           <li>「<Ui>下載模板圖</Ui>」：下載一張版型畫布大小的 PNG（深色底，每塊螢幕的長方形、名字、版型裡的像素大小、一支指著「這塊螢幕的上方」的箭頭），給動畫師在 AE 裡當參考圖層（不要一起輸出）。畫布很大、瀏覽器畫不出原尺寸時會縮小並提醒你怎麼在 AE 裡放大回來。</li>
+          <li>「<Ui>下載 AE 合成腳本</Ui>」：下載一個 .jsx，動畫師在 AE 跑一下（<Ui>File</Ui> → <Ui>Scripts</Ui> → <Ui>Run Script File…</Ui>）就建好<strong>版型畫布大小</strong>的合成（正方形像素，名字像「<Ui>示範專案 - 版型 1 1920x1080</Ui>」），每塊螢幕一個外框，模板圖放在最下面，都是導引圖層、鎖住，不會算圖出去。步驟看 <Go to={A.animAeScript}>用 AE 腳本建合成</Go>。</li>
+          <li>「<Ui>下載座標表</Ui>」（選 CSV 或 JSON）：給 LED 工程師、d3 操作員看。一塊螢幕一列：版型上的位置和大小、轉向（0、90、180、270）、左右翻、上下翻、真實點數、縮成幾 %、對應整張畫布的哪一塊（x、y、寬、高）；最上面寫版型名稱、版型畫布大小和比例。CSV 用 Excel 打開，中文不會亂碼。</li>
+          <li>3D 工具列「<Ui>⋯</Ui>」→ LED 對位圖：這首歌用了版型的時候，對位圖、AE 合成腳本、位置表會<strong>跟著版型</strong>出（名字後面寫「（版型 1）」），整張畫布的版本還在，後面寫「（整張畫布）」。這首歌沒有用版型就跟以前一樣。</li>
           <li>「<Ui>複製版型</Ui>」：複製現在這個版型，取個新名字再改。</li>
           <li>重疊、超出畫布的螢幕畫紅框；被拉伸（大小跟比例對不上）也會提醒。提醒但不擋存檔。</li>
           <li>加影片時，影片大小會跟<strong>版型畫布</strong>比：剛好一樣大、或剛好是它的 50%、200%…（等比例縮放）都接受，播放時自動放大貼回，LED 的像素格一律照真實點數畫；長寬比不一樣才會提醒「畫面會變形」。</li>
@@ -1763,6 +1768,7 @@ function AnimatorChapter() {
           <li>說明裡寫「<Ui>沒有放：AE 現在不允許腳本存檔</Ui>」：<Ui>Edit</Ui> → <Ui>Preferences</Ui> → <Ui>Scripting &amp; Expressions</Ui>（Mac：<Ui>After Effects</Ui> → <Ui>Settings</Ui> → <Ui>Scripting &amp; Expressions</Ui>），勾「<Ui>Allow Scripts to Write Files and Access Network</Ui>」再跑一次。外框和名字不用這個設定。</li>
           <li>對位圖存在 .jsx 旁邊（同一個資料夾）。搬走的話 AE 會說找不到檔案，重新連結或再跑一次就好。</li>
           <li>模型或 LED 畫布大小改了：重新下載腳本再跑一次（會建一個新的合成，不會動到舊的）。</li>
+          <li><strong>這首歌用了版型</strong>：「<Ui>⋯</Ui>」裡每個下載有兩個。「<Ui>下載 AE 合成腳本（版型 1）</Ui>」建出<strong>版型畫布大小</strong>的合成（名字像「<Ui>示範專案 - 版型 1 1920x1080</Ui>」，放在「<Ui>Stage Previz LED 版型</Ui>」資料夾，每塊螢幕一個外框，版型模板圖放在最下面，都是導引圖層、鎖住）；「<Ui>（整張畫布）</Ui>」是上面說的整張畫布。AE 輸出的影片要跟版型畫布一樣大。「<Ui>下載位置表</Ui>」同理，版型的表多了轉向、翻轉、真實點數和比例。</li>
         </ul>
       </Section>
 
@@ -1945,6 +1951,28 @@ function AeLiveChapter() {
           <li><strong>畫布小</strong>（1920×1080 以內）：可以用 Full。</li>
           <li>改了解析度，網頁會自動跟上，不用重新整理。</li>
           <li>小程序（0.1.13 起）畫面不大就原樣送；超過 450 萬像素（例如 Full 的 8800×2024）才縮小，所以大畫布用 Full 不會比 Half 清楚多少，反而讓 AE 變慢。</li>
+        </ul>
+      </Section>
+
+      <Section id={A.aeNoE3d} title="AE 裡不要放 E3D 舞台，只做平面畫布">
+        <p><strong>AE 裡只做平面的畫布（LED 要播的畫面），不要在 AE 裡放 Element 3D（E3D）的舞台。舞台交給網頁。</strong></p>
+        <ul className="help-list">
+          <li><strong>為什麼</strong>：E3D 要在 AE 裡把整個 3D 舞台一格一格算出來，AE 的預覽慢、卡卡的，最大的原因就是它。</li>
+          <li>網頁的 3D 舞台是用<strong>顯示卡</strong>直接畫的，LED 一收到 AE 的畫面就馬上看得到，轉視角、換 cue 都不用等。</li>
+          <li>所以 AE 只要負責畫面本身，照 <Go to={A.animLedMap}>LED 對位圖</Go>（或 <Go to={A.prodLedTemplate}>版型</Go>）的大小和位置排好，貼到舞台的 LED 上是網頁的事。</li>
+          <li>手上的合成已經有 E3D：把 E3D 那一層關掉（或拿掉），只留 LED 的畫面，再送出 NDI。</li>
+        </ul>
+      </Section>
+
+      <Section id={A.aeSpeedTips} title="AE 預覽變順的小技巧">
+        <p>AE 預覽還是不順的時候，由上往下試：</p>
+        <ul className="help-list">
+          <li><strong>預覽解析度用 Half 或 Third，不要用 Quarter</strong>：看 <Go to={A.resolution}>建議的預覽解析度</Go>。</li>
+          <li><strong>只調某一塊時用 Region of Interest（感興趣區域）</strong>：合成視窗下方的按鈕，框一塊，AE 只算框裡面的。框外的地方 AE 不會算，網頁上對應的 LED 可能會黑掉或不動，所以調完那一塊就關掉。</li>
+          <li><strong>很重的圖層先預先合成（Pre-compose）或先算好（Pre-render）</strong>：很吃力的特效、很大的影片，包成一個預先合成，或先輸出成影片再換回來，AE 就不用每一格重算。</li>
+          <li><strong>打開磁碟快取（Disk Cache）</strong>：<Ui>Edit</Ui> → <Ui>Preferences</Ui> → <Ui>Media &amp; Disk Cache</Ui>（Mac：<Ui>After Effects</Ui> → <Ui>Settings</Ui>），空間給夠。算過的畫面存下來，重複播同一段就快很多。</li>
+          <li><strong>打開多影格算圖（Multi-Frame Rendering）</strong>：新一點的 AE 才有，在 <Ui>Preferences</Ui> 的 <Ui>Memory &amp; Performance</Ui> 裡，讓 AE 同時用好幾個核心算。</li>
+          <li><strong>只要 LED 的一部分時，用比較小的版型畫布</strong>：版型只放這首歌要出的幾塊螢幕，畫布小很多，AE 要算的畫面就少很多。看 <Go to={A.prodLedTemplate}>LED 版型</Go>。</li>
         </ul>
       </Section>
 

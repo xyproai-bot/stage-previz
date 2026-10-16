@@ -4,6 +4,7 @@ import {
   simplifyPath, type AeScriptInput,
 } from './aeCompScript';
 import { buildLedLayout, ledMapFileName, type LedLayout } from './ledMap';
+import { runInFakeAe } from '../test/fakeAeHost';
 
 /** 一個長方形（兩個三角形）的 UV */
 function quad(u0: number, v0: number, u1: number, v1: number): number[] {
@@ -158,109 +159,6 @@ describe('buildAeCompScript：整支 .jsx', () => {
   });
 });
 
-// ─── 用假的 AE 跑一次整支腳本 ───
-
-interface FakeLayer {
-  kind: 'shape' | 'text' | 'footage';
-  name: string;
-  label?: number;
-  guideLayer: boolean;
-  locked: boolean;
-  blendingMode?: string;
-  root: FakeProp;
-  property: (n: string) => FakeProp;
-}
-
-class FakeProp {
-  value: unknown;
-  name = '';
-  children = new Map<string, FakeProp>();
-  added: { type: string; prop: FakeProp }[] = [];
-  constructor(public type: string) {}
-  setValue(v: unknown) { this.value = v; }
-  property(n: string): FakeProp {
-    let p = this.children.get(n);
-    if (!p) { p = new FakeProp(n); this.children.set(n, p); }
-    return p;
-  }
-  addProperty(n: string): FakeProp {
-    const p = new FakeProp(n);
-    this.added.push({ type: n, prop: p });
-    return p;
-  }
-}
-
-function runInFakeAe(script: string, opts: { answers: (string | null)[]; canWrite?: boolean }) {
-  const alerts: string[] = [];
-  const prompts: { msg: string; def: string }[] = [];
-  const files = new Map<string, string>();
-  const comps: Record<string, unknown>[] = [];
-  const layers: FakeLayer[] = [];
-  const answers = [...opts.answers];
-  const makeLayer = (kind: FakeLayer['kind']): FakeLayer => {
-    const root = new FakeProp('root');
-    const l: FakeLayer = { kind, name: '', guideLayer: false, locked: false, root, property: (n: string) => root.property(n) };
-    layers.unshift(l);
-    return l;
-  };
-  const folderObj = (fsName: string) => ({ fsName, exists: true });
-  class File {
-    fsName: string;
-    encoding = 'UTF-8';
-    constructor(path: string) { this.fsName = path; }
-    get parent() { return folderObj(this.fsName.replace(/[\\/][^\\/]*$/, '')); }
-    get exists() { return files.has(this.fsName); }
-    get length() { return files.get(this.fsName)?.length ?? 0; }
-    open() { files.set(this.fsName, ''); return true; }
-    write(s: string) { files.set(this.fsName, (files.get(this.fsName) ?? '') + s); }
-    close() {}
-  }
-  const app = {
-    project: {
-      items: {
-        addFolder: (name: string) => ({ name, remove() {} }),
-        addComp: (name: string, width: number, height: number, par: number, duration: number, fps: number) => {
-          const comp = {
-            name, width, height, par, duration, fps, comment: '', parentFolder: null as unknown, opened: false, removed: false,
-            layers: {
-              addShape: () => makeLayer('shape'),
-              addText: (text: string) => {
-                const l = makeLayer('text');
-                l.property('ADBE Text Properties').property('ADBE Text Document').value = { text };
-                return l;
-              },
-              add: () => makeLayer('footage'),
-            },
-            openInViewer() { this.opened = true; },
-            remove() { this.removed = true; },
-          };
-          comps.push(comp);
-          return comp;
-        },
-      },
-      importFile: (io: { file: File }) => ({ file: io.file, parentFolder: null }),
-    },
-    preferences: { getPrefAsLong: () => (opts.canWrite === false ? 0 : 1) },
-    beginUndoGroup() {},
-    endUndoGroup() {},
-  };
-  const env = {
-    app,
-    alert: (m: string) => { alerts.push(m); },
-    prompt: (msg: string, def: string) => { prompts.push({ msg, def }); return answers.length ? answers.shift()! : null; },
-    $: { os: 'Windows 10', fileName: 'C:/Users/me/Downloads/AE合成腳本.jsx' },
-    File,
-    Folder: { myDocuments: folderObj('C:/Users/me/Documents'), temp: folderObj('C:/Temp') },
-    Shape: class { vertices: unknown; closed = false },
-    ImportOptions: class { constructor(public file: File) {} },
-    BlendingMode: { SCREEN: 'screen' },
-    ParagraphJustification: { LEFT_JUSTIFY: 'left' },
-  };
-  const names = Object.keys(env);
-  // eslint-disable-next-line @typescript-eslint/no-implied-eval
-  new Function(...names, script.replace(/^\uFEFF/, ''))(...names.map(n => (env as Record<string, unknown>)[n]));
-  return { alerts, prompts, files, comps, layers };
-}
 
 describe('用假的 AE 跑整支腳本', () => {
   it('問長度 → 建合成（名字、大小、fps、長度）、每塊 LED 一個外框、名字標籤，都是導引圖層、鎖住', () => {

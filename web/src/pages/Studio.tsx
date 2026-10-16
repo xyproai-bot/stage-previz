@@ -569,6 +569,8 @@ function StudioInner({ projectId }: { projectId: string }) {
     void reloadLedTpls();
   }, [selectedSongId, reloadLedTpls]);
   const songTplPlan = useMemo(() => songTemplatePlan(ledTpls.list, selectedSong?.templateId), [ledTpls.list, selectedSong?.templateId]);
+  // 3D 工具列「⋯」的對位圖 / AE 合成腳本 / 位置表：這首歌用了版型就照版型下載
+  const ledSongTpl = useMemo(() => (songTplPlan && ledTpls.list ? { plan: songTplPlan, manuals: ledTpls.list.screens } : null), [songTplPlan, ledTpls.list]);
   const [ledFullView, setLedFullView] = useState(false);
   useEffect(() => { setLedFullView(false); }, [selectedSongId]);
   const [aeFrameSize, setAeFrameSize] = useState<{ width: number; height: number } | null>(null);
@@ -1106,6 +1108,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   ledVideo={videoMode && player.ready ? player.video : null}
                   ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
                   ledTemplate={ledChoice.plan}
+                  ledSongTemplate={ledSongTpl}
                   onNdiFrameSize={setAeFrameSize}
                   poseAtFrame={poseAtFrame}
                   cueKey={selectedCueId}

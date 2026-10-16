@@ -61,16 +61,18 @@ import {
 import Icon from './Icon';
 import { promptDialog } from './dialogs';
 import { toast } from '../lib/toast';
-import StageToolbar, { type ToolDef, type ToolMenuSection } from './StageToolbar';
+import StageToolbar, { type ToolDef, type ToolMenuEntry, type ToolMenuSection } from './StageToolbar';
 import { LED_CANVAS_RANGE, normalizeLedCanvas, type LedCanvas } from '../lib/ledCanvas';
 import {
   buildLedLayout, canvasSourceText, layoutPanel, layoutToCsv, layoutToJson, ledMapFileName, parseCanvasInput, resolveLedCanvas, testPatternSize, todayString,
   type CanvasSize, type LedLayout, type LedMapMeta,
 } from '../lib/ledMap';
 import { collectUvTriangles, ledPanelInputs, type LedSceneObject } from '../lib/ledMapScene';
-import { buildObjectUniforms, mapUvRectToTemplate, spanFromAxes, spanFromUv, type LedTemplatePlan, type Placement, type SrcSpan } from '../lib/ledTemplate';
+import { buildObjectUniforms, buildScreenList, mapUvRectToTemplate, spanFromAxes, spanFromUv, type LedTemplatePlan, type Placement, type ScreenDef, type SrcSpan } from '../lib/ledTemplate';
 import { downloadBlob, drawTestPattern, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
+import { downloadSongTemplateFile, type LedSongTemplate } from '../lib/ledTemplateDownload';
+import { ledMapMenuHint, ledMapMenuLabel, type LedDownloadKind, type LedDownloadScope } from '../lib/ledMapMenuText';
 import './StageScene.css';
 
 // 3D 畫面上用 DOM 直接畫的小圖示（物件名稱旁的鎖、留言圖釘）：跟 lucide 的 Lock / MessageSquare 同一個圖形
@@ -238,6 +240,11 @@ interface Props {
   onLedCanvasChange?: (v: LedCanvas | null) => void;
   /** 「更多」選單裡的 LED 對位圖（下載 PNG / CSV / JSON、LED 顯示測試圖）；預設有 */
   ledMapMenu?: boolean;
+  /**
+   * 這首歌選的 LED 版型（自己排的）+ 手動切的螢幕：有給 →「更多」選單的對位圖 / AE 合成腳本 / 位置表照版型下載（lib/ledTemplateDownload.ts），
+   * 整張畫布的版本還是在（寫「（整張畫布）」）；沒給 = 跟以前一樣只有整張畫布
+   */
+  ledSongTemplate?: LedSongTemplate | null;
   /** 有給 →「更多」選單最下面多一個「說明」（新分頁打開使用說明的這一段） */
   helpHref?: string;
   /** 審片用：拿目前的視角、飛到某個視角（留言記住的）、抓一張縮圖（StageViewApi） */
@@ -300,7 +307,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -461,7 +468,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   });
   // 目前影片 / 圖片的大小（製作還沒設定畫布大小時，對位圖用這個）
   const [mediaSize, setMediaSize] = useState<CanvasSize | null>(null);
-  const [ledMapBusy, setLedMapBusy] = useState<null | 'png' | 'jsx'>(null);
+  const [ledMapBusy, setLedMapBusy] = useState<null | 'png' | 'jsx' | 'tpl-png' | 'tpl-jsx'>(null);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   // NDI 真連線：connect 後拿到 frames 就 update CanvasTexture（替代 mock）
   const ndiLiveTextureRef = useRef<{ texture: THREE.CanvasTexture; canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null>(null);
@@ -2237,6 +2244,33 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     }
   }
 
+  /** 這首歌選的版型的螢幕清單（跟 LED 版型編輯器同一套：每個 LED 物件一塊，手動切的螢幕取代它） */
+  function songTemplateDefs(tpl: LedSongTemplate, full: CanvasSize): ScreenDef[] {
+    const list = stageObjectsRef.current
+      ? stageObjectsRef.current.map(o => ({ id: o.id, name: o.displayName || o.meshName, order: o.order, category: o.category }))
+      : (statesRef.current || []).map(st => ({ id: st.objectId, name: st.displayName || st.meshName, order: st.order, category: st.category }));
+    const autos = list.filter(o => o.category === 'led_panel').map(o => {
+      const mesh = meshesRef.current.get(o.id);
+      return { objectId: o.id, name: o.name, order: o.order, src: (mesh && ledObjectSpan(mesh)) || { us: 0, ul: 1, vs: 0, vl: 1 } };
+    });
+    return buildScreenList(autos, tpl.manuals, full);
+  }
+
+  /** 「⋯」→ 版型的下載（對位圖 / AE 合成腳本 / 位置表）：lib/ledTemplateDownload.ts */
+  async function downloadSongTemplate(kind: LedDownloadKind) {
+    const full = projectCanvasRef.current;
+    if (!ledSongTemplate || !full) { toast.error('版型要先有 LED 畫布大小'); return; }
+    const busy = kind === 'png' ? 'tpl-png' : kind === 'jsx' ? 'tpl-jsx' : null;
+    if (busy) setLedMapBusy(busy);
+    try {
+      await new Promise(r => requestAnimationFrame(() => r(null)));
+      const n = await downloadSongTemplateFile(kind, ledSongTemplate.plan, songTemplateDefs(ledSongTemplate, full), { projectName: projectName || '', date: todayString(), fullCanvas: full });
+      toast[n.level](n.text, n.duration);
+    } finally {
+      if (busy) setLedMapBusy(null);
+    }
+  }
+
   async function editLedCanvas() {
     if (!onLedCanvasChange) return;
     const cur = resolvedCanvas.canvas;
@@ -3445,26 +3479,29 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   // 「更多」選單固定的一段：LED 對位圖（給動畫師做 AE 合成用）
   const canvasNow = resolvedCanvas.canvas;
+  // 四個下載（對位圖 / AE 合成腳本 / 位置表 CSV / JSON）：這首歌用了版型 → 版型的在前、整張畫布的在後；沒有版型 → 跟以前一樣
+  const songTplScope: LedDownloadScope | null = ledSongTemplate && projectCanvasRef.current ? { template: ledSongTemplate.plan.name } : null;
+  const dlIcons = { png: ImageDown, jsx: FileCode, csv: FileSpreadsheet, json: FileBraces } as const;
+  const dlItem = (kind: LedDownloadKind, scope: LedDownloadScope): ToolMenuEntry => {
+    const tpl = typeof scope === 'object';
+    const busyText = kind === 'png' ? '正在畫對位圖…' : kind === 'jsx' ? '正在做 AE 合成腳本…' : null;
+    return {
+      icon: dlIcons[kind],
+      label: busyText && ledMapBusy === (tpl ? `tpl-${kind}` : kind) ? busyText : ledMapMenuLabel(kind, scope),
+      disabled: (kind === 'png' || kind === 'jsx') && !!ledMapBusy,
+      hint: ledMapMenuHint(kind, scope),
+      onSelect: () => { void (tpl ? downloadSongTemplate(kind) : downloadLedMap(kind)); },
+    };
+  };
+  const dlKinds: LedDownloadKind[] = ['png', 'jsx', 'csv', 'json'];
+  const downloadItems: ToolMenuEntry[] = songTplScope
+    ? [...dlKinds.map(k => dlItem(k, songTplScope)), ...dlKinds.map(k => dlItem(k, 'full'))]
+    : dlKinds.map(k => dlItem(k, 'plain'));
   const ledSections: ToolMenuSection[] = ledMapMenu ? [{
     id: 'ledmap',
     title: 'LED 對位圖',
     items: [
-      {
-        icon: ImageDown,
-        label: ledMapBusy === 'png' ? '正在畫對位圖…' : '下載對位圖（PNG）',
-        disabled: !!ledMapBusy,
-        hint: '每塊 LED 在 AE 畫布上的位置：名字、x y w h、每 100 px 格線；可以直接放進 AE 當參考圖層',
-        onSelect: () => { void downloadLedMap('png'); },
-      },
-      {
-        icon: FileCode,
-        label: ledMapBusy === 'jsx' ? '正在做 AE 合成腳本…' : '下載 AE 合成腳本（.jsx）',
-        disabled: !!ledMapBusy,
-        hint: '在 AE 按「File > Scripts > Run Script File…」（檔案 > 指令碼 > 執行指令碼檔案）跑：自動建好畫布大小的合成，每塊 LED 的外框、名字都是導引圖層（不會算圖出去）',
-        onSelect: () => { void downloadLedMap('jsx'); },
-      },
-      { icon: FileSpreadsheet, label: '下載位置表（CSV）', hint: 'Excel 打得開：每塊 LED 的名字和 x、y、w、h', onSelect: () => { void downloadLedMap('csv'); } },
-      { icon: FileBraces, label: '下載位置表（JSON）', hint: '給 AE 腳本 / 程式讀', onSelect: () => { void downloadLedMap('json'); } },
+      ...downloadItems,
       {
         icon: MonitorCheck,
         label: 'LED 顯示測試圖',
@@ -3484,6 +3521,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       <>
         畫布 {canvasNow.width} × {canvasNow.height}（{canvasSourceText(resolvedCanvas.source)}）
         {resolvedCanvas.source !== 'project' && !onLedCanvasChange && <><br />AE 合成要做多大，以製作給的為準</>}
+        {songTplScope && ledSongTemplate && <><br />這首歌用的版型：{ledSongTemplate.plan.name}（{ledSongTemplate.plan.canvas.width} × {ledSongTemplate.plan.canvas.height}）</>}
       </>
     ),
   }] : [];

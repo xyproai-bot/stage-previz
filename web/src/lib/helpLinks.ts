@@ -74,6 +74,8 @@ export const HELP_ANCHORS = {
   chromeAllow: 'chrome-allow',
   use: 'use',
   resolution: 'resolution',
+  aeNoE3d: 'ae-no-e3d',
+  aeSpeedTips: 'ae-speed-tips',
   aeLiveColor: 'ae-live-color',
   chooseSource: 'choose-source',
   faq: 'faq',

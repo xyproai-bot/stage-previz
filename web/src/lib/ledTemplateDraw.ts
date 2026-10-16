@@ -268,10 +268,16 @@ export interface TemplateGuidePng { blob: Blob; scale: number; width: number; he
  * 畫成 PNG（版型畫布的原尺寸；瀏覽器畫不了就縮小，scale 會 < 1；最小的也畫不了就丟錯）。
  * 用一般的 canvas（有 OffscreenCanvas 的瀏覽器也一樣能畫，這裡不需要在背景執行緒）。
  */
-export async function renderTemplateGuidePng(plan: Pick<LedTemplatePlan, 'name' | 'canvas' | 'scalePct' | 'screens'>, defs: readonly ScreenDef[]): Promise<TemplateGuidePng> {
+export async function renderTemplateGuidePng(
+  plan: Pick<LedTemplatePlan, 'name' | 'canvas' | 'scalePct' | 'screens'>, defs: readonly ScreenDef[],
+  opts: { maxSide?: number } = {},
+): Promise<TemplateGuidePng> {
   const { width: W, height: H } = plan.canvas;
   const items = layoutPattern(plan, defs);
-  for (const s of exportScales(W, H)) {
+  // maxSide：夾在 AE 腳本裡的小張版（腳本會把它放大回版型畫布的大小）
+  const cap = opts.maxSide ? Math.min(1, opts.maxSide / Math.max(W, H)) : 1;
+  const scales = exportScales(W, H).map(s => Math.min(s, cap)).filter((s, i, a) => a.indexOf(s) === i);
+  for (const s of scales) {
     const cw = Math.max(1, Math.round(W * s)), ch = Math.max(1, Math.round(H * s));
     const el = document.createElement('canvas');
     el.width = cw;

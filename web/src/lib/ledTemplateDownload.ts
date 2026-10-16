@@ -1,0 +1,108 @@
+// LED 版型的下載（瀏覽器這一側：畫圖、組檔案、下載）：模板圖 PNG、AE 合成腳本（.jsx）、座標表（CSV / JSON）。
+// 檔案裡寫什麼：aeTemplateScript.ts / ledTemplateTable.ts（純函式，有單元測試）；這裡只負責畫 PNG、包成檔案、按下載。
+// 編輯器（LedTemplatesDialog）和 3D 工具列的「⋯」選單（StageScene）共用。
+
+import { AE_MAX_COMP_SIDE, blobToBase64, type AeMapImage } from './aeCompScript';
+import { AE_MAP_MAX_SIDE, AeCanvasTooBigError } from './aeCompScriptDownload';
+import { aeTemplateGuideFileName, aeTemplateScriptFileName, buildAeTemplateScript } from './aeTemplateScript';
+import type { CanvasSize } from './ledMap';
+import { downloadBlob } from './ledMapDraw';
+import type { LedTemplatePlan, ManualScreen, ScreenDef } from './ledTemplate';
+import type { LedDownloadKind } from './ledMapMenuText';
+import { renderTemplateGuidePng, type TemplateGuidePng } from './ledTemplateDraw';
+import { guideFileName } from './ledTemplatePattern';
+import { templateTableFileName, templateTableToCsv, templateTableToJson } from './ledTemplateTable';
+
+export interface TemplateDownloadMeta {
+  projectName: string;
+  /** yyyy-mm-dd */
+  date: string;
+  /** 專案的 LED 畫布（整張畫布） */
+  fullCanvas: CanvasSize;
+}
+
+/** 模板圖 PNG（版型畫布的原尺寸；瀏覽器畫不了就縮小，檔名會加「-縮小N%」） */
+export async function renderTemplateGuideFile(plan: LedTemplatePlan, defs: readonly ScreenDef[], projectName: string): Promise<{ png: TemplateGuidePng; fileName: string }> {
+  const png = await renderTemplateGuidePng(plan, defs);
+  let fileName = guideFileName(projectName, plan);
+  if (png.scale < 1) fileName = fileName.replace(/\.png$/, `-縮小${Math.round(png.scale * 100)}%.png`);
+  return { png, fileName };
+}
+
+/** 模板圖縮小了，要告訴使用者怎麼在 AE 裡放大回來 */
+export function guideShrinkWarning(png: Pick<TemplateGuidePng, 'scale' | 'width' | 'height'>, canvas: CanvasSize): string {
+  return `這台電腦的瀏覽器畫不出 ${canvas.width}×${canvas.height} 的原尺寸，圖縮成 ${png.width}×${png.height}（${Math.round(png.scale * 100)}%）：在 AE 裡把這個圖層放大成 ${Math.round(100 / png.scale)}% 就能對上。要原尺寸請換一台記憶體大一點的電腦。`;
+}
+
+/** 下載 AE 合成腳本（.jsx）；模板圖夾在腳本裡（小一點的版本，畫不出來就只放外框）；回傳有沒有夾到圖 */
+export async function downloadTemplateAeScript(
+  plan: LedTemplatePlan, defs: readonly ScreenDef[], meta: Pick<TemplateDownloadMeta, 'projectName' | 'date'>,
+): Promise<{ withGuide: boolean; fileName: string }> {
+  const { width, height } = plan.canvas;
+  if (width > AE_MAX_COMP_SIDE || height > AE_MAX_COMP_SIDE) {
+    throw new AeCanvasTooBigError(`版型畫布 ${width} × ${height} 超過 AE 合成的上限 ${AE_MAX_COMP_SIDE} px`);
+  }
+  let guide: AeMapImage | null = null;
+  try {
+    const png = await renderTemplateGuidePng(plan, defs, { maxSide: AE_MAP_MAX_SIDE });
+    guide = {
+      fileName: aeTemplateGuideFileName(meta.projectName, plan.name, plan.canvas),
+      width: png.width, height: png.height, base64: await blobToBase64(png.blob),
+    };
+  } catch (e) {
+    console.warn('[aeTemplateScript] 模板圖沒畫出來，腳本只放外框', e);
+  }
+  const js = buildAeTemplateScript({ plan, defs, projectName: meta.projectName, date: meta.date, guide });
+  const fileName = aeTemplateScriptFileName(meta.projectName, plan.name, plan.canvas);
+  downloadBlob(new Blob([js], { type: 'application/javascript;charset=utf-8' }), fileName);
+  return { withGuide: !!guide, fileName };
+}
+
+/** 這首歌選的版型（3D 工具列「⋯」的下載跟著它）：版型排法 + 專案手動切的螢幕（算螢幕清單用） */
+export interface LedSongTemplate { plan: LedTemplatePlan; manuals: readonly ManualScreen[] }
+
+/** 下載完要跳的小提示 */
+export interface LedDownloadNotice { level: 'success' | 'warn' | 'error'; text: string; duration?: number }
+
+/**
+ * 3D 工具列「⋯」→ LED 對位圖：這首歌用了版型時，四個下載（對位圖 PNG / AE 合成腳本 / 位置表 CSV / JSON）照版型出。
+ * defs = 3D 畫面現在的螢幕清單（buildScreenList）；出了什麼事都不丟錯，回傳要跳的提示。
+ */
+export async function downloadSongTemplateFile(
+  kind: LedDownloadKind, plan: LedTemplatePlan, defs: readonly ScreenDef[], meta: TemplateDownloadMeta,
+): Promise<LedDownloadNotice> {
+  const keys = new Set(defs.map(d => d.key));
+  const shown = { ...plan, screens: plan.screens.filter(p => keys.has(p.key)) };
+  if (shown.screens.length === 0) {
+    return { level: 'error', text: `版型「${plan.name}」裡還沒有螢幕，或模型裡找不到它們（要等模型載好）` };
+  }
+  try {
+    if (kind === 'png') {
+      const { png, fileName } = await renderTemplateGuideFile(shown, defs, meta.projectName);
+      downloadBlob(png.blob, fileName);
+      return png.scale < 1
+        ? { level: 'warn', text: guideShrinkWarning(png, shown.canvas), duration: 8000 }
+        : { level: 'success', text: `版型「${plan.name}」的模板圖下載好了（${png.width}×${png.height}）` };
+    }
+    if (kind === 'jsx') {
+      const r = await downloadTemplateAeScript(shown, defs, meta);
+      return {
+        level: 'success', duration: 8000,
+        text: `AE 合成腳本（版型「${plan.name}」）下載好了：在 AE 按「File > Scripts > Run Script File…」選它${r.withGuide ? '' : '（這次沒有夾模板圖，外框都有）'}`,
+      };
+    }
+    downloadTemplateTable(kind, shown, defs, meta);
+    return { level: 'success', text: `版型「${plan.name}」的座標表下載好了（${kind === 'csv' ? 'CSV，Excel 打得開' : 'JSON'}）` };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    return { level: 'error', text: (e instanceof AeCanvasTooBigError ? '' : '沒有下載成功：') + reason };
+  }
+}
+
+/** 下載座標表（CSV 前面有 BOM，Excel 看得到中文） */
+export function downloadTemplateTable(kind: 'csv' | 'json', plan: LedTemplatePlan, defs: readonly ScreenDef[], meta: TemplateDownloadMeta): string {
+  const fileName = templateTableFileName(kind, meta.projectName, plan);
+  const text = kind === 'csv' ? templateTableToCsv(plan, defs, meta) : templateTableToJson(plan, defs, meta);
+  downloadBlob(new Blob([text], { type: kind === 'csv' ? 'text/csv;charset=utf-8' : 'application/json' }), fileName);
+  return fileName;
+}

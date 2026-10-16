@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Copy, Download, LayoutPanelLeft, LoaderCircle, Monitor, Plus, Save, Scissors, Trash2, TriangleAlert, X } from 'lucide-react';
+import { Copy, Download, FileBraces, FileCode, FileSpreadsheet, LayoutPanelLeft, LoaderCircle, Monitor, Plus, Save, Scissors, Trash2, TriangleAlert, X } from 'lucide-react';
 import Icon from './Icon';
+import OverflowMenu from './OverflowMenu';
 import NumField from './NumField';
 import LedTemplateCanvas, { type PatchHow } from './LedTemplateCanvas';
 import LedSplitCanvas from './LedSplitCanvas';
@@ -22,10 +23,10 @@ import { boundsOf, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelec
 import {
   commit, fitCanvasToItems, newHistory, redo, rectToUv, setRotation, settle, transient, undo, type History,
 } from '../lib/ledTemplateEdit';
-import { panelColor, type PixelRect } from '../lib/ledMap';
+import { panelColor, todayString, type PixelRect } from '../lib/ledMap';
 import { downloadBlob } from '../lib/ledMapDraw';
-import { guideFileName } from '../lib/ledTemplatePattern';
-import { renderTemplateGuidePng } from '../lib/ledTemplateDraw';
+import { AeCanvasTooBigError } from '../lib/aeCompScriptDownload';
+import { downloadTemplateAeScript, downloadTemplateTable, guideShrinkWarning, renderTemplateGuideFile } from '../lib/ledTemplateDownload';
 import { layoutFromSpans } from '../lib/ledTemplateContent';
 import { wholeCanvasLayout, type LayerBackdrop } from '../lib/ledTemplateContentDraw';
 import { useLedFullMap } from '../lib/useLedFullMap';
@@ -42,6 +43,9 @@ import './LedTemplatesDialog.css';
  *   左邊：版型畫布（拖曳移動、拖角落縮放、吸附、轉 90°、翻轉、復原重做）或整張畫布（拖出範圍切螢幕）；右邊：螢幕清單 + 選到的螢幕的數字欄位（跟畫布雙向連動）。
  *   面板開著的時候，3D 的 LED 顯示這個版型的測試圖（每塊螢幕不同顏色 + 名字 + 指著上方的箭頭 + 像素格），放錯、轉錯一眼就看得出來。
  *   「下載模板圖」= 版型畫布大小的 PNG，給動畫師當 AE 的參考圖層。「複製版型」= 複製一份再改名字。
+ *   「下載 AE 合成腳本」= 一個 .jsx，在 AE 跑一下就建好版型畫布大小的合成（外框 + 模板圖，導引圖層）；
+ *   「下載座標表」（CSV / JSON）= 每塊螢幕在版型和整張畫布上的位置、轉向、翻轉、真實點數，給 LED 工程師、d3 操作員。
+ *   （檔案內容：lib/aeTemplateScript.ts / lib/ledTemplateTable.ts；下載：lib/ledTemplateDownload.ts；3D 工具列的「⋯」也有同樣的下載）
  *   「全部」是現在的整張 LED 畫布（每塊螢幕的真實點數都從它來），不能改。
  *   版型畫布上：每塊螢幕的框裡畫「對位圖內容」（整張畫布的測試圖裡屬於這塊螢幕的那一段，照轉動、翻轉擺進來）；最底下可以墊一張自己載入的「底圖」
  *   （只存在這台電腦的瀏覽器裡，不上傳）。對位圖內容和底圖都只是編輯時的參考，不會存進版型。
@@ -427,19 +431,45 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     setBusy(true);
     try {
       const shown = { ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) };
-      const png = await renderTemplateGuidePng(shown, screens);
-      let file = guideFileName(projectName, shown);
-      if (png.scale < 1) {
-        file = file.replace(/\.png$/, `-縮小${Math.round(png.scale * 100)}%.png`);
-        toast.warn(`這台電腦的瀏覽器畫不出 ${draft.width}×${draft.height} 的原尺寸，圖縮成 ${png.width}×${png.height}（${Math.round(png.scale * 100)}%）：在 AE 裡把這個圖層放大成 ${Math.round(100 / png.scale)}% 就能對上。要原尺寸請換一台記憶體大一點的電腦。`);
-      } else {
-        toast.success(`模板圖下載好了（${png.width}×${png.height}）`);
-      }
-      downloadBlob(png.blob, file);
+      const { png, fileName } = await renderTemplateGuideFile(shown, screens, projectName ?? '');
+      if (png.scale < 1) toast.warn(guideShrinkWarning(png, shown.canvas));
+      else toast.success(`模板圖下載好了（${png.width}×${png.height}）`);
+      downloadBlob(png.blob, fileName);
     } catch (e) {
       toast.error('下載不了模板圖：' + msg(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** 版型畫布大小的 AE 合成腳本（.jsx）：跟「下載模板圖」一樣照現在編輯的樣子（沒存也可以） */
+  async function downloadAeScript() {
+    if (!draft || !plan || busy) return;
+    if (placedCount === 0) { toast.warn('版型裡還沒有螢幕：先把螢幕「加入版型」'); return; }
+    setBusy(true);
+    try {
+      await new Promise(r => requestAnimationFrame(() => r(null)));   // 先讓「忙碌中」顯示出來再開始畫（大畫布要一兩秒）
+      const shown = { ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) };
+      const r = await downloadTemplateAeScript(shown, screens, { projectName: projectName ?? '', date: todayString() });
+      toast.success(`AE 合成腳本下載好了：在 AE 按「File > Scripts > Run Script File…」選它${r.withGuide ? '' : '（這次沒有夾模板圖，外框都有）'}`, 8000);
+    } catch (e) {
+      toast.error((e instanceof AeCanvasTooBigError ? '' : 'AE 合成腳本沒做出來：') + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** 座標表（給 LED 工程師、d3 操作員）：CSV 或 JSON */
+  function downloadTable(kind: 'csv' | 'json') {
+    if (!draft || !plan || busy) return;
+    if (!fullCanvas) { toast.warn('還沒填這個專案的 LED 畫布大小'); return; }
+    if (placedCount === 0) { toast.warn('版型裡還沒有螢幕：先把螢幕「加入版型」'); return; }
+    try {
+      const shown = { ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) };
+      downloadTemplateTable(kind, shown, screens, { projectName: projectName ?? '', date: todayString(), fullCanvas });
+      toast.success(kind === 'csv' ? '座標表下載好了（CSV，Excel 打得開）' : '座標表下載好了（JSON）');
+    } catch (e) {
+      toast.error('下載不了座標表：' + msg(e));
     }
   }
 
@@ -516,6 +546,16 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
         {draft && (
           <>
             <button className="btn btn--ghost" onClick={() => void downloadGuide()} disabled={busy} title="下載版型畫布大小的 PNG（每塊螢幕的長方形、名字、像素大小、指著上方的箭頭），給動畫師當 AE 的參考圖層"><Icon icon={Download} /> 下載模板圖</button>
+            <button className="btn btn--ghost" onClick={() => void downloadAeScript()} disabled={busy} title="下載 AE 腳本（.jsx）：在 AE 跑一下，自動建好版型畫布大小的合成（正方形像素），每塊螢幕一個外框，模板圖放在最下面（都是導引圖層，不會算圖出去）"><Icon icon={FileCode} /> 下載 AE 合成腳本</button>
+            <OverflowMenu
+              label="下載座標表（選 CSV 或 JSON）"
+              align="auto"
+              trigger={{ icon: FileSpreadsheet, text: '下載座標表', className: 'btn btn--ghost' }}
+              items={[
+                { key: 'csv', label: 'CSV（Excel 打得開）', icon: FileSpreadsheet, onSelect: () => downloadTable('csv') },
+                { key: 'json', label: 'JSON（給程式讀）', icon: FileBraces, onSelect: () => downloadTable('json') },
+              ]}
+            />
             <button className="btn btn--ghost ledtpl-dock__danger" onClick={() => void remove()} disabled={busy}><Icon icon={Trash2} /> {draft.id ? '刪除版型' : '放棄'}</button>
             <button className="btn btn--primary" onClick={() => void save()} disabled={busy || !dirty}><Icon icon={busy ? LoaderCircle : Save} spin={busy} /> 儲存</button>
           </>

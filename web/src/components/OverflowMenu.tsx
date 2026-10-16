@@ -45,11 +45,16 @@ interface Props {
   trigger?: { icon?: LucideIcon; text?: ReactNode; className?: string };
   /** 打開時叫（例：先去讀分享連結） */
   onOpen?: () => void;
+  /** 選單怎麼對齊按鈕：預設靠右；'auto' = 按鈕太靠左、靠右會超出畫面時改靠左 */
+  align?: 'right' | 'auto';
 }
 
-export default function OverflowMenu({ items, label = '更多', header, className, trigger, onOpen }: Props) {
+/** 選單最寬大概多少（min-width 210 + 內距） */
+const MENU_ROOM = 232;
+
+export default function OverflowMenu({ items, label = '更多', header, className, trigger, onOpen, align = 'right' }: Props) {
   const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+  const [pos, setPos] = useState<{ top: number; right?: number; left?: number } | null>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const menuId = useId();
@@ -58,8 +63,14 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
   const place = useCallback(() => {
     const r = btnRef.current?.getBoundingClientRect();
     if (!r) return;
-    setPos({ top: Math.round(r.bottom + 6), right: Math.max(8, Math.round(window.innerWidth - r.right)) });
-  }, []);
+    const top = Math.round(r.bottom + 6);
+    // auto：按鈕在畫面左邊（工具列換行、排到最左邊的時候），靠右對齊的選單會被切掉 → 改成靠左對齊；其他照舊靠右對齊
+    if (align === 'auto' && r.right < MENU_ROOM) {
+      setPos({ top, left: Math.max(8, Math.round(r.left)) });
+      return;
+    }
+    setPos({ top, right: Math.max(8, Math.round(window.innerWidth - r.right)) });
+  }, [align]);
 
   const close = useCallback((refocus: boolean) => {
     setOpen(false);
@@ -181,7 +192,7 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
           className="ovf__menu"
           role="menu"
           aria-label={label}
-          style={{ top: pos.top, right: pos.right }}
+          style={{ top: pos.top, right: pos.right, left: pos.left }}
           onKeyDown={onMenuKey}
         >
           {header && <div className="ovf__header">{header}</div>}

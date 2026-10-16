@@ -258,7 +258,7 @@ function wrapNote(p: LedPanelLayout): string {
   return '';
 }
 
-function csvCell(s: string | number): string {
+export function csvCell(s: string | number): string {
   const t = String(s);
   return /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
 }

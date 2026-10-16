@@ -442,6 +442,8 @@ export default function ProjectEditor() {
 
   // AE 即時照這首歌選的 LED 版型放到 LED 上（lib/ledLiveTemplate.ts）；版型面板開著的測試圖蓋過一切
   const songTplPlan = useMemo(() => songTemplatePlan(ledTpls.list, selectedSong?.templateId), [ledTpls.list, selectedSong?.templateId]);
+  // 3D 工具列「⋯」的對位圖 / AE 合成腳本 / 位置表：這首歌用了版型就照版型下載
+  const ledSongTpl = useMemo(() => (songTplPlan && ledTpls.list ? { plan: songTplPlan, manuals: ledTpls.list.screens } : null), [songTplPlan, ledTpls.list]);
   const [ledFullView, setLedFullView] = useState(false);          // 「暫時用整張畫布看」：只有這個畫面，不存
   useEffect(() => { setLedFullView(false); }, [selectedSongId]);
   const [aeFrameSize, setAeFrameSize] = useState<{ width: number; height: number } | null>(null);
@@ -1280,6 +1282,7 @@ export default function ProjectEditor() {
               ledCanvas={view.ledCanvas}
               onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
               ledTemplate={ledChoice.plan}
+              ledSongTemplate={ledSongTpl}
               ledPreviewCanvas={tplPreview ? tplPattern.canvas : null}
               ledPreviewVersion={tplPattern.version}
             />

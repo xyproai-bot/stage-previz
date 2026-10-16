@@ -67,7 +67,7 @@ export function es3Literal(v: unknown): string {
 const LINE_BREAKS = new RegExp('[\r\n' + String.fromCharCode(0x2028, 0x2029) + ']+', 'g');
 
 /** 註解裡放使用者打的字：不能換行（不然會跑出註解變成程式） */
-function commentSafe(s: string): string {
+export function commentSafe(s: string): string {
   return s.replace(LINE_BREAKS, ' ');
 }
 
@@ -84,7 +84,7 @@ export function hslToRgb01(h: number, s: number, l: number): [number, number, nu
 
 // ─── 外框 ───
 
-const rectPath = (r: PixelRect): PanelPath => ({ v: [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]], c: true });
+export const rectPath = (r: PixelRect): PanelPath => ({ v: [[r.x, r.y], [r.x + r.w, r.y], [r.x + r.w, r.y + r.h], [r.x, r.y + r.h]], c: true });
 
 /** 拿掉在一直線上的點（外框是三角形的邊串起來的，直的那一段中間會有很多點） */
 export function simplifyPath(pts: Pt[], closed: boolean, eps = 0.05): Pt[] {
@@ -176,7 +176,7 @@ export interface PanelLabel {
 }
 
 /** 字的大小跟著畫布（4K 畫布 = 1） */
-function unitOf(canvas: CanvasSize): number {
+export function unitOf(canvas: CanvasSize): number {
   return Math.min(4, Math.max(0.5, Math.max(canvas.width, canvas.height) / 3840));
 }
 
@@ -251,7 +251,7 @@ export function chunkBase64(b64: string, size = 8192): string[] {
   return out;
 }
 
-const UI_TEXT = {
+export const UI_TEXT = {
   title: 'Stage Previz',
   askDuration: '要建 {0} × {1}、{2} fps 的合成。\n合成多長？（分:秒，例：3:00）',
   badDuration: '看不懂這個長度。請寫成「分:秒」，例：3:00（1 秒到 3 小時）',
@@ -275,9 +275,11 @@ const FONTS = {
 
 /**
  * 固定的 ES3 程式（DATA 在前面）。改這裡要記得：沒有 let / const / 箭頭函式 / 樣板字串 / forEach / indexOf / JSON。
+ * 分三段：RUNNER_COMMON（兩種腳本共用的小工具：問長度、寫對位圖檔、放圖、畫外框）、
+ * RUNNER_COMP（整張畫布的合成：外框 + 名字標籤）、RUNNER_TEMPLATE（版型的合成：外框 + 模板圖，aeTemplateScript.ts 用）。
  * 新的圖層一律加在最上面 → 先放對位圖，再放外框，最後放名字。
  */
-export const RUNNER = String.raw`
+export const RUNNER_COMMON = String.raw`
 var UI = DATA.ui;
 function fmt(s) {
   var args = arguments;
@@ -306,20 +308,15 @@ function clockText(sec) {
   function pad(n) { return (n < 10 ? "0" : "") + n; }
   return h > 0 ? h + ":" + pad(m) + ":" + pad(r) : m + ":" + pad(r);
 }
-function pickFont() {
-  var isWin = false;
-  try { isWin = /windows/i.test($.os); } catch (e0) {}
-  var names = isWin ? DATA.fonts.win : DATA.fonts.mac;
-  var hasFontApi = false;
-  try { hasFontApi = !!(app.fonts && app.fonts.getFontsByPostScriptName); } catch (e1) {}
-  if (!hasFontApi) return names[0];
-  for (var i = 0; i < names.length; i++) {
-    try {
-      var found = app.fonts.getFontsByPostScriptName(names[i]);
-      if (found && found.length > 0) return names[i];
-    } catch (e2) {}
+function askDuration(ask, def) {
+  var msg = ask, dur = -1;
+  while (dur < 0) {
+    var ans = prompt(msg, def, UI.title);
+    if (ans === null || ans === undefined) return -1;
+    dur = parseDuration(ans);
+    if (dur < 1 || dur > 10800) { dur = -1; msg = UI.badDuration + "\n\n" + ask; def = ans; }
   }
-  return null;
+  return dur;
 }
 function canWriteFiles() {
   try { return app.preferences.getPrefAsLong("Main Pref Section", "Pref_SCRIPTING_FILE_NETWORK_SECURITY") === 1; } catch (e) { return true; }
@@ -372,7 +369,7 @@ function addMap(comp, folder) {
   tr.property("ADBE Scale").setValue([DATA.width / DATA.map.width * 100, DATA.height / DATA.map.height * 100]);
   tr.property("ADBE Position").setValue([DATA.width / 2, DATA.height / 2]);
   tr.property("ADBE Opacity").setValue(DATA.mapOpacity);
-  try { layer.blendingMode = BlendingMode.SCREEN; } catch (e) {}
+  try { if (DATA.mapBlend !== "normal") layer.blendingMode = BlendingMode.SCREEN; } catch (e) {}
   lockGuide(layer);
   return fmt(UI.mapDone, f.fsName);
 }
@@ -380,6 +377,7 @@ function addPanel(comp, p) {
   var layer = comp.layers.addShape();
   layer.name = p.name;
   try { layer.label = p.label; } catch (e0) {}
+  if (p.comment) { try { layer.comment = p.comment; } catch (e2) {} }
   var tr = layer.property("ADBE Transform Group");
   tr.property("ADBE Anchor Point").setValue([0, 0]);
   tr.property("ADBE Position").setValue([0, 0]);
@@ -400,6 +398,25 @@ function addPanel(comp, p) {
   fill.property("ADBE Vector Fill Opacity").setValue(DATA.fillOpacity);
   try { fill.property("ADBE Vector Fill Rule").setValue(2); } catch (e1) {}
   lockGuide(layer);
+}
+`;
+
+/** 整張畫布的合成：外框 + 名字標籤 + 對位圖 */
+export const RUNNER_COMP = String.raw`
+function pickFont() {
+  var isWin = false;
+  try { isWin = /windows/i.test($.os); } catch (e0) {}
+  var names = isWin ? DATA.fonts.win : DATA.fonts.mac;
+  var hasFontApi = false;
+  try { hasFontApi = !!(app.fonts && app.fonts.getFontsByPostScriptName); } catch (e1) {}
+  if (!hasFontApi) return names[0];
+  for (var i = 0; i < names.length; i++) {
+    try {
+      var found = app.fonts.getFontsByPostScriptName(names[i]);
+      if (found && found.length > 0) return names[i];
+    } catch (e2) {}
+  }
+  return null;
 }
 function addLabel(comp, lb, font) {
   var layer = comp.layers.addText(lb.text);
@@ -423,14 +440,8 @@ function addLabel(comp, lb, font) {
 }
 function run() {
   if (DATA.width > 30000 || DATA.height > 30000) { alert(fmt(UI.tooBig, DATA.width, DATA.height), UI.title); return; }
-  var ask = fmt(UI.askDuration, DATA.width, DATA.height, DATA.fps);
-  var msg = ask, def = DATA.defaultDuration, dur = -1;
-  while (dur < 0) {
-    var ans = prompt(msg, def, UI.title);
-    if (ans === null || ans === undefined) return;
-    dur = parseDuration(ans);
-    if (dur < 1 || dur > 10800) { dur = -1; msg = UI.badDuration + "\n\n" + ask; def = ans; }
-  }
+  var dur = askDuration(fmt(UI.askDuration, DATA.width, DATA.height, DATA.fps), DATA.defaultDuration);
+  if (dur < 0) return;
   if (!app.project) app.newProject();
   var made = { panels: 0, labels: 0, map: UI.mapNone };
   var failed = null, folder = null, comp = null;
@@ -463,7 +474,47 @@ function run() {
 run();
 `;
 
-const BOM = String.fromCharCode(0xfeff);
+/** 整張畫布的合成（完整的 ES3 程式；測試、說明都用這個名字） */
+export const RUNNER = RUNNER_COMMON + RUNNER_COMP;
+
+/** 版型的合成：版型畫布大小、每塊螢幕一個外框、模板圖放最下面（aeTemplateScript.ts 用） */
+export const RUNNER_TEMPLATE = String.raw`
+function run() {
+  if (DATA.width > 30000 || DATA.height > 30000) { alert(fmt(UI.tooBig, DATA.width, DATA.height), UI.title); return; }
+  var dur = askDuration(fmt(UI.askDuration, DATA.width, DATA.height, DATA.fps), DATA.defaultDuration);
+  if (dur < 0) return;
+  if (!app.project) app.newProject();
+  var made = { panels: 0, map: UI.mapNone };
+  var failed = null, folder = null, comp = null;
+  app.beginUndoGroup(UI.undo);
+  try {
+    folder = app.project.items.addFolder(DATA.folderName);
+    comp = app.project.items.addComp(DATA.compName, DATA.width, DATA.height, 1, dur, DATA.fps);
+    try { comp.pixelAspect = 1; } catch (e6) {}
+    comp.parentFolder = folder;
+    try { comp.comment = DATA.comment; } catch (e0) {}
+    if (DATA.map) {
+      try { made.map = addMap(comp, folder); } catch (e1) { made.map = UI.mapWriteFailed + " (" + e1.toString() + ")"; }
+    }
+    for (var i = DATA.panels.length - 1; i >= 0; i--) { addPanel(comp, DATA.panels[i]); made.panels++; }
+    for (var s = 1; s <= comp.numLayers; s++) { try { comp.layer(s).selected = false; } catch (e5) {} }
+    try { comp.openInViewer(); } catch (e2) {}
+  } catch (e) {
+    failed = e;
+  }
+  app.endUndoGroup();
+  if (failed) {
+    try { if (comp) comp.remove(); } catch (e3) {}
+    try { if (folder) folder.remove(); } catch (e4) {}
+    alert(fmt(UI.failed, failed.toString() + (failed.line ? " (line " + failed.line + ")" : "")), UI.title);
+    return;
+  }
+  alert(fmt(UI.done, DATA.compName, DATA.width, DATA.height, DATA.fps, clockText(dur), made.panels, DATA.templateName, made.map), UI.title);
+}
+run();
+`;
+
+export const BOM = String.fromCharCode(0xfeff);
 
 /** 整支 .jsx（開頭有 BOM）：資料 + RUNNER，包在一個函式裡（不會留東西在 AE 的全域） */
 export function buildAeCompScript(input: AeScriptInput): string {
@@ -502,8 +553,13 @@ export function buildAeCompScript(input: AeScriptInput): string {
     `// 會建一個 ${c.width} × ${c.height}、${fps} fps 的合成，每塊 LED 一個外框和名字（導引圖層、鎖住，不會算圖出去）`,
     '// AE 2020 以後的版本，Windows / Mac 都可以',
     '//@target aftereffects',
-  ].join('\n');
-  return BOM + header + '\n(function () {\nvar DATA = ' + es3Literal(data) + ';\n' + RUNNER + '})();\n';
+  ];
+  return assembleScript(header, data, RUNNER);
+}
+
+/** 整支 .jsx：BOM + 說明註解（每行已經是 // 開頭）+ 包在函式裡的「資料 + 固定程式」（版型的腳本也用這個） */
+export function assembleScript(headerLines: readonly string[], data: unknown, runner: string): string {
+  return BOM + headerLines.join('\n') + '\n(function () {\nvar DATA = ' + es3Literal(data) + ';\n' + runner + '})();\n';
 }
 
 /** base64（瀏覽器的 Blob → AE 腳本裡的字） */
