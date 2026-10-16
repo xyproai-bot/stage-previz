@@ -3,6 +3,30 @@
 import type { Vec3 } from './geometry';
 import { add, cross, normalize, scale } from './geometry';
 import type { PrimGeom } from './surfaces';
+import { arrangementFromPack, type ArrangeItem, type ArrangeNative, type Arrangement } from './arrange';
+import type { PackResult } from './pack';
+
+/**
+ * 手排用的排法（測試用）：spec 裡指定的幾塊放在指定的位置 + 轉動；其餘的一塊一塊排在 shelfY 以下（不重疊），畫布自己填。
+ * natives = plan.items，pack = plan.pack（自動排的結果，給少了的塊用）。
+ */
+export function shelfArrangement(
+  natives: readonly ArrangeNative[], pack: Pick<PackResult, 'placed' | 'canvas'>,
+  spec: Record<string, Partial<ArrangeItem>>, canvas: { width: number; height: number }, shelfY = 1200,
+): Arrangement {
+  const base = arrangementFromPack(natives, pack);
+  let x = 0, y = shelfY, rowH = 0;
+  const items: ArrangeItem[] = natives.map((n) => {
+    const s = spec[n.key];
+    if (s) return { key: n.key, x: 0, y: 0, rotate: 0, flipH: false, flipV: false, ...s };
+    if (x + n.w > canvas.width - 100) { x = 0; y += rowH; rowH = 0; }
+    const it: ArrangeItem = { key: n.key, x, y, rotate: 0, flipH: false, flipV: false };
+    x += n.w;
+    rowH = Math.max(rowH, n.h);
+    return it;
+  });
+  return { ...base, canvasMode: 'custom', canvas: { ...canvas }, items, groups: [] };
+}
 
 /** 在 (origin, 沿 ax 走 w, 沿 ay 走 h) 的平面上鋪格子；三角形繞向讓法線 = ax × ay 的方向 */
 export function gridPrim(origin: Vec3, ax: Vec3, ay: Vec3, w: number, h: number, seg = 4, opts: { screen?: boolean; sign?: 1 | -1; oldUv?: (s: number, t: number) => [number, number] } = {}): PrimGeom {

@@ -10,7 +10,7 @@ import { verifyUvScene } from './verifyScene';
 import { UNSUPPORTED_TEXT } from './text';
 import { DISTORTION_OK, DISTORTION_WARN } from './surfaces';
 import { readLedObjects } from './docRead';
-import { uvReadingCheck } from './testing';
+import { shelfArrangement, uvReadingCheck } from './testing';
 
 const url = new URL('../../../../stage.glb', import.meta.url);
 const have = existsSync(url);
@@ -109,5 +109,76 @@ describe.runIf(have)('真的 stage.glb：彎的 LED', () => {
     for (const o of plan.objects) {
       if (o.mode === 'auto' && o.pieces.length === 1) expect(r.rects[o.id], o.name).toEqual({ x: o.pieces[0].placed!.x, y: o.pieces[0].placed!.y, w: o.pieces[0].placed!.w, h: o.pieces[0].placed!.h });
     }
+  }, 300_000);
+
+  // 第 3 階段：自己排。弧牆上直接疊在弧牆下面（邊對邊貼在一起）、右邊那道轉 90° 再左右翻轉，畫布自己填寬 8800
+  it('自己排：上下兩道弧牆貼在一起，測試圖跨過接縫是連續的（沒有錯位）；轉 90° + 翻轉的那道方向對；三關檢查都過', async () => {
+    const ins: PlanObjectIn[] = objects.map((o, i) => ({
+      id: o.id, name: o.meshName, order: i, info: ana.infos[o.id], selected: true,
+      sizes: Object.fromEntries(Array.from({ length: 8 }, (_, k) => [k, { mode: 'pitch' as const, pitchMm: 20 }])), manuals: [],
+    }));
+    const ctx = { front: ana.front, metersPerUnit: ana.scaleFactor, oldCanvas: OLD };
+    const auto = buildPlan(ins, ctx);
+    const n = (name: string) => auto.items.find(i => i.name === name)!;
+    const up = n('LED_1_UP'), down = n('LED_1_DOWN'), four = n('LED_4');
+    const arr = shelfArrangement(auto.items, auto.pack, {
+      [up.key]: { x: 0, y: 0 },
+      [down.key]: { x: 0, y: up.h },                                  // 上緣剛好貼著弧牆上的下緣
+      [four.key]: { x: up.w + 100, y: 0, rotate: 90, flipH: true },
+    }, { width: 8800, height: 4000 }, 1000);
+    const plan = buildPlan(ins, { ...ctx, arrangement: arr });
+    expect(plan.blockers).toEqual([]);
+    expect(plan.canvas).toEqual({ width: 8800, height: 4000 });
+    expect(plan.problems).toEqual({ outside: [], overlaps: [] });
+    const pl = (name: string) => plan.objects.find(o => o.name === name)!.pieces[0].placed!;
+    expect(pl('LED_1_UP').y + pl('LED_1_UP').h).toBe(pl('LED_1_DOWN').y);
+    expect(pl('LED_4')).toMatchObject({ rotate: 90, flipH: true, w: four.h, h: four.w });
+
+    const b = await buildModelBytes(io, bytes, objects, plan, OLD);
+    expect(b.ok, JSON.stringify((b as { issues?: string[] }).issues ?? (b as { reason?: string }).reason)).toBe(true);
+    const out = (b as BuildOk).bytes;
+    expect((b as BuildOk).output.maxPixelError).toBeLessThan(0.01);
+    const r = await verifyUvScene(ab(bytes), ab(out), plan, objects);
+    expect(r.issues).toEqual([]);
+    for (const o of plan.objects) {
+      if (o.mode === 'auto' && o.pieces.length === 1) expect(r.rects[o.id], o.name).toEqual({ x: o.pieces[0].placed!.x, y: o.pieces[0].placed!.y, w: o.pieces[0].placed!.w, h: o.pieces[0].placed!.h });
+    }
+
+    const outRead = readLedObjects(await io.readBinary(out), objects);
+    const W = plan.canvas.width, H = plan.canvas.height;
+    const prim = (name: string) => outRead.objects.get(objects.find(o => o.meshName === name)!.id)!.geom.prims[0];
+    // 接縫：弧牆下最上面一排的頂點 vs 弧牆上最下面一排的頂點（3D 位置重合），畫布上的位置要一樣 → 測試圖跨過去是連續的
+    const dp = prim('LED_1_DOWN'), upP = prim('LED_1_UP');
+    let dMaxY = -Infinity, uMinY = Infinity;
+    for (let v = 0; v < dp.pos.length / 3; v++) dMaxY = Math.max(dMaxY, dp.pos[v * 3 + 1]);
+    for (let v = 0; v < upP.pos.length / 3; v++) uMinY = Math.min(uMinY, upP.pos[v * 3 + 1]);
+    expect(Math.abs(dMaxY - uMinY)).toBeLessThan(0.01);   // 兩道牆在 3D 裡真的是接在一起的（差 2.5 mm）
+    const top = new Map<string, number>();
+    for (let v = 0; v < dp.pos.length / 3; v++) if (dp.pos[v * 3 + 1] > dMaxY - 0.02) top.set(`${Math.round(dp.pos[v * 3] * 200)},${Math.round(dp.pos[v * 3 + 2] * 200)}`, v);
+    let pairs = 0, worstU = 0, worstV = 0;
+    for (let v = 0; v < upP.pos.length / 3; v++) {
+      if (upP.pos[v * 3 + 1] > uMinY + 0.02) continue;
+      const m = top.get(`${Math.round(upP.pos[v * 3] * 200)},${Math.round(upP.pos[v * 3 + 2] * 200)}`);
+      if (m === undefined) continue;
+      pairs++;
+      worstU = Math.max(worstU, Math.abs(upP.uv![v * 2] * W - dp.uv![m * 2] * W));
+      worstV = Math.max(worstV, Math.abs(upP.uv![v * 2 + 1] * H - dp.uv![m * 2 + 1] * H));
+    }
+    expect(pairs).toBeGreaterThan(20);
+    expect(worstU).toBeLessThan(0.01);   // 每一欄是同一段弧（弧長一樣、起點一樣）：實測一點都不差
+    expect(worstV).toBeLessThan(0.01);   // 上面這道的下緣 == 下面這道的上緣：實測一點都不差
+
+    // 沒轉的兩道：左右、上下沒有反
+    for (const name of ['LED_1_DOWN', 'LED_1_UP']) {
+      const chk = uvReadingCheck(prim(name), W, H);
+      expect(chk.checked, name).toBeGreaterThan(500);
+      expect(chk.bad, name).toBe(0);
+    }
+    // 轉 90° + 左右翻轉的那道：先把排法的轉動反過來（(畫布 x, 畫布 y) = (ly, lx) → u = lx, v = ly），再用同一個獨立檢查
+    const p4 = prim('LED_4'), w4 = pl('LED_4');
+    const swapped = Float64Array.from({ length: p4.uv!.length }, (_, k) => (k % 2 === 0 ? p4.uv![k + 1] * H - w4.y : p4.uv![k - 1] * W - w4.x));
+    const chk4 = uvReadingCheck({ ...p4, uv: swapped }, 1, 1);
+    expect(chk4.checked).toBeGreaterThan(500);
+    expect(chk4.bad).toBe(0);
   }, 300_000);
 });

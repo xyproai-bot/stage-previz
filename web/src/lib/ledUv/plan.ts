@@ -11,11 +11,13 @@ import type { CanvasSize, PixelRect } from '../ledMap';
 import type { UvBox } from '../ledTemplate';
 import { dot, WORLD_UP, type Vec3 } from './geometry';
 import { packStageShaped, type PackItem, type Placed, type PackResult } from './pack';
+import { resolveArrangement, type ArrangeNative, type ArrangeProblems, type Arrangement } from './arrange';
+import { composeOrientation, IDENTITY_ORIENTATION, invertOrientation, isIdentity } from './orient';
 import { resolveSize, type Measured, type SizeResult, type SizeSpec } from './size';
 import type { ObjectInfo } from './objectInfo';
 import { flatUvForPrim, keepUvForPrim, type KeepMap } from './place';
 import { audienceRight, type DistortionStat, type ObjectGeom, type Piece, type SurfaceOverride } from './surfaces';
-import { BLOCKED_TEXT, KEEP_TEXT, MISSING_TEXT, NO_UV_TEXT, SPLITS_TEXT, UNSUPPORTED_TEXT } from './text';
+import { BLOCKED_TEXT, KEEP_TEXT, MISSING_TEXT, NO_UV_TEXT, SPLITS_TEXT, UNSUPPORTED_TEXT, WARN_TEXT } from './text';
 
 export interface ManualBox { id: string; name: string; uv: UvBox }
 
@@ -85,7 +87,14 @@ export interface Plan {
   blockers: string[];
   warnings: string[];
   rows: number;
+  /** 照舞台自動排出來的結果（沒套用自己排的排法時，畫布和位置就是它；「自動排一次」也是它） */
   pack: PackResult;
+  /** 排版時的每一塊（螢幕片或保留的物件）：大小是規格決定的，排版時不能改 */
+  items: ArrangeNative[];
+  /** 這個方案用的是製作自己排的排法（不是自動排的） */
+  arranged: boolean;
+  /** 自己排的排法有什麼問題（超出畫布、重疊）；沒套用自己排的 = null */
+  problems: ArrangeProblems | null;
 }
 
 export interface PlanContext {
@@ -96,6 +105,8 @@ export interface PlanContext {
   oldCanvas: CanvasSize;
   gutter?: number;
   roundTo?: number;
+  /** 製作自己排的排法（位置 / 轉 90° / 翻轉 / 畫布大小）；沒有 = 照舞台自動排。對不上螢幕清單的部分會被忽略或補上自動排的位置 */
+  arrangement?: Arrangement | null;
 }
 
 const MAX_CANVAS_SIDE = 32768;
@@ -142,6 +153,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
   const sorted = [...inputs].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
   const objects: PlanObject[] = [];
   const items: PackItem[] = [];
+  const natives: ArrangeNative[] = [];
   const blockers: string[] = [];
   const warnings: string[] = [];
 
@@ -171,6 +183,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
         for (const w of size.warnings) obj.warnings.push(`${name}：${w}`);
         const box = stageBox(cornersOf(piece), ctx.front, right);
         items.push({ key, name, w: size.w, h: size.h, ...box, floor: Math.abs(dot(piece.frame.normal, WORLD_UP)) >= 0.9 });
+        natives.push({ key, name, w: size.w, h: size.h, fixed: false });
       });
       continue;
     }
@@ -196,21 +209,35 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
     const flatHeight = info.bbox.max[1] - info.bbox.min[1];
     const horiz = Math.max(info.bbox.max[0] - info.bbox.min[0], info.bbox.max[2] - info.bbox.min[2]);
     items.push({ key: `o:${inp.id}`, name: inp.name, w: Math.max(1, region.rect.w), h: Math.max(1, region.rect.h), ...box, floor: flatHeight <= 0.15 * horiz });
+    natives.push({ key: `o:${inp.id}`, name: inp.name, w: Math.max(1, region.rect.w), h: Math.max(1, region.rect.h), fixed: true });
   }
 
   const pack = packStageShaped(items, { gutter: ctx.gutter, roundTo: ctx.roundTo });
-  const canvas = pack.canvas;
+  // 製作自己排的排法（有的話）蓋過自動排的位置和畫布；沒有 = 自動排的
+  const resolved = ctx.arrangement ? resolveArrangement(natives, pack, ctx.arrangement) : null;
+  const placedMap = resolved ? resolved.placed : pack.placed;
+  const canvas = resolved ? resolved.canvas : pack.canvas;
   if (canvas.width > MAX_CANVAS_SIDE || canvas.height > MAX_CANVAS_SIDE) blockers.push(BLOCKED_TEXT.canvasTooBig(canvas.width, canvas.height));
   if (!objects.some(o => o.mode === 'auto')) blockers.unshift(BLOCKED_TEXT.noSelection);
+  if (resolved) {
+    const nameOf = new Map(natives.map(n => [n.key, n.name]));
+    if (resolved.problems.outside.length > 0) {
+      blockers.push(BLOCKED_TEXT.outside(resolved.problems.outside.map(k => nameOf.get(k) ?? k)));
+    }
+    if (resolved.problems.overlaps.length > 0) {
+      const [a, b] = resolved.problems.overlaps[0];
+      warnings.push(WARN_TEXT.overlap(resolved.problems.overlaps.length, nameOf.get(a) ?? a, nameOf.get(b) ?? b));
+    }
+  }
 
   // 位置填回各物件
   for (const o of objects) {
     if (o.mode === 'auto') {
-      for (const p of o.pieces) p.placed = pack.placed.get(p.key) ?? null;
+      for (const p of o.pieces) p.placed = placedMap.get(p.key) ?? null;
     } else if (o.mode === 'keep') {
       const inp = inputs.find(i => i.id === o.id)!;
       const region = inp.info!.oldRegion!;
-      const placed = pack.placed.get(`o:${o.id}`)!;
+      const placed = placedMap.get(`o:${o.id}`)!;
       const shiftX = placed.x - region.rect.x, shiftY = placed.y - region.rect.y;
       const manualUpdates = inp.manuals.map(m => ({
         id: m.id,
@@ -222,7 +249,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
       o.keep = { map: { span: region.span, oldCanvas: ctx.oldCanvas, shiftX, shiftY }, rect: region.rect, placed, manualUpdates };
     }
   }
-  return { objects, canvas, blockers, warnings, rows: pack.rows, pack };
+  return { objects, canvas, blockers, warnings, rows: pack.rows, pack, items: natives, arranged: !!resolved, problems: resolved ? resolved.problems : null };
 }
 
 /** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null */
@@ -295,7 +322,10 @@ export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanv
         if (old.region.wraps) { unprotected.push(p.name); return; }
         if (old.err > EXACT) approximate.push(p.name);
         const key = o.pieces.length > 1 ? `s:@${o.id}#${i}` : `o:${o.id}`;
-        screens.push({ key, objectId: o.id, name: p.name, dest: old.region.rect, ...old.rel });
+        // 版型的方向 = 原本的方向 ∘ 新排法方向的反方向（新排法轉過 / 翻過，舊影片的畫面才貼得回原本的樣子）
+        const now = p.placed ? { rotate: p.placed.rotate, flipH: p.placed.flipH, flipV: p.placed.flipV } : IDENTITY_ORIENTATION;
+        const rel = isIdentity(now) ? old.rel : composeOrientation(old.rel, invertOrientation(now));
+        screens.push({ key, objectId: o.id, name: p.name, dest: old.region.rect, ...rel });
       });
     }
   }

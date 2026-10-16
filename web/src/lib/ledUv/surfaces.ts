@@ -577,13 +577,28 @@ export function localOnPiece(piece: Piece, x: number, y: number, z: number): { l
   return { lx: (px - f.minX) / (f.maxX - f.minX), ly: (py - f.minY) / (f.maxY - f.minY), dist: Math.hypot(pz, ox, oy) };
 }
 
-/** 每個頂點屬於哪一片螢幕（離哪一片最近）；lx、ly 已經夾進 0~1 */
+/**
+ * 每個頂點屬於哪一片螢幕（離哪一片最近）；lx、ly 已經夾進 0~1。
+ * 不是螢幕的 primitive（外框、背板、舞台結構，沒有 LED 畫面）整個歸同一片（離它的中心最近的那一片）：
+ * 它的三角形常常橫跨好幾片螢幕，如果各頂點各歸各的，排版時這幾片被擺得很遠，這些三角形的 UV 就會拉成橫跨整張畫布的大三角形，
+ * 把這個物件在對位圖上的外框撐到整張畫布。整個歸同一片，UV 就全部落在那一片的長方形裡。
+ */
 export function assignVertices(prim: PrimGeom, pieces: readonly Piece[]): { piece: Int16Array; lx: Float64Array; ly: Float64Array; dist: Float64Array } {
   const nv = Math.floor(prim.pos.length / 3);
   const piece = new Int16Array(nv), lx = new Float64Array(nv), ly = new Float64Array(nv), dist = new Float64Array(nv);
+  let only = -1;
+  if (!prim.screen && pieces.length > 1 && nv > 0) {
+    // 歸給面積最大的那一片（平手取編號小的）：只看螢幕片自己的大小，不看這個 primitive 的頂點，
+    // 所以原檔、壓縮寫出再讀回來的檔（頂點被量化、重排）選到的永遠是同一片
+    let bestArea = -1;
+    for (let i = 0; i < pieces.length; i++) {
+      const area = pieces[i].widthU * pieces[i].heightU;
+      if (area > bestArea * (1 + 1e-9)) { bestArea = area; only = i; }
+    }
+  }
   for (let v = 0; v < nv; v++) {
     let best = -1, bd = Infinity, bx = 0, by = 0;
-    for (let i = 0; i < pieces.length; i++) {
+    for (let i = only >= 0 ? only : 0; i < (only >= 0 ? only + 1 : pieces.length); i++) {
       const r = localOnPiece(pieces[i], prim.pos[v * 3], prim.pos[v * 3 + 1], prim.pos[v * 3 + 2]);
       if (r.dist < bd) { bd = r.dist; best = i; bx = r.lx; by = r.ly; }
     }

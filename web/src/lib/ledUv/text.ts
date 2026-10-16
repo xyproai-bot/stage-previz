@@ -12,7 +12,7 @@ export const UNSUPPORTED_TEXT: Record<UnsupportedKind, string> = {
   arcfail: '這塊沒辦法當弧面貼（太平、不是圓柱，或整圈 360 度），請改回「自動」或選「平面」',
 };
 
-export const SPLITS_TEXT = '這塊已經手動切成幾塊螢幕，第 3 階段才支援';
+export const SPLITS_TEXT = '這塊已經手動切成幾塊螢幕，目前還不能自動貼，先保留原本的 UV（可以搬位置）';
 export const NO_UV_TEXT = '這個物件原本沒有 UV，也不是平面，沒辦法保留';
 export const MISSING_TEXT = '模型裡找不到這個物件（物件名稱跟模型不一樣）';
 export const KEEP_TEXT = '保留原本的 UV，只搬到新位置（大小、方向、每個點的對應都不變）';
@@ -36,7 +36,12 @@ export const BLOCKED_TEXT = {
   noSelection: '還沒有選任何要自動貼的螢幕',
   size: (name: string, why: string) => `「${name}」：${why}`,
   canvasTooBig: (w: number, h: number) => `排出來的畫布是 ${w} × ${h}，一邊超過 32768（畫布的上限），請改小點數或少選幾塊`,
-  wrapKeep: (name: string) => `「${name}」原本的畫面橫跨畫布邊緣，又已經手動切成幾塊，第 3 階段才支援`,
+  wrapKeep: (name: string) => `「${name}」原本的畫面橫跨畫布邊緣，又已經手動切成幾塊，目前還不支援`,
+  outside: (names: string[]) => `有 ${names.length} 塊螢幕超出畫布（${names.slice(0, 3).join('、')}${names.length > 3 ? '…' : ''}）：把畫布加大，或把它們移進畫布裡`,
+} as const;
+
+export const WARN_TEXT = {
+  overlap: (n: number, a: string, b: string) => `有 ${n} 組螢幕互相重疊（例如「${a}」和「${b}」）：重疊的地方兩塊會顯示同一段畫面`,
 } as const;
 
 const pct = (v: number): string => {

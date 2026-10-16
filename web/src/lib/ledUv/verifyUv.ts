@@ -108,8 +108,8 @@ export function expectedRect(obj: PlanObject, canvas: CanvasSize): UvRegionLike 
     return uvRegion(tris, canvas);
   }
   if (obj.mode === 'keep' && obj.keep) {
-    const { placed, rect } = obj.keep;
-    return { rect: { x: placed.x, y: placed.y, w: rect.w, h: rect.h } };
+    const { placed } = obj.keep;
+    return { rect: { x: placed.x, y: placed.y, w: placed.w, h: placed.h } };
   }
   return null;
 }
