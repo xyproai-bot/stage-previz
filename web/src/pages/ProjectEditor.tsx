@@ -51,6 +51,7 @@ import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
 import LedTemplatesDialog from '../components/LedTemplatesDialog';
 import LedUvPanel from '../components/LedUvPanel';
+import type { UvPreview } from '../lib/ledUv/previewUv';
 import { useLedTemplates } from '../lib/useLedTemplates';
 import { useLedPatternCanvas, type LedPatternSource } from '../lib/useLedPatternCanvas';
 import { setSongTemplate } from '../lib/ledTemplateApi';
@@ -222,6 +223,8 @@ export default function ProjectEditor() {
   );
   // 自動貼 UV（和版型面板都是貼在頁面下方，一次只開一個）
   const [uvOpen, setUvOpen] = useState(false);
+  /** 自動貼 UV 的 3D 預覽（面板算好的新 UV）；null = 3D 畫面照模型現在的 UV */
+  const [uvPreview, setUvPreview] = useState<UvPreview | null>(null);
   const uvObjects = useMemo(
     () => stageObjects.filter(o => o.category === 'led_panel').map(o => ({ id: o.id, meshName: o.meshName, name: o.displayName || o.meshName, order: o.order })),
     [stageObjects],
@@ -1299,6 +1302,7 @@ export default function ProjectEditor() {
               projectName={projectMeta?.name}
               ledCanvas={view.ledCanvas}
               onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
+              ledUvPreview={uvOpen ? uvPreview : null}
               ledTemplate={ledChoice.plan}
               ledSongTemplate={ledSongTpl}
               ledPreviewCanvas={tplPreview ? tplPattern.canvas : null}
@@ -1470,8 +1474,10 @@ export default function ProjectEditor() {
         list={ledTpls.list}
         ledCanvas={view.ledCanvas}
         scaleCorrection={view.scaleCorrection}
-        onClose={() => setUvOpen(false)}
+        onClose={() => { setUvOpen(false); setUvPreview(null); }}
+        onPreview={setUvPreview}
         onApplied={(r) => {
+          setUvPreview(null);
           // 新模型、新畫布（後台已經一起換好）、新的「舊版面」版型
           view.setLedCanvas(r.ledCanvas);
           refreshModel();

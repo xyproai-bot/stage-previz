@@ -19,6 +19,7 @@ import { autoScaleFactor } from './docRead';
 import { computeScaleFactor, classifyMeshName } from '../parseGlb';
 import { parseModel } from '../modelLoader';
 import { dot } from './geometry';
+import { UNSUPPORTED_TEXT } from './text';
 
 let io: NodeIO;
 let plain: Uint8Array;
@@ -91,9 +92,14 @@ describe('analyze：分類', () => {
     if (!a.ok) return;
     const kind = (n: string) => a.infos[byName(n).id]!;
     expect(a.front[2]).toBeGreaterThan(0.99);
-    for (const n of ['LED_A_主牆', 'LED_B_左側', 'LED_C_右側', 'LED_D_地屏', 'LED_F_鏡像', 'LED_G_雙翼', 'LED_H_沒選', 'LED_I_框']) expect(kind(n).kind).toBe('flat');
-    expect(kind('LED_E_小半圓').kind).toBe('unsupported');
-    expect(kind('LED_E_小半圓').unsupported).toBe('arc');
+    for (const n of ['LED_A_主牆', 'LED_B_左側', 'LED_C_右側', 'LED_D_地屏', 'LED_F_鏡像', 'LED_G_雙翼', 'LED_H_沒選', 'LED_I_框']) expect(kind(n).kind).toBe('ok');
+    // 第 2 階段：圓柱的弧面也能貼（小半圓 180 度凸、凹弧 60 度凹）；波浪不是圓柱 → 不收
+    expect(kind('LED_E_小半圓').kind).toBe('ok');
+    expect(kind('LED_E_小半圓').pieces[0].arc!.convex).toBe(true);
+    expect(kind('LED_K_凹弧').kind).toBe('ok');
+    expect(kind('LED_K_凹弧').pieces[0].arc!.convex).toBe(false);
+    expect(kind('LED_J_波浪').kind).toBe('unsupported');
+    expect(kind('LED_J_波浪').unsupported).toBe('arc');
     expect(kind('LED_G_雙翼').pieces).toHaveLength(2);
     expect(kind('LED_I_框').pieces).toHaveLength(1);
     expect(kind('LED_I_框').pieces[0].widthU).toBeCloseTo(4, 5);
@@ -170,10 +176,11 @@ describe.each([['沒壓縮', () => plain], ['Draco', () => draco]] as const)('�
     const rep = verifyOutputUv(await io.readBinary(out), objects, res.plan, res.a.infos);
     expect(rep.issues).toEqual([]);
     const h = res.plan.objects.find(o => o.name === '沒選')!;
-    const e = res.plan.objects.find(o => o.name === '小半圓')!;
+    const e = res.plan.objects.find(o => o.name === 'LED_J_波浪'.replace(/^LED_[A-Z]_/, ''))!;
     expect(h.mode).toBe('keep');
     expect(e.mode).toBe('keep');
-    expect(e.reason).toBe('這塊是弧面，第 2 階段才支援');
+    expect(e.reason).toBe(UNSUPPORTED_TEXT.arc);
+    expect(e.freeform).toBeDefined();
     expect(rep.rects[h.id]).toEqual({ x: h.keep!.placed.x, y: h.keep!.placed.y, w: h.keep!.rect.w, h: h.keep!.rect.h });
     expect(h.keep!.rect.w).toBe(res.a.infos[byName('LED_H_沒選').id]!.oldRegion!.rect.w);
   });

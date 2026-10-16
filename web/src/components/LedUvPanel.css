@@ -297,6 +297,56 @@
   font-size: 12px;
   color: var(--text-dim);
 }
+/* 第 2 階段：類型下拉、變形百分比、3D 預覽 */
+.uvlist__type {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.uvdist {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
+}
+.uvdist--ok {
+  color: var(--ok, #2fbf71);
+  border-color: var(--ok, #2fbf71);
+}
+.uvdist--warn {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+.uvdist--bad {
+  color: var(--danger);
+  border-color: var(--danger);
+  font-weight: 700;
+}
+.uvdock__pv.is-on {
+  border-color: var(--accent, #4ea1ff);
+  background: color-mix(in srgb, var(--accent, #4ea1ff) 22%, var(--surface-2));
+  color: var(--text);
+}
+.uvpv {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-size: 13px;
+}
+.uvpv--ready {
+  border-color: var(--accent, #4ea1ff);
+}
+.uvpv--error,
+.uvpv--wait {
+  border-color: var(--warn);
+  color: var(--warn);
+}
 @media (max-width: 900px) {
   .uvdock {
     position: fixed;

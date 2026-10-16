@@ -160,8 +160,10 @@ function snapMaterial(m: THREE.Material): MaterialSnap {
 }
 
 function snapGeometry(g: THREE.BufferGeometry): GeometrySnap {
-  if (!g.boundingBox) g.computeBoundingBox();
-  const bb = g.boundingBox!;
+  // 外框用實際的頂點算，不用 glTF 檔頭記的 min / max：3ds Max 匯出的 Draco 檔，檔頭是量化前的真值，
+  // 解壓縮出來的頂點會差一個量化格（毫米等級），重新壓縮以後檔頭就變成解壓縮後的值，比檔頭會誤報「外框變了」
+  const pos = g.getAttribute('position');
+  const bb = pos ? new THREE.Box3().setFromBufferAttribute(pos as THREE.BufferAttribute) : (g.boundingBox ?? new THREE.Box3());
   const ext = bb.isEmpty() ? 0 : Math.max(bb.max.x - bb.min.x, bb.max.y - bb.min.y, bb.max.z - bb.min.z,
     Math.abs(bb.min.x), Math.abs(bb.min.y), Math.abs(bb.min.z), Math.abs(bb.max.x), Math.abs(bb.max.y), Math.abs(bb.max.z));
   const attributes = Object.entries(g.attributes)
@@ -208,7 +210,7 @@ export async function snapshotScene(gltf: GLTF): Promise<SceneSnapshot> {
   await yieldToUi();
 
   // 跟 StageScene / parseGlb 同一套
-  const box = new THREE.Box3().setFromObject(scene);
+  const box = new THREE.Box3().setFromObject(scene, true);  // 用實際的頂點算（理由見 snapGeometry）
   const diag = box.getSize(new THREE.Vector3()).length();
   const scaleFactor = computeScaleFactor(diag);
   const bestScope = findBestScope(scene);
@@ -261,8 +263,17 @@ function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+export interface CompareOptions {
+  /**
+   * 「場景大小 / 物件大小」這兩個從檔頭外框算出來的數字，額外容許的相對誤差（預設 0 = 照原本的容差）。
+   * 用在原檔是 Draco 的情況：gltf-pipeline 之類匯出的 Draco 檔，檔頭的 min / max 比解壓縮出來的頂點多留了約一個量化格（例如 65 m 的場景差 8 cm），
+   * 重新壓縮後檔頭是解壓縮後的真值，所以這兩個數字會小一點。頂點資料本身另外逐點比對過，這裡只是「推算出來的大小」的一致性檢查。
+   */
+  sizeSlackRel?: number;
+}
+
 /** 兩份快照比對；回傳不一樣的地方（白話），空的 = 一樣 */
-export function compareSnapshots(a: SceneSnapshot, b: SceneSnapshot): string[] {
+export function compareSnapshots(a: SceneSnapshot, b: SceneSnapshot, opts: CompareOptions = {}): string[] {
   const issues: string[] = [];
   const add = (m: string) => { if (issues.length < 20) issues.push(m); };
 
@@ -306,7 +317,9 @@ export function compareSnapshots(a: SceneSnapshot, b: SceneSnapshot): string[] {
 
   // 上傳時的物件清單（存進資料庫的預設位置）：一模一樣
   const pa = a.parsed, pb = b.parsed;
-  if (pa.scaleFactor !== pb.scaleFactor || pa.unitGuess !== pb.unitGuess || pa.sceneSizeMeters !== pb.sceneSizeMeters) add('上傳時判斷的場景大小 / 單位變了');
+  const slack = opts.sizeSlackRel ?? 0;
+  const sizeOk = (x: number, y: number) => Math.abs(x - y) <= 0.0015 + (TOLERANCE.bboxRel + slack) * Math.max(x, y);
+  if (pa.scaleFactor !== pb.scaleFactor || pa.unitGuess !== pb.unitGuess || (slack === 0 ? pa.sceneSizeMeters !== pb.sceneSizeMeters : !sizeOk(pa.sceneSizeMeters, pb.sceneSizeMeters))) add('上傳時判斷的場景大小 / 單位變了');
   if (!same(pa.warnings, pb.warnings)) add('上傳時的提醒變了');
   if (pa.meshes.length !== pb.meshes.length) add(`物件數量變了（${pa.meshes.length} → ${pb.meshes.length}）`);
   else pa.meshes.forEach((m, i) => {
@@ -314,7 +327,7 @@ export function compareSnapshots(a: SceneSnapshot, b: SceneSnapshot): string[] {
     const { sizeMeters: s1, ...restA } = m;
     const { sizeMeters: s2, ...restB } = n;
     if (!same(restA, restB)) add(`物件「${m.meshName}」的名稱、分類或預設位置 / 旋轉 / 縮放變了`);
-    if (!(Math.abs(s1 - s2) <= 0.0015 + TOLERANCE.bboxRel * Math.max(s1, s2))) add(`物件「${m.meshName}」的大小變了（${s1} → ${s2}）`);
+    if (!sizeOk(s1, s2)) add(`物件「${m.meshName}」的大小變了（${s1} → ${s2}）`);
   });
 
   // StageScene 烤進縮放後的物件位置（cue 位置的單位）

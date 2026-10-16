@@ -149,7 +149,7 @@ export function verifyOutputUv(
       add(`「${o.name}」在對位圖上的位置不對（要 ${w.x},${w.y} ${w.w}×${w.h}，實際 ${r.x},${r.y} ${r.w}×${r.h}）`);
     }
     const info = infos[o.id];
-    if (o.mode === 'auto' && info && info.kind === 'flat') {
+    if (o.mode === 'auto' && info && info.kind === 'ok') {
       // 每一片各自量：這一片的三角形（三個頂點都屬於它）的外框 == 排好的長方形
       const assigns = so.geom.prims.map(p => assignVertices(p, info.pieces));
       o.pieces.forEach((pp, i) => {

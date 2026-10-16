@@ -5,11 +5,13 @@
 //   其他 primitive（外框、背板…）不是螢幕，但物件底下每個 mesh 都吃同一張 LED 貼圖，所以它們的頂點也要有 UV：
 //   一律用「離它最近的那一片螢幕」的座標算，再夾進那一片的範圍裡（外框會變成螢幕邊緣的顏色，不會把物件的 UV 外框撐大）。
 //
-// 平面判斷（第 1 階段只做平面；弧面、折角留給之後的階段）：
+// 平面判斷（第 1 階段）：
 //   三角形照位置焊起來分成幾片（跟 index 無關：硬邊匯出會把同一個位置的頂點複製很多份）；
 //   每一片：最佳平面的 RMS 距離 <= 長邊的 0.3 %，而且（面積加權）99.5 % 以上的三角形法線跟平均法線差在 3 度內 → 平面。
 //   有厚度的板子（前後兩個大面平行、面積差不多）→ 取朝觀眾的那一面當螢幕，側邊和背面跟著同一個函數算。
-//   任何一片不是平面 → 整個物件第 1 階段不處理（「這塊是弧面，第 2 階段才支援」）。
+//   不是平面的那一片 → 試著當圓柱面的一段弧（cylinder.ts，第 2 階段）；也不是圓柱（折角、波浪、圓錐…）→ 整個物件不處理，
+//   並估一下「硬貼會變形多少」給製作看（自由曲面第 4 階段才支援）。
+//   製作可以手動指定整個物件「平面」或「弧面」（override），指定了就照他的，變形百分比照實告訴他。
 //
 // 座標：螢幕片的 right / up / normal
 //   normal = 三角形繞向的法線（LED 只畫正面，觀眾站在 normal 這一側看）；鏡像過的節點（行列式 < 0）繞向會反，要乘回來。
@@ -17,6 +19,7 @@
 //   right = up × normal（站在 normal 那一側的人看過去的右邊），畫面的 y 朝下（down = -up）。
 
 import { cross, dot, eigenSym3, length, normalize, scale, sub, WORLD_UP, type Vec3 } from './geometry';
+import { arcLocal, arcPoint, fitArc, type ArcMap } from './cylinder';
 
 export interface PrimGeom {
   /** 世界座標的頂點，每個頂點 3 個數字 */
@@ -42,8 +45,12 @@ export interface PieceFrame {
   minX: number; maxX: number; minY: number; maxY: number;
 }
 
-/** 一片平面螢幕 */
+/** 攤平造成的變形（比例：0.012 = 1.2 %）：每個三角形「畫面上的面積 / 實際的面積」跟 1 差多少 */
+export interface DistortionStat { max: number; mean: number }
+
+/** 一片螢幕：平面，或圓柱面的一段弧 */
 export interface Piece {
+  kind: 'flat' | 'arc';
   frame: PieceFrame;
   /** 寬（沿 right）、高（沿 down），文件單位 */
   widthU: number;
@@ -54,15 +61,33 @@ export interface Piece {
   center: Vec3;
   /** normal · 舞台正面：1 = 正對觀眾，< 0 = 背對觀眾 */
   facing: number;
-  /** 平面誤差 / 長邊 */
+  /** 平面誤差 / 長邊（弧面：頂點離圓柱面的 RMS / min(半徑, 長邊)） */
   flatness: number;
+  /** 弧面才有：圓柱的擬合結果（半徑、角度範圍、凸或凹、方向） */
+  arc?: ArcMap;
+  /** 螢幕頂點的外框（排版算舞台位置用） */
+  bbox: { min: Vec3; max: Vec3 };
+  /** 攤平的變形 */
+  distortion: DistortionStat;
+  /** 頂點離這片多近算「在這片上」（文件單位） */
+  tol: number;
+  /** 製作手動指定的類型（不是自動辨識的） */
+  forced: boolean;
 }
 
-export type UnsupportedKind = 'arc' | 'fold' | 'other' | 'toomany' | 'empty';
+export type UnsupportedKind = 'arc' | 'fold' | 'other' | 'toomany' | 'empty' | 'closed' | 'arcfail';
+
+/** 製作手動指定整個物件的類型：auto = 自動辨識 */
+export type SurfaceOverride = 'auto' | 'flat' | 'arc';
 
 export interface ObjectAnalysis {
-  kind: 'flat' | 'unsupported';
+  /** ok = 每一片都能貼（平面或弧面）；unsupported = 這個物件不處理 */
+  kind: 'ok' | 'unsupported';
   unsupported?: UnsupportedKind;
+  /** 不能貼的曲面：硬貼的話會變形多少（用最接近的平面或圓柱估的），給製作看為什麼不收 */
+  freeform?: { distortion: DistortionStat; via: 'flat' | 'arc' };
+  /** 製作指定的類型（沒指定 = auto） */
+  override?: SurfaceOverride;
   /** 由左到右（從觀眾席看） */
   pieces: Piece[];
   /** 給畫面顯示的提醒（白話） */
@@ -201,6 +226,8 @@ interface PlaneFit {
   longExtent: number;
   area: number;
   flat: boolean;
+  /** 三角形法線（面積加權）的平均方向：「從觀眾席看過去」的投影方向 */
+  meanNormal: Vec3;
 }
 
 function fitPlane(tris: ScreenTris, ids: readonly number[]): PlaneFit {
@@ -248,7 +275,7 @@ function fitPlane(tris: ScreenTris, ids: readonly number[]): PlaneFit {
     if (d < cosTol) outlier += tris.area[t];
   }
   const flat = longExtent > 0 && rms <= RMS_FLAT_REL * longExtent && outlier <= NORMAL_OUTLIER_AREA * W;
-  return { centroid, normal, rms, longExtent, area: W, flat };
+  return { centroid, normal, rms, longExtent, area: W, flat, meanNormal: normalize(S) };
 }
 
 /** 厚板子：前後兩個大面平行、面積差不多 → 取朝觀眾的那一面的三角形；不是厚板子 = null */
@@ -299,7 +326,80 @@ function classifyNonFlat(tris: ScreenTris, ids: readonly number[]): UnsupportedK
   return 'other';
 }
 
-function buildPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3): Piece | null {
+
+/** 畫面上變形的門檻：<= 0.5 % 綠（看不出來）、<= 5 % 黃（輕微拉伸）、超過 = 紅（會變形） */
+export const DISTORTION_OK = 0.005;
+export const DISTORTION_WARN = 0.05;
+
+/** 辨識「這個頂點在這片螢幕上」的最小容差（文件單位 = 這片長寬和的百萬分之一） */
+const TOL_REL = 1e-6;
+
+function cornerOf(tris: ScreenTris, t: number, k: number): Vec3 {
+  return [tris.p[t * 9 + k * 3], tris.p[t * 9 + k * 3 + 1], tris.p[t * 9 + k * 3 + 2]];
+}
+
+/** 一組三角形的螢幕頂點（焊接後每個位置一份）、三角形法線 / 面積 / 重心：弧面擬合的輸入 */
+function arcInputOf(tris: ScreenTris, ids: readonly number[]) {
+  const seen = new Set<number>();
+  const pts: number[] = [];
+  const n = new Float64Array(ids.length * 3), area = new Float64Array(ids.length), c = new Float64Array(ids.length * 3);
+  ids.forEach((t, i) => {
+    for (let k = 0; k < 3; k++) {
+      const w = tris.w[t * 3 + k];
+      if (seen.has(w)) continue;
+      seen.add(w);
+      pts.push(tris.p[t * 9 + k * 3], tris.p[t * 9 + k * 3 + 1], tris.p[t * 9 + k * 3 + 2]);
+    }
+    n[i * 3] = tris.n[t * 3]; n[i * 3 + 1] = tris.n[t * 3 + 1]; n[i * 3 + 2] = tris.n[t * 3 + 2];
+    area[i] = tris.area[t];
+    for (let a = 0; a < 3; a++) c[i * 3 + a] = (tris.p[t * 9 + a] + tris.p[t * 9 + 3 + a] + tris.p[t * 9 + 6 + a]) / 3;
+  });
+  return { points: Float64Array.from(pts), triN: n, triArea: area, triC: c };
+}
+
+function boxOfIds(tris: ScreenTris, ids: readonly number[]): { min: Vec3; max: Vec3 } {
+  const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const t of ids) {
+    for (let k = 0; k < 3; k++) {
+      for (let a = 0; a < 3; a++) {
+        const v = tris.p[t * 9 + k * 3 + a];
+        if (v < min[a]) min[a] = v;
+        if (v > max[a]) max[a] = v;
+      }
+    }
+  }
+  return { min, max };
+}
+
+/**
+ * 攤平的變形：每個三角形「畫面上的面積 / 實際的面積」跟 1 差多少。
+ * 弧面的網格是用弦（直線）近似圓弧的，但 LED 實際是光滑的圓柱，所以把弦長換成弧長再比（不然粗網格會被冤枉成「有一點變形」）。
+ */
+function measureDistortion(tris: ScreenTris, ids: readonly number[], piece: Piece): DistortionStat {
+  const W = piece.widthU, H = piece.heightU;
+  let max = 0, sum = 0, sumArea = 0;
+  const arcIsY = piece.arc?.arcVertical ?? false;
+  for (const t of ids) {
+    const a3 = tris.area[t];
+    if (!(a3 > 0)) continue;
+    const l = [0, 1, 2].map(k => { const c = cornerOf(tris, t, k); return localOnPiece(piece, c[0], c[1], c[2]); });
+    const auv = Math.abs((l[1].lx - l[0].lx) * (l[2].ly - l[0].ly) - (l[2].lx - l[0].lx) * (l[1].ly - l[0].ly)) / 2 * W * H;
+    let ratio = auv / a3;
+    if (piece.arc) {
+      const f = l.map(x => (arcIsY ? x.ly : x.lx));
+      const dth = (Math.max(...f) - Math.min(...f)) * piece.arc.span;
+      if (dth > 1e-9) ratio *= Math.sin(dth / 2) / (dth / 2);
+    }
+    if (!Number.isFinite(ratio)) continue;
+    const dev = Math.abs(ratio - 1);
+    if (dev > max) max = dev;
+    sum += dev * a3;
+    sumArea += a3;
+  }
+  return { max, mean: sumArea > 0 ? sum / sumArea : 0 };
+}
+
+function buildPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3, forced: boolean): Piece | null {
   const n = normalize(fit.normal);
   let up: Vec3;
   if (Math.abs(dot(n, WORLD_UP)) < 0.9) {
@@ -324,14 +424,54 @@ function buildPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, fro
   }
   const widthU = maxX - minX, heightU = maxY - minY;
   if (!(widthU > 0) || !(heightU > 0)) return null;
-  return {
+  const piece: Piece = {
+    kind: 'flat',
     frame: { origin: o, right, down, normal: n, minX, maxX, minY, maxY },
     widthU, heightU,
     area: fit.area,
     center: fit.centroid,
     facing: dot(n, front),
     flatness: fit.longExtent > 0 ? fit.rms / fit.longExtent : 0,
+    bbox: boxOfIds(tris, ids),
+    distortion: { max: 0, mean: 0 },
+    tol: TOL_REL * (widthU + heightU),
+    forced,
   };
+  piece.distortion = measureDistortion(tris, ids, piece);
+  return piece;
+}
+
+type ArcBuild = { piece: Piece; outward: number } | { piece: null; reason: 'degenerate' | 'flat' | 'closed' | 'fit' };
+
+/** 圓柱面的一段弧；force = 製作手動指定（殘差再大也貼，變形多少照實算） */
+function buildArcPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3, force: boolean): ArcBuild {
+  const res = fitArc({ ...arcInputOf(tris, ids), front, force });
+  if (!res.ok) return { piece: null, reason: res.reason };
+  const m = res.map;
+  const P = (lx: number, ly: number) => arcPoint(m, lx, ly);
+  const piece: Piece = {
+    kind: 'arc',
+    frame: {
+      origin: P(0.5, 0.5),
+      right: normalize(sub(P(0.51, 0.5), P(0.49, 0.5))),
+      down: normalize(sub(P(0.5, 0.51), P(0.5, 0.49))),
+      normal: res.midNormal,
+      minX: 0, maxX: res.width, minY: 0, maxY: res.height,
+    },
+    widthU: res.width,
+    heightU: res.height,
+    area: fit.area,
+    center: fit.centroid,
+    facing: dot(res.midNormal, front),
+    flatness: res.rmsRel,
+    arc: m,
+    bbox: boxOfIds(tris, ids),
+    distortion: { max: 0, mean: 0 },
+    tol: Math.max(TOL_REL * (res.width + res.height), 3 * m.maxResidual),
+    forced: force,
+  };
+  piece.distortion = measureDistortion(tris, ids, piece);
+  return { piece, outward: res.outwardScore };
 }
 
 /** 從觀眾席看，由左到右：沿 (世界朝上 × 舞台正面) 的位置 */
@@ -339,11 +479,11 @@ export function audienceRight(front: Vec3): Vec3 {
   return normalize(cross(WORLD_UP, front));
 }
 
-export function analyzeObject(geom: ObjectGeom, front: Vec3): ObjectAnalysis {
+export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOverride = 'auto'): ObjectAnalysis {
   const bbox = boundsOf(geom);
   const diag = length(sub(bbox.max, bbox.min));
   const empty = (unsupported: UnsupportedKind, warnings: string[] = []): ObjectAnalysis =>
-    ({ kind: 'unsupported', unsupported, pieces: [], warnings, bbox, screenTriangles: 0 });
+    ({ kind: 'unsupported', unsupported, pieces: [], warnings, bbox, screenTriangles: 0, override });
   if (!(diag > 0)) return empty('empty');
   const tris = collectScreenTris(geom, diag);
   if (tris.count === 0) return empty('empty');
@@ -354,34 +494,61 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3): ObjectAnalysis {
   const pieces: Piece[] = [];
   const warnings: string[] = [];
   let worst: UnsupportedKind | null = null;
-  const rank: Record<string, number> = { arc: 3, fold: 2, other: 1 };
+  let freeform: ObjectAnalysis['freeform'];
+  const rank: Record<string, number> = { arcfail: 5, closed: 4, arc: 3, fold: 2, other: 1 };
+  const worse = (k: UnsupportedKind) => { if (!worst || rank[k] > rank[worst]) worst = k; };
+  let mixedFacing = false;
   for (const ids of comps) {
     let compArea = 0;
     for (const t of ids) compArea += tris.area[t];
-    const tiny = compArea < totalArea * TINY_PIECE_AREA;
+    if (compArea < totalArea * TINY_PIECE_AREA) continue;  // 螺絲、貼字：跟著最近的那片
+
     let fit = fitPlane(tris, ids);
-    let faceIds: readonly number[] = ids;
-    if (!fit.flat) {
-      const face = slabFace(tris, ids, compArea, front);
-      if (face) {
-        const f2 = fitPlane(tris, face);
-        if (f2.flat) { fit = f2; faceIds = face; }
+    let piece: Piece | null = null;
+    let fail: UnsupportedKind | null = null;
+    if (override !== 'arc') {
+      let faceIds: readonly number[] = ids;
+      if (!fit.flat) {
+        const face = slabFace(tris, ids, compArea, front);
+        if (face) {
+          const f2 = fitPlane(tris, face);
+          if (f2.flat) { fit = f2; faceIds = face; }
+        }
+      }
+      if (fit.flat || override === 'flat') {
+        // 手動指定平面、但其實不平：沿著平均法線投影（從觀眾席看過去的樣子），變形多少照實算
+        piece = buildPiece(tris, faceIds, fit.flat ? fit : { ...fit, normal: fit.meanNormal }, front, override === 'flat');
+        if (!piece) fail = 'other';
       }
     }
-    if (!fit.flat) {
-      if (tiny) continue;
-      const kind = classifyNonFlat(tris, ids);
-      if (!worst || rank[kind] > rank[worst]) worst = kind;
-      continue;
+    if (!piece && !fail) {
+      const arc = buildArcPiece(tris, ids, fit, front, override === 'arc');
+      if (arc.piece) {
+        piece = arc.piece;
+        if (Math.abs(arc.outward) < 0.8) mixedFacing = true;
+      } else if (arc.reason === 'closed') {
+        fail = 'closed';
+      } else if (override === 'arc') {
+        fail = 'arcfail';
+      } else {
+        fail = classifyNonFlat(tris, ids);
+        // 不是平面也不是圓柱：估一下硬貼會變形多少（用最接近的平面或圓柱）
+        const cands: { distortion: DistortionStat; via: 'flat' | 'arc' }[] = [];
+        const pf = buildPiece(tris, ids, { ...fit, normal: fit.meanNormal }, front, true);
+        if (pf) cands.push({ distortion: pf.distortion, via: 'flat' });
+        const pa = buildArcPiece(tris, ids, fit, front, true);
+        if (pa.piece) cands.push({ distortion: pa.piece.distortion, via: 'arc' });
+        cands.sort((a, b) => a.distortion.mean - b.distortion.mean);
+        if (cands[0] && (!freeform || cands[0].distortion.mean > freeform.distortion.mean)) freeform = cands[0];
+      }
     }
-    if (tiny) continue;
-    const piece = buildPiece(tris, faceIds, fit, front);
     if (piece) pieces.push(piece);
+    else worse(fail ?? 'other');
   }
-  if (worst) return { kind: 'unsupported', unsupported: worst, pieces: [], warnings, bbox, screenTriangles: tris.count };
+  if (worst) return { kind: 'unsupported', unsupported: worst, freeform, pieces: [], warnings, bbox, screenTriangles: tris.count, override };
   if (pieces.length === 0) return empty('empty');
   if (pieces.length > MAX_PIECES_PER_OBJECT) {
-    return { kind: 'unsupported', unsupported: 'toomany', pieces: [], warnings, bbox, screenTriangles: tris.count };
+    return { kind: 'unsupported', unsupported: 'toomany', pieces: [], warnings, bbox, screenTriangles: tris.count, override };
   }
   // 由左到右（觀眾席看過去）
   const right = audienceRight(front);
@@ -389,15 +556,17 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3): ObjectAnalysis {
   if (pieces.some(p => p.facing < -0.2)) {
     warnings.push('有一片的正面朝向舞台後方（背對觀眾）：LED 只畫正面，觀眾席看不到這片的畫面');
   }
-  return { kind: 'flat', pieces, warnings, bbox, screenTriangles: tris.count };
+  if (mixedFacing) warnings.push('弧面的面有的朝外、有的朝內：貼出來的左右方向可能有一部分是反的，請在 3D 預覽檢查');
+  return { kind: 'ok', pieces, warnings, bbox, screenTriangles: tris.count, override };
 }
 
 // ───────────────────────── 頂點 → 螢幕片 ─────────────────────────
 
 export interface PieceLocal { piece: number; lx: number; ly: number; dist: number }
 
-/** 這個點離某片螢幕（長方形範圍）有多遠、在它的哪裡（lx、ly = 0~1 的比例，可能超出 0~1） */
+/** 這個點離某片螢幕有多遠、在它的哪裡（lx、ly = 0~1 的比例，可能超出 0~1）；平面片看長方形，弧面片看圓柱面的那一段 */
 export function localOnPiece(piece: Piece, x: number, y: number, z: number): { lx: number; ly: number; dist: number } {
+  if (piece.arc) return arcLocal(piece.arc, x, y, z);
   const f = piece.frame;
   const dx = x - f.origin[0], dy = y - f.origin[1], dz = z - f.origin[2];
   const px = dx * f.right[0] + dy * f.right[1] + dz * f.right[2];

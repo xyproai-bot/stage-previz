@@ -9,7 +9,7 @@ import { layoutProblems, packStageShaped, type PackItem } from './pack';
 import { canvasPoint, flatUvForPrim } from './place';
 import { buildLegacy, buildPlan, objectUvs, pieceScreensOf, type PlanObjectIn } from './plan';
 import { uvRegion } from './region';
-import { arcPrim, gridPrim, mirroredX, moved, slabPrim } from './testing';
+import { arcPrim, gridPrim, mirroredX, moved, slabPrim, wavePrim } from './testing';
 import { UNSUPPORTED_TEXT } from './text';
 import { dot, type Vec3 } from './geometry';
 
@@ -32,7 +32,7 @@ describe('stageFrontOf', () => {
 describe('analyzeObject：平面與座標方向', () => {
   it('牆：朝觀眾的 LED，右邊是 +X、上方是世界朝上；量到的寬高對', () => {
     const a = analyzeObject(obj(gridPrim([-6, 1, 0], X, Y, 12, 4)), FRONT);
-    expect(a.kind).toBe('flat');
+    expect(a.kind).toBe('ok');
     expect(a.pieces).toHaveLength(1);
     const p = a.pieces[0];
     expect(p.widthU).toBeCloseTo(12, 6);
@@ -45,7 +45,7 @@ describe('analyzeObject：平面與座標方向', () => {
   it('向後傾的牆：上方是世界朝上投影到平面（沿著斜面往上），不是任意方向', () => {
     const tilt = moved(gridPrim([-6, 0, 0], X, Y, 12, 4), X, -20, [0, 1, 0]);
     const a = analyzeObject(obj(tilt), FRONT);
-    expect(a.kind).toBe('flat');
+    expect(a.kind).toBe('ok');
     const down = a.pieces[0].frame.down;
     expect(down[1]).toBeLessThan(-0.9);
     expect(Math.abs(dot(down, a.pieces[0].frame.right))).toBeLessThan(1e-9);
@@ -57,7 +57,7 @@ describe('analyzeObject：平面與座標方向', () => {
     const side = moved(gridPrim([-3, 0, 0], X, Y, 6, 3), Y, 90, [0, 0, 0]);
     const f = stageFrontOf([obj(side)]);
     const a = analyzeObject(obj(side), f);
-    expect(a.kind).toBe('flat');
+    expect(a.kind).toBe('ok');
     expect(a.pieces[0].frame.down[1]).toBeCloseTo(-1, 6);
     // 螢幕本來的 +X 邊現在朝 -Z；站在法線（+X）那一側看，右邊 = 上 × 法線
     expect(a.pieces[0].frame.right[2]).toBeCloseTo(-1, 6);
@@ -67,7 +67,7 @@ describe('analyzeObject：平面與座標方向', () => {
     // 躺在 y=0，法線 +Y：用 Z 軸和 X 軸排出 +Y 法線 → ax = Z? Z × X = +Y
     const floor = gridPrim([-5, 0, -4], Z, X, 8, 10);
     const a = analyzeObject(obj(floor), FRONT);
-    expect(a.kind).toBe('flat');
+    expect(a.kind).toBe('ok');
     const f = a.pieces[0].frame;
     expect(f.normal[1]).toBeCloseTo(1, 6);
     // 上方 = 舞台後方 = -Z → down = +Z
@@ -79,7 +79,7 @@ describe('analyzeObject：平面與座標方向', () => {
 
   it('鏡像過的節點（負的縮放）：用繞向乘回正負，座標方向跟沒鏡像時一樣', () => {
     const m = analyzeObject(obj(mirroredX(gridPrim([-6, 0, 0], X, Y, 12, 4))), FRONT);
-    expect(m.kind).toBe('flat');
+    expect(m.kind).toBe('ok');
     expect(m.pieces[0].frame.normal[2]).toBeCloseTo(1, 6);
     // 鏡像以後世界裡的 x 反過來，但從 +Z 看過去，畫面右邊還是 +X
     expect(m.pieces[0].frame.right[0]).toBeCloseTo(1, 6);
@@ -87,24 +87,27 @@ describe('analyzeObject：平面與座標方向', () => {
 
   it('有厚度的板子：取朝觀眾的那一面，側邊和背面不會變成別片', () => {
     const a = analyzeObject(obj(slabPrim([0, 2, 0], X, Y, 8, 4, 0.2)), FRONT);
-    expect(a.kind).toBe('flat');
+    expect(a.kind).toBe('ok');
     expect(a.pieces).toHaveLength(1);
     expect(a.pieces[0].facing).toBeGreaterThan(0.99);
     expect(a.pieces[0].widthU).toBeCloseTo(8, 6);
     // 背對觀眾的板子：兩面一樣大，取朝觀眾那面（法線朝 +Z 的那面）
     const flipped = analyzeObject(obj(moved(slabPrim([0, 2, 0], X, Y, 8, 4, 0.2), Y, 180, [0, 0, 0])), FRONT);
-    expect(flipped.kind).toBe('flat');
+    expect(flipped.kind).toBe('ok');
     expect(flipped.pieces[0].facing).toBeGreaterThan(0.99);
   });
 
-  it('有一點雜訊的平面還是平面；弧面、折角不支援，說明白', () => {
+  it('有一點雜訊的平面還是平面；圓柱的弧面第 2 階段支援；波浪、折角不支援，說明白', () => {
     const noisy = gridPrim([-6, 0, 0], X, Y, 12, 4, 12);
     for (let i = 2; i < noisy.pos.length; i += 3) noisy.pos[i] += (((i * 7919) % 13) / 13 - 0.5) * 0.004;
-    expect(analyzeObject(obj(noisy), FRONT).kind).toBe('flat');
+    expect(analyzeObject(obj(noisy), FRONT).kind).toBe('ok');
     const arc = analyzeObject(obj(arcPrim(5, 180, 3)), FRONT);
-    expect(arc.kind).toBe('unsupported');
-    expect(arc.unsupported).toBe('arc');
-    expect(UNSUPPORTED_TEXT.arc).toBe('這塊是弧面，第 2 階段才支援');
+    expect(arc.kind).toBe('ok');
+    expect(arc.pieces[0].kind).toBe('arc');
+    const wave = analyzeObject(obj(wavePrim(14, 3, 0.8, 2)), FRONT);
+    expect(wave.kind).toBe('unsupported');
+    expect(wave.unsupported).toBe('arc');
+    expect(UNSUPPORTED_TEXT.arc).toContain('不是標準的圓柱');
     const fold = analyzeObject(obj(
       gridPrim([-6, 0, 0], X, Y, 6, 3),
       gridPrim([0, 0, 0], normalizeV([1, 0, -0.6]), Y, 6, 3),
@@ -308,7 +311,7 @@ describe('排好位置 → UV：像素要對準', () => {
       const g = obj(wall);
       const f = stageFrontOf([g]);
       const inf = describeObject(g, f, CANVAS);
-      if (inf.kind !== 'flat') continue;
+      if (inf.kind !== 'ok') continue;
       const w = 50 + Math.floor(rnd() * 3000), h = 20 + Math.floor(rnd() * 1000);
       const pl = { x: Math.floor(rnd() * 4000), y: Math.floor(rnd() * 800), w, h, rotate: 0 as Rotation, flipH: false, flipV: false };
       const r = flatUvForPrim(wall, inf.pieces, () => pl, CANVAS);
@@ -324,7 +327,7 @@ describe('buildPlan：選哪些、保留哪些、舊版面', () => {
   // 三個物件：兩塊平面（一塊舊 UV 是正的、一塊舊 UV 轉了 90 度）、一塊弧面（保留）
   const wallA = gridPrim([-6, 1, 0], X, Y, 12, 4, 4);             // 舊 UV 預設：s → u、1-t → v（畫面正的）
   const wallB = gridPrim([-6, 8, 0], X, Y, 6, 3, 4, { oldUv: (s, t) => [t, s] }); // 舊 UV 轉了：v 跟著 x
-  const arc = arcPrim(5, 180, 3);
+  const arc = wavePrim(12, 3, 0.6, 2);  // 波浪：不是平面也不是圓柱 → 保留
   const OLD = { width: 8800, height: 2024 };
   // 舊 UV 都擺在畫布不同的地方
   function relocate(p: ReturnType<typeof gridPrim>, u0: number, v0: number, du: number, dv: number) {

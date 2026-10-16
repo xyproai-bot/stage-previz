@@ -76,6 +76,8 @@ import {
 import { collectUvTriangles, ledPanelInputs, type LedSceneObject } from '../lib/ledMapScene';
 import { buildObjectUniforms, buildScreenList, mapUvRectToTemplate, spanFromAxes, spanFromUv, type LedTemplatePlan, type Placement, type ScreenDef, type SrcSpan } from '../lib/ledTemplate';
 import { downloadBlob, drawTestPattern, renderAlignmentMapPng } from '../lib/ledMapDraw';
+import type { UvPreview } from '../lib/ledUv/previewUv';
+import { applyUvPreview } from '../lib/ledUv/previewApply';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
 import { downloadSongTemplateFile, type LedSongTemplate } from '../lib/ledTemplateDownload';
 import { ledMapMenuHint, ledMapMenuLabel, type LedDownloadKind, type LedDownloadScope } from '../lib/ledMapMenuText';
@@ -250,6 +252,8 @@ interface Props {
   ledCanvas?: LedCanvas | null;
   /** 有傳才能在「LED 對位圖」裡改畫布大小 — 只有製作 */
   onLedCanvasChange?: (v: LedCanvas | null) => void;
+  /** 自動貼 UV 的 3D 預覽：暫時把 LED 的 UV 換成「套用以後」的樣子（新畫布大小 + 測試圖），不存檔；不給 = 照模型現在的 UV */
+  ledUvPreview?: UvPreview | null;
   /** 「更多」選單裡的 LED 對位圖（下載 PNG / CSV / JSON、LED 顯示測試圖）；預設有 */
   ledMapMenu?: boolean;
   /**
@@ -320,7 +324,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const containerRef = useRef<HTMLDivElement>(null);
@@ -2119,8 +2123,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   // ── LED 對位圖 / 測試圖：每塊 LED 在畫布上的位置（從模型的 UV 算）──
   const resolvedCanvas = useMemo(
-    () => resolveLedCanvas(ledCanvas, mediaSize),
-    [ledCanvas?.width, ledCanvas?.height, mediaSize?.width, mediaSize?.height], // eslint-disable-line react-hooks/exhaustive-deps
+    () => resolveLedCanvas(ledUvPreview ? ledUvPreview.canvas : ledCanvas, mediaSize),
+    [ledCanvas?.width, ledCanvas?.height, ledUvPreview, mediaSize?.width, mediaSize?.height], // eslint-disable-line react-hooks/exhaustive-deps
   );
   const computeLedLayout = useCallback((canvas: CanvasSize): LedLayout => {
     const objs: LedSceneObject[] = [];
@@ -2139,6 +2143,20 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const ledObjectsKey = stageObjects
     ? stageObjects.filter(o => o.category === 'led_panel').map(o => `${o.id}:${o.displayName}:${o.order}`).join('|')
     : states.filter(st => st.category === 'led_panel').map(st => `${st.objectId}:${st.displayName}:${st.order}`).join('|');
+
+  // 自動貼 UV 的 3D 預覽：LED 的 UV 暫時換成套用以後的（不改原本的 geometry，關掉就放回去）。要排在下面的測試圖 effect 前面
+  useEffect(() => {
+    if (!ledUvPreview) return;
+    const applied = applyUvPreview(ledUvPreview, (id) => meshesRef.current.get(id));
+    ledSpanCacheRef.current = new WeakMap();
+    emitterCacheRef.current = new WeakMap();
+    if (applied.missing.length > 0) console.warn('[StageScene] LED UV 預覽對不上這些物件，沒換：', applied.missing);
+    return () => {
+      applied.restore();
+      ledSpanCacheRef.current = new WeakMap();
+      emitterCacheRef.current = new WeakMap();
+    };
+  }, [ledUvPreview, modelVersion]);
 
   // 測試圖貼圖：模型 / LED / 畫布大小換了才重畫（畫一次、上傳一次，之後不用每幀更新）
   useEffect(() => {
@@ -2160,7 +2178,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     try {
-      drawTestPattern(ctx, layout, size.scale);
+      drawTestPattern(ctx, layout, size.scale, ledUvPreview ? { upArrow: true } : undefined);
     } catch (e) {
       console.warn('[StageScene] test pattern draw failed:', e);
       return;
@@ -2177,7 +2195,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     setTestPatternTex(tex);
     // 等材質換成新的那張再丟（不然會有一幀用到已經丟掉的）
     return () => { window.setTimeout(() => tex.dispose(), 1000); };
-  }, [modelVersion, ledObjectsKey, states.length, resolvedCanvas.canvas.width, resolvedCanvas.canvas.height, computeLedLayout, startQuality]);
+  }, [modelVersion, ledObjectsKey, states.length, resolvedCanvas.canvas.width, resolvedCanvas.canvas.height, computeLedLayout, startQuality, ledUvPreview]);
 
   useEffect(() => {
     try { sessionStorage.setItem('sp_led_test_pattern', forceTestPattern ? '1' : '0'); } catch { /* 只是不會記得 */ }
@@ -2341,7 +2359,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (isLed && ledPreviewCanvas && ledMediaTextureRef.current) {
         // 正在編輯 LED 版型：版型的測試圖蓋過所有東西
         ledTexture = ledMediaTextureRef.current;
-      } else if (isLed && forceTestPattern && testPatternTex) {
+      } else if (isLed && (forceTestPattern || !!ledUvPreview) && testPatternTex) {
         ledTexture = testPatternTex;
       } else if (ledImageUrl) {
         const cache = ledTextureCacheRef.current;
@@ -2480,7 +2498,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, ledTemplate, ledPreviewCanvas, testPatternTex, forceTestPattern]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, ledTemplate, ledPreviewCanvas, testPatternTex, forceTestPattern, ledUvPreview]);
 
   // ── 淡入淡出的半透明 shader 先編好（不然第一次換 cue 淡入淡出會卡一下）──
   // 模型載好 / 切模式 / 改材質 / 換 LED 畫面 / 畫質換了（燈數會變）→ 等畫面穩一點再編

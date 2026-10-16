@@ -1,6 +1,6 @@
 // 壓縮前後逐項比對（第一關，在壓縮 worker 裡跑；gltf-transform 讀出來的資料）
 //
-// 節點：名稱、階層、位置 / 旋轉 / 縮放、extras 要「一模一樣」（壓縮根本不該碰到）
+// 節點：名稱、階層、extras 要「一模一樣」（壓縮根本不該碰到）；位置 / 旋轉 / 縮放差在 1e-6 以內算一樣（見 nearArr）
 // 材質、貼圖（圖片的每個位元組）、取樣方式（Repeat / Clamp…）、動畫、骨架、攝影機：一模一樣
 // 形狀：每個 primitive 的頂點和三角形逐點比對（geometryMatch.ts），位置 / UV 誤差在 float 精度內
 // 整個場景的外框：差 ≤ 1e-5 × 對角線
@@ -36,6 +36,16 @@ const MAX_ISSUES = 20;
 
 function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * 位置 / 旋轉 / 縮放 / 世界矩陣：差在 matrixRel（跟第二關 three 載入後的比對同一個容差）以內算一樣。
+ * 為什麼不是逐位元一模一樣：gltf-transform 寫檔時，跟預設值（縮放 1、位置 0、旋轉 0,0,0,1）差不到 1e-5 的整組數字會省略不寫，
+ * 3ds Max 匯出的縮放常常是 0.99999994 這種（差 6e-8），寫出來再讀回來就變成剛好 1。差這麼一點點對位置、尺寸都沒有意義，
+ * 但真的被動過（>= 1e-6）一樣會被抓到。
+ */
+function nearArr(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((v, i) => Math.abs(v - b[i]) <= TOLERANCE.matrixRel * Math.max(1, Math.abs(v), Math.abs(b[i])));
 }
 
 function equalsSkipping(a: Property, b: Property, skip: string[]): boolean {
@@ -86,11 +96,11 @@ export function verifyDocuments(orig: Document, dec: Document): DocumentVerifyRe
       const a = nodesA[i], b = nodesB[i];
       const label = `節點「${a.getName() || `#${i}`}」`;
       if (a.getName() !== b.getName()) add(`第 ${i + 1} 個節點名稱不一樣（「${a.getName()}」→「${b.getName()}」）`);
-      if (!sameJson(a.getTranslation(), b.getTranslation()) || !sameJson(a.getRotation(), b.getRotation()) || !sameJson(a.getScale(), b.getScale())) {
+      if (!nearArr(a.getTranslation(), b.getTranslation()) || !nearArr(a.getRotation(), b.getRotation()) || !nearArr(a.getScale(), b.getScale())) {
         add(`${label} 的位置 / 旋轉 / 縮放變了`);
       }
-      if (!sameJson(a.getWorldMatrix(), b.getWorldMatrix())) add(`${label} 的世界座標矩陣變了`);
-      if (!equalsSkipping(a, b, ['mesh', 'children', 'skin'])) add(`${label} 的其他設定（extras、攝影機、擴充）變了`);
+      if (!nearArr(a.getWorldMatrix(), b.getWorldMatrix())) add(`${label} 的世界座標矩陣變了`);
+      if (!equalsSkipping(a, b, ['mesh', 'children', 'skin', 'translation', 'rotation', 'scale'])) add(`${label} 的其他設定（extras、攝影機、擴充）變了`);
       const ca = a.listChildren().map(c => nodeIndexA.get(c)), cb = b.listChildren().map(c => nodeIndexB.get(c));
       if (!sameJson(ca, cb)) add(`${label} 底下的子節點不一樣`);
       const ma = a.getMesh(), mb = b.getMesh();

@@ -56,7 +56,7 @@ export function mergePrims(prims: PrimGeom[]): PrimGeom {
 }
 
 /** 圓柱的一段弧（內側朝圓心，法線朝外），給「弧面不支援」的測試 */
-export function arcPrim(radius: number, sweepDeg: number, height: number, seg = 32, startDeg = -sweepDeg / 2): PrimGeom {
+export function arcPrim(radius: number, sweepDeg: number, height: number, seg = 32, startDeg = -sweepDeg / 2, concave = false): PrimGeom {
   const pos: number[] = [], uv: number[] = [], index: number[] = [];
   for (let i = 0; i <= seg; i++) {
     const a = ((startDeg + (i / seg) * sweepDeg) * Math.PI) / 180;
@@ -64,6 +64,39 @@ export function arcPrim(radius: number, sweepDeg: number, height: number, seg = 
       pos.push(Math.sin(a) * radius, y, Math.cos(a) * radius);
       uv.push(i / seg, y > 0 ? 0 : 1);
     }
+  }
+  for (let i = 0; i < seg; i++) {
+    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+    // 繞向決定法線朝外（凸）還是朝內（凹，觀眾在圓柱裡面看）
+    if (concave) index.push(a, b, c, b, d, c);
+    else index.push(a, c, b, b, c, d);
+  }
+  return { pos: Float64Array.from(pos), index: Uint32Array.from(index), screen: true, sign: 1, uv: Float64Array.from(uv) };
+}
+
+/** 圓錐的一段（半徑從下到上慢慢變小）：不是圓柱，給「辨識不出圓柱」的測試 */
+export function conePrim(rBottom: number, rTop: number, sweepDeg: number, height: number, seg = 32): PrimGeom {
+  const pos: number[] = [], uv: number[] = [], index: number[] = [];
+  for (let i = 0; i <= seg; i++) {
+    const a = ((-sweepDeg / 2 + (i / seg) * sweepDeg) * Math.PI) / 180;
+    pos.push(Math.sin(a) * rBottom, 0, Math.cos(a) * rBottom, Math.sin(a) * rTop, height, Math.cos(a) * rTop);
+    uv.push(i / seg, 1, i / seg, 0);
+  }
+  for (let i = 0; i < seg; i++) {
+    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+    index.push(a, c, b, b, c, d);
+  }
+  return { pos: Float64Array.from(pos), index: Uint32Array.from(index), screen: true, sign: 1, uv: Float64Array.from(uv) };
+}
+
+/** 波浪形的長條（z 隨 x 起伏的正弦）：不是平面也不是圓柱 */
+export function wavePrim(width: number, height: number, amplitude: number, waves: number, seg = 48): PrimGeom {
+  const pos: number[] = [], uv: number[] = [], index: number[] = [];
+  for (let i = 0; i <= seg; i++) {
+    const x = (i / seg - 0.5) * width;
+    const z = amplitude * Math.sin((i / seg) * waves * Math.PI * 2);
+    pos.push(x, 0, z, x, height, z);
+    uv.push(i / seg, 1, i / seg, 0);
   }
   for (let i = 0; i < seg; i++) {
     const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
@@ -93,4 +126,32 @@ export function mirroredX(p: PrimGeom): PrimGeom {
   const pos = Float64Array.from(p.pos);
   for (let i = 0; i < pos.length; i += 3) pos[i] = -pos[i];
   return { ...p, pos, sign: -1 };
+}
+
+/**
+ * 跟 GPU 一樣的方式獨立檢查「會不會左右 / 上下反」（不靠 arcPoint 之類的對應函數）：
+ * 每個三角形，站在看得到的那一面（繞向法線乘鏡像的正負）、頭朝世界朝上看過去，
+ * u 要往畫面右邊增加、v 要往下增加（世界 y 變小）。回傳檢查了幾個三角形、有幾個不對（躺在地上看不出「右邊」的略過）。
+ * prim.uv 是 0~1 的 UV，W、H 是畫布大小（把 UV 換成像素）。
+ */
+export function uvReadingCheck(prim: PrimGeom, W: number, H: number): { checked: number; bad: number } {
+  let checked = 0, bad = 0;
+  if (!prim.uv) return { checked, bad };
+  for (let t = 0; t + 2 < prim.index.length; t += 3) {
+    const [i, j, k] = [prim.index[t], prim.index[t + 1], prim.index[t + 2]];
+    const P = (v: number): Vec3 => [prim.pos[v * 3], prim.pos[v * 3 + 1], prim.pos[v * 3 + 2]];
+    const e1 = [0, 1, 2].map(q => P(j)[q] - P(i)[q]) as Vec3, e2 = [0, 1, 2].map(q => P(k)[q] - P(i)[q]) as Vec3;
+    const n = normalize(cross(e1, e2).map(x => x * prim.sign) as Vec3);
+    const du1 = (prim.uv[j * 2] - prim.uv[i * 2]) * W, du2 = (prim.uv[k * 2] - prim.uv[i * 2]) * W;
+    const dv1 = (prim.uv[j * 2 + 1] - prim.uv[i * 2 + 1]) * H, dv2 = (prim.uv[k * 2 + 1] - prim.uv[i * 2 + 1]) * H;
+    const det = du1 * dv2 - du2 * dv1;
+    if (Math.abs(det) < 1e-12) continue;
+    const dPdu = [0, 1, 2].map(q => (e1[q] * dv2 - e2[q] * dv1) / det) as Vec3;
+    const dPdv = [0, 1, 2].map(q => (e2[q] * du1 - e1[q] * du2) / det) as Vec3;
+    const right = cross([-n[0], -n[1], -n[2]], [0, 1, 0]);
+    if (Math.hypot(right[0], right[1], right[2]) < 1e-6) continue;
+    checked++;
+    if (!(right[0] * dPdu[0] + right[1] * dPdu[1] + right[2] * dPdu[2] > 0) || !(dPdv[1] < 1e-9)) bad++;
+  }
+  return { checked, bad };
 }

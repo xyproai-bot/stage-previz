@@ -273,7 +273,12 @@ const BARS = ['#bfbfbf', '#bfbf00', '#00bfbf', '#00bf00', '#bf00bf', '#bf0000', 
  * 測試圖：每塊 LED 自己的名字、x y w h、每 100 px 格線、彩條、灰階、中心十字、四個角的記號、邊框。
  * 最亮的地方 ≈ 85%（線性約 0.69），低於光暈門檻 0.75。
  */
-export function drawTestPattern(ctx: CanvasRenderingContext2D, layout: LedLayout, scale: number) {
+export interface TestPatternOptions {
+  /** 每塊多畫一組「上」「右」的箭頭（自動貼 UV 的 3D 預覽用：看得出方向有沒有轉、有沒有左右反）；預設不畫，其他地方的測試圖完全不變 */
+  upArrow?: boolean;
+}
+
+export function drawTestPattern(ctx: CanvasRenderingContext2D, layout: LedLayout, scale: number, opts: TestPatternOptions = {}) {
   const c = layout.canvas;
   const px = 1 / scale;  // 貼圖上 1 個像素有多少畫布像素
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
@@ -290,10 +295,42 @@ export function drawTestPattern(ctx: CanvasRenderingContext2D, layout: LedLayout
       ctx.translate(dx, dy);
       clipPanel(ctx, p, c);
       drawPanelPattern(ctx, p, names.get(p.id) || p.name, px);
+      if (opts.upArrow) drawDirectionArrows(ctx, p, px);
       ctx.restore();
     }
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+/** 「上」「右」兩個箭頭（像座標軸）：畫在每塊的左下方，不蓋到名字和中間的十字 */
+function drawDirectionArrows(ctx: CanvasRenderingContext2D, p: LedPanelLayout, px: number) {
+  const { x, y, w, h } = p.rect;
+  if (w <= 0 || h <= 0) return;
+  const m = Math.min(w, h);
+  const len = Math.min(m * 0.3, w * 0.22);
+  const ox = x + Math.max(w * 0.06, m * 0.06) + m * 0.03, oy = y + h * 0.64;
+  const head = Math.max(len * 0.22, 3 * px);
+  ctx.save();
+  ctx.strokeStyle = '#ffd54a';
+  ctx.fillStyle = '#ffd54a';
+  ctx.lineWidth = Math.max(2 * px, m * 0.012);
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - len);
+  ctx.moveTo(ox, oy); ctx.lineTo(ox + len, oy);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ox, oy - len - head); ctx.lineTo(ox - head * 0.6, oy - len); ctx.lineTo(ox + head * 0.6, oy - len); ctx.closePath();
+  ctx.moveTo(ox + len + head, oy); ctx.lineTo(ox + len, oy - head * 0.6); ctx.lineTo(ox + len, oy + head * 0.6); ctx.closePath();
+  ctx.fill();
+  ctx.font = `700 ${Math.max(6 * px, m * 0.075)}px ${FONT}`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('上', ox + head, oy - len);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('右', ox + len, oy + head * 0.9);
+  ctx.restore();
 }
 
 function drawPanelPattern(ctx: CanvasRenderingContext2D, p: LedPanelLayout, name: string, px: number) {

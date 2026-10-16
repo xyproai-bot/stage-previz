@@ -3,7 +3,7 @@
 
 import type { CanvasSize } from '../ledMap';
 import { uvToLocal, ROTATIONS, applyLocalTransform, localTransform, type Rotation } from '../ledTemplate';
-import { analyzeObject, assignVertices, type ObjectAnalysis, type ObjectGeom, type PrimGeom } from './surfaces';
+import { analyzeObject, assignVertices, type ObjectAnalysis, type ObjectGeom, type PrimGeom, type SurfaceOverride } from './surfaces';
 import { oldUvTriangles, uvRegion, type UvRegion } from './region';
 import type { Vec3 } from './geometry';
 
@@ -48,7 +48,7 @@ export function bestOrientation(samples: readonly (readonly [number, number, num
 
 function describePieces(geom: ObjectGeom, a: ObjectAnalysis, oldCanvas: CanvasSize): (PieceOld | null)[] {
   const assigns = geom.prims.map(p => assignVertices(p, a.pieces));
-  const tolOf = (i: number) => 1e-6 * (a.pieces[i].widthU + a.pieces[i].heightU);
+  const tolOf = (i: number) => a.pieces[i].tol;
   return a.pieces.map((_, i): PieceOld | null => {
     // 這一片的螢幕面：三個頂點都在這一片的面上（外框、背板、厚度的側邊不算——它們的舊 UV 常常亂放，會把範圍撐大）
     const tol = tolOf(i);
@@ -78,8 +78,8 @@ function describePieces(geom: ObjectGeom, a: ObjectAnalysis, oldCanvas: CanvasSi
   });
 }
 
-export function describeObject(geom: ObjectGeom, front: Vec3, oldCanvas: CanvasSize): ObjectInfo {
-  const a = analyzeObject(geom, front);
+export function describeObject(geom: ObjectGeom, front: Vec3, oldCanvas: CanvasSize, override: SurfaceOverride = 'auto'): ObjectInfo {
+  const a = analyzeObject(geom, front, override);
   const oldRegion = uvRegion(oldUvTriangles(geom.prims), oldCanvas);
-  return { ...a, oldRegion, oldPieces: a.kind === 'flat' ? describePieces(geom, a, oldCanvas) : [] };
+  return { ...a, oldRegion, oldPieces: a.kind === 'ok' ? describePieces(geom, a, oldCanvas) : [] };
 }

@@ -7,6 +7,7 @@ import { parseModel } from '../modelLoader';
 import { findBestScope } from '../parseGlb';
 import { collectUvTriangles } from '../ledMapScene';
 import { compareSnapshots, disposeGltf, snapshotScene } from '../modelCompress/verifyScene';
+import { DRACO_EXTENSION, readGltfJson } from '../modelCompress/glbJson';
 import type { PixelRect } from '../ledMap';
 import { expectedRect } from './verifyUv';
 import { uvRegion } from './region';
@@ -40,7 +41,9 @@ export async function verifyUvScene(
   };
   stripUv(a);
   stripUv(b);
-  const issues = compareSnapshots(a, b);
+  // 原檔是 Draco：檔頭的外框比解壓縮後的頂點多留了一個量化格，「推算出來的大小」容許 0.5 % 的差（細節見 CompareOptions）
+  const draco = readGltfJson(new Uint8Array(original))?.extensionsUsed.includes(DRACO_EXTENSION) ?? false;
+  const issues = compareSnapshots(a, b, { sizeSlackRel: draco ? 0.005 : 0 });
 
   const rects: Record<string, PixelRect | null> = {};
   const scope = findBestScope(gb.scene);

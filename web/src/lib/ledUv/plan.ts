@@ -14,7 +14,7 @@ import { packStageShaped, type PackItem, type Placed, type PackResult } from './
 import { resolveSize, type Measured, type SizeResult, type SizeSpec } from './size';
 import type { ObjectInfo } from './objectInfo';
 import { flatUvForPrim, keepUvForPrim, type KeepMap } from './place';
-import { audienceRight, type ObjectGeom, type Piece } from './surfaces';
+import { audienceRight, type DistortionStat, type ObjectGeom, type Piece, type SurfaceOverride } from './surfaces';
 import { BLOCKED_TEXT, KEEP_TEXT, MISSING_TEXT, NO_UV_TEXT, SPLITS_TEXT, UNSUPPORTED_TEXT } from './text';
 
 export interface ManualBox { id: string; name: string; uv: UvBox }
@@ -31,6 +31,8 @@ export interface PlanObjectIn {
   sizes: Record<number, SizeSpec | undefined>;
   /** 這個物件已經手動切出來的螢幕 */
   manuals: ManualBox[];
+  /** 製作手動指定的類型（平面 / 弧面）；沒指定 = 自動辨識。info 要是照同一個指定分析出來的 */
+  override?: SurfaceOverride;
 }
 
 export type ObjectMode = 'auto' | 'keep' | 'none' | 'missing';
@@ -39,6 +41,14 @@ export interface PlanPiece {
   index: number;
   key: string;
   name: string;
+  /** 平面 / 弧面（弧面的 measured.w 是真正的弧長） */
+  surface: 'flat' | 'arc';
+  /** 弧面：凸（觀眾在圓柱外面看）= true、凹 = false；平面沒有 */
+  convex?: boolean;
+  /** 弧面的角度範圍（度） */
+  spanDeg?: number;
+  /** 攤平的變形 */
+  distortion: DistortionStat;
   measured: Measured;
   size: SizeResult | null;
   placed: Placed | null;
@@ -62,6 +72,10 @@ export interface PlanObject {
   pieces: PlanPiece[];
   keep: PlanKeep | null;
   warnings: string[];
+  /** 製作手動指定的類型（沒指定 = 自動） */
+  override: SurfaceOverride;
+  /** 不能貼的曲面：硬貼會變形多少（給製作看為什麼保留原本的 UV） */
+  freeform?: { distortion: DistortionStat; via: 'flat' | 'arc' };
 }
 
 export interface Plan {
@@ -90,6 +104,8 @@ export const pieceKey = (id: string, count: number, i: number): string => (count
 export const pieceName = (name: string, count: number, i: number): string => (count > 1 ? `${name} ${i + 1}` : name);
 
 function cornersOf(p: Piece): Vec3[] {
+  // 弧面：用螢幕頂點的外框八個角算舞台上的位置
+  if (p.kind === 'arc') return boxPoints(p.bbox.min, p.bbox.max);
   const f = p.frame;
   const out: Vec3[] = [];
   for (const x of [f.minX, f.maxX]) for (const y of [f.minY, f.maxY]) {
@@ -131,13 +147,13 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
 
   for (const inp of sorted) {
     const info = inp.info;
-    const obj: PlanObject = { id: inp.id, name: inp.name, mode: 'none', reason: '', pieces: [], keep: null, warnings: [] };
+    const obj: PlanObject = { id: inp.id, name: inp.name, mode: 'none', reason: '', pieces: [], keep: null, warnings: [], override: inp.override ?? 'auto', freeform: info?.freeform };
     objects.push(obj);
     if (!info) { obj.mode = 'missing'; obj.reason = MISSING_TEXT; continue; }
     obj.warnings.push(...info.warnings);
 
     // 勾了、全是平面、沒有手動切過 → 自動貼
-    const canAuto = info.kind === 'flat' && inp.manuals.length === 0;
+    const canAuto = info.kind === 'ok' && inp.manuals.length === 0;
     if (inp.selected && canAuto) {
       obj.mode = 'auto';
       obj.reason = '';
@@ -148,7 +164,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
         const key = pieceKey(inp.id, count, i);
         const name = pieceName(inp.name, count, i);
         const size = spec ? resolveSize(spec, measured) : null;
-        const pp: PlanPiece = { index: i, key, name, measured, size, placed: null };
+        const pp: PlanPiece = { index: i, key, name, surface: piece.kind, ...(piece.arc ? { convex: piece.arc.convex, spanDeg: (piece.arc.span * 180) / Math.PI } : {}), distortion: piece.distortion, measured, size, placed: null };
         obj.pieces.push(pp);
         if (!size) { blockers.push(BLOCKED_TEXT.size(name, '還沒填點數')); return; }
         if (!size.ok) { blockers.push(BLOCKED_TEXT.size(name, size.error || '點數不能用')); return; }

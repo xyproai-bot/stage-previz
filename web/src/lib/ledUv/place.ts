@@ -34,7 +34,7 @@ export function flatUvForPrim(prim: PrimGeom, pieces: readonly Piece[], placeOf:
     const [px, py] = canvasPoint(placed[a.piece[v]], a.lx[v], a.ly[v]);
     uv[v * 2] = px / canvas.width;
     uv[v * 2 + 1] = py / canvas.height;
-    if (a.dist[v] > 1e-6 * (pieces[a.piece[v]].widthU + pieces[a.piece[v]].heightU)) clamped++;
+    if (a.dist[v] > pieces[a.piece[v]].tol) clamped++;
   }
   return { uv, clamped };
 }

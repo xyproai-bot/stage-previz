@@ -2,15 +2,17 @@
 //   LED_A_主牆   12×4 m 的牆，硬邊（左右兩半的接縫頂點是複製的），舊 UV 正的
 //   LED_B_左側 / LED_C_右側  兩個節點共用同一個形狀（instance）；PROP_X 也共用這個形狀（沒被處理，要原封不動）
 //   LED_D_地屏   躺在地上，舊 UV 轉了 90 度
-//   LED_E_小半圓  180 度弧面（第 1 階段保留原本的 UV）
+//   LED_E_小半圓  180 度凸的弧面（第 2 階段自動貼，弧長攤平）
 //   LED_F_鏡像   X 縮放 -1 的節點
 //   LED_G_雙翼   同一個 primitive 裡兩片分開的牆
 //   LED_H_沒選   平面，但測試裡不勾（保留）
 //   LED_I_框     平面 LED + 外框（另一個 primitive，不是 LED 材質）
+//   LED_J_波浪   波浪形長條（不是平面也不是圓柱：保留原本的 UV，告訴製作硬貼會變形多少）
+//   LED_K_凹弧   60 度凹的弧面（圓心在觀眾這邊，法線朝內）
 //   MECH_01      一般物件
 
 import { Document, type Accessor, type Buffer as GBuffer, type Primitive } from '@gltf-transform/core';
-import { arcPrim, gridPrim, mergePrims } from './testing';
+import { arcPrim, gridPrim, mergePrims, wavePrim } from './testing';
 import type { PrimGeom } from './surfaces';
 import type { Vec3 } from './geometry';
 
@@ -99,10 +101,16 @@ export function buildUvFixture(): UvFixture {
   const frameI = oldUv(gridPrim([1.8, 6.8, -7.05], X, Y, 4.4, 2.4, 2, { screen: false }), 0.1, 0.9, 0.5, 0.05);
   wrapper.addChild(meshNode('LED_I_框', 'LED_I_框', [toPrim(ledI).setMaterial(led), toPrim(frameI).setMaterial(metal)]));
 
+  // J：波浪（不是平面也不是圓柱）
+  wrapper.addChild(meshNode('LED_J_波浪', 'LED_J_波浪', [toPrim(oldUv(wavePrim(14, 2, 0.8, 2), 0.02, 0.9, 0.3, 0.06)).setMaterial(led)]).setTranslation([-4, 9, -9]));
+
+  // K：凹弧（圓心在觀眾這邊，法線朝內），60 度
+  wrapper.addChild(meshNode('LED_K_凹弧', 'LED_K_凹弧', [toPrim(oldUv(arcPrim(8, 60, 3, 24, 150, true), 0.4, 0.78, 0.15, 0.1)).setMaterial(led)]).setTranslation([20, 1, 4]));
+
   // 一般物件
   wrapper.addChild(meshNode('MECH_01_升降台', 'MECH_01_升降台', [toPrim(oldUv(gridPrim([-1, 0, 0], X, Z, 2, 2, 1), 0, 0, 1, 1)).setMaterial(metal)]).setTranslation([0, 0, 2]));
 
-  const names = ['LED_A_主牆', 'LED_B_左側', 'LED_C_右側', 'LED_D_地屏', 'LED_E_小半圓', 'LED_F_鏡像', 'LED_G_雙翼', 'LED_H_沒選', 'LED_I_框'];
+  const names = ['LED_A_主牆', 'LED_B_左側', 'LED_C_右側', 'LED_D_地屏', 'LED_E_小半圓', 'LED_F_鏡像', 'LED_G_雙翼', 'LED_H_沒選', 'LED_I_框', 'LED_J_波浪', 'LED_K_凹弧'];
   const objects = names.map((n, i) => ({ id: `so_${i}`, meshName: n, display: n.replace(/^LED_[A-Z]_/, '') }));
   return { doc, objects };
 }

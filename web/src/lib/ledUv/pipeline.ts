@@ -1,16 +1,16 @@
 // 自動貼 UV：worker 和測試共用的流程（讀模型 → 分析；排好版 → 寫 UV → 三關檢查）
 // io 要先註冊好擴充和 Draco 的 encoder / decoder（worker 用 WebIO、測試用 NodeIO）。
 
-import type { PlatformIO } from '@gltf-transform/core';
+import type { Document, PlatformIO } from '@gltf-transform/core';
 import { SUPPORTED_EXTENSIONS } from '../modelCompress/compressCore';
 import { DRACO_EXTENSION, MESHOPT_EXTENSION, MESH_QUANTIZATION_EXTENSION, readGltfJson } from '../modelCompress/glbJson';
 import { verifyDocuments } from '../modelCompress/verifyDocument';
 import type { CanvasSize } from '../ledMap';
 import type { Vec3 } from './geometry';
-import { readLedObjects } from './docRead';
+import { readLedObjects, type SceneRead } from './docRead';
 import { describeObject, type ObjectInfo } from './objectInfo';
 import { objectUvs, type Plan } from './plan';
-import { stageFrontOf } from './surfaces';
+import { stageFrontOf, type SurfaceOverride } from './surfaces';
 import { verifyOutputUv, verifyUvEdit, type OutputCheckReport } from './verifyUv';
 import { applyUvs, prepareOutputCompression } from './writeUv';
 
@@ -40,6 +40,7 @@ export function precheckForUv(input: Uint8Array): PrecheckResult {
 
 export interface AnalyzeOk {
   ok: true;
+  /** 物件 id → 分析結果（only 有指定時只有那幾個）；模型裡找不到 = null */
   infos: Record<string, ObjectInfo | null>;
   front: Vec3;
   /** 場景外框對角線（文件單位）、網站載入時的自動縮放倍率 */
@@ -51,17 +52,32 @@ export interface AnalyzeOk {
 }
 export type AnalyzeResult = AnalyzeOk | { ok: false; reason: string };
 
-export async function analyzeModelBytes(io: PlatformIO, input: Uint8Array, objects: readonly WantedObject[], oldCanvas: CanvasSize): Promise<AnalyzeResult> {
+export type OpenResult = { ok: true; doc: Document; draco: boolean } | { ok: false; reason: string };
+
+/** 讀進模型（之後的分析、3D 預覽都用這份文件，只讀不改） */
+export async function openModelBytes(io: PlatformIO, input: Uint8Array): Promise<OpenResult> {
   const pre = precheckForUv(input);
   if (!pre.ok) return pre;
-  let doc;
-  try { doc = await io.readBinary(input); } catch (e) { return { ok: false, reason: `讀模型時出錯：${e instanceof Error ? e.message : String(e)}` }; }
+  try { return { ok: true, doc: await io.readBinary(input), draco: pre.draco }; } catch (e) { return { ok: false, reason: `讀模型時出錯：${e instanceof Error ? e.message : String(e)}` }; }
+}
+
+export interface AnalyzeOptions {
+  /** 製作手動指定的類型（物件 id → 平面 / 弧面）；沒有 = 自動辨識 */
+  overrides?: Readonly<Record<string, SurfaceOverride | undefined>>;
+  /** 只重新分析這幾個物件（舞台正面還是照全部物件算） */
+  only?: readonly string[];
+}
+
+/** 分析每個 LED 物件（平面 / 弧面 / 原本的 UV 範圍）。doc 是 openModelBytes 讀進來的，這裡只讀 */
+export function analyzeDoc(doc: Document, draco: boolean, objects: readonly WantedObject[], oldCanvas: CanvasSize, opts: AnalyzeOptions = {}): AnalyzeOk {
   const read = readLedObjects(doc, objects);
   const front = stageFrontOf([...read.objects.values()].map(o => o.geom));
+  const only = opts.only ? new Set(opts.only) : null;
   const infos: Record<string, ObjectInfo | null> = {};
   for (const w of objects) {
+    if (only && !only.has(w.id)) continue;
     const so = read.objects.get(w.id);
-    infos[w.id] = so ? describeObject(so.geom, front, oldCanvas) : null;
+    infos[w.id] = so ? describeObject(so.geom, front, oldCanvas, opts.overrides?.[w.id] ?? 'auto') : null;
   }
   const warnings: string[] = [];
   const names = new Set<string>();
@@ -76,7 +92,34 @@ export async function analyzeModelBytes(io: PlatformIO, input: Uint8Array, objec
       }
     }
   }
-  return { ok: true, infos, front, diag: read.diag, scaleFactor: read.scaleFactor, draco: pre.draco, warnings };
+  return { ok: true, infos, front, diag: read.diag, scaleFactor: read.scaleFactor, draco, warnings };
+}
+
+export async function analyzeModelBytes(io: PlatformIO, input: Uint8Array, objects: readonly WantedObject[], oldCanvas: CanvasSize, opts: AnalyzeOptions = {}): Promise<AnalyzeResult> {
+  const o = await openModelBytes(io, input);
+  if (!o.ok) return o;
+  return analyzeDoc(o.doc, o.draco, objects, oldCanvas, opts);
+}
+
+/** 照排好的方案算每個被處理的物件的新 UV（寫檔和 3D 預覽共用）；模型跟排版時不一樣 = 失敗 */
+export function computePlanUvs(
+  read: SceneRead, plan: Plan, oldCanvas: CanvasSize,
+): { ok: true; infos: Record<string, ObjectInfo | null>; uvs: Map<string, (Float32Array | null)[]> } | { ok: false; reason: string } {
+  const front = stageFrontOf([...read.objects.values()].map(o => o.geom));
+  const infos: Record<string, ObjectInfo | null> = {};
+  const uvs = new Map<string, (Float32Array | null)[]>();
+  for (const o of plan.objects) {
+    if (o.mode !== 'auto' && o.mode !== 'keep') continue;
+    const so = read.objects.get(o.id);
+    if (!so) return { ok: false, reason: `模型裡找不到物件「${o.name}」` };
+    const info = describeObject(so.geom, front, oldCanvas, o.override ?? 'auto');
+    infos[o.id] = info;
+    if (o.mode === 'auto' && (info.kind !== 'ok' || info.pieces.length !== o.pieces.length)) {
+      return { ok: false, reason: `「${o.name}」的分析結果跟排版時不一樣（模型是不是換過了？請重新分析）` };
+    }
+    uvs.set(o.id, objectUvs(so.geom, o, info, plan.canvas));
+  }
+  return { ok: true, infos, uvs };
 }
 
 export type BuildPhase = 'read' | 'compute' | 'write' | 'encode' | 'verify';
@@ -105,22 +148,11 @@ export async function buildModelBytes(
     const orig = await io.readBinary(input);
     const edit = await io.readBinary(input);
     const read = readLedObjects(edit, objects);
-    const front = stageFrontOf([...read.objects.values()].map(o => o.geom));
 
     onPhase?.('compute');
-    const infos: Record<string, ObjectInfo | null> = {};
-    const uvs = new Map<string, (Float32Array | null)[]>();
-    for (const o of plan.objects) {
-      if (o.mode !== 'auto' && o.mode !== 'keep') continue;
-      const so = read.objects.get(o.id);
-      if (!so) return { ok: false, reason: `模型裡找不到物件「${o.name}」` };
-      const info = describeObject(so.geom, front, oldCanvas);
-      infos[o.id] = info;
-      if (o.mode === 'auto' && (info.kind !== 'flat' || info.pieces.length !== o.pieces.length)) {
-        return { ok: false, reason: `「${o.name}」的分析結果跟排版時不一樣（模型是不是換過了？請重新分析）` };
-      }
-      uvs.set(o.id, objectUvs(so.geom, o, info, plan.canvas));
-    }
+    const computed = computePlanUvs(read, plan, oldCanvas);
+    if (!computed.ok) return computed;
+    const { infos, uvs } = computed;
 
     onPhase?.('write');
     const stats = applyUvs(edit, read.objects, uvs);
