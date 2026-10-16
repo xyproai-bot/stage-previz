@@ -48,3 +48,7 @@
 ## 資料表
 
 `model_uv_layouts (project_id, model_key, led_canvas, recipe, note, legacy_template_id, legacy_plan, stamped_videos, created_by, created_at)`，主鍵 `(project_id, model_key)`，專案刪掉時跟著刪。
+
+## 第 2 階段（弧面、3D 預覽）
+
+後台**沒有改**（沒有新的 migration、網址、欄位）。弧面也走上面同一套「放進 R2 → 一次換好」。`recipe`（選填，<= 256 KB）多了每個物件的 `override`（`auto` / `flat` / `arc`）和每片螢幕的 `surface`（`flat` / `arc`）、`convex`、`spanDeg`、`distortion`，舊版前端不認識也不影響。
