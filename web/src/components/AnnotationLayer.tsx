@@ -4,10 +4,14 @@
 //   打開有畫記的留言（showing）：攝影機飛到當時的視角後疊上去，比例跟當時一樣（containBox）；按播放或轉視角就收起來。
 // 貼圖（貼在畫面上的參考圖片，StickerLayer）也在這一層：留言框裡的圖片「放到畫面上」、把圖片檔拖進 3D 畫面；
 //   貼圖不用先按「畫記」，3D 視角照樣可以轉（拿來對照舞台）；打開有貼圖的留言，貼圖跟筆畫一起出現在同樣的位置。
+//   畫記工具列開著、又有貼圖時，工具列最前面多一個「移動照片」（誰收滑鼠看選哪個工具：lib/review/stickerTool.ts）：
+//     選「移動照片」→ 按到照片 = 選到它、可以拖 / 縮放 / 旋轉，按空白處 = 取消選取，什麼都不畫；
+//     選筆 / 箭頭 / 方框 / 圓圈 → 按哪裡都是畫（照片上也能畫，筆畫蓋在照片上面）；第一次按在照片上會提醒要先點「移動照片」。
+//     放到畫面上、把圖片檔拖進來 → 自動換到「移動照片」並選到那張。
 // 座標 / 形狀的規則在 lib/review/annotations.ts。窄的畫面（手機、iPad 直放）工具列收成一排小按鈕。
 
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, Circle, ImagePlus, ImageUp, MoveUpRight, Pencil, Square, Trash2, Undo2, X } from 'lucide-react';
+import { Check, ChevronDown, Circle, ImagePlus, ImageUp, MousePointer2, MoveUpRight, Pencil, Square, Trash2, Undo2, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Icon from './Icon';
 import {
@@ -16,6 +20,10 @@ import {
 } from '../lib/review/annotations';
 import type { AnnotationDraft, StickerDraft } from '../lib/review/useReviewSession';
 import { attachmentSrc, type CommentAttachment } from '../lib/api';
+import { pickSticker } from '../lib/review/stickers';
+import {
+  MOVE_HINT, MOVE_TOOL_LABEL, activeTool, canMovePhotos, layerRouting, planPress, type PointerTool,
+} from '../lib/review/stickerTool';
 import { confirmDialog } from './dialogs';
 import StickerLayer from './StickerLayer';
 import './AnnotationLayer.css';
@@ -83,6 +91,20 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
   const [expanded, setExpanded] = useState(false);
   useEffect(() => { if (!drawing) setExpanded(false); }, [drawing]);
 
+  // 現在的工具（貼圖在調整 = 移動照片）和誰收滑鼠
+  const stickerCount = stickerDraftShown ? draftImages.length : 0;
+  const tool: PointerTool = activeTool(draft?.tool ?? 'arrow', !!stickers?.editing, stickerCount);
+  const routing = layerRouting(drawing, tool);
+  // 用畫的工具按在照片上：第一次提醒一聲（整個頁面只提醒一次）
+  const [moveHint, setMoveHint] = useState(false);
+  const hintShownRef = useRef(false);
+  useEffect(() => {
+    if (!moveHint) return;
+    const t = window.setTimeout(() => setMoveHint(false), 6000);
+    return () => window.clearTimeout(t);
+  }, [moveHint]);
+  useEffect(() => { if (!drawing || tool === 'move') setMoveHint(false); }, [drawing, tool]);
+
   // 正在畫的這一筆（還沒放開）
   const [live, setLive] = useState<number[] | null>(null);
   const strokeRef = useRef<{ id: number; type: string; pts: number[] } | null>(null);
@@ -103,6 +125,14 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     const r = frameRect();
     if (!r) return;
+    // 照片收滑鼠的時候（移動照片）畫記這層不開始畫；用畫的工具按在照片上 → 照畫，第一次提醒要先點「移動照片」
+    const plan = planPress(tool, stickerCount > 0 && !!pickSticker([e.clientX - r.left, e.clientY - r.top], draftImages, r.width, r.height));
+    if (plan.to !== 'draw') return;
+    if (plan.hintMove && !hintShownRef.current) {
+      hintShownRef.current = true;
+      setMoveHint(true);
+      if (compact) setExpanded(false);
+    }
     e.preventDefault();
     (e.currentTarget as Element).setPointerCapture(e.pointerId);
     const [x, y] = toNormalized(e.clientX, e.clientY, r);
@@ -235,20 +265,42 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
     return a ? attachmentSrc(a.url) : undefined;
   };
   const showingImages = showing?.images ?? [];
-  const editingStickers = !!stickers && stickers.editing && !drawing && !showing;
+  // 貼圖收滑鼠：沒在畫的時候 = 貼圖在調整；畫的時候 = 工具選著「移動照片」
+  const editingStickers = !!stickers && !showing && routing.stickersGetPointer;
   const showingKind = !showing ? '' : showing.shapes.length ? (showingImages.length ? '畫記和貼圖' : '畫記') : '貼圖';
 
-  const toolButtons = ANN_TOOLS.map(t => (
+  const drawToolButtons = ANN_TOOLS.map(t => (
     <button
       key={t}
       type="button"
-      className={'ann-tool' + (draft?.tool === t ? ' is-active' : '')}
+      className={'ann-tool' + (tool === t ? ' is-active' : '')}
       onClick={() => { draft?.setTool(t); if (compact) setExpanded(false); }}
       title={ANN_TOOL_LABEL[t]}
       aria-label={ANN_TOOL_LABEL[t]}
-      aria-pressed={draft?.tool === t}
+      aria-pressed={tool === t}
     ><Icon icon={TOOL_ICON[t]} size="md" /></button>
   ));
+  // 第一個工具：移動照片（這則留言有貼照片才有）
+  const toolButtons = (
+    <>
+      {canMovePhotos(stickerCount) && (
+        <>
+          <button
+            type="button"
+            className={'ann-tool ann-tool--move' + (tool === 'move' ? ' is-active' : '')}
+            onClick={() => { stickers?.edit(); if (compact) setExpanded(false); }}
+            title={`${MOVE_TOOL_LABEL}：拖照片移動、拖角落縮放、拖上面的圓點旋轉`}
+            aria-label={MOVE_TOOL_LABEL}
+            aria-pressed={tool === 'move'}
+          >
+            <Icon icon={MousePointer2} size="md" />{!compact && <span>{MOVE_TOOL_LABEL}</span>}
+          </button>
+          <span className="ann-toolbar__sep" aria-hidden="true" />
+        </>
+      )}
+      {drawToolButtons}
+    </>
+  );
   const colorButtons = ANN_COLORS.map(c => (
     <button
       key={c.value}
@@ -263,7 +315,10 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
   ));
 
   return (
-    <div ref={rootRef} className={'ann-layer' + (drawing ? ' is-drawing' : showing ? ' is-showing' : ' is-stickers')}>
+    <div
+      ref={rootRef}
+      className={'ann-layer' + (drawing ? ' is-drawing' + (routing.drawSurfaceGetsPointer ? '' : ' is-moving') : showing ? ' is-showing' : ' is-stickers')}
+    >
       {/* 貼圖在筆畫下面（畫記的時候筆畫要蓋在貼圖上） */}
       {W > 0 && H > 0 && (showing ? showingImages.length > 0 : stickerDraftShown) && (
         <div style={{ position: 'absolute', left: box.left, top: box.top, width: W, height: H, pointerEvents: 'none' }}>
@@ -281,6 +336,8 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
               onCommit={stickers!.commit}
               onRemove={stickers!.remove}
               onFinish={stickers!.finish}
+              onBlank={routing.blankPress === 'deselect' ? () => stickers!.select(null) : undefined}
+              forwardWheel={!drawing}
               imageRef={stickers!.imageRef}
             />
           )}
@@ -304,7 +361,7 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
       )}
 
       {drawing && draft && (
-        <div className={'ann-toolbar' + (compact ? ' is-compact' : '') + (expanded ? ' is-expanded' : '')} role="toolbar" aria-label="畫記工具">
+        <div data-stk="" className={'ann-toolbar' + (compact ? ' is-compact' : '') + (expanded ? ' is-expanded' : '')} role="toolbar" aria-label="畫記工具">
           {compact ? (
             <>
               <button
@@ -312,10 +369,10 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
                 className="ann-tool is-active ann-toolbar__pick"
                 onClick={() => setExpanded(x => !x)}
                 title="換工具、換顏色"
-                aria-label={`工具：${ANN_TOOL_LABEL[draft.tool]}（換工具、換顏色）`}
+                aria-label={`工具：${tool === 'move' ? MOVE_TOOL_LABEL : ANN_TOOL_LABEL[tool]}（換工具、換顏色）`}
                 aria-expanded={expanded}
               >
-                <Icon icon={TOOL_ICON[draft.tool]} size="md" />
+                <Icon icon={tool === 'move' ? MousePointer2 : TOOL_ICON[tool]} size="md" />
                 <span className="ann-toolbar__dot" style={{ background: draft.color }} aria-hidden="true" />
                 <Icon icon={ChevronDown} size="xs" />
               </button>
@@ -342,7 +399,7 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
               <Icon icon={Trash2} size="md" />
             </button>
           )}
-          <span className="ann-toolbar__count">{draft.shapes.length > 0 ? `${draft.shapes.length} 筆` : '在畫面上拖拉'}</span>
+          <span className="ann-toolbar__count">{draft.shapes.length > 0 ? `${draft.shapes.length} 筆` : tool === 'move' ? '拖曳照片' : '在畫面上拖拉'}</span>
           {onDone && (
             <button type="button" className="ann-tool ann-tool--done" onClick={onDone} title="畫好了，回到留言框" aria-label="畫好了，回到留言框">
               <Icon icon={Check} size="md" />{!compact && <span>畫好了</span>}
@@ -351,6 +408,12 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
           <button type="button" className="ann-tool ann-tool--cancel" onClick={() => void cancelDrawing()} title="不要畫記了" aria-label="不要畫記了">
             <Icon icon={X} size="md" />
           </button>
+          {/* 用畫的工具按在照片上：第一次提醒一聲（點它 = 換到移動照片） */}
+          {moveHint && tool !== 'move' && !expanded && (
+            <button type="button" className="ann-toolbar__hint" onClick={() => { stickers?.edit(); setMoveHint(false); }} title={`換到「${MOVE_TOOL_LABEL}」`}>
+              <Icon icon={MousePointer2} size="xs" /><span>{MOVE_HINT}</span>
+            </button>
+          )}
         </div>
       )}
 
@@ -367,8 +430,8 @@ export default function AnnotationLayer({ draft, showing, showingLabel, onHideSh
         </div>
       )}
 
-      {/* 貼圖留在畫面上、沒在調整：左上角一顆小按鈕回去調整 */}
-      {!drawing && !showing && stickerDraftShown && !stickers!.editing && (
+      {/* 貼圖留在畫面上、沒在調整：左上角一顆小按鈕回去調整（畫記工具列開著、用的是畫的工具時也在；提醒出現時由提醒代替） */}
+      {!showing && stickerDraftShown && tool !== 'move' && !(drawing && moveHint) && (
         <button
           type="button"
           data-stk=""

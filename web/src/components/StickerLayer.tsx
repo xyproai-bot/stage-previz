@@ -2,6 +2,8 @@
 //   調整中（editing）：點一張選到它 → 拖 = 移動、拖四個角 = 縮放（比例不變）、拖上面的圓點 = 旋轉（按住 Shift 每 15° 一格）、
 //     兩根手指 = 縮放 + 旋轉 + 移動；下面一條：不透明度滑桿、刪除、完成。點別的地方 = 調整完了。
 //   沒在調整：貼圖留在畫面上，滑鼠穿過去，3D 視角照樣可以轉（拿來對照舞台）。
+//   畫記工具列開著時：工具選「移動照片」= 調整中（照片收滑鼠，按空白處只是取消選取）；選畫的工具 = 沒在調整（畫記的那層收滑鼠）。
+//     誰收滑鼠的決定在 lib/review/stickerTool.ts，這裡只照 editing 掛事件。
 //   打開留言時（唯讀）：貼圖照存的位置、大小、角度、不透明度出現。
 // 算法（座標換算、縮放、旋轉、捏合）在 lib/review/stickers.ts；這裡只收事件、畫出來。
 // 拖的過程只改這裡的 live，放開才交給外面存（外面是整個頁面的狀態，不要每一格動作都重畫整頁）。
@@ -29,6 +31,10 @@ interface Props {
   onCommit?: (attachmentId: string, el: AnnImage) => void;
   onRemove?: (attachmentId: string) => void;
   onFinish?: () => void;
+  /** 按在貼圖以外的地方；沒給 = 跟 onFinish 一樣（調整完了）。畫記工具列開著時給「只取消選取」 */
+  onBlank?: () => void;
+  /** 滑鼠滾輪在貼圖上是不是轉交給 3D 畫面縮放（預設要；畫記的時候 3D 視角鎖住，不要轉交） */
+  forwardWheel?: boolean;
   imageRef?: (attachmentId: string, el: HTMLImageElement | null) => void;
   /** 打開留言的時候：淡入 */
   showing?: boolean;
@@ -59,7 +65,8 @@ function isTypingTarget(t: EventTarget | null): boolean {
 }
 
 export default function StickerLayer({
-  width: W, height: H, items, srcOf, editing = false, selectedId = null, onSelect, onCommit, onRemove, onFinish, imageRef, showing = false,
+  width: W, height: H, items, srcOf, editing = false, selectedId = null, onSelect, onCommit, onRemove, onFinish, onBlank, forwardWheel = true,
+  imageRef, showing = false,
 }: Props) {
   const rootRef = useRef<HTMLDivElement>(null);
   const gesture = useRef<Gesture | null>(null);
@@ -67,8 +74,8 @@ export default function StickerLayer({
   const [opacityLive, setOpacityLive] = useState<{ id: string; value: number } | null>(null);
   const opacityRef = useRef<{ id: string; value: number } | null>(null);
   const sliderDown = useRef(false);
-  const cb = useRef({ onSelect, onCommit, onRemove, onFinish });
-  cb.current = { onSelect, onCommit, onRemove, onFinish };
+  const cb = useRef({ onSelect, onCommit, onRemove, onFinish, onBlank });
+  cb.current = { onSelect, onCommit, onRemove, onFinish, onBlank };
 
   const shown = items.map(i => {
     if (live && live.attachmentId === i.attachmentId) return live;
@@ -89,7 +96,7 @@ export default function StickerLayer({
   // 滑鼠滾輪在貼圖上也要能縮放 3D 視角（貼圖蓋住了整個畫面也一樣）：轉交給 3D 畫面
   useEffect(() => {
     const root = rootRef.current;
-    if (!root || !editing) return;
+    if (!root || !editing || !forwardWheel) return;
     const onWheel = (e: WheelEvent) => {
       const t = e.target as Element | null;
       if (!t?.closest?.('.stk') || t.closest('.stk-panel')) return;
@@ -105,7 +112,7 @@ export default function StickerLayer({
     };
     root.addEventListener('wheel', onWheel, { passive: false });
     return () => root.removeEventListener('wheel', onWheel);
-  }, [editing]);
+  }, [editing, forwardWheel]);
 
   // 點別的地方 = 調整完了；Delete 刪掉選到的；Esc 也算調整完了
   useEffect(() => {
@@ -113,7 +120,7 @@ export default function StickerLayer({
     const onDown = (e: PointerEvent) => {
       const t = e.target as Element | null;
       if (t?.closest?.('[data-stk]')) return;
-      cb.current.onFinish?.();
+      (cb.current.onBlank ?? cb.current.onFinish)?.();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { cb.current.onFinish?.(); return; }

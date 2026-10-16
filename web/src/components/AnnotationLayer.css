@@ -1,5 +1,7 @@
 /* 畫記：疊在 3D 畫面上（StageScene 的 children，跟畫面一樣大）
-   z-index 20：蓋過 3D 工具列（畫的時候不能轉視角），在小播放器（25）下面 → 畫的時候照樣可以拉時間、播放 */
+   z-index 20：蓋過 3D 工具列（畫的時候不能轉視角），在小播放器（25）下面 → 畫的時候照樣可以拉時間、播放
+   裡面的上下順序（z-index 小的在下面）：貼圖（選到的 2）< 筆畫 SVG（5）< 貼圖下面那一條（6）< 工具列、小標、提示（7）
+   → 筆畫一定蓋在照片上面；誰收滑鼠不看上下順序，看選哪個工具：移動照片 = 照片收（.is-moving，SVG 讓開）、畫的工具 = SVG 收 */
 .ann-layer {
   position: absolute;
   inset: 0;
@@ -11,9 +13,15 @@
   cursor: crosshair;
   background: rgba(0, 0, 0, 0.08);
   box-shadow: inset 0 0 0 2px rgba(255, 59, 48, 0.55);
+  /* 手指 / 筆按在空白處（移動照片時），不要捲動、縮放頁面 */
+  touch-action: none;
 }
+/* 工具選「移動照片」：畫記那層讓開，照片收滑鼠；按空白處只是取消選取（落在這一層上，3D 視角也不會被轉） */
+.ann-layer.is-drawing.is-moving { cursor: default; }
+.ann-layer.is-moving .ann-layer__svg { pointer-events: none; }
 .ann-layer__svg {
   position: absolute;
+  z-index: 5;
   display: block;
   overflow: visible;
   /* 手指 / 筆在這裡畫，不要捲動、縮放頁面 */
@@ -34,6 +42,7 @@
   left: 50%;
   transform: translateX(-50%);
   display: flex;
+  z-index: 7;
   align-items: center;
   gap: 4px;
   padding: 4px 6px;
@@ -100,6 +109,33 @@
 }
 .ann-toolbar__row { display: flex; align-items: center; gap: 4px; }
 
+/* 第一個工具「移動照片」：圖示 + 字（窄的畫面只有圖示） */
+.ann-tool--move { padding: 0 8px; }
+/* 用畫的工具按在照片上，第一次出現的提醒（工具列正下方；點它 = 換到移動照片） */
+.ann-toolbar__hint {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: max-content;
+  max-width: min(300px, calc(100vw - 32px));
+  min-height: 28px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(16, 17, 20, 0.95);
+  border: 1px solid var(--accent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  color: var(--text);
+  font-size: 12px;
+  white-space: normal;
+  cursor: pointer;
+}
+.ann-toolbar__hint:hover { background: rgba(32, 34, 40, 0.97); }
+.ann-toolbar__hint:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
 /* 叉叉（不要畫記了）跟「畫好了」分開一點，比較不會按錯 */
 .ann-tool--cancel { margin-left: 6px; }
 @media (hover: none) and (pointer: coarse) {
@@ -107,11 +143,13 @@
   .ann-color { width: 28px; height: 28px; }
   .ann-tool--cancel { margin-left: 12px; }
   .ann-badge__close { width: 32px; height: 32px; }
+  .ann-toolbar__hint { min-height: 40px; padding: 4px 14px; }
 }
 
 /* ── 打開留言時的畫記小標 ── */
 .ann-badge {
   position: absolute;
+  z-index: 7;
   display: inline-flex;
   align-items: center;
   gap: 6px;

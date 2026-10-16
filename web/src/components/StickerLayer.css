@@ -34,7 +34,7 @@
   outline-offset: 0;
 }
 .stk.is-selected {
-  z-index: 2;
+  z-index: 2;   /* 只比別張貼圖高；畫記的筆畫是 5，筆畫永遠蓋在照片上面 */
   outline: 2px solid var(--accent);
 }
 
@@ -95,7 +95,7 @@
   left: 50%;
   bottom: 8px;
   transform: translateX(-50%);
-  z-index: 3;
+  z-index: 6;   /* 比畫記的筆畫（5）高：下面這一條不會被筆畫蓋住 */
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -150,6 +150,7 @@
 /* 沒在調整時，畫面左上角的小按鈕：貼圖 N 張 · 調整 */
 .stk-pill {
   position: absolute;
+  z-index: 7;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -172,6 +173,7 @@
 /* 圖片檔拖到 3D 畫面上時的提示 */
 .stk-drop {
   position: absolute;
+  z-index: 7;
   inset: 8px;
   display: flex;
   align-items: center;

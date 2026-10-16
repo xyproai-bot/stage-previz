@@ -62,7 +62,10 @@ export interface StickerDraft {
   /** 貼圖是對著哪個比例的畫面貼的（第一張貼上去時 3D 畫面的寬 / 高） */
   aspect: number;
   selectedId: string | null;
-  /** 正在調整（貼圖可以拖、縮放、轉；不在調整 = 滑鼠穿過去，可以轉 3D 視角） */
+  /**
+   * 正在調整（貼圖可以拖、縮放、轉；不在調整 = 滑鼠穿過去，可以轉 3D 視角）。
+   * 畫記工具列開著時 = 工具選著「移動照片」（放到畫面上、拖進圖片檔會自動換過去；選畫的工具就換回來）
+   */
   editing: boolean;
   /** 能不能把圖片檔直接拖進 3D 畫面（留言框有開圖片上傳才行） */
   canDrop: boolean;
@@ -436,7 +439,9 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
   }, []);
   const draft: AnnotationDraft = {
     active: drawActive, shapes, tool, color, aspect: drawAspect, time: drawTime,
-    setTool, setColor,
+    // 選畫的工具 = 離開「移動照片」（貼圖不再收滑鼠，按哪裡都是畫）
+    setTool: (t) => { setTool(t); setStkEditing(false); setStkSelected(null); },
+    setColor,
     add: (s) => { clearedRef.current = null; setShapes(list => [...list, s]); },
     undo: () => {
       if (shapes.length === 0 && clearedRef.current) { const back = clearedRef.current; clearedRef.current = null; setShapes(back); return; }
