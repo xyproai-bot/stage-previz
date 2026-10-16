@@ -50,6 +50,8 @@ import { songTitle } from '../lib/songCode';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { useStageProps } from '../lib/useStageProps';
 import { canEditStageProps } from '../lib/stageProps';
+import { useCameraBookmarks } from '../lib/useCameraBookmarks';
+import { canEditCameraBookmarks } from '../lib/cameraBookmarks';
 import { crossfadeLabel, cueTransitionSeconds } from '../lib/cueTiming';
 import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import HelpLink from '../components/HelpLink';
@@ -122,6 +124,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   const projectRole: ProjectRole | null = va.projectRole(myRole === undefined ? (user?.role ?? null) : myRole);
   // 比例尺的樂手和器材：製作、導演可以擺，動畫師只能看（預覽別人的畫面時也只能看）
   const band = useStageProps(projectId, canEditStageProps(projectRole) && !va.readOnly);
+  // 視角書籤（專案共用）：製作、導演可以存 / 改，動畫師點了飛過去
+  const camBm = useCameraBookmarks(projectId, canEditCameraBookmarks(projectRole) && !va.readOnly);
   // 動畫師只看：3D 工具列只剩重置攝影機、燈光照專案預設（不能自己調）
   const isAnimatorViewer = projectRole === 'animator';
 
@@ -1118,6 +1122,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                   stageProps={band.stageProps}
                   onStagePropsChange={band.onStagePropsChange}
+                  cameraBookmarks={camBm.bookmarks}
+                  onCameraBookmarksChange={camBm.onChange}
                   {...mech.sceneProps}
                   toolbarMode={isAnimatorViewer ? 'viewer' : 'full'}
                   lookSettings={isAnimatorViewer ? view.lookSettings : personalLook.effective}

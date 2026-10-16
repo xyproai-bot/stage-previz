@@ -30,6 +30,7 @@ import { isTrustedOrigin } from './origins.mjs';
 import { normalizeSlugInput, slugProblem, slugProblemMessage } from '../web/src/lib/shareSlug.ts';
 // 比例尺的樂手和器材（0033）：存檔格式和檢查規則也跟前端共用同一個檔
 import { checkStagePropsForSave, parseStoredStageProps, serializeStageProps } from '../web/src/lib/stageProps.ts';
+import { checkCameraBookmarksForSave, parseStoredCameraBookmarks, serializeCameraBookmarks } from '../web/src/lib/cameraBookmarks.ts';
 // 權限規則（誰在這個專案能做什麼）— 純判斷，access.test.mjs 有測
 import {
   projectRoleOf, canEditProjectContent, songStatusDecision,
@@ -451,6 +452,8 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'project.archive':       return archiveProject(request, env, projectId);
     case 'stageProps.get':
     case 'stageProps.put':        return handleStageProps(request, env, ctx);
+    case 'cameraBookmarks.get':
+    case 'cameraBookmarks.put':   return handleCameraBookmarks(request, env, ctx);
     case 'shareLinks':
     case 'shareLinks.item':       return handleProjectShareLinks(request, env, ctx, segs[4] || null);
 
@@ -865,6 +868,25 @@ async function handleStageProps(request, env, ctx) {
     .bind(serializeStageProps(check.props), ctx.projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
   return jsonResp({ ok: true, props: check.props });
+}
+
+// 視角書籤（0035，projects.camera_bookmarks）：GET 所有成員都看得到；PUT 整份換掉，只有製作和導演
+// （權限在路由表 access.mjs 就擋了；格式和檢查在 web/src/lib/cameraBookmarks.ts，有一筆不對就整份拒絕）。
+// 存視角不寫活動紀錄、也不動專案的更新時間
+async function handleCameraBookmarks(request, env, ctx) {
+  if (request.method === 'GET') {
+    const row = await env.DB.prepare(`SELECT camera_bookmarks FROM projects WHERE id = ? LIMIT 1`).bind(ctx.projectId).first();
+    if (!row) return jsonResp({ error: 'Not found' }, 404);
+    return jsonResp({ bookmarks: parseStoredCameraBookmarks(row.camera_bookmarks) });
+  }
+  const body = await readJsonLimited(request, 64 * 1024);
+  if (body.error) return jsonResp({ error: body.error }, body.status);
+  const check = checkCameraBookmarksForSave(body.value && typeof body.value === 'object' ? body.value.bookmarks : undefined);
+  if (!check.ok) return jsonResp({ error: check.error }, 400);
+  const result = await env.DB.prepare(`UPDATE projects SET camera_bookmarks = ? WHERE id = ?`)
+    .bind(serializeCameraBookmarks(check.bookmarks), ctx.projectId).run();
+  if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  return jsonResp({ ok: true, bookmarks: check.bookmarks });
 }
 
 // 現場模式設定：範圍要跟 web/src/lib/stageLook/lookSettings.ts 的 LOOK_SETTING_RANGES 一致
@@ -5990,7 +6012,7 @@ async function handleShareRouter(request, env, url, ref) {
   if (sub === 'data' && request.method === 'GET') {
     // bundle 給 share viewer：project meta + songs + stage_objects + model
     const proj = await env.DB.prepare(
-      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view, led_canvas, stage_props FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view, led_canvas, stage_props, camera_bookmarks FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
     ).bind(link.project_id).first();
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
@@ -6045,6 +6067,8 @@ async function handleShareRouter(request, env, url, ref) {
       ledCanvas: proj.led_canvas ? sanitizeLedCanvas(proj.led_canvas) : null,
       // 比例尺的樂手和器材（0033；訪客只看）
       stageProps: parseStoredStageProps(proj.stage_props),
+      // 視角書籤（0035；訪客只看，點了飛過去）
+      cameraBookmarks: parseStoredCameraBookmarks(proj.camera_bookmarks),
       // 有密碼的連結：之後的請求帶這張通行證（X-Share-Access header），不用再送密碼
       access,
       // 0026：製作有沒有打開「允許看的人留言」（連結名稱是團隊內部用的，不給訪客）

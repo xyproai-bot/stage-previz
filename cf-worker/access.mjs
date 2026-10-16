@@ -29,6 +29,8 @@
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
 //   比例尺的樂手和器材（0033，stage-props）：看                                所有成員（分享連結：只看）
 //   比例尺的樂手和器材：新增 / 移動 / 轉 / 刪除                                admin、導演（canEditStageProps，規則在 web/src/lib/stageProps.ts）
+//   視角書籤（0035，camera-bookmarks）：看                                   所有成員（分享連結：只看）
+//   視角書籤：新增 / 改名 / 刪除 / 換順序                                      admin、導演（canEditCameraBookmarks，規則在 web/src/lib/cameraBookmarks.ts）
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
 //   歌曲影片：最近刪除、救回來（30 天內）                                      admin（這個專案的 admin）
@@ -39,6 +41,9 @@
 // 比例尺的樂手和器材：誰能改的規則跟前端共用同一個檔（純判斷）
 import { canEditStageProps, STAGE_PROPS_DENIED_MESSAGE } from '../web/src/lib/stageProps.ts';
 export { canEditStageProps };
+// 視角書籤：誰能改的規則也跟前端共用同一個檔
+import { canEditCameraBookmarks, CAMERA_BOOKMARKS_DENIED_MESSAGE } from '../web/src/lib/cameraBookmarks.ts';
+export { canEditCameraBookmarks };
 
 export const ROLES = ['admin', 'animator', 'director'];
 export const SONG_STATUSES = ['todo', 'in_review', 'approved', 'needs_changes'];
@@ -185,6 +190,7 @@ export function songStatusDecision({ role, userId, song, to, expected, hasReadyV
  *   'globalAdmin'  只有全站 admin
  *   'shareManager' admin 或導演（canManageShareLinks）
  *   'stageProps'   admin 或導演（canEditStageProps）：改比例尺的樂手和器材
+ *   'cameraBookmarks' admin 或導演（canEditCameraBookmarks）：存 / 改名 / 刪 / 排視角書籤
  *   'songPatch'    改歌：只改狀態看 songStatusDecision，改其他欄位要 editor（handler 裡判斷）
  *   'projectPatch' 改專案：一般欄位 editor，Drive / 狀態 / 3D 檢視設定要全站 admin（handler 裡判斷）
  *   'videoUploader' 交影片：admin 或動畫師先放行，handler 裡再看這首歌指派給誰 / 這一版是誰交的（videos.mjs）
@@ -217,6 +223,12 @@ export function describeProjectRoute(method, segs) {
       if (a) return null;
       if (read) return r('stageProps.get', 'member');
       return m === 'PUT' ? r('stageProps.put', 'stageProps') : bad('stageProps');
+
+    // 視角書籤（0035）：所有成員看、製作和導演整份存（PUT { bookmarks: [...] }）
+    case 'camera-bookmarks':
+      if (a) return null;
+      if (read) return r('cameraBookmarks.get', 'member');
+      return m === 'PUT' ? r('cameraBookmarks.put', 'cameraBookmarks') : bad('cameraBookmarks');
 
     case 'share-links':
       if (!a) {
@@ -451,6 +463,8 @@ export function roleMeetsNeed(need, { role, globalRole }) {
       return canManageShareLinks(role);
     case 'stageProps':
       return canEditStageProps(role);
+    case 'cameraBookmarks':
+      return canEditCameraBookmarks(role);
     case 'videoUploader':
       return role === 'admin' || role === 'animator';
     case 'videoLinker':
@@ -481,6 +495,8 @@ export function needDeniedMessage(need) {
       return '只有製作或導演可以管理分享連結';
     case 'stageProps':
       return STAGE_PROPS_DENIED_MESSAGE;
+    case 'cameraBookmarks':
+      return CAMERA_BOOKMARKS_DENIED_MESSAGE;
     case 'videoUploader':
       return '導演可以貼連結交一版；上傳檔案請找負責的動畫師或製作';
     case 'videoLinker':

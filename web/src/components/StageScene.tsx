@@ -60,6 +60,8 @@ import {
 } from 'lucide-react';
 import Icon from './Icon';
 import { promptDialog } from './dialogs';
+import CameraBookmarkPanel from './CameraBookmarkPanel';
+import type { CameraBookmark } from '../lib/cameraBookmarks';
 import { toast } from '../lib/toast';
 import StageToolbar, { type ToolDef, type ToolMenuEntry, type ToolMenuSection } from './StageToolbar';
 import { LED_CANVAS_RANGE, normalizeLedCanvas, type LedCanvas } from '../lib/ledCanvas';
@@ -161,8 +163,12 @@ interface Props {
   onCommentPinClick?: (comment: import('../lib/api').SongComment) => void;
   /** 「加 3D 留言」流程：當啟用 + 用戶點 mesh，回傳 anchor 給上層彈出留言視窗 */
   onAddAnchoredComment?: (anchor: import('../lib/api').CommentAnchor) => void;
-  /** Camera bookmarks 儲存範圍 — 用 projectId 當 localStorage key 前綴；不傳則停用功能 */
+  /** 有給（專案 id）才有工具列的「視角」：常用看台視角 + 專案共用的視角書籤；不傳則停用功能 */
   bookmarkScope?: string;
+  /** 專案共用的視角書籤（lib/cameraBookmarks.ts；每個人都能點了飛過去） */
+  cameraBookmarks?: CameraBookmark[];
+  /** 有給 = 可以存目前視角 / 改名 / 換順序 / 刪除（製作、導演）；沒給 = 只能看 */
+  onCameraBookmarksChange?: (next: CameraBookmark[]) => void;
   /** 機關定義（每個專案設定一次）；沒給 / 還在讀 = 沒有機關 */
   mechanisms?: Mechanism[] | null;
   /** 目前這個 cue 的機關位置（已經沿用 / 夾在行程內）；換 cue 時照走幾秒走過去，同一個 cue 裡改值直接跳 */
@@ -285,6 +291,7 @@ export interface StageSceneQuery {
 }
 
 const NO_STAGE_PROPS: StagePropItem[] = [];
+const NO_CAMERA_BOOKMARKS: CameraBookmark[] = [];
 const NO_SKIP: ReadonlySet<string> = new Set<string>();
 /** 樂手和器材的自發光：現場（暗場）/ 快速（亮場景） */
 const PROP_BOOST_LIVE = 2.2;
@@ -307,7 +314,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const readOnly = readOnlyProp || viewer;
@@ -508,15 +515,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const statesRef = useRef(states);
   statesRef.current = states;
 
-  // Camera bookmarks
-  interface Bookmark { id: string; name: string; pos: [number, number, number]; target: [number, number, number]; fov: number; }
-  const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
-    if (!bookmarkScope) return [];
-    try {
-      const raw = localStorage.getItem('sp_camera_bookmarks:' + bookmarkScope);
-      return raw ? JSON.parse(raw) : [];
-    } catch { return []; }
-  });
+  // 視角書籤：專案共用（cameraBookmarks prop，存取在 lib/useCameraBookmarks.ts），這裡只管開關面板
   const [bookmarkPanelOpen, setBookmarkPanelOpen] = useState(false);
   const [homeViewPanelOpen, setHomeViewPanelOpen] = useState(false);
 
@@ -577,32 +576,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     setMeasureMode(false);
     setAddPinMode(false);
   }, [viewer]);
-  // Persist to localStorage
-  useEffect(() => {
-    if (!bookmarkScope) return;
-    try { localStorage.setItem('sp_camera_bookmarks:' + bookmarkScope, JSON.stringify(bookmarks)); } catch {}
-  }, [bookmarks, bookmarkScope]);
-
-  async function saveCurrentCamera() {
-    const cam = cameraRef.current;
-    const orb = orbitRef.current;
-    if (!cam || !orb) return;
-    const name = ((await promptDialog({
-      title: '存目前的視角', label: '視角名稱', defaultValue: `視角 ${bookmarks.length + 1}`, confirmLabel: '儲存', maxLength: 40,
-    })) || '').trim();
-    if (!name) return;
-    const bm: Bookmark = {
-      id: 'bm_' + Math.random().toString(36).slice(2, 10),
-      name,
-      pos: [round(cam.position.x), round(cam.position.y), round(cam.position.z)],
-      target: [round(orb.target.x), round(orb.target.y), round(orb.target.z)],
-      fov: cam.fov,
-    };
-    setBookmarks(prev => [...prev, bm]);
-  }
-
-  function loadBookmark(bm: Bookmark) {
-    flyCamera(new THREE.Vector3(...bm.pos), new THREE.Vector3(...bm.target), bm.fov);
+  function loadBookmark(bm: CameraBookmark) {
+    flyCamera(new THREE.Vector3(...bm.position), new THREE.Vector3(...bm.target), bm.fov);
   }
 
   // 平滑飛到指定視角：看的點直線移過去，攝影機繞著它轉（像搖臂，不會從舞台中間穿過去）；
@@ -656,9 +631,6 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     });
   }
 
-  function deleteBookmark(id: string) {
-    setBookmarks(prev => prev.filter(b => b.id !== id));
-  }
   // 讓 useEffect 之外的 render loop 能讀取最新 renderMode
   const renderModeRef = useRef<RenderMode>(renderMode);
   renderModeRef.current = renderMode;
@@ -3334,6 +3306,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     setSelectedPropId(null);
   };
 
+  // 「視角」：常用看台視角 + 專案共用的視角書籤；只看模式（動畫師、分享連結）也有，只是不能存 / 改
+  const viewsTitle = `視角（專案存了 ${cameraBookmarks.length} 個）：常用看台視角、專案共用的視角` + (onCameraBookmarksChange ? '，可以存目前視角' : '');
+  const viewsTool: ToolDef = {
+    id: 'views', group: 'camera', priority: 3,
+    render: (l) => toolBtn({
+      icon: Camera, label: '視角', title: viewsTitle, labeled: l, active: bookmarkPanelOpen, onClick: openBookmarkPanel,
+      extra: l && cameraBookmarks.length > 0 ? <span className="muted small"> {cameraBookmarks.length}</span> : null,
+    }),
+    menu: { icon: Camera, label: cameraBookmarks.length > 0 ? `視角…（${cameraBookmarks.length}）` : '視角…', hint: viewsTitle, onSelect: openBookmarkPanel },
+  };
+
   const tools: ToolDef[] = [];
   if (!readOnly) {
     tools.push({
@@ -3401,6 +3384,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   });
   // 只看模式（動畫師、分享連結）：專案上擺了樂手和器材才放比例尺，讓看的人也看得到（只能看，不能改）
   if (viewer && showScaleButton && stageProps.length > 0) tools.push(scaleTool);
+  if (viewer && bookmarkScope) tools.push(viewsTool);
   if (onHomeViewChange && !viewer) {
     tools.push({
       id: 'home', group: 'camera', priority: 4, noSepBefore: true,
@@ -3423,17 +3407,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       render: (l) => toolBtn({ icon: Footprints, label: '漫遊', title: walkMode ? '離開漫遊模式（或按 Esc）' : '漫遊模式：WASD 走動、滑鼠看四周', labeled: l, active: walkMode, pressed: walkMode, onClick: () => setWalkMode(m => !m) }),
       menu: { icon: Footprints, label: '漫遊', checked: walkMode, hint: 'WASD 走動、滑鼠看四周（Esc 離開）', onSelect: () => setWalkMode(m => !m) },
     });
-    if (bookmarkScope) {
-      const t = `視角書籤（${bookmarks.length}）— 儲存 / 切換常用視角`;
-      tools.push({
-        id: 'views', group: 'camera', priority: 3,
-        render: (l) => toolBtn({
-          icon: Camera, label: '視角', title: t, labeled: l, active: bookmarkPanelOpen, onClick: openBookmarkPanel,
-          extra: l && bookmarks.length > 0 ? <span className="muted small"> {bookmarks.length}</span> : null,
-        }),
-        menu: { icon: Camera, label: bookmarks.length > 0 ? `視角書籤…（${bookmarks.length}）` : '視角書籤…', hint: t, onSelect: openBookmarkPanel },
-      });
-    }
+    if (bookmarkScope) tools.push(viewsTool);
     if (onAddAnchoredComment) {
       tools.push({
         id: 'pin', group: 'mark', priority: 1,
@@ -3589,52 +3563,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             onClose={() => setHomeViewPanelOpen(false)}
           />
         )}
-        {bookmarkPanelOpen && bookmarkScope && !viewer && (
-          <div className="bm-popover" onClick={e => e.stopPropagation()}>
-            <div className="bm-popover__head">
-              <span>視角</span>
-              <button className="dlg__close" onClick={() => setBookmarkPanelOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
-            </div>
-            <div style={{ padding: '8px 10px 4px' }}>
-              <div className="muted small" style={{ marginBottom: 6 }}>常用看台視角</div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 4, marginBottom: 10 }}>
-                {CAMERA_PRESETS.map(p => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    style={{ justifyContent: 'center' }}
-                    onClick={() => {
-                      const v = computePresetViewHelper(p.id);
-                      if (v) flyCamera(v.position, v.target, DEFAULT_FOV);
-                    }}
-                    title={p.hint}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-              <div className="muted small" style={{ marginBottom: 6 }}>自訂書籤</div>
-            </div>
-            <button className="btn btn--primary btn--sm bm-popover__save" onClick={saveCurrentCamera}>
-              + 儲存目前視角
-            </button>
-            {bookmarks.length === 0 ? (
-              <div className="bm-popover__empty">還沒儲存任何自訂視角</div>
-            ) : (
-              <ul className="bm-popover__list">
-                {bookmarks.map(bm => (
-                  <li key={bm.id}>
-                    <button className="bm-row" onClick={() => loadBookmark(bm)}>
-                      <span className="bm-row__name">{bm.name}</span>
-                      <span className="bm-row__coords">({bm.pos.map(n => n.toFixed(1)).join(', ')})</span>
-                    </button>
-                    <button className="bm-row__del" onClick={() => deleteBookmark(bm.id)} title="刪除這個視角" aria-label="刪除這個視角"><Icon icon={X} /></button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+        {bookmarkPanelOpen && bookmarkScope && (
+          <CameraBookmarkPanel
+            presets={CAMERA_PRESETS}
+            bookmarks={cameraBookmarks}
+            onFlyPreset={(id) => {
+              const v = computePresetViewHelper(id);
+              if (v) flyCamera(v.position, v.target, DEFAULT_FOV);
+            }}
+            onFlyBookmark={loadBookmark}
+            getCurrentView={() => {
+              const v = currentCameraView();
+              return v ? { position: v.position.map(round) as [number, number, number], target: v.target.map(round) as [number, number, number], fov: round(v.fov) } : null;
+            }}
+            onChange={onCameraBookmarksChange}
+            onClose={() => setBookmarkPanelOpen(false)}
+          />
         )}
         {enableNdi && ndiPopoverOpen && (
           <div className="ndi-popover" onClick={e => e.stopPropagation()}>

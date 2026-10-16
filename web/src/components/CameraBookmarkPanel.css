@@ -1,0 +1,46 @@
+/* 「視角」面板（位置規則在 StageScene.css 的 .bm-popover：工具列下面、對齊工具列右邊、不超出 3D 區塊） */
+.bm-presets {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.bm-presets .btn { justify-content: center; }
+.bm-row__name { overflow-wrap: anywhere; }
+.bm-row__acts { display: inline-flex; align-items: center; flex: none; }
+.bm-row__act {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.bm-row__act:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.bm-row__act:disabled { opacity: 0.3; cursor: default; }
+.bm-row__act--del:hover:not(:disabled) { background: rgba(255, 84, 112, 0.15); color: var(--danger); }
+/* 手指點的東西至少 40px */
+@media (hover: none) and (pointer: coarse) {
+  .bm-row__act { width: 40px; height: 40px; }
+  .bm-row { min-height: 40px; justify-content: center; }
+  .bm-presets .btn { min-height: 40px; }
+}
+/* 手機（窄螢幕）：3D 區塊常常很矮，面板貼著螢幕下緣、左右各留 8px（跟比例尺面板一樣），390px 寬放得下 */
+@media (max-width: 520px) {
+  .stage-scene .stage-scene__toolbar-row > .bm-popover {
+    position: fixed;
+    top: auto;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+    width: auto;
+    max-width: none;
+    max-height: 62vh;
+    z-index: 200;
+  }
+}

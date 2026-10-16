@@ -7,6 +7,7 @@ import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/
 import { normalizeHomeView, type HomeView } from './homeView';
 import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
 import { normalizeStageProps, type StagePropItem } from './stageProps';
+import { normalizeCameraBookmarks, type CameraBookmark } from './cameraBookmarks';
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
 import type { SongReviewFields } from './reviewApi';
 import { friendlyError } from './songReview';
@@ -330,6 +331,21 @@ export async function saveProjectStageProps(
     method: 'PUT',
     body: JSON.stringify({ props }),
     keepalive: opts?.keepalive,
+  });
+}
+
+// ─── 視角書籤（0035，全專案共用；製作、導演可以改，其他人只能看）──────
+// 格式和規則在 lib/cameraBookmarks.ts（後台 cf-worker 直接 import 同一個檔）
+
+export async function getProjectCameraBookmarks(projectId: string): Promise<CameraBookmark[]> {
+  const data = await http<{ bookmarks?: unknown }>(`/api/projects/${encodeURIComponent(projectId)}/camera-bookmarks`);
+  return normalizeCameraBookmarks(data?.bookmarks ?? []);
+}
+
+export async function saveProjectCameraBookmarks(projectId: string, bookmarks: CameraBookmark[]): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/camera-bookmarks`, {
+    method: 'PUT',
+    body: JSON.stringify({ bookmarks }),
   });
 }
 
@@ -1349,6 +1365,8 @@ export interface SharePublicData {
   ledCanvas?: unknown;
   /** 比例尺的樂手和器材（0033，只看；用 normalizeStageProps 讀）；舊版 worker 沒有 → undefined */
   stageProps?: unknown;
+  /** 視角書籤（0035，只看；用 normalizeCameraBookmarks 讀）；舊版 worker 沒有 → undefined */
+  cameraBookmarks?: unknown;
   /**
    * 有密碼的連結：密碼對了後台發的通行證（8 小時）。之後的請求帶它（getShareSongCues 等的 access 參數），
    * 不用每次都送密碼；影片網址（streamUrl）後台已經接好通行證。沒密碼的連結 = null；舊版 worker 沒有 → undefined

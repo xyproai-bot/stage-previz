@@ -41,6 +41,8 @@ import { confirmDialog, splitQuestion } from '../components/dialogs';
 import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { useStageProps } from '../lib/useStageProps';
 import { canEditStageProps } from '../lib/stageProps';
+import { useCameraBookmarks } from '../lib/useCameraBookmarks';
+import { canEditCameraBookmarks } from '../lib/cameraBookmarks';
 import { cueTransitionSeconds } from '../lib/cueTiming';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
@@ -737,6 +739,8 @@ function SongDetail({
   const view = useProjectViewSettings(projectId, user?.role === 'admin');
   // 比例尺的樂手和器材：製作、導演可以擺，其他人只能看（預覽別人的畫面時也只能看）
   const band = useStageProps(projectId, canEditStageProps(projectRole) && !va.readOnly);
+  // 視角書籤（專案共用）：製作、導演可以存 / 改，其他人點了飛過去
+  const camBm = useCameraBookmarks(projectId, canEditCameraBookmarks(projectRole) && !va.readOnly);
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
 
@@ -1118,6 +1122,8 @@ function SongDetail({
                 onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                 stageProps={band.stageProps}
                 onStagePropsChange={band.onStagePropsChange}
+                cameraBookmarks={camBm.bookmarks}
+                onCameraBookmarksChange={camBm.onChange}
                 {...mech.sceneProps}
                 lookSettings={personalLook.effective}
                 onLookSettingsChange={personalLook.set}
