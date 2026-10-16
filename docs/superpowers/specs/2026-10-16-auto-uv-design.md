@@ -1,6 +1,6 @@
 # 自動貼 UV (auto UV + pixel map for LED screens) — design
 
-Date: 2026-10-16. Status: **design only, no code**. The owner approved building the feature; this document is what he sees before anyone implements.
+Date: 2026-10-16. Status: **stage 1 built** (flat panels, three resolution inputs, stage-shaped layout, new model version, 「舊版面」 protection; see 0.2); stages 2-4 not started. The owner approved building the feature and answered the open questions (0.1).
 UI strings are quoted exactly as they should ship: Traditional Chinese, no emoji (icons via `Icon` + lucide), in-page dialogs only, no English role words (the guard tests in `web/src/test/` apply).
 
 ## 0. Problem, goal, decisions
@@ -16,6 +16,28 @@ Today the slowest part of every job: after the client's 3D stage model arrives, 
 | 5 | The layout (where every screen sits on the canvas) **is** the full canvas. Layout editor = the LED template editor reused (section 5). | Owner knows d3-feed-map style editing. |
 | 6 | **Model scale is read, never written.** Node transforms, positions, names, materials are byte-for-byte unchanged (gate: `verifyDocuments` + `verifyModelIdentity`). | memory note `project_model_scale_locked`: cue positions are stored in scaled scene units. |
 | 7 | **No colour path is touched** (no shader, no material, no texture code). | `feedback_led_color_fidelity`. `web/scripts/led-color-accuracy.mjs` before/after must be identical. |
+
+### 0.1 Owner's answers to the open questions (2026-10-16) — these override section 13
+
+| # | Question | Decision |
+|---|---|---|
+| 1 | LED spec input | All three are enterable, chosen **per screen**: pixel pitch (P3.9), total resolution (W×H), cabinet pixels × cabinet count. |
+| 2 | Initial auto-layout | 「照舞台的樣子排」: screens are placed by their stage position (left on the left, upper on top); a bigger canvas is fine. |
+| 3 | Old videos (no template) | Automatically create a 「舊版面」 template that maps the OLD full-canvas layout onto the new UVs so existing videos keep displaying without re-rendering. Pulled into **stage 1** (was stage 4), see 0.2. |
+| 4 | Floor LEDs | The picture's "up" points to the back of the stage (away from the audience). Wall screens: up = world up. |
+| 5 | Several separate pieces in one object | Each piece is its own screen, laid out separately (default, no prompt). |
+
+### 0.2 Stage 1 as built (2026-10-16) — differences from the original draft below
+
+- **Migration is `0036_model_uv_layouts.sql`** (0035 was taken by camera bookmarks). Table columns: `led_canvas, recipe, note, legacy_template_id, legacy_plan, stamped_videos` (the last three are the legacy protection state, below).
+- **Two-step apply instead of `PUT /model?ledCanvas=…`**: `PUT /model?hold=1` stores the new `.glb` in R2 without activating it (old frontends never send `hold`, so `PUT /model` behaves exactly as before); the browser downloads it back, compares SHA-256, then `POST /led-uv/apply` swaps everything in **one D1 batch** (new `model_r2_key`, new `led_canvas`, 「舊版面」 template + placements, snapshots on the old videos, new manual screens, version rows). Any failure leaves the project untouched; an uploaded-but-unused version is deleted by the browser (or shows as an ordinary old version). `ifActive` still guards against two people applying at once (409).
+- **Unselected / unsupported LEDs are not left alone.** The whole canvas is regenerated, so a LED keeping its old UV would land on top of the new layout. Such objects (unselected, curved, already hand-split, no usable stage-1 plane) are **kept**: their old UV is translated by a whole number of pixels to a new spot (shape, size, orientation, sampling unchanged) and take part in the stage-shaped layout as fixed-size items. Objects with no UV at all and no plane are untouched. Hand-split screens (`led_screens`) of a kept object are shifted with it (`screenUpdates` in the apply call).
+- **Flat pieces** = welded connected components of the screen triangles (a primitive whose material name contains `LED`, otherwise every triangle). Flat if RMS <= 0.3 % of the long edge and >= 99.5 % of the area within 3° of the mean normal. A thick slab (two parallel big faces of similar area) uses the face towards the audience. Components under 0.5 % of the screen area (bolts, text) follow the nearest piece; more than 8 pieces -> not supported in stage 1. Every vertex (screen or not: frames, back, sides) gets its UV from its **position** (nearest piece, clamped into the piece rectangle), so there is no vertex splitting and the object's UV bounding box is exactly the planned rectangle.
+- **Multiple pieces in one object** (owner decision 5): each piece is laid out separately and the apply call creates one manual screen (`led_screens` row) per piece, so templates and the 對位圖 keep treating them as separate screens.
+- **「舊版面」 mechanism (the safest one consistent with the snapshot design).** `template_snapshot = NULL` means "made for the full canvas as it was". At apply time the server creates a template 「舊版面」 (canvas = the full canvas before the apply, one placement per screen at its **old pixel rectangle**, rotated / flipped by the orientation found by comparing old and new local coordinates over every vertex, so the old picture reproduces the old appearance; its source box is the object's new UV box as usual) and writes **that frozen plan into the snapshot of every video version that has none** (self-contained, like any other snapshot). Versions uploaded after the apply keep `NULL` = the new canvas. `songs.template_id` is **not** touched: it is also the default for newly uploaded versions, so pointing songs at 「舊版面」 would mislabel new work; the template exists in the song's 「LED 版型」 list for the occasional old local file. The ids of the stamped versions are stored on the version row; switching the active model back to the version before the apply **un-stamps** them (the old UV already matches the old pictures) and switching forward **re-stamps** them. Pieces whose old rectangle crossed the canvas edge cannot be a single rectangle: they are listed as not protected. Second apply -> 「舊版面 2」 etc.
+- **Metres per model unit** is computed from the document (auto scale from the scene diagonal, the same rule as `parseGlb`, times the project's 測距校準) instead of a new `StageSceneQuery` method, so `StageScene.tsx` is not touched. Model scale is read only.
+- **Not in stage 1**: 3D preview swap (`ledUvPreview`), arcs, manual arrange editor (the layout tab is read-only with a gutter option), recipe reload (`PUT …/layout`; the recipe is stored with the version), freeform, closed 360° shells.
+- **Tests**: `web/src/lib/ledUv/*.test.ts` (pure maths, real `.glb` with Draco, pixel-exactness three ways: analytic corners, layout rect via the app's loader, one LED dot ↔ one canvas pixel), `cf-worker/uvLayouts.test.mjs`.
 
 ## 1. What exists (facts this design builds on)
 
@@ -209,7 +231,7 @@ The shared model library (`assets/models/...`) is never modified: saving always 
 
 **Browser smoke (local worker + real `stage.glb`, no external browser needed beyond the existing harness)**: analyse, set a pitch, auto-pack, apply, reload: LED test pattern shows the names upright, 對位圖 downloads, AE script and CSV regenerate with the new canvas, 「模型版本」 -> 換回上一版 restores the old picture and canvas; phone width shows the notice.
 
-## 13. Open questions for the owner (plain Chinese)
+## 13. Open questions for the owner (plain Chinese) — answered on 2026-10-16, see 0.1
 
 1. **你拿到的 LED 規格通常是哪一種？**
    (A) 點距（例如 P3.9）　(B) 整面總解析度（例如 3072 × 1024）　(C) 箱體大小 + 幾箱（例如每箱 128 × 128 點，橫 6 直 2）　(D) 三種都會用，都要能輸入。

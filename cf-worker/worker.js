@@ -2494,14 +2494,13 @@ async function useSharedAssetForProject(request, env, projectId) {
   const head = await env.MODELS.head(a.r2_key);
   if (!head) return jsonResp({ error: 'Asset 還沒上傳檔案，請先上傳 .glb 後再使用' }, 400);
 
-  await env.DB.prepare(
-    `UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`
-  ).bind(a.r2_key, projectId).run();
+  // 換回自動貼 UV 以前用的模型庫模型時，畫布和舊影片也跟著換回來（沒有紀錄的專案 = 只換模型，跟以前一樣）
+  const swapped = await uvLayouts.activateVersion(env, projectId, a.r2_key);
 
   await logActivity(request, env, projectId, 'activate', 'model', a.r2_key, {
     fromAsset: assetId, assetName: a.name, key: a.r2_key,
   });
-  return jsonResp({ ok: true, key: a.r2_key, url: `/r2/${a.r2_key}` });
+  return jsonResp({ ok: true, key: a.r2_key, url: `/r2/${a.r2_key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas });
 }
 
 // 列某 project 的所有 model 版本（依時間倒序）

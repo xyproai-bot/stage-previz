@@ -242,7 +242,12 @@ describe.each([['沒壓縮', () => plain], ['Draco', () => draco]] as const)('�
   it('舊版面：每塊畫在原本的位置；沒有跨邊緣', () => {
     const legacy = buildLegacy(res.plan, res.ins, FIXTURE_OLD_CANVAS);
     expect(legacy.unprotected).toEqual([]);
+    expect(legacy.approximate).toEqual([]);
     expect(legacy.screens.length).toBeGreaterThanOrEqual(8);
+    // 有外框的 LED：舊版面只看螢幕面，外框亂放的舊 UV 不會把範圍撐大
+    const withFrame = legacy.screens.find(s => s.key === `o:${byName('LED_I_框').id}`)!;
+    expect(withFrame.dest.w).toBe(704);
+    expect(res.a.infos[byName('LED_I_框').id]!.oldRegion!.rect.w).toBeGreaterThan(704);
     const d = legacy.screens.find(s => s.key === `o:${byName('LED_D_地屏').id}`)!;
     expect(d.dest).toEqual(res.a.infos[byName('LED_D_地屏').id]!.oldRegion!.rect);
     // 地屏原本轉了 90 度 → 舊版面要轉回來

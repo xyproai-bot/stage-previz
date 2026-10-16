@@ -46,20 +46,22 @@ export function bestOrientation(samples: readonly (readonly [number, number, num
   return best ?? { rel: { rotate: 0, flipH: false, flipV: false }, err: 0 };
 }
 
-function describePieces(geom: ObjectGeom, a: ObjectAnalysis, objectRegion: UvRegion | null, oldCanvas: CanvasSize): (PieceOld | null)[] {
+function describePieces(geom: ObjectGeom, a: ObjectAnalysis, oldCanvas: CanvasSize): (PieceOld | null)[] {
   const assigns = geom.prims.map(p => assignVertices(p, a.pieces));
   const tolOf = (i: number) => 1e-6 * (a.pieces[i].widthU + a.pieces[i].heightU);
   return a.pieces.map((_, i): PieceOld | null => {
-    // 這一片的三角形：三個頂點都屬於這一片
-    const region = a.pieces.length === 1
-      ? objectRegion
-      : uvRegion(oldUvTriangles(geom.prims, (pi, t) => {
-        const as = assigns[pi], idx = geom.prims[pi].index;
-        return as.piece[idx[t * 3]] === i && as.piece[idx[t * 3 + 1]] === i && as.piece[idx[t * 3 + 2]] === i;
-      }), oldCanvas);
+    // 這一片的螢幕面：三個頂點都在這一片的面上（外框、背板、厚度的側邊不算——它們的舊 UV 常常亂放，會把範圍撐大）
+    const tol = tolOf(i);
+    const region = uvRegion(oldUvTriangles(geom.prims, (pi, t) => {
+      const as = assigns[pi], idx = geom.prims[pi].index;
+      for (let k = 0; k < 3; k++) {
+        const v = idx[t * 3 + k];
+        if (as.piece[v] !== i || as.dist[v] > tol) return false;
+      }
+      return true;
+    }), oldCanvas);
     if (!region) return null;
     const samples: [number, number, number, number][] = [];
-    const tol = tolOf(i);
     geom.prims.forEach((p: PrimGeom, pi) => {
       if (!p.uv) return;
       const as = assigns[pi];
@@ -79,5 +81,5 @@ function describePieces(geom: ObjectGeom, a: ObjectAnalysis, objectRegion: UvReg
 export function describeObject(geom: ObjectGeom, front: Vec3, oldCanvas: CanvasSize): ObjectInfo {
   const a = analyzeObject(geom, front);
   const oldRegion = uvRegion(oldUvTriangles(geom.prims), oldCanvas);
-  return { ...a, oldRegion, oldPieces: a.kind === 'flat' ? describePieces(geom, a, oldRegion, oldCanvas) : [] };
+  return { ...a, oldRegion, oldPieces: a.kind === 'flat' ? describePieces(geom, a, oldCanvas) : [] };
 }
