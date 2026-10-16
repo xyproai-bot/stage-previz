@@ -376,3 +376,109 @@ test('刪版本：紀錄跟著刪；一般上傳（壓縮）沿用上一版的�
   assert.equal((await call('u_admin', 'DELETE', `${P}/model/versions/${file}`)).status, 200);
   assert.equal(await db.prepare(`SELECT 1 FROM model_uv_layouts WHERE model_key = ?`).bind(comp.data.key).first(), null);
 });
+
+// ─────────────────────────────────────────────
+// 第 3 階段：排到一半的東西（勾的螢幕、點數、自己排的排法）存在目前模型版本的 recipe.edit
+// ─────────────────────────────────────────────
+
+const EDIT = {
+  v: 1,
+  selected: { oa: true, ob: false },
+  forms: { 'o:oa': { mode: 'pitch', pitch: '3.9', pw: '', ph: '', cmmW: '', cmmH: '', cpxW: '', cpxH: '', cols: '', rows: '' } },
+  overrides: {},
+  gutter: '0',
+  arrangement: { v: 1, canvasMode: 'custom', canvas: { width: 8800, height: 2024 }, items: [{ key: 'o:oa', x: 5, y: 6, rotate: 90, flipH: true, flipV: false }], groups: [] },
+};
+
+test('排到一半的東西：只有製作能看 / 存；導演、動畫師 403；沒登入 401', async () => {
+  const { call } = await setup();
+  for (const who of ['u_dir', 'u_ani']) {
+    assert.equal((await call(who, 'GET', `${P}/led-uv/layout`)).status, 403);
+    assert.equal((await call(who, 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: EDIT })).status, 403);
+  }
+  assert.equal((await call(null, 'GET', `${P}/led-uv/layout`)).status, 401);
+  assert.equal((await call(null, 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: EDIT })).status, 401);
+  const none = await call('u_admin', 'GET', `${P}/led-uv/layout`);
+  assert.equal(none.status, 200);
+  assert.deepEqual(none.data, { key: OLD_KEY, edit: null });
+  assert.ok((await call('u_admin', 'DELETE', `${P}/led-uv/layout`)).status >= 400);
+});
+
+test('存了就讀得回來；這個版本原本沒有紀錄就建一筆（畫布 = 現在的畫布）；再存是換掉 edit；不動別的東西', async () => {
+  const { call, db } = await setup();
+  const put = await call('u_admin', 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: EDIT });
+  assert.equal(put.status, 200, JSON.stringify(put.data));
+  assert.deepEqual(put.data, { ok: true, key: OLD_KEY });
+  const got = await call('u_admin', 'GET', `${P}/led-uv/layout`);
+  assert.deepEqual(got.data, { key: OLD_KEY, edit: EDIT });
+  const row = await db.prepare(`SELECT * FROM model_uv_layouts WHERE model_key = ?`).bind(OLD_KEY).first();
+  assert.deepEqual(JSON.parse(row.led_canvas), OLD_CANVAS);
+  assert.equal(row.legacy_template_id, null);
+  assert.equal(row.note, null);
+  // 專案的畫布、模型、舊影片都沒被動
+  const proj = await db.prepare(`SELECT model_r2_key, led_canvas FROM projects WHERE id = 'p1'`).first();
+  assert.equal(proj.model_r2_key, OLD_KEY);
+  assert.deepEqual(JSON.parse(proj.led_canvas), OLD_CANVAS);
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM song_videos WHERE template_id IS NOT NULL`).first()).n, 1);
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM led_templates WHERE name LIKE '舊版面%'`).first()).n, 0);
+  // 再存一次：換掉 edit
+  const edit2 = { ...EDIT, gutter: '8' };
+  assert.equal((await call('u_admin', 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: edit2 })).status, 200);
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data.edit, edit2);
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM model_uv_layouts`).first()).n, 1);
+});
+
+test('存的內容檢查：ifActive 對不上 409；格式不對 400；太大 413；沒有模型 400', async () => {
+  const { call, db } = await setup();
+  const put = (body) => call('u_admin', 'PUT', `${P}/led-uv/layout`, body);
+  const stale = await put({ ifActive: `models/p1/9999-${'b'.repeat(32)}.glb`, edit: EDIT });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.data.conflict, true);
+  assert.equal((await put({ edit: EDIT })).status, 400);
+  assert.equal((await put({ ifActive: OLD_KEY })).status, 400);
+  assert.equal((await put({ ifActive: OLD_KEY, edit: { v: 2 } })).status, 400);
+  assert.equal((await put({ ifActive: OLD_KEY, edit: [1, 2] })).status, 400);
+  assert.equal((await put({ ifActive: OLD_KEY, edit: { v: 1, big: 'x'.repeat(210 * 1024) } })).status, 413);
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM model_uv_layouts`).first()).n, 0);
+  await db.prepare(`UPDATE projects SET model_r2_key = NULL WHERE id = 'p1'`).run();
+  assert.equal((await put({ ifActive: null, edit: EDIT })).status, 400);
+});
+
+test('套用時 recipe 裡的 edit 跟著新版本存；打開讀到的是新版本的；換回舊版讀到舊版的草稿；畫布和舊影片的來回照舊', async () => {
+  const { call, db } = await setup();
+  // 先在舊版上存一份草稿
+  assert.equal((await call('u_admin', 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: EDIT })).status, 200);
+  const key = await holdUpload(call);
+  const applied = { ...EDIT, gutter: '16' };
+  const r = await call('u_admin', 'POST', `${P}/led-uv/apply`, applyBody(key, { recipe: { v: 1, surfaces: [], edit: applied } }));
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key, edit: applied });
+  // 在新版上再存一次（停手自動存）：edit 換掉、surfaces 留著
+  const later = { ...EDIT, gutter: '24' };
+  assert.equal((await call('u_admin', 'PUT', `${P}/led-uv/layout`, { ifActive: key, edit: later })).status, 200);
+  const newRow = await db.prepare(`SELECT recipe FROM model_uv_layouts WHERE model_key = ?`).bind(key).first();
+  assert.deepEqual(JSON.parse(newRow.recipe), { v: 1, surfaces: [], edit: later });
+  // 換回舊版：畫布和舊影片照舊還原；讀到舊版自己的草稿
+  const back = await call('u_admin', 'POST', `${P}/model/versions/activate`, { key: OLD_KEY });
+  assert.equal(back.status, 200);
+  assert.equal(back.data.restoredCanvas, true);
+  assert.deepEqual(back.data.ledCanvas, OLD_CANVAS);
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key: OLD_KEY, edit: EDIT });
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM song_videos WHERE template_id IS NOT NULL AND template_id != 'lt_mine'`).first()).n, 0);
+  // 再換回新版：舊影片重新套上，草稿還在
+  await call('u_admin', 'POST', `${P}/model/versions/activate`, { key });
+  assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM song_videos WHERE template_id IS NOT NULL AND template_id != 'lt_mine'`).first()).n, 2);
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data.edit, later);
+});
+
+test('一般上傳（壓縮）沿用草稿；沒帶 edit 的舊版前端套用照舊（recipe 沒有 edit → 讀到 null）', async () => {
+  const { call } = await setup();
+  assert.equal((await call('u_admin', 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: EDIT })).status, 200);
+  const comp = await call('u_admin', 'PUT', `${P}/model`, undefined, new Uint8Array([3, 3, 3]));
+  assert.equal(comp.status, 200);
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key: comp.data.key, edit: EDIT });
+  const key = await holdUpload(call);
+  const r = await call('u_admin', 'POST', `${P}/led-uv/apply`, { ...applyBody(key), ifActive: comp.data.key });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key, edit: null });
+});

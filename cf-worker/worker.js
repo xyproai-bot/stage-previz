@@ -549,6 +549,8 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         : ledTpl.deleteTemplate(request, env, ctx, route.tplId, mechLog(request, env, projectId)));
     case 'ledUv.apply':           return mechResp(uvLayouts.applyAutoUv(request, env, ctx, mechLog(request, env, projectId)));
     case 'ledUv.impact':          return mechResp(uvLayouts.uvImpact(env, ctx));
+    case 'ledUv.layoutGet':       return mechResp(uvLayouts.getLayoutEdit(env, ctx));
+    case 'ledUv.layoutPut':       return mechResp(uvLayouts.putLayoutEdit(request, env, ctx));
     case 'ledScreens.create':     return mechResp(ledTpl.createScreen(request, env, ctx, mechLog(request, env, projectId)));
     case 'ledScreens.item':
       return mechResp(request.method === 'PATCH'

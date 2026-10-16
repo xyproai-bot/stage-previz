@@ -52,3 +52,15 @@
 ## 第 2 階段（弧面、3D 預覽）
 
 後台**沒有改**（沒有新的 migration、網址、欄位）。弧面也走上面同一套「放進 R2 → 一次換好」。`recipe`（選填，<= 256 KB）多了每個物件的 `override`（`auto` / `flat` / `arc`）和每片螢幕的 `surface`（`flat` / `arc`）、`convex`、`spanDeg`、`distortion`，舊版前端不認識也不影響。
+
+## 第 3 階段（自己排版、排法存起來）
+
+後台只多兩個網址，**沒有新的 migration**（用 0036 的 `recipe` 欄位）；都只有這個專案的製作（`editor`），導演、動畫師 403，沒登入 401。舊版前端不會呼叫它們。
+
+- `GET /api/projects/:id/led-uv/layout` → `{ key, edit }`：`key` = 目前使用的模型版本，`edit` = 這個版本上次存的「製作填的東西」（沒有 = `null`）。
+- `PUT /api/projects/:id/led-uv/layout`　body `{ "ifActive": "<key>" | null, "edit": { "v": 1, … } }`
+  - `ifActive` 一定要附，跟現在使用的版本不一樣 → 409「模型已經被別人換過了，請重新分析」（`conflict: true`）。
+  - `edit` 要是物件、`v` 是 1、<= 200 KB（413）；存進這個版本的 `recipe.edit`，`recipe` 其他部分留著（合起來 <= 256 KB）。這個版本還沒有紀錄就建一筆（畫布 = 現在的畫布）。成功 `{ ok: true, key }`。
+  - 沒有模型 → 400。
+- `edit` 的內容（前端格式，`web/src/lib/ledUv/editState.ts`）：`{ v: 1, selected: { <物件 id>: bool }, forms: { <螢幕片代號>: 點數表單 }, overrides: { <物件 id>: 'flat' | 'arc' }, gutter, arrangement: { v: 1, canvasMode: 'auto' | 'custom', canvas: {width,height}, items: [{ key, x, y, rotate, flipH, flipV }], groups: [[key, …], …] } | null }`。螢幕的寬高不存（永遠是 LED 規格算出來的）。
+- `POST /led-uv/apply` 的 `recipe` 現在多一個 `edit`（同上格式），所以套用出來的新版本就帶著排法；換回舊版看到的是舊版自己的 `edit`；一般上傳（壓縮）沿用上一版的紀錄。沒帶 `edit` 的舊版前端照常套用（`GET` 回 `edit: null`）。

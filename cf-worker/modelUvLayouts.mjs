@@ -263,6 +263,63 @@ export async function uvImpact(env, ctx) {
 }
 
 // ─────────────────────────────────────────────
+// 排到一半的東西（第 3 階段）：勾的螢幕、每片的點數、辨識類型、自己排的排法，存在目前使用的模型版本的 recipe.edit 裡
+//   - 排到一半就存（前端停手 1.5 秒），重新整理、關掉再開，同一個模型版本從上次的樣子繼續
+//   - 套用的時候 recipe（含 edit）跟著新版本一起存，下次打開接著做
+//   沒有新的 migration：recipe 欄位 0036 就有了。這個版本還沒有紀錄的話建一筆（畫布 = 現在的畫布，跟「套用前」那筆一樣的意思）。
+// ─────────────────────────────────────────────
+
+export const MAX_EDIT_BYTES = 200 * 1024;
+
+export async function getLayoutEdit(env, ctx) {
+  const { projectId } = ctx;
+  const cur = await env.DB.prepare(`SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+  if (!cur) return bad('Not found', 404);
+  const key = cur.model_r2_key || null;
+  const row = await layoutRow(env, projectId, key);
+  let edit = null;
+  if (row && row.recipe) {
+    try { const r = JSON.parse(row.recipe); if (isObj(r) && isObj(r.edit)) edit = r.edit; } catch { /* 壞掉的 recipe 當沒有 */ }
+  }
+  return ok({ key, edit });
+}
+
+export async function putLayoutEdit(request, env, ctx) {
+  const { projectId, me } = ctx;
+  const body = await readJson(request);
+  if (!body) return bad('Invalid JSON');
+  if (!('ifActive' in body) || (body.ifActive !== null && typeof body.ifActive !== 'string')) return bad('要附上打開時的模型版本（ifActive）');
+  if (!isObj(body.edit) || body.edit.v !== 1) return bad('要存的內容格式不對');
+  const edit = JSON.stringify(body.edit);
+  if (edit.length > MAX_EDIT_BYTES) return bad('要存的內容太大（最多 200 KB）', 413);
+
+  const cur = await env.DB.prepare(`SELECT model_r2_key, led_canvas FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+  if (!cur) return bad('Not found', 404);
+  if (!cur.model_r2_key) return bad('這個專案還沒有 3D 模型');
+  if ((body.ifActive ?? null) !== cur.model_r2_key) return bad('模型已經被別人換過了，請重新分析', 409, { conflict: true });
+
+  const row = await layoutRow(env, projectId, cur.model_r2_key);
+  let recipe = {};
+  if (row && row.recipe) {
+    try { const r = JSON.parse(row.recipe); if (isObj(r)) recipe = r; } catch { /* 壞掉的 recipe 重新開始 */ }
+  }
+  recipe.v = 1;
+  recipe.edit = body.edit;
+  const text = JSON.stringify(recipe);
+  if (text.length > MAX_RECIPE_BYTES) return bad('要存的內容太大（最多 256 KB）', 413);
+  const t = nowIso();
+  if (row) {
+    await env.DB.prepare(`UPDATE model_uv_layouts SET recipe = ? WHERE project_id = ? AND model_key = ?`).bind(text, projectId, cur.model_r2_key).run();
+  } else {
+    const canvasJson = cur.led_canvas ? JSON.stringify(normalizeLedCanvas(cur.led_canvas)) : null;
+    await env.DB.prepare(
+      `INSERT OR IGNORE INTO model_uv_layouts (project_id, model_key, led_canvas, recipe, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(projectId, cur.model_r2_key, canvasJson, text, null, (me && me.id) || null, t).run();
+  }
+  return ok({ ok: true, key: cur.model_r2_key });
+}
+
+// ─────────────────────────────────────────────
 // 模型版本：列表上的說明、換版本時畫布和舊影片跟著換、刪除、一般上傳時沿用
 // ─────────────────────────────────────────────
 

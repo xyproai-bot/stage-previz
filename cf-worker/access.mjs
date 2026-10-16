@@ -32,6 +32,7 @@
 //   視角書籤（0035，camera-bookmarks）：看                                   所有成員（分享連結：只看）
 //   視角書籤：新增 / 改名 / 刪除 / 換順序                                      admin、導演（canEditCameraBookmarks，規則在 web/src/lib/cameraBookmarks.ts）
 //   自動貼 UV（0036，led-uv）：套用 / 看會動到什麼                            admin（這個專案的 admin，也就是製作）
+//   自動貼 UV：看 / 存排到一半的東西（led-uv/layout，沒有新的 migration）      admin（這個專案的 admin，也就是製作）
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
 //   歌曲影片：最近刪除、救回來（30 天內）                                      admin（這個專案的 admin）
@@ -335,6 +336,8 @@ export function describeProjectRoute(method, segs) {
       if (b) return null;
       if (a === 'apply') return m === 'POST' ? r('ledUv.apply', 'editor') : bad('ledUv.apply');
       if (a === 'impact') return read ? r('ledUv.impact', 'editor') : bad('ledUv.impact');
+      // 排到一半的東西（勾的螢幕、點數、自己排的排法）：看 / 存，只有製作
+      if (a === 'layout') return read ? r('ledUv.layoutGet', 'editor') : m === 'PUT' ? r('ledUv.layoutPut', 'editor') : bad('ledUv.layout');
       return null;
     // 手動切的螢幕（一個模型物件裡有好幾塊螢幕時，在整張畫布上框出來；讀在 GET …/led-templates 的 screens 裡）
     case 'led-screens':
