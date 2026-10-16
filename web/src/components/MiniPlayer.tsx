@@ -7,6 +7,7 @@ import Icon from './Icon';
 import { formatClock, parkVideo, type LocalVideoState } from '../lib/localVideo';
 import type { SongComment } from '../lib/api';
 import type { CompareOption } from '../lib/abCompare';
+import { LED_SWAP_PHONE_NOTE, ledBadgeText } from '../lib/abLedSync';
 import { isTouchDevice, type ReviewSession } from '../lib/review/useReviewSession';
 import { PLAYBACK_RATES, formatRange, formatTimecode, rateLabel } from '../lib/review/timecode';
 import './MiniPlayer.css';
@@ -20,6 +21,10 @@ export interface MiniPlayerCompare {
   onPick: (key: string | null) => void;
   /** 切到另一版（同一秒、播放 / 暫停照舊）；還沒選比較的版本 → 跟上一版比 */
   onFlip: () => void;
+  /** 比較中，LED 上現在放的是哪一版（徽章「LED：V2」）；沒在比 = null（lib/abLedSync.ts） */
+  ledLabel?: string | null;
+  /** 'instant' = 另一版先載在後面、跟著播，按 C 馬上換、LED 不會黑；'reload' = 手機：不同時放兩支影片，換的時候重新載入 */
+  ledSwap?: 'instant' | 'reload';
 }
 
 /** 審片（lib/review/useReviewSession.ts）：逐格、速度、時間碼、區段、留言跟著播放、畫記 */
@@ -475,6 +480,10 @@ export default function MiniPlayer({
                 </select>
               </label>
               {flipBtn || <span className="mini-player__compare-hint">選一版，按 C 切換</span>}
+              {ledBadgeText(!!compare!.value, compare!.ledLabel) && (
+                <span className="mini-player__led-chip" title="3D 舞台的 LED 現在放的是這一版">{ledBadgeText(true, compare!.ledLabel)}</span>
+              )}
+              {compare!.value && compare!.ledSwap === 'reload' && <span className="mini-player__compare-hint">{LED_SWAP_PHONE_NOTE}</span>}
             </div>
           )}
           {(onAddCommentAtTime || review?.onDraw || rangesOn || loopChip) && (

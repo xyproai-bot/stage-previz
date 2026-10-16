@@ -3,11 +3,15 @@
 //   isVideoFile / formatClock — 純函式
 //   useLocalVideo — 管這個 <video>（object URL、播放狀態、時間、循環、靜音、分頁在背景時暫停）
 //   載入新的影片不會自己播：停在第一格，使用者按播放才開始（規則在 playbackPolicy.ts）
+//   比較兩版（A/B）時多一個「後面」的 <video>（standby）：另一版先載好、跟著這一版同一個時間點播（沒聲音、看不到），
+//   換版本時（replaceUrl 到那一版）直接把前後對調——不重新載入、LED 不會黑；規則在 abLedSync.ts。
+//   沒有開比較的時候只有一個 <video>，跟以前完全一樣。
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CANNOT_PLAY_TEXT, LOCAL_CANNOT_PLAY_TEXT } from './videoCheck';
 import { recordPlayCheck, versionIdFromKey } from './versionPlayCheck';
 import { playsAfterLoad } from './playbackPolicy';
+import { decideSync, driftSeconds, planVersionSwitch, SYNC_INTERVAL_MS } from './abLedSync';
 
 const VIDEO_EXT = /\.(mp4|m4v|mov|webm|mkv|avi|ogv)$/i;
 
@@ -51,8 +55,22 @@ export interface LoadUrlOptions {
   startAt?: number;
 }
 
+/** 比較兩版時，後面那一個 <video>（看不到、沒聲音，一直跟著前面播）：lib/abLedSync.ts */
+export interface StandbyVideo {
+  /** 後面那一版的 key；沒有 = null */
+  key: string | null;
+  /** 後面那一版載好了（可以馬上換） */
+  ready: boolean;
+  /** 載進後面（不影響現在看的）；同一版再載一次沒有作用 */
+  load: (url: string, opts: LoadUrlOptions) => void;
+  /** 不比了：後面的卸掉 */
+  clear: () => void;
+}
+
 export interface LocalVideoState {
+  /** 現在放的那個 <video>（比較時，換版本會換成另一個，所以用的地方要把它放進 effect 的依賴） */
   video: HTMLVideoElement;
+  standby: StandbyVideo;
   fileName: string | null;
   /** 現在載的是什麼：本地檔案 'local:<清單 id>'、網址 = LoadUrlOptions.key；沒有 = null */
   srcKey: string | null;
@@ -81,20 +99,30 @@ export interface LocalVideoState {
   setRate: (r: number) => void;
 }
 
+function createVideoElement(): HTMLVideoElement {
+  const v = document.createElement('video');
+  v.playsInline = true;
+  v.loop = true;
+  v.preload = 'auto';
+  return v;
+}
+
 export function useLocalVideo(): LocalVideoState {
-  const [video] = useState(() => {
-    const v = document.createElement('video');
-    v.playsInline = true;
-    v.loop = true;
-    v.preload = 'auto';
-    return v;
-  });
+  // 第一個 <video>；比較兩版時才會多第二個（spare）。video = 現在放的那一個，換版本時（flipStandby）會換成另一個
+  const [home] = useState(createVideoElement);
+  const spareRef = useRef<HTMLVideoElement | null>(null);
+  const [video, setVideo] = useState<HTMLVideoElement>(home);
+  const videoRef = useRef(video);
+  videoRef.current = video;
+  /** 不是 v 的那一個 <video>（沒有第二個 = null） */
+  const otherOf = useCallback((v: HTMLVideoElement): HTMLVideoElement | null => (v === home ? spareRef.current : home), [home]);
   const urlRef = useRef<string | null>(null);
   const srcKeyRef = useRef<string | null>(null);
+  const fileNameRef = useRef<string | null>(null);
   const kindRef = useRef<'file' | 'url' | null>(null);
   /** 分頁在背景時暫停的 → 切回來接著播；中間換了影片就不接（新的停在第一格） */
   const resumeOnShowRef = useRef(false);
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileName, setFileNameState] = useState<string | null>(null);
   const [srcKey, setSrcKey] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -102,12 +130,38 @@ export function useLocalVideo(): LocalVideoState {
   const [duration, setDuration] = useState(0);
   const [loop, setLoopState] = useState(true);
   const [muted, setMutedState] = useState(false);
+  const mutedRef = useRef(false);
   const [rate, setRateState] = useState(1);
   const rateRef = useRef(1);
   const [error, setError] = useState<string | null>(null);
+  // 比較：後面那一版（key、名字）和它載好了沒
+  const standbyRef = useRef<{ key: string; name: string } | null>(null);
+  const [standbyKey, setStandbyKey] = useState<string | null>(null);
+  const [standbyReady, setStandbyReady] = useState(false);
 
+  const setFileName = useCallback((n: string | null) => {
+    fileNameRef.current = n;
+    setFileNameState(n);
+  }, []);
+
+  // 第一個 <video> 放到頁面上看不到的角落；離開頁面時全部卸掉
   useEffect(() => {
-    parkVideo(video);
+    parkVideo(home);
+    return () => {
+      for (const v of [home, spareRef.current]) {
+        if (!v) continue;
+        v.pause();
+        v.removeAttribute('src');
+        v.load();
+        v.remove();
+      }
+      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    };
+  }, [home]);
+
+  // 現在放的這個 <video> 的事件（換版本、對調之後，換成聽新的那一個）
+  useEffect(() => {
     // 播的是影片版本（'v:<id>'）→ 記下這台電腦播不播得了（貼連結的版本沒辦法先檢查，版本列上會寫出來）
     const versionId = () => (kindRef.current === 'url' ? versionIdFromKey(srcKeyRef.current) : null);
     const onMeta = () => {
@@ -190,12 +244,6 @@ export function useLocalVideo(): LocalVideoState {
       video.removeEventListener('ended', onPause);
       video.removeEventListener('error', onError);
       document.removeEventListener('visibilitychange', onVisibility);
-      video.pause();
-      video.removeAttribute('src');
-      video.load();
-      video.remove();
-      if (urlRef.current) URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
     };
   }, [video]);
 
@@ -217,11 +265,136 @@ export function useLocalVideo(): LocalVideoState {
     urlRef.current = null;
   }, []);
 
-  const clear = useCallback(() => {
+  // ── 比較（A/B）：後面那一版 ──
+
+  /** 不比了：後面的卸掉（<video> 留著，下次比較再用） */
+  const clearStandby = useCallback(() => {
+    const meta = standbyRef.current;
+    standbyRef.current = null;
+    setStandbyKey(null);
+    setStandbyReady(false);
+    const other = meta ? otherOf(videoRef.current) : null;
+    if (other) {
+      other.pause();
+      other.removeAttribute('src');
+      other.load();
+    }
+  }, [otherOf]);
+
+  const loadStandby = useCallback((url: string, opts: LoadUrlOptions) => {
+    const cur = videoRef.current;
+    let sb = otherOf(cur);
+    if (!sb) {
+      sb = createVideoElement();
+      spareRef.current = sb;
+      parkVideo(sb);
+    }
+    if (standbyRef.current?.key === opts.key && sb.getAttribute('src') === url) return;
+    sb.pause();
+    sb.muted = true;  // 後面那一版沒有聲音（換到前面時才照使用者的靜音設定）
+    sb.loop = cur.loop;
+    // crossOrigin 一定要在 src 之前設：LED 貼圖要讀畫面，沒有就會被瀏覽器擋
+    sb.crossOrigin = opts.crossOrigin ?? 'anonymous';
+    sb.src = url;
+    sb.playbackRate = cur.playbackRate;
+    standbyRef.current = { key: opts.key, name: opts.name };
+    setStandbyKey(opts.key);
+    setStandbyReady(false);
+  }, [otherOf]);
+
+  // 後面那一版：載好了就通知；跟著前面的時間、播放 / 暫停、速度（每 SYNC_INTERVAL_MS 檢查，前面一有動作就馬上檢查）
+  useEffect(() => {
+    if (!standbyKey) return;
+    const master = video;
+    const sb = otherOf(master);
+    if (!sb) return;
+    const checkReady = () => setStandbyReady(sb.readyState >= 2 && sb.videoWidth > 0);
+    const onSbError = () => setStandbyReady(false);
+    const tick = () => {
+      if (standbyRef.current?.key !== standbyKey) return;
+      const act = decideSync({
+        masterTime: master.currentTime,
+        masterDuration: master.duration,
+        masterPaused: master.paused,
+        masterRate: master.playbackRate,
+        loop: master.loop,
+        standbyTime: sb.currentTime,
+        standbyPaused: sb.paused,
+        standbyRate: sb.playbackRate,
+        standbyReady: sb.readyState >= 2 && sb.videoWidth > 0,
+      });
+      if (act.rate !== undefined) sb.playbackRate = act.rate;
+      if (act.seekTo !== undefined) { try { sb.currentTime = act.seekTo; } catch { /* 還不能跳就下次 */ } }
+      if (act.pause) sb.pause();
+      if (act.play) sb.play().catch(() => { /* 被擋就等下次 */ });
+    };
+    const onSbData = () => { checkReady(); tick(); };
+    sb.addEventListener('loadeddata', onSbData);
+    sb.addEventListener('canplay', onSbData);
+    sb.addEventListener('error', onSbError);
+    const masterEvents = ['seeked', 'play', 'pause', 'ratechange'] as const;
+    masterEvents.forEach(ev => master.addEventListener(ev, tick));
+    const id = window.setInterval(tick, SYNC_INTERVAL_MS);
+    checkReady();
+    tick();
+    return () => {
+      window.clearInterval(id);
+      masterEvents.forEach(ev => master.removeEventListener(ev, tick));
+      sb.removeEventListener('loadeddata', onSbData);
+      sb.removeEventListener('canplay', onSbData);
+      sb.removeEventListener('error', onSbError);
+    };
+  }, [standbyKey, video, otherOf]);
+
+  /**
+   * 把後面那一版換到前面（前後對調）：後面那個已經載好、時間也跟上了才行（abLedSync.planVersionSwitch）。
+   * 不重新載入，所以 LED 不會黑一下；原本前面的退到後面，接著跟著新的前面播（再按一次還是馬上換）。
+   * 換成功 true；不行 false（呼叫的人照原本的作法換網址）
+   */
+  const flipStandby = useCallback((): boolean => {
+    const meta = standbyRef.current;
+    const cur = videoRef.current;
+    const next = meta ? otherOf(cur) : null;
+    if (!meta || !next || kindRef.current !== 'url') return false;
+    const plan = planVersionSwitch({
+      targetKey: meta.key,
+      activeKey: srcKeyRef.current,
+      standbyKey: meta.key,
+      standbyReady: next.readyState >= 2 && next.videoWidth > 0,
+      drift: driftSeconds(cur.currentTime, next.currentTime, cur.duration, cur.loop),
+    });
+    if (plan !== 'instant') return false;
+    const prevKey = srcKeyRef.current;
+    const prevName = fileNameRef.current ?? '';
+    // 聲音、循環、速度、播放狀態：新的前面照使用者的設定，退到後面的靜音
+    next.muted = mutedRef.current;
+    next.loop = cur.loop;
+    if (next.playbackRate !== rateRef.current) next.playbackRate = rateRef.current;
+    cur.muted = true;
+    if (!cur.paused && next.paused) next.play().catch(() => {});
+    else if (cur.paused && !next.paused) next.pause();
     resumeOnShowRef.current = false;
-    video.pause();
-    video.removeAttribute('src');
-    video.load();
+    videoRef.current = next;
+    standbyRef.current = prevKey ? { key: prevKey, name: prevName } : null;
+    setVideo(next);
+    setKey(meta.key);
+    setFileName(meta.name);
+    setError(null);
+    setReady(true);
+    setTime(next.currentTime);
+    setDuration(Number.isFinite(next.duration) ? next.duration : 0);
+    setPlaying(!next.paused);
+    setStandbyKey(prevKey);
+    setStandbyReady(true);
+    return true;
+  }, [otherOf, setKey, setFileName]);
+
+  const clear = useCallback(() => {
+    const v = videoRef.current;
+    resumeOnShowRef.current = false;
+    v.pause();
+    v.removeAttribute('src');
+    v.load();
     revokeObjectUrl();
     kindRef.current = null;
     setKey(null);
@@ -231,13 +404,15 @@ export function useLocalVideo(): LocalVideoState {
     setTime(0);
     setDuration(0);
     setError(null);
-  }, [video, revokeObjectUrl, setKey]);
+    clearStandby();
+  }, [revokeObjectUrl, setKey, setFileName, clearStandby]);
 
   const load = useCallback((file: File, key?: string) => {
     if (!isVideoFile(file)) {
       setError(`「${file.name}」不是影片檔`);
       return false;
     }
+    const v = videoRef.current;
     revokeObjectUrl();
     urlRef.current = URL.createObjectURL(file);
     resetState();
@@ -245,13 +420,15 @@ export function useLocalVideo(): LocalVideoState {
     kindRef.current = 'file';
     setKey(key ?? `file:${file.name}:${file.size}:${file.lastModified}`);
     // 換檔案不會自己播：停在第一格等使用者按播放（先暫停：正在播的換 src 時瀏覽器不會通知「暫停了」）
-    video.pause();
-    video.removeAttribute('crossorigin');
-    video.src = urlRef.current;
+    v.pause();
+    v.removeAttribute('crossorigin');
+    v.src = urlRef.current;
+    clearStandby();  // 本地檔案不跟版本比較
     return true;
-  }, [video, revokeObjectUrl, resetState, setKey]);
+  }, [revokeObjectUrl, resetState, setKey, setFileName, clearStandby]);
 
   const loadUrl = useCallback((url: string, opts: LoadUrlOptions) => {
+    const video = videoRef.current;
     if (srcKeyRef.current === opts.key && video.getAttribute('src') === url) return;
     revokeObjectUrl();  // 換掉本地檔案 → 收掉它的網址
     resetState();
@@ -271,9 +448,19 @@ export function useLocalVideo(): LocalVideoState {
     }
     // 預設停在第一格（或 startAt 那一秒）等使用者按播放；明講要播的（點了區段留言）才播
     if (playsAfterLoad({ autoplay: opts.autoplay })) video.play().catch(() => { /* 被擋就等使用者按播放 */ });
-  }, [video, revokeObjectUrl, resetState, setKey]);
+  }, [revokeObjectUrl, resetState, setKey, setFileName]);
 
   const replaceUrl = useCallback((url: string, opts: LoadUrlOptions) => {
+    // 比較：要換的那一版已經在後面準備好了 → 直接對調，不重新載入（同一秒、播放 / 暫停照舊）
+    if (standbyRef.current?.key === opts.key && flipStandby()) {
+      const now = videoRef.current;
+      if (opts.startAt != null) {
+        try { now.currentTime = Math.min(opts.startAt, now.duration || opts.startAt); } catch { /* 跳不過去就算了 */ }
+      }
+      if (opts.autoplay && now.paused) now.play().catch(() => {});
+      return;
+    }
+    const video = videoRef.current;
     const at = video.currentTime;
     const wasPlaying = !video.paused;
     revokeObjectUrl();
@@ -291,33 +478,49 @@ export function useLocalVideo(): LocalVideoState {
       try { video.currentTime = Math.min(to, video.duration || to); } catch { /* 跳不過去就從頭 */ }
       if (play) video.play().catch(() => {});
     }, { once: true });
-  }, [video, revokeObjectUrl, setKey]);
+  }, [revokeObjectUrl, setKey, setFileName, flipStandby]);
 
   const togglePlay = useCallback(() => {
+    const video = videoRef.current;
     if (video.paused) video.play().catch(() => {});
     else video.pause();
-  }, [video]);
-  const play = useCallback(() => { video.play().catch(() => {}); }, [video]);
-  const pause = useCallback(() => { resumeOnShowRef.current = false; video.pause(); }, [video]);
+  }, []);
+  const play = useCallback(() => { videoRef.current.play().catch(() => {}); }, []);
+  const pause = useCallback(() => { resumeOnShowRef.current = false; videoRef.current.pause(); }, []);
 
   const seek = useCallback((t: number) => {
     if (!Number.isFinite(t)) return;
+    const video = videoRef.current;
     video.currentTime = Math.max(0, Math.min(t, video.duration || t));
     setTime(video.currentTime);
-  }, [video]);
+  }, []);
 
-  const setLoop = useCallback((on: boolean) => { video.loop = on; setLoopState(on); }, [video]);
-  const setMuted = useCallback((on: boolean) => { video.muted = on; setMutedState(on); }, [video]);
+  const setLoop = useCallback((on: boolean) => {
+    videoRef.current.loop = on;
+    const other = otherOf(videoRef.current);
+    if (other) other.loop = on;
+    setLoopState(on);
+  }, [otherOf]);
+  const setMuted = useCallback((on: boolean) => {
+    mutedRef.current = on;
+    videoRef.current.muted = on;
+    setMutedState(on);
+  }, []);
   const setRate = useCallback((r: number) => {
     const v = Math.max(0.25, Math.min(4, Number(r) || 1));
     rateRef.current = v;
-    video.playbackRate = v;
+    videoRef.current.playbackRate = v;
     setRateState(v);
-  }, [video]);
+  }, []);
   const getSrcKey = useCallback(() => srcKeyRef.current, []);
 
+  const standby = useMemo<StandbyVideo>(
+    () => ({ key: standbyKey, ready: standbyReady, load: loadStandby, clear: clearStandby }),
+    [standbyKey, standbyReady, loadStandby, clearStandby],
+  );
+
   return {
-    video, fileName, srcKey, getSrcKey, ready, playing, time, duration, loop, muted, error,
+    video, standby, fileName, srcKey, getSrcKey, ready, playing, time, duration, loop, muted, error,
     load, loadUrl, replaceUrl, clear, togglePlay, play, pause, seek, setLoop, setMuted, rate, setRate,
   };
 }

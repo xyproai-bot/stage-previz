@@ -1,0 +1,17 @@
+/* 比較兩版時，3D 畫面左上角（工具列下面）的「LED：V2」；在 3D 畫面（position: relative 的外框）裡，不擋滑鼠 */
+.led-compare-badge {
+  position: absolute;
+  left: 12px;
+  top: 64px;
+  z-index: 6;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: rgba(14, 16, 20, 0.72);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}

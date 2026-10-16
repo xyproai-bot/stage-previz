@@ -6,8 +6,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   compareOptions, defaultCompareKey, flipTarget, isCompareShortcut, otherKey, startCompare, syncPair, type AbPair,
 } from './abCompare';
-import type { LoadUrlOptions } from './localVideo';
+import type { LoadUrlOptions, StandbyVideo } from './localVideo';
 import type { MiniPlayerCompare } from '../components/MiniPlayer';
+import { standbyAllowed } from './abLedSync';
+import { isPhoneLayout } from './viewportVars';
 
 interface CompareItem { key: string; label: string; url: string | null; crossOrigin?: LoadUrlOptions['crossOrigin'] }
 
@@ -38,9 +40,16 @@ export interface UseAbCompareOptions {
   currentKey: string | null;
   /** 記住選了哪一版（工作站還會順便把 LED 切到「影片」） */
   select: (key: string) => void;
-  player: { replaceUrl: (url: string, opts: LoadUrlOptions) => void };
+  /** standby = 比較的另一版先載在後面、跟著播（lib/localVideo.ts），按 C 馬上換、LED 跟著換、不會黑；沒給 = 照舊重新載入 */
+  player: { replaceUrl: (url: string, opts: LoadUrlOptions) => void; standby?: StandbyVideo };
   /** false = 現在不能比（C 不作用）；預設 true */
   enabled?: boolean;
+}
+
+/** 這台裝置能不能同時放兩支影片（手機、記憶體小的不行） */
+function canHoldTwoVideos(): boolean {
+  const mem = typeof navigator !== 'undefined' ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory : undefined;
+  return standbyAllowed({ isPhone: isPhoneLayout(), deviceMemoryGb: mem ?? null });
 }
 
 export function useAbCompare({ resetKey, items, currentKey, select, player, enabled = true }: UseAbCompareOptions): MiniPlayerCompare {
@@ -70,6 +79,18 @@ export function useAbCompare({ resetKey, items, currentKey, select, player, enab
 
   const options = useMemo(() => compareOptions(items, currentKey), [items, currentKey]);
 
+  // 比較中：另一版先載在後面、跟著播（手機不做，維持換網址）；換版本時 replaceUrl 看到它已經準備好就直接對調
+  const standby = player.standby;
+  const dual = !!standby && canHoldTwoVideos();
+  useEffect(() => {
+    if (!standby) return;
+    const want = dual && pair ? otherKey(pair, currentKey) : null;
+    const it = want ? items.find(x => x.key === want) : null;
+    if (!want || !it?.url) { if (standby.key !== null) standby.clear(); return; }
+    if (standby.key !== want) standby.load(it.url, { key: it.key, name: it.label, crossOrigin: it.crossOrigin });
+  }, [standby, dual, pair, currentKey, items]);
+  const ledLabel = pair ? items.find(it => it.key === currentKey)?.label ?? null : null;
+
   // 鍵盤 C（在打字、按著 Ctrl / Cmd / Alt 時不算）
   useEffect(() => {
     if (!enabled) return;
@@ -88,5 +109,7 @@ export function useAbCompare({ resetKey, items, currentKey, select, player, enab
     value: pair ? otherKey(pair, currentKey) : null,
     onPick,
     onFlip,
+    ledLabel,
+    ledSwap: dual ? 'instant' : 'reload',
   };
 }

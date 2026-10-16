@@ -28,6 +28,7 @@ import HelpModal from '../components/HelpModal';
 import CommentThreadList from '../components/CommentThreadList';
 import { buildThreads, defaultScope, filterAndSortThreads, scopeThreads, visibleInScope, canPostComment, canResolveComment, type CommentScope } from '../lib/commentThreads';
 import { useAbCompare } from '../lib/useAbCompare';
+import LedCompareBadge from '../components/LedCompareBadge';
 import { useNewVersionHint } from '../lib/newVersionHint';
 import { decisionNotifyHint, newVersionLabel } from '../lib/reviewHistory';
 import { parseDeepLink, type DeepLink } from '../lib/notifications';
@@ -1163,6 +1164,8 @@ function SongDetail({
                   showingAttachments={openedComment?.attachments}
                 />
               </StageScene>
+              {/* 比較兩版時，LED 現在放的是哪一版 */}
+              <LedCompareBadge compare={compare} />
               {/* 小播放器（子母畫面）：可以拖、可以收起來；在 3D 畫面裡面，不會蓋到下面的 cue 列 */}
               {selected && (
                 <MiniPlayer

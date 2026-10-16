@@ -41,6 +41,7 @@ import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { useAbCompare } from '../lib/useAbCompare';
+import LedCompareBadge from '../components/LedCompareBadge';
 import { useNewVersionHint } from '../lib/newVersionHint';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
@@ -1155,6 +1156,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                     showingAttachments={openedComment?.attachments}
                   />
                 </StageScene>
+                {/* 比較兩版時，LED 現在放的是哪一版 */}
+                <LedCompareBadge compare={compare} />
                 {/* 歌曲影片的小播放器（浮在 3D 畫面上，可以拖、可以收起來；不會蓋到下面的 cue 列） */}
                 {selectedVersion && (
                   <MiniPlayer
