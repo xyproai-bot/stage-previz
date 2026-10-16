@@ -95,6 +95,8 @@ export interface Plan {
   arranged: boolean;
   /** 自己排的排法有什麼問題（超出畫布、重疊）；沒套用自己排的 = null */
   problems: ArrangeProblems | null;
+  /** blockers 裡面，是自己排的排法造成的那幾條（超出畫布）；3D 預覽只被「點數還沒填」擋住，不被這幾條擋住 */
+  arrangeBlockers: string[];
 }
 
 export interface PlanContext {
@@ -154,6 +156,8 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
   const objects: PlanObject[] = [];
   const items: PackItem[] = [];
   const natives: ArrangeNative[] = [];
+  /** 自己排的排法造成的擋住套用的問題（超出畫布）：預覽不受影響 */
+  const arrangeBlockers: string[] = [];
   const blockers: string[] = [];
   const warnings: string[] = [];
 
@@ -222,7 +226,9 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
   if (resolved) {
     const nameOf = new Map(natives.map(n => [n.key, n.name]));
     if (resolved.problems.outside.length > 0) {
-      blockers.push(BLOCKED_TEXT.outside(resolved.problems.outside.map(k => nameOf.get(k) ?? k)));
+      const t = BLOCKED_TEXT.outside(resolved.problems.outside.map(k => nameOf.get(k) ?? k));
+      blockers.push(t);
+      arrangeBlockers.push(t);
     }
     if (resolved.problems.overlaps.length > 0) {
       const [a, b] = resolved.problems.overlaps[0];
@@ -249,7 +255,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
       o.keep = { map: { span: region.span, oldCanvas: ctx.oldCanvas, shiftX, shiftY }, rect: region.rect, placed, manualUpdates };
     }
   }
-  return { objects, canvas, blockers, warnings, rows: pack.rows, pack, items: natives, arranged: !!resolved, problems: resolved ? resolved.problems : null };
+  return { objects, canvas, blockers, warnings, rows: pack.rows, pack, items: natives, arranged: !!resolved, problems: resolved ? resolved.problems : null, arrangeBlockers };
 }
 
 /** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null */

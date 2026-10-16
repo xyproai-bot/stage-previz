@@ -65,6 +65,25 @@ interface Props {
   backdrop?: LayerBackdrop | null;
   /** 工具列下面那排開關 */
   layersBar?: ReactNode;
+  /**
+   * 大小鎖死（自動貼 UV 的排版用）：螢幕的大小是 LED 規格決定的，所以沒有縮放把手（單塊、整組都沒有），只能移動、轉 90°、翻轉。
+   * 沒給 = 跟版型編輯器一樣可以縮放。
+   */
+  lockSize?: boolean;
+  /** 能不能用 Delete 拿掉選到的（預設可以；排版時每一塊都是必要的，不能拿掉） */
+  allowRemove?: boolean;
+  /** 「轉 90°」「左右翻轉」「上下翻轉」怎麼改選到的螢幕（排版時連在一起的整組要當一個整體轉）；沒給 = 各自在原地轉 / 翻 */
+  transformPatches?: (kind: 'rotate' | 'flipH' | 'flipV', selected: readonly PlacementInput[]) => ItemPatchEntry[];
+  /** 選到的螢幕裡有沒有能轉 / 翻的（按鈕亮不亮）；沒給 = 有選就亮 */
+  canTransform?: (selected: readonly PlacementInput[]) => boolean;
+  /** 畫布上方的名稱（預設「版型畫布」） */
+  canvasName?: string;
+  /** 每一塊框裡寫的大小（預設「實際 W×H → 這個版型 w×h」） */
+  sizeLabel?: (def: ScreenDef, item: PlacementInput) => string;
+  /** 畫布上沒有螢幕時的說明 */
+  emptyText?: string;
+  /** 畫布底下那一行操作說明 */
+  hint?: string;
 }
 
 type Pt = { x: number; y: number };
@@ -90,7 +109,14 @@ export function zoomText(zoom: number): string {
   return `${pct >= 10 ? Math.round(pct) : Number(pct.toFixed(1))}%`;
 }
 
-export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo, fullMap = null, showContent = false, contentOpacity = 1, backdrop = null, layersBar = null }: Props) {
+const DEFAULT_HINT = '空白處拖曳框選（Shift / Ctrl 加選，Ctrl+A 全選）· 拖曳螢幕移動，選了好幾塊就一起動 · 拖角落縮放（預設鎖長寬比，Shift 可以自由拉；選了好幾塊就是整組一起縮放，拖虛線外框的角落或邊）· 方向鍵微調 1 像素（Shift 10 像素）· 靠近邊會吸附（Alt 不吸附）· 滾輪縮放 · 按住空白鍵拖曳、滑鼠中鍵拖曳或雙指平移';
+const DEFAULT_EMPTY = '版型裡還沒有螢幕。在右邊的清單按「加入版型」，就會放在畫布上，再用滑鼠拖到想要的位置。';
+
+export default function LedTemplateCanvas({
+  canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo,
+  fullMap = null, showContent = false, contentOpacity = 1, backdrop = null, layersBar = null,
+  lockSize = false, allowRemove = true, transformPatches, canTransform, canvasName = '版型畫布', sizeLabel = screenSizeLabel, emptyText = DEFAULT_EMPTY, hint = DEFAULT_HINT,
+}: Props) {
   const api = useCanvasView(canvas, resetKey);
   const { view, size } = api;
   const dragRef = useRef<Drag | null>(null);
@@ -271,7 +297,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
     if (mod || e.altKey) return;
     if (k === 'escape') { if (selKeys.length > 0) { stop(); onSelect([]); } return; }
     if (selItems.length === 0) return;
-    if (k === 'delete' || k === 'backspace') { stop(); onRemove(selKeys); return; }
+    if (k === 'delete' || k === 'backspace') { if (allowRemove) { stop(); onRemove(selKeys); } return; }
     const step = e.shiftKey ? 10 : 1;
     const dir = k === 'arrowleft' ? [-step, 0] : k === 'arrowright' ? [step, 0] : k === 'arrowup' ? [0, -step] : k === 'arrowdown' ? [0, step] : null;
     if (dir) {
@@ -281,8 +307,17 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
   }
 
   // 轉 90° / 翻轉：選到幾塊就各自在原地轉 / 翻
-  const rotate90 = () => { if (selItems.length) onPatch(rotatePatches(selItems, 1), {}); };
-  const flip = (axis: 'h' | 'v') => { if (selItems.length) onPatch(flipPatches(selItems, axis), {}); };
+  const transformable = selItems.length > 0 && (canTransform ? canTransform(selItems) : true);
+  const rotate90 = () => {
+    if (!transformable) return;
+    const patches = transformPatches ? transformPatches('rotate', selItems) : rotatePatches(selItems, 1);
+    if (patches.length) onPatch(patches, {});
+  };
+  const flip = (axis: 'h' | 'v') => {
+    if (!transformable) return;
+    const patches = transformPatches ? transformPatches(axis === 'h' ? 'flipH' : 'flipV', selItems) : flipPatches(selItems, axis);
+    if (patches.length) onPatch(patches, {});
+  };
   const allFlipped = (axis: 'h' | 'v') => selItems.length > 0 && selItems.every(i => (axis === 'h' ? i.flipH : i.flipV));
 
   // ───────── 畫面 ─────────
@@ -343,9 +378,9 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
         <button className="ltc__btn" onClick={onUndo} disabled={!canUndo} title="復原（Ctrl+Z）" aria-label="復原"><Icon icon={Undo2} /></button>
         <button className="ltc__btn" onClick={onRedo} disabled={!canRedo} title="重做（Ctrl+Shift+Z）" aria-label="重做"><Icon icon={Redo2} /></button>
         <span className="ltc__sep" />
-        <button className="ltc__btn" onClick={rotate90} disabled={selItems.length === 0} title="選到的螢幕順時針轉 90 度（寬高對調）；選了好幾塊就各自在原地轉"><Icon icon={RotateCw} /> <span className="ltc__btn-text">轉 90°</span></button>
-        <button className="ltc__btn" onClick={() => flip('h')} disabled={selItems.length === 0} aria-pressed={allFlipped('h')} title="左右翻轉（轉完再翻）；選了好幾塊就各自翻"><Icon icon={FlipHorizontal2} /> <span className="ltc__btn-text">左右翻轉</span></button>
-        <button className="ltc__btn" onClick={() => flip('v')} disabled={selItems.length === 0} aria-pressed={allFlipped('v')} title="上下翻轉（轉完再翻）；選了好幾塊就各自翻"><Icon icon={FlipVertical2} /> <span className="ltc__btn-text">上下翻轉</span></button>
+        <button className="ltc__btn" onClick={rotate90} disabled={!transformable} title={transformPatches ? '選到的螢幕順時針轉 90 度（寬高對調）；連在一起的整組一起轉，其餘的各自在原地轉' : '選到的螢幕順時針轉 90 度（寬高對調）；選了好幾塊就各自在原地轉'}><Icon icon={RotateCw} /> <span className="ltc__btn-text">轉 90°</span></button>
+        <button className="ltc__btn" onClick={() => flip('h')} disabled={!transformable} aria-pressed={allFlipped('h')} title={transformPatches ? '左右翻轉；連在一起的整組一起翻，其餘的各自翻' : '左右翻轉（轉完再翻）；選了好幾塊就各自翻'}><Icon icon={FlipHorizontal2} /> <span className="ltc__btn-text">左右翻轉</span></button>
+        <button className="ltc__btn" onClick={() => flip('v')} disabled={!transformable} aria-pressed={allFlipped('v')} title={transformPatches ? '上下翻轉；連在一起的整組一起翻，其餘的各自翻' : '上下翻轉（轉完再翻）；選了好幾塊就各自翻'}><Icon icon={FlipVertical2} /> <span className="ltc__btn-text">上下翻轉</span></button>
         {selItems.length > 1 && <span className="ltc__count" role="status">已選 {selItems.length} 塊</span>}
       </div>
       {layersBar}
@@ -355,7 +390,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
         className={'ltc__host' + (grabbing ? ' is-grabbing' : '') + (spaceHeld ? ' is-space' : '')}
         tabIndex={0}
         role="application"
-        aria-label={`版型畫布 ${canvas.width}×${canvas.height}，用方向鍵微調選到的螢幕，在空白處拖曳可以框選好幾塊`}
+        aria-label={`${canvasName} ${canvas.width}×${canvas.height}，用方向鍵微調選到的螢幕，在空白處拖曳可以框選好幾塊`}
         onPointerEnter={() => { hoverRef.current = true; }}
         onPointerLeave={() => { hoverRef.current = false; }}
         onPointerDown={onPointerDown}
@@ -377,7 +412,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
             : <line key={i} y1={sy(g.at)} y2={sy(g.at)} x1={0} x2={size.w} className="ltc__guide" />))}
         </svg>
         <div className="ltc__canvas-label" style={{ left: Math.max(6, sx(0)), top: Math.max(4, sy(0) - 20) }}>
-          版型畫布 {canvas.width}×{canvas.height} 像素
+          {canvasName} {canvas.width}×{canvas.height} 像素
         </div>
 
         {ordered.map(it => {
@@ -391,7 +426,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           const hue = panelHue(defs.indexOf(def));
           const style = { transform: `translate(${sx(it.dest.x)}px, ${sy(it.dest.y)}px)`, width: w, height: h, '--hue': hue.toFixed(1) } as CSSProperties;
           const bad = probs?.size ? [probs.has('outside') ? '超出畫布' : '', probs.has('overlap') ? '重疊' : ''].filter(Boolean).join('、') : '';
-          const tip = `${def.name}：${screenSizeLabel(def, it)}；位置 ${it.dest.x}, ${it.dest.y}；螢幕的上方${upText(up)}`
+          const tip = `${def.name}：${sizeLabel(def, it)}；位置 ${it.dest.x}, ${it.dest.y}；螢幕的上方${upText(up)}`
             + (it.rotate ? `；轉 ${it.rotate}°` : '') + (it.flipH ? '；左右翻' : '') + (it.flipV ? '；上下翻' : '') + (bad ? `；${bad}` : '') + (stretched ? '；被拉伸' : '');
           return (
             <div
@@ -409,7 +444,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
               {w >= 56 && h >= 26 && (
                 <div className="ltc__label">
                   <strong>{def.name}</strong>
-                  {h >= 44 && <span>{screenSizeLabel(def, it)}</span>}
+                  {h >= 44 && <span>{sizeLabel(def, it)}</span>}
                   {h >= 60 && (it.rotate || it.flipH || it.flipV || stretched) ? (
                     <span className="ltc__tags">
                       {it.rotate ? `轉 ${it.rotate}°` : ''}{it.flipH ? ' 左右翻' : ''}{it.flipV ? ' 上下翻' : ''}
@@ -431,7 +466,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           />
         )}
 
-        {groupBox && (() => {
+        {groupBox && !lockSize && (() => {
           const b = groupBox;
           const x0 = sx(b.x), x1 = sx(b.x + b.w), y0 = sy(b.y), y1 = sy(b.y + b.h);
           const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
@@ -447,7 +482,7 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
           ));
         })()}
 
-        {sel && (() => {
+        {sel && !lockSize && (() => {
           const b = sel.dest;
           const pos: Record<Handle, Pt> = {
             nw: { x: sx(b.x), y: sy(b.y) }, ne: { x: sx(b.x + b.w), y: sy(b.y) },
@@ -467,10 +502,10 @@ export default function LedTemplateCanvas({ canvas, scalePct, defs, items, selec
         )}
 
         {placed.length === 0 && (
-          <div className="ltc__empty muted">版型裡還沒有螢幕。在右邊的清單按「加入版型」，就會放在畫布上，再用滑鼠拖到想要的位置。</div>
+          <div className="ltc__empty muted">{emptyText}</div>
         )}
       </div>
-      <p className="ltc__hint ltc__hint--wrap muted">空白處拖曳框選（Shift / Ctrl 加選，Ctrl+A 全選）· 拖曳螢幕移動，選了好幾塊就一起動 · 拖角落縮放（預設鎖長寬比，Shift 可以自由拉；選了好幾塊就是整組一起縮放，拖虛線外框的角落或邊）· 方向鍵微調 1 像素（Shift 10 像素）· 靠近邊會吸附（Alt 不吸附）· 滾輪縮放 · 按住空白鍵拖曳、滑鼠中鍵拖曳或雙指平移</p>
+      <p className="ltc__hint ltc__hint--wrap muted">{hint}</p>
     </div>
   );
 }

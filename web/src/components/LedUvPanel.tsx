@@ -3,15 +3,21 @@ import { ArrowRight, CircleCheck, Download, Eye, LoaderCircle, Ruler, TriangleAl
 import Icon from './Icon';
 import { toast } from './dialogs';
 import * as api from '../lib/api';
-import { getUvImpact, uploadModelHeld, applyAutoUv, type ApplyResult, type LedUvApiError, type UvImpact } from '../lib/ledUvApi';
+import { getUvImpact, getUvLayoutEdit, saveUvLayoutEdit, uploadModelHeld, applyAutoUv, type ApplyResult, type LedUvApiError, type UvImpact } from '../lib/ledUvApi';
 import type { LedTemplateList } from '../lib/ledTemplateApi';
 import { DEFAULT_LED_CANVAS, layoutToCsv, ledMapFileName, todayString, type LedMapMeta } from '../lib/ledMap';
-import { downloadBlob, drawAlignmentMap, renderAlignmentMapPng } from '../lib/ledMapDraw';
+import { downloadBlob, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
 import { isPhoneLayout } from '../lib/viewportVars';
 import type { LedCanvas } from '../lib/ledCanvas';
 import { buildLegacy, buildPlan, pieceKey, pieceScreensOf, type ManualBox, type Plan, type PlanObjectIn } from '../lib/ledUv/plan';
 import { previewLayout } from '../lib/ledUv/previewLayout';
+import type { Arrangement, ArrangeNative } from '../lib/ledUv/arrange';
+import type { PackResult } from '../lib/ledUv/pack';
+import { useArrangeState } from '../lib/ledUv/useArrange';
+import { editSignature, parseEditSnapshot, pruneEditSnapshot, type UvEditSnapshot } from '../lib/ledUv/editState';
+import { createLatestRunner, type LatestRunner } from '../lib/ledUv/latestRunner';
+import LedUvArrange from './LedUvArrange';
 import { PITCH_PRESETS, pitchLabel, type SizeSpec } from '../lib/ledUv/size';
 import { EMPTY_FORM, MODE_LABEL, formIsEmpty, formToSpec, type SizeForm } from '../lib/ledUv/sizeForm';
 import { MODE_TEXT, OVERRIDE_HINT, OVERRIDE_LABEL, UNSUPPORTED_TEXT, arcText, distortionLevel, distortionText, freeformText, type DistortionLevel } from '../lib/ledUv/text';
@@ -28,6 +34,8 @@ import './LedUvPanel.css';
  *   所有運算在瀏覽器的 worker 裡（lib/ledUv/），後台只收做好的 .glb 和一個「一次換好」的呼叫。
  * 第 2 階段：弧面（圓柱的一段）也能貼，照真正的弧長攤平；辨識錯了可以手動指定「平面 / 弧面」；每塊顯示變形百分比；
  *   「在 3D 預覽」把 3D 畫面的 LED 暫時換成套用以後的樣子（測試圖），確認方向、接縫沒問題再套用。
+ * 第 3 階段：第 3 步「排版」換成自己排整張畫布（LED 版型編輯器同一套畫布；螢幕大小鎖死，只能搬、轉 90°、翻轉；畫布自動或自己填；
+ *   全部靠左上 / 自動排一次；幾塊可以連在一起）；邊排邊在 3D 預覽（節流）；排法、點數、勾的螢幕存在後台（停手自動存，套用時跟著新版本存），下次打開接著做。
  * 說明：docs/superpowers/specs/2026-10-16-auto-uv-design.md
  */
 
@@ -60,6 +68,13 @@ type Run =
   | { state: 'error'; message: string; issues?: string[] }
   | { state: 'done'; result: ApplyResult; plan: Plan };
 
+const NO_NATIVES: ArrangeNative[] = [];
+const NO_PACK: Pick<PackResult, 'placed' | 'canvas'> = { placed: new Map(), canvas: { width: 0, height: 0 } };
+/** 排好以後停手多久才存到後台 */
+const AUTOSAVE_MS = 1500;
+/** 3D 預覽：兩次開始計算至少隔多久（拖曳中邊拖邊更新，但不會每一幀都重算） */
+const PREVIEW_GAP_MS = 200;
+
 const fmtInt = (n: number) => n.toLocaleString('en-US');
 const fmtPx = (n: number) => (n >= 1e4 ? `${(n / 1e4).toFixed(n >= 1e6 ? 0 : 1).replace(/\.0$/, '')} 萬` : fmtInt(n));
 const fmtDots = (n: number) => `${fmtPx(n)}點`;
@@ -85,12 +100,23 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
   const [reBusy, setReBusy] = useState<string | null>(null);
   const [previewOn, setPreviewOn] = useState(false);
   const [pv, setPv] = useState<{ state: 'idle' | 'wait' | 'loading' | 'ready' | 'error'; message?: string }>({ state: 'idle' });
+  /** 上次存的排法還沒還原（螢幕清單要等點數填好才有，還原要等到那時候） */
+  const [pendingArr, setPendingArr] = useState<Arrangement | null>(null);
   const bufRef = useRef<ArrayBuffer | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<UvSession | null>(null);
   const onPreviewRef = useRef(onPreview);
   onPreviewRef.current = onPreview;
   const running = run.state === 'running';
+  /** 自動存：上次存好（或剛讀進來）的內容指紋；null = 還沒有基準 */
+  const lastSigRef = useRef<string | null>(null);
+  const saveBlockedRef = useRef(false);
+  const restoreArrRef = useRef<(a: Arrangement | null) => void>(() => undefined);
+  const previewRunnerRef = useRef<LatestRunner | null>(null);
+  const planRef = useRef<Plan | null>(null);
+  const previewOnRef = useRef(false);
+  const ledObjectsRef = useRef(ledObjects);
+  ledObjectsRef.current = ledObjects;
 
   const oldCanvas = ledCanvas ?? DEFAULT_LED_CANVAS;
   const manualsBy = useMemo(() => {
@@ -109,6 +135,10 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
     setRun({ state: 'idle' });
     setOverrides({});
     setPreviewOn(false);
+    setPendingArr(null);
+    restoreArrRef.current(null);
+    lastSigRef.current = null;
+    saveBlockedRef.current = false;
     sessionRef.current?.close();
     sessionRef.current = null;
     try {
@@ -117,13 +147,20 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       const imp = await getUvImpact(projectId);
       if (!imp) throw new Error('後台還沒更新到支援自動貼 UV 的版本');
       if (ledObjects.length === 0) throw new Error('這個專案還沒有 LED 物件（物件分類要是 LED 螢幕）');
+      // 上次排到哪裡（勾的螢幕、點數、類型、排法）：同一個模型版本接著做；讀不到就從頭開始
+      let restored: UvEditSnapshot | null = null;
+      try {
+        const saved = await getUvLayoutEdit(projectId);
+        const snap = saved && saved.key === model.key ? parseEditSnapshot(saved.edit) : null;
+        if (snap) restored = pruneEditSnapshot(snap, new Set(ledObjects.map(o => o.id)));
+      } catch { /* 讀不到就從頭開始 */ }
       const resp = await fetch(api.modelDownloadUrl(model.key), { signal: ac.signal });
       if (!resp.ok) throw new Error(`下載模型失敗（HTTP ${resp.status}）`);
       const buf = await resp.arrayBuffer();
       const client = await import('../lib/ledUv/ledUvClient');
       const session = client.openUvSession();
       sessionRef.current = session;
-      const result = await session.analyze(buf, { objects: ledObjects.map(o => ({ id: o.id, meshName: o.meshName })), oldCanvas }, ac.signal);
+      const result = await session.analyze(buf, { objects: ledObjects.map(o => ({ id: o.id, meshName: o.meshName })), oldCanvas, overrides: restored?.overrides }, ac.signal);
       if (ac.signal.aborted) return;
       if (!result.ok) throw new Error(result.reason);
       bufRef.current = buf;
@@ -133,12 +170,16 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       const sel: Record<string, boolean> = {};
       for (const o of ledObjects) {
         const info = result.infos[o.id];
-        sel[o.id] = !!info && info.kind === 'ok' && !(manualsBy[o.id]?.length);
+        const can = !!info && info.kind === 'ok' && !(manualsBy[o.id]?.length);
+        sel[o.id] = can && (restored && o.id in restored.selected ? restored.selected[o.id] : true);
       }
       setSelected(sel);
-      setForms({});
+      setForms(restored?.forms ?? {});
+      setOverrides(restored?.overrides ?? {});
+      setGutter(restored?.gutter ?? '0');
+      setPendingArr(restored?.arrangement ?? null);
       setLoad({ state: 'ready' });
-      setTab('pick');
+      setTab(restored?.arrangement ? 'layout' : 'pick');
     } catch (e) {
       if (ac.signal.aborted) return;
       setLoad({ state: 'error', message: e instanceof Error ? e.message : String(e) });
@@ -161,7 +202,13 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !running && !(e.target instanceof HTMLInputElement) && !(e.target instanceof HTMLSelectElement)) onClose(); };
+    // 在排版畫布上按 Esc 是「取消選取」，不是關掉整個面板
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || running) return;
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLSelectElement) return;
+      if (e.target instanceof HTMLElement && e.target.closest('.ltc__host')) return;
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, running, onClose]);
@@ -175,10 +222,29 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
   }), [ledObjects, ana, forms, selected, manualsBy, overrides]);
 
   const gutterPx = Math.max(0, Math.min(64, Math.round(Number(gutter) || 0)));
-  const plan: Plan | null = useMemo(
+  // 照舞台自動排的方案（沒套用自己排的排法）：螢幕清單、框裡的畫面、「自動排一次」都從它來
+  const autoPlan: Plan | null = useMemo(
     () => (ana ? buildPlan(inputs, { front: ana.front, metersPerUnit, oldCanvas, gutter: gutterPx }) : null),
     [ana, inputs, metersPerUnit, oldCanvas, gutterPx],
   );
+  // 自己排的排法（位置 / 轉 90° / 翻轉 / 畫布大小 / 連在一起）；沒動過 = 照自動排
+  const arrange = useArrangeState(autoPlan ? autoPlan.items : NO_NATIVES, autoPlan ? autoPlan.pack : NO_PACK);
+  restoreArrRef.current = arrange.restore;
+  const plan: Plan | null = useMemo(
+    () => (!ana ? null : arrange.arrangement
+      ? buildPlan(inputs, { front: ana.front, metersPerUnit, oldCanvas, gutter: gutterPx, arrangement: arrange.arrangement })
+      : autoPlan),
+    [ana, inputs, metersPerUnit, oldCanvas, gutterPx, arrange.arrangement, autoPlan],
+  );
+  planRef.current = plan;
+
+  // 上次存的排法：螢幕清單有了（點數填好了）就還原一次
+  useEffect(() => {
+    if (!pendingArr || !autoPlan || autoPlan.items.length === 0) return;
+    arrange.restore(pendingArr);
+    setPendingArr(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingArr, autoPlan]);
 
   const autoPieces = useMemo(() => (plan ? plan.objects.flatMap(o => (o.mode === 'auto' ? o.pieces : [])) : []), [plan]);
   const stats = useMemo(() => {
@@ -192,39 +258,81 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
 
   const legacy = useMemo(() => (plan && ana ? buildLegacy(plan, inputs, oldCanvas) : null), [plan, ana, inputs, oldCanvas]);
 
-  // 3D 預覽：方案的重點（畫布、每塊排在哪、類型）變了才重算；填點數打字時不會每按一個鍵就重算
+  // ───────── 排到一半的東西：停手 1.5 秒自動存到後台（同一個模型版本，下次打開接著做）─────────
+  const snapshot = useMemo<UvEditSnapshot>(
+    () => ({ v: 1, selected, forms, overrides, gutter, arrangement: arrange.arrangement ?? pendingArr }),
+    [selected, forms, overrides, gutter, arrange.arrangement, pendingArr],
+  );
+  const snapshotSig = useMemo(() => editSignature(snapshot), [snapshot]);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
+  const canSave = open && !phone && load.state === 'ready' && !!ana && !!activeKey && run.state !== 'running' && run.state !== 'done';
+  useEffect(() => {
+    if (!canSave) return;
+    if (lastSigRef.current === null) { lastSigRef.current = snapshotSig; return; }   // 剛讀完 / 剛還原完的樣子就是基準，不用存
+    if (snapshotSig === lastSigRef.current || saveBlockedRef.current) return;
+    const sig = snapshotSig;
+    const t = window.setTimeout(async () => {
+      try {
+        await saveUvLayoutEdit(projectId, activeKey, snapshotRef.current as unknown as Record<string, unknown>);
+        lastSigRef.current = sig;
+      } catch (e) {
+        const err = e as LedUvApiError;
+        if (err.status === 409) {
+          saveBlockedRef.current = true;
+          toast.warn('模型已經被別人換過了，這份排版不會再自動存。要接著做請關掉重新打開。');
+        } else if (err.status === 404) {
+          saveBlockedRef.current = true;   // 舊的後台沒有這個功能：照常用，只是不記住
+        }
+      }
+    }, AUTOSAVE_MS);
+    return () => window.clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshotSig, canSave, projectId, activeKey]);
+
+  // ───────── 3D 預覽：邊排邊更新（節流：同一時間只算一次、兩次開始之間隔 200 毫秒、永遠算最新的排法）─────────
+  // 方案的重點（畫布、每塊排在哪 / 轉動 / 翻轉、類型）變了才重算；填點數打字時不會每按一個鍵就重算
   const planKey = useMemo(() => (plan
     ? JSON.stringify([plan.canvas, plan.blockers.length, plan.objects.map(o => [o.id, o.mode, o.override, o.pieces.map(p => p.placed), o.keep ? o.keep.placed : null])])
     : ''), [plan]);
+  previewOnRef.current = previewOn;
   useEffect(() => {
-    const session = sessionRef.current;
-    if (!open || !previewOn || !session || !plan || load.state !== 'ready') {
-      onPreviewRef.current(null);
-      setPv({ state: 'idle' });
-      return;
-    }
-    if (plan.blockers.length > 0) {
-      onPreviewRef.current(null);
-      setPv({ state: 'wait', message: plan.blockers[0] });
-      return;
-    }
-    const ac = new AbortController();
-    setPv({ state: 'loading' });
-    const t = window.setTimeout(async () => {
+    if (!open) return;
+    const runner = createLatestRunner(async () => {
+      const session = sessionRef.current;
+      const p = planRef.current;
+      if (!session || !p || !previewOnRef.current) return;
+      // 自己排的排法超出畫布只會擋住「套用」，預覽照樣看得到（方便邊排邊看）；點數沒填完才沒辦法預覽
+      const waiting = p.blockers.filter(b => !p.arrangeBlockers.includes(b));
+      if (waiting.length > 0) {
+        onPreviewRef.current(null);
+        setPv({ state: 'wait', message: waiting[0] });
+        return;
+      }
+      setPv(cur => (cur.state === 'ready' ? cur : { state: 'loading' }));
       try {
-        const r = await session.preview(ledObjects.map(o => ({ id: o.id, meshName: o.meshName })), plan, oldCanvas, ac.signal);
-        if (ac.signal.aborted) return;
+        const r = await session.preview(ledObjectsRef.current.map(o => ({ id: o.id, meshName: o.meshName })), p, oldCanvas, undefined);
+        if (!previewOnRef.current || sessionRef.current !== session) return;
         if (!r.ok) { onPreviewRef.current(null); setPv({ state: 'error', message: r.reason }); return; }
         onPreviewRef.current(r.preview);
         setPv({ state: 'ready' });
       } catch (e) {
-        if (ac.signal.aborted) return;
+        if (!previewOnRef.current || (e instanceof DOMException && e.name === 'AbortError')) return;
         onPreviewRef.current(null);
         setPv({ state: 'error', message: e instanceof Error ? e.message : String(e) });
       }
-    }, 350);
-    return () => { window.clearTimeout(t); ac.abort(); };
+    }, { gapMs: PREVIEW_GAP_MS });
+    previewRunnerRef.current = runner;
+    return () => { runner.dispose(); previewRunnerRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, oldCanvas.width, oldCanvas.height]);
+  useEffect(() => {
+    if (!open || !previewOn || load.state !== 'ready') {
+      onPreviewRef.current(null);
+      setPv({ state: 'idle' });
+      return;
+    }
+    previewRunnerRef.current?.trigger();
   }, [open, previewOn, planKey, load.state]);
 
   if (!open) return null;
@@ -306,7 +414,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
         ifActive: activeKey,
         ledCanvas: { width: plan.canvas.width, height: plan.canvas.height },
         note: `自動貼 UV · ${autoCount} 塊螢幕 · ${plan.canvas.width}×${plan.canvas.height}`,
-        recipe: recipeOf(plan, oldCanvas, metersPerUnit),
+        recipe: recipeOf(plan, oldCanvas, metersPerUnit, snapshotRef.current),
         legacy: lg.screens.length > 0 ? { canvas: { width: lg.canvas.width, height: lg.canvas.height }, screens: lg.screens.map(s => ({ key: s.key, dest: s.dest, rotate: s.rotate, flipH: s.flipH, flipV: s.flipV })) } : null,
         pieceScreens: pieceScreensOf(plan),
         screenUpdates: plan.objects.flatMap(o => o.keep?.manualUpdates ?? []),
@@ -329,11 +437,11 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
     ? null
     : tab === 'pick' ? <PickTab plan={plan} ana={ana} inputs={inputs} selected={selected} onSel={setSel} overrides={overrides} busyId={reBusy} onOverride={(id, v) => void changeOverride(id, v)} onAll={(v) => setSelected(Object.fromEntries(ledObjects.map(o => [o.id, v && ana.infos[o.id]?.kind === 'ok' && !(manualsBy[o.id]?.length)])))} />
       : tab === 'size' ? <SizeTab plan={plan} forms={forms} bulk={bulk} setBulk={setBulk} onBulk={applyBulk} setForm={setForm} scaleCorrection={scaleCorrection} />
-        : tab === 'layout' ? <LayoutTab plan={plan} oldCanvas={oldCanvas} hasProjectCanvas={!!ledCanvas} projectName={projectName} gutter={gutter} setGutter={setGutter} />
+        : tab === 'layout' ? <LedUvArrange projectId={projectId} autoPlan={autoPlan!} plan={plan} arrange={arrange} gutter={gutter} setGutter={setGutter} />
           : <ApplyTab plan={plan} stats={stats!} legacy={legacy!} impact={impact} list={list} oldCanvas={oldCanvas} hasProjectCanvas={!!ledCanvas} run={run} onApply={doApply} projectName={projectName} />;
 
   return (
-    <section className="uvdock" aria-label="自動貼 UV">
+    <section className={'uvdock' + (tab === 'layout' ? ' uvdock--tall' : '')} aria-label="自動貼 UV">
       <header className="uvdock__head">
         <h2><Icon icon={Ruler} size="md" /> 自動貼 UV</h2>
         <nav className="uvdock__tabs" role="tablist">
@@ -353,7 +461,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
         ><Icon icon={Eye} size="sm" /> {previewOn ? '關閉 3D 預覽' : '在 3D 預覽'}</button>
         <button className="uvdock__close" onClick={close} disabled={running} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
       </header>
-      <div className="uvdock__body">
+      <div className={'uvdock__body' + (tab === 'layout' ? ' uvdock__body--fill' : '')}>
         {previewOn && load.state === 'ready' && (
           <div className={'uvpv uvpv--' + pv.state} role="status" data-testid="uv-preview-status">
             {pv.state === 'loading' && <><Icon icon={LoaderCircle} spin size="sm" /> 正在算 3D 預覽…</>}
@@ -376,9 +484,11 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
 }
 
 /** 之後「重新編輯」要用的：製作填的東西 */
-function recipeOf(plan: Plan, oldCanvas: { width: number; height: number }, metersPerUnit: number): Record<string, unknown> {
+function recipeOf(plan: Plan, oldCanvas: { width: number; height: number }, metersPerUnit: number, edit: UvEditSnapshot): Record<string, unknown> {
   return {
     v: 1,
+    /** 製作填的東西（勾的螢幕、點數、類型、排法）：下次打開自動貼 UV 接著做 */
+    edit,
     canvas: plan.canvas,
     oldCanvas,
     metersPerUnit,
@@ -571,44 +681,6 @@ function SizeTab({ plan, forms, bulk, setBulk, onBulk, setForm, scaleCorrection 
   );
 }
 
-// ───────────────────────── 3 排版 ─────────────────────────
-
-function LayoutTab({ plan, oldCanvas, hasProjectCanvas, projectName, gutter, setGutter }: {
-  plan: Plan; oldCanvas: { width: number; height: number }; hasProjectCanvas: boolean; projectName?: string; gutter: string; setGutter: (s: string) => void;
-}) {
-  const ref = useRef<HTMLCanvasElement | null>(null);
-  const layout = useMemo(() => previewLayout(plan), [plan]);
-  const { width: W, height: H } = plan.canvas;
-  useEffect(() => {
-    const c = ref.current;
-    if (!c || !W || !H) return;
-    const s = Math.min(1, 1100 / W, 640 / H);
-    c.width = Math.max(1, Math.round(W * s));
-    c.height = Math.max(1, Math.round(H * s));
-    const ctx = c.getContext('2d');
-    if (!ctx) return;
-    const meta: LedMapMeta = { projectName: projectName || '', date: todayString(), canvas: { width: W, height: H }, canvasSource: 'project' };
-    drawAlignmentMap(ctx, layout, meta, s, true);
-  }, [layout, W, H, projectName]);
-  return (
-    <div className="uvtab">
-      <div className="uvtab__bar">
-        <span className="small">
-          整張畫布會從 <strong>{oldCanvas.width} × {oldCanvas.height}</strong>{hasProjectCanvas ? '' : '（專案還沒設定畫布，用預設大小算）'} 變成 <strong>{W || '—'} × {H || '—'}</strong>
-        </span>
-        <span className="uvdock__spacer" />
-        <label className="uvfields">
-          <span className="muted small">螢幕間隔</span>
-          <input className="uvfields__s" inputMode="numeric" value={gutter} onChange={e => setGutter(e.target.value)} aria-label="螢幕之間的間隔（點）" />
-          <span className="muted small">點</span>
-        </label>
-      </div>
-      <p className="muted small uvtab__note">照舞台的樣子排：左邊的螢幕在左邊、上面的在上面，地屏在最下面（離觀眾越遠越上面）。這是套用後的對位圖，之後可以在 3D 工具列「⋯」→ LED 對位圖再下載。</p>
-      {W > 0 ? <canvas ref={ref} className="uvprev" aria-label="排版預覽" /> : <div className="uvdock__empty">還沒有可以排的螢幕</div>}
-    </div>
-  );
-}
-
 // ───────────────────────── 4 套用 ─────────────────────────
 
 function ApplyTab({ plan, stats, legacy, impact, list, oldCanvas, hasProjectCanvas, run, onApply, projectName }: {
@@ -676,6 +748,7 @@ function ApplyTab({ plan, stats, legacy, impact, list, oldCanvas, hasProjectCanv
           </div>
         ))}
         {plan.objects.filter(o => o.mode === 'auto').flatMap(o => o.warnings).map((w, i) => <div key={i} className="uvsum__line uvlist__warn small"><Icon icon={TriangleAlert} size="xs" /> {w}</div>)}
+        {plan.warnings.map((w, i) => <div key={i} className="uvsum__line uvlist__warn small" data-testid="uv-plan-warning"><Icon icon={TriangleAlert} size="xs" /> {w}</div>)}
         {plan.blockers.map((b, i) => <div key={i} className="uvsum__line uvlist__bad small"><Icon icon={TriangleAlert} size="xs" /> {b}</div>)}
       </div>
 

@@ -44,6 +44,34 @@ export const WARN_TEXT = {
   overlap: (n: number, a: string, b: string) => `有 ${n} 組螢幕互相重疊（例如「${a}」和「${b}」）：重疊的地方兩塊會顯示同一段畫面`,
 } as const;
 
+/** 第 3 步「排版」畫面上的字 */
+export const ARRANGE_TEXT = {
+  empty: '還沒有可以排的螢幕：先在「1 選螢幕」勾要自動貼的螢幕，再到「2 解析度」把點數填好。',
+  canvasGroup: '畫布大小',
+  canvasAuto: '剛好包住螢幕',
+  canvasAutoHint: '畫布的寬高自動剛好包住全部螢幕（進位到 8 的倍數）。直接在旁邊的欄位打數字，就會變成「自己填大小」。',
+  canvasCustom: '自己填大小',
+  canvasCustomHint: '畫布寬 × 高照你填的（例如寬 8800）。螢幕超出畫布會標紅，而且不能套用。',
+  topLeft: '全部靠左上',
+  topLeftHint: '整組一起平移，讓最左、最上的螢幕貼著畫布的左上角。螢幕之間的相對位置不變，貼好的還是貼著。',
+  alreadyTopLeft: '已經貼著畫布的左上角了',
+  autoOnce: '自動排一次',
+  autoOnceHint: '全部螢幕照舞台的樣子重排一次（位置、轉動、翻轉會重來；畫布大小的設定和「連在一起」的組不變）。排錯了可以按復原。',
+  alreadyAuto: '已經是自動排的樣子了',
+  gutterHint: '自動排版時螢幕之間空幾個點（預設 0）。只影響沒動過的排法和「自動排一次」。',
+  join: '連在一起',
+  joinHint: '把選到的螢幕綁成一組：之後點一塊就選到整組，一起移動、一起轉 90°、一起翻轉（像一張圖）。至少選 2 塊。',
+  split: '拆開',
+  splitHint: '把選到的螢幕所在的組拆開，各自獨立。',
+  sizeLocked: '螢幕的大小是 LED 規格決定的（點距 / 總點數 / 箱體），這裡只能搬、轉 90°、翻轉，不能改大小。',
+  fixedHint: '保留原本 UV 的螢幕：它的 UV 只是整片搬到新位置，所以只能搬位置，不能轉、不能翻。',
+  canvasHint: '空白處拖曳框選（Shift / Ctrl 加選，Ctrl+A 全選）· 拖曳螢幕移動，選了好幾塊（或連在一起的）就一起動 · 方向鍵微調 1 像素（Shift 10 像素）· 靠近別塊螢幕的邊或畫布的邊會吸附，邊對邊貼在一起很容易（Alt 不吸附）· 螢幕的大小是 LED 規格決定的，不能縮放 · 滾輪縮放 · 按住空白鍵拖曳、滑鼠中鍵拖曳或雙指平移',
+  outside: (names: string[]) => `有 ${names.length} 塊螢幕超出畫布（${names.slice(0, 4).join('、')}${names.length > 4 ? '…' : ''}）：把畫布加大，或把它們拖進畫布裡，否則不能套用`,
+  overlap: (pairs: string[], n: number) => `有 ${n} 組螢幕互相重疊（${pairs.join('；')}${n > pairs.length ? '…' : ''}）：重疊的地方兩塊會顯示同一段畫面`,
+  multiHint: '畫布上方的「轉 90°」「左右翻轉」「上下翻轉」：連在一起的整組一起轉 / 翻，其餘的各自在原地轉 / 翻。',
+  pickHint: '點畫布上的螢幕（或右邊清單裡的名字）來選它，就能在這裡改位置、轉動、翻轉。按住 Shift 或 Ctrl 可以加選，在畫布空白處拖曳可以框選好幾塊。',
+} as const;
+
 const pct = (v: number): string => {
   const p = v * 100;
   if (p === 0) return '0';

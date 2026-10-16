@@ -256,7 +256,19 @@ export function moveAllToTopLeft(doc: ArrangeDoc, natives: readonly ArrangeNativ
 export function autoLayoutDoc(doc: ArrangeDoc, natives: readonly ArrangeNative[], pack: Pick<PackResult, 'placed' | 'canvas'>): ArrangeDoc {
   const base = arrangementFromPack(natives, pack);
   const arr: Arrangement = { ...base, canvasMode: doc.canvasMode, canvas: { width: doc.width, height: doc.height }, groups: doc.groups };
-  return normalizeDoc(docFromArrangement(arr, natives), natives);
+  const next = normalizeDoc(docFromArrangement(arr, natives), natives);
+  return docSignature(next) === docSignature(doc) ? doc : next;
+}
+
+/** 草稿的內容指紋（位置、轉動、翻轉、畫布、組）：兩個草稿一樣不一樣 */
+export function docSignature(doc: ArrangeDoc): string {
+  return JSON.stringify([doc.canvasMode, doc.width, doc.height, doc.items.map(i => [i.key, i.dest.x, i.dest.y, i.dest.w, i.dest.h, i.rotate, i.flipH, i.flipV]), doc.groups]);
+}
+
+/** 換一組「連在一起」；沒變 = 同一個物件 */
+export function withGroups(doc: ArrangeDoc, groups: readonly (readonly string[])[]): ArrangeDoc {
+  const next = pruneGroups(groups, new Set(doc.items.map(i => i.key)));
+  return sameGroups(next, doc.groups) ? doc : { ...doc, groups: next };
 }
 
 export function setCanvasMode(doc: ArrangeDoc, mode: CanvasMode, natives: readonly ArrangeNative[]): ArrangeDoc {
