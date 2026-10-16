@@ -1,0 +1,302 @@
+// 自動貼 UV：把「每個物件的分析 + 製作填的點數」變成排版方案（純函式）
+//
+// 每個 LED 物件最後是三種狀態之一：
+//   自動貼（auto）  勾了、而且全是平面 → 每一片螢幕照點數排進畫布，UV 全部重算
+//   保留（keep）    沒勾、或這個物件第 1 階段還不能處理（弧面、已經手動切過）→ 原本的 UV 整片平移到新位置，大小、方向不變
+//                   （畫布整張重排，所以沒處理的螢幕也要搬過去，不然會壓到別人）
+//   不處理（none）  沒有 UV 又不能自動貼 → 不動
+// 一個物件有好幾片分開的平面 → 每一片各自是一塊螢幕，分開排（每片各建一個手動螢幕，版型裡才能分開放）。
+
+import type { CanvasSize, PixelRect } from '../ledMap';
+import type { UvBox } from '../ledTemplate';
+import { dot, WORLD_UP, type Vec3 } from './geometry';
+import { packStageShaped, type PackItem, type Placed, type PackResult } from './pack';
+import { resolveSize, type Measured, type SizeResult, type SizeSpec } from './size';
+import type { ObjectInfo } from './objectInfo';
+import { flatUvForPrim, keepUvForPrim, type KeepMap } from './place';
+import { audienceRight, type ObjectGeom, type Piece } from './surfaces';
+import { BLOCKED_TEXT, KEEP_TEXT, MISSING_TEXT, NO_UV_TEXT, SPLITS_TEXT, UNSUPPORTED_TEXT } from './text';
+
+export interface ManualBox { id: string; name: string; uv: UvBox }
+
+export interface PlanObjectIn {
+  id: string;
+  name: string;
+  order: number;
+  /** 模型裡找不到這個物件 = null */
+  info: ObjectInfo | null;
+  /** 製作勾了要自動貼 */
+  selected: boolean;
+  /** 每一片螢幕的點數（片的編號 → 輸入）；沒填 = 還沒填 */
+  sizes: Record<number, SizeSpec | undefined>;
+  /** 這個物件已經手動切出來的螢幕 */
+  manuals: ManualBox[];
+}
+
+export type ObjectMode = 'auto' | 'keep' | 'none' | 'missing';
+
+export interface PlanPiece {
+  index: number;
+  key: string;
+  name: string;
+  measured: Measured;
+  size: SizeResult | null;
+  placed: Placed | null;
+}
+
+export interface PlanKeep {
+  map: KeepMap;
+  /** 原本的範圍（原本畫布的像素） */
+  rect: PixelRect;
+  placed: Placed;
+  /** 手動切的螢幕的新 UV 範圍 */
+  manualUpdates: { id: string; uv: UvBox }[];
+}
+
+export interface PlanObject {
+  id: string;
+  name: string;
+  mode: ObjectMode;
+  /** 為什麼是這個狀態（白話） */
+  reason: string;
+  pieces: PlanPiece[];
+  keep: PlanKeep | null;
+  warnings: string[];
+}
+
+export interface Plan {
+  objects: PlanObject[];
+  canvas: { width: number; height: number };
+  /** 擋住「套用」的問題（白話） */
+  blockers: string[];
+  warnings: string[];
+  rows: number;
+  pack: PackResult;
+}
+
+export interface PlanContext {
+  front: Vec3;
+  /** 每個文件單位是幾公尺（自動縮放 × 測距校準） */
+  metersPerUnit: number;
+  /** 算原本範圍用的畫布（專案沒設定 = 預設大小） */
+  oldCanvas: CanvasSize;
+  gutter?: number;
+  roundTo?: number;
+}
+
+const MAX_CANVAS_SIDE = 32768;
+
+const pieceKey = (id: string, count: number, i: number): string => (count > 1 ? `o:${id}#${i}` : `o:${id}`);
+const pieceName = (name: string, count: number, i: number): string => (count > 1 ? `${name} ${i + 1}` : name);
+
+function cornersOf(p: Piece): Vec3[] {
+  const f = p.frame;
+  const out: Vec3[] = [];
+  for (const x of [f.minX, f.maxX]) for (const y of [f.minY, f.maxY]) {
+    out.push([
+      f.origin[0] + f.right[0] * x + f.down[0] * y,
+      f.origin[1] + f.right[1] * x + f.down[1] * y,
+      f.origin[2] + f.right[2] * x + f.down[2] * y,
+    ]);
+  }
+  return out;
+}
+
+function stageBox(points: Vec3[], front: Vec3, right: Vec3): Pick<PackItem, 'x' | 'y' | 'd' | 'yRange' | 'dRange'> {
+  let x = 0, y = 0, d = 0;
+  let y0 = Infinity, y1 = -Infinity, d0 = Infinity, d1 = -Infinity;
+  for (const p of points) {
+    x += dot(p, right); y += p[1]; d += dot(p, front);
+    y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]);
+    const dd = dot(p, front);
+    d0 = Math.min(d0, dd); d1 = Math.max(d1, dd);
+  }
+  const n = points.length || 1;
+  return { x: x / n, y: y / n, d: d / n, yRange: [y0, y1], dRange: [d0, d1] };
+}
+
+function boxPoints(min: Vec3, max: Vec3): Vec3[] {
+  const out: Vec3[] = [];
+  for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) out.push([x, y, z]);
+  return out;
+}
+
+export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Plan {
+  const right = audienceRight(ctx.front);
+  const sorted = [...inputs].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
+  const objects: PlanObject[] = [];
+  const items: PackItem[] = [];
+  const blockers: string[] = [];
+  const warnings: string[] = [];
+
+  for (const inp of sorted) {
+    const info = inp.info;
+    const obj: PlanObject = { id: inp.id, name: inp.name, mode: 'none', reason: '', pieces: [], keep: null, warnings: [] };
+    objects.push(obj);
+    if (!info) { obj.mode = 'missing'; obj.reason = MISSING_TEXT; continue; }
+    obj.warnings.push(...info.warnings);
+
+    // 勾了、全是平面、沒有手動切過 → 自動貼
+    const canAuto = info.kind === 'flat' && inp.manuals.length === 0;
+    if (inp.selected && canAuto) {
+      obj.mode = 'auto';
+      obj.reason = '';
+      const count = info.pieces.length;
+      info.pieces.forEach((piece, i) => {
+        const measured = { w: piece.widthU * ctx.metersPerUnit, h: piece.heightU * ctx.metersPerUnit };
+        const spec = inp.sizes[i];
+        const key = pieceKey(inp.id, count, i);
+        const name = pieceName(inp.name, count, i);
+        const size = spec ? resolveSize(spec, measured) : null;
+        const pp: PlanPiece = { index: i, key, name, measured, size, placed: null };
+        obj.pieces.push(pp);
+        if (!size) { blockers.push(BLOCKED_TEXT.size(name, '還沒填點數')); return; }
+        if (!size.ok) { blockers.push(BLOCKED_TEXT.size(name, size.error || '點數不能用')); return; }
+        for (const w of size.warnings) obj.warnings.push(`${name}：${w}`);
+        const box = stageBox(cornersOf(piece), ctx.front, right);
+        items.push({ key, name, w: size.w, h: size.h, ...box, floor: Math.abs(dot(piece.frame.normal, WORLD_UP)) >= 0.9 });
+      });
+      continue;
+    }
+
+    // 其他 = 保留原本的 UV（搬到新位置）
+    const region = info.oldRegion;
+    if (inp.selected && !canAuto) {
+      obj.reason = info.kind === 'unsupported' ? UNSUPPORTED_TEXT[info.unsupported ?? 'other'] : SPLITS_TEXT;
+    } else if (!inp.selected) {
+      obj.reason = region ? KEEP_TEXT : NO_UV_TEXT;
+    }
+    if (!region) {
+      obj.mode = 'none';
+      if (!obj.reason) obj.reason = NO_UV_TEXT;
+      else obj.reason += `；${NO_UV_TEXT}`;
+      continue;
+    }
+    if (region.wraps && inp.manuals.length > 0) {
+      blockers.push(BLOCKED_TEXT.wrapKeep(inp.name));
+    }
+    obj.mode = 'keep';
+    const box = stageBox(boxPoints(info.bbox.min, info.bbox.max), ctx.front, right);
+    const flatHeight = info.bbox.max[1] - info.bbox.min[1];
+    const horiz = Math.max(info.bbox.max[0] - info.bbox.min[0], info.bbox.max[2] - info.bbox.min[2]);
+    items.push({ key: `o:${inp.id}`, name: inp.name, w: Math.max(1, region.rect.w), h: Math.max(1, region.rect.h), ...box, floor: flatHeight <= 0.15 * horiz });
+  }
+
+  const pack = packStageShaped(items, { gutter: ctx.gutter, roundTo: ctx.roundTo });
+  const canvas = pack.canvas;
+  if (canvas.width > MAX_CANVAS_SIDE || canvas.height > MAX_CANVAS_SIDE) blockers.push(BLOCKED_TEXT.canvasTooBig(canvas.width, canvas.height));
+  if (!objects.some(o => o.mode === 'auto')) blockers.unshift(BLOCKED_TEXT.noSelection);
+
+  // 位置填回各物件
+  for (const o of objects) {
+    if (o.mode === 'auto') {
+      for (const p of o.pieces) p.placed = pack.placed.get(p.key) ?? null;
+    } else if (o.mode === 'keep') {
+      const inp = inputs.find(i => i.id === o.id)!;
+      const region = inp.info!.oldRegion!;
+      const placed = pack.placed.get(`o:${o.id}`)!;
+      const shiftX = placed.x - region.rect.x, shiftY = placed.y - region.rect.y;
+      const manualUpdates = inp.manuals.map(m => ({
+        id: m.id,
+        uv: [
+          (m.uv[0] * ctx.oldCanvas.width + shiftX) / canvas.width, (m.uv[1] * ctx.oldCanvas.height + shiftY) / canvas.height,
+          (m.uv[2] * ctx.oldCanvas.width + shiftX) / canvas.width, (m.uv[3] * ctx.oldCanvas.height + shiftY) / canvas.height,
+        ] as UvBox,
+      }));
+      o.keep = { map: { span: region.span, oldCanvas: ctx.oldCanvas, shiftX, shiftY }, rect: region.rect, placed, manualUpdates };
+    }
+  }
+  return { objects, canvas, blockers, warnings, rows: pack.rows, pack };
+}
+
+/** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null */
+export function objectUvs(geom: ObjectGeom, obj: PlanObject, info: ObjectInfo, canvas: CanvasSize): (Float32Array | null)[] {
+  if (obj.mode === 'auto' && obj.pieces.every(p => p.placed)) {
+    const placed = obj.pieces.map(p => p.placed!);
+    return geom.prims.map(p => flatUvForPrim(p, info.pieces, i => placed[i], canvas).uv);
+  }
+  if (obj.mode === 'keep' && obj.keep) {
+    const keep = obj.keep.map;
+    return geom.prims.map(p => keepUvForPrim(p, keep, canvas));
+  }
+  return geom.prims.map(() => null);
+}
+
+// ───────────────────────── 舊版面（舊影片照舊貼對）─────────────────────────
+
+export interface LegacyScreen {
+  /** 'o:<物件 id>'（整個物件一塊）、's:<手動螢幕 id>'（原本就切過的）、's:@<ref>'（這次新切出來的，後台換成真的 id） */
+  key: string;
+  objectId: string;
+  name: string;
+  dest: PixelRect;
+  rotate: 0 | 90 | 180 | 270;
+  flipH: boolean;
+  flipV: boolean;
+}
+
+export interface LegacyPlan {
+  canvas: CanvasSize;
+  screens: LegacyScreen[];
+  /** 沒辦法放進舊版面的螢幕（原本的畫面橫跨畫布邊緣）：舊影片在這幾塊會貼不對 */
+  unprotected: string[];
+  /** 放進去了，但原本的 UV 不是整齊的長方形，貼出來可能有點歪 */
+  approximate: string[];
+}
+
+/** 這次新切出來的螢幕（一個物件有好幾片分開的平面）：後台建手動螢幕用 */
+export interface PieceScreen { ref: string; objectId: string; name: string; uv: UvBox }
+
+const EXACT = 0.02;
+
+/**
+ * 舊版面：版型畫布 = 套用前的整張畫布；每塊螢幕放在它原本的像素位置，方向用「新座標 → 原本範圍」找出來的。
+ * 版型的來源範圍是看「現在模型的 UV 外框」（新的位置），目的地是原本的位置 → 舊影片的畫面照原樣貼回新的 UV 上。
+ */
+export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanvas: CanvasSize): LegacyPlan {
+  const screens: LegacyScreen[] = [];
+  const unprotected: string[] = [], approximate: string[] = [];
+  for (const o of plan.objects) {
+    const inp = inputs.find(i => i.id === o.id);
+    const info = inp?.info;
+    if (!inp || !info) continue;
+    if (o.mode === 'keep' && o.keep) {
+      if (inp.manuals.length > 0) {
+        for (const m of inp.manuals) {
+          const x0 = Math.round(m.uv[0] * oldCanvas.width), x1 = Math.round(m.uv[2] * oldCanvas.width);
+          const y0 = Math.round(m.uv[1] * oldCanvas.height), y1 = Math.round(m.uv[3] * oldCanvas.height);
+          screens.push({ key: `s:${m.id}`, objectId: o.id, name: m.name, dest: { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) }, rotate: 0, flipH: false, flipV: false });
+        }
+      } else if (info.oldRegion!.wraps) {
+        unprotected.push(o.name);
+      } else {
+        screens.push({ key: `o:${o.id}`, objectId: o.id, name: o.name, dest: info.oldRegion!.rect, rotate: 0, flipH: false, flipV: false });
+      }
+    } else if (o.mode === 'auto') {
+      o.pieces.forEach((p, i) => {
+        const old = info.oldPieces[i];
+        if (!old) return;  // 原本就沒有 UV：舊影片本來就沒有畫面可以保護
+        if (old.region.wraps) { unprotected.push(p.name); return; }
+        if (old.err > EXACT) approximate.push(p.name);
+        const key = o.pieces.length > 1 ? `s:@${o.id}#${i}` : `o:${o.id}`;
+        screens.push({ key, objectId: o.id, name: p.name, dest: old.region.rect, ...old.rel });
+      });
+    }
+  }
+  return { canvas: oldCanvas, screens, unprotected, approximate };
+}
+
+/** 一個物件有好幾片分開的平面 → 每一片建一個手動螢幕（範圍 = 排好的長方形） */
+export function pieceScreensOf(plan: Plan): PieceScreen[] {
+  const out: PieceScreen[] = [];
+  const cw = plan.canvas.width, ch = plan.canvas.height;
+  for (const o of plan.objects) {
+    if (o.mode !== 'auto' || o.pieces.length < 2) continue;
+    o.pieces.forEach((p, i) => {
+      if (!p.placed) return;
+      out.push({ ref: `${o.id}#${i}`, objectId: o.id, name: p.name, uv: [p.placed.x / cw, p.placed.y / ch, (p.placed.x + p.placed.w) / cw, (p.placed.y + p.placed.h) / ch] });
+    });
+  }
+  return out;
+}
+

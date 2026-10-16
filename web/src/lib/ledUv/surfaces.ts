@@ -1,0 +1,428 @@
+// 自動貼 UV：找出每個 LED 物件的「螢幕」（平面片），算每一片的座標系（純函式，只吃一堆數字）
+//
+// 輸入是世界座標的三角形（docRead.ts 從 gltf-transform 的文件讀出來）。一個物件 = 一堆 PrimGeom（一個 primitive 一份）。
+//   螢幕三角形 = 材質名字有 LED 的 primitive 裡的三角形；整個物件都沒有這種材質 → 全部三角形。
+//   其他 primitive（外框、背板…）不是螢幕，但物件底下每個 mesh 都吃同一張 LED 貼圖，所以它們的頂點也要有 UV：
+//   一律用「離它最近的那一片螢幕」的座標算，再夾進那一片的範圍裡（外框會變成螢幕邊緣的顏色，不會把物件的 UV 外框撐大）。
+//
+// 平面判斷（第 1 階段只做平面；弧面、折角留給之後的階段）：
+//   三角形照位置焊起來分成幾片（跟 index 無關：硬邊匯出會把同一個位置的頂點複製很多份）；
+//   每一片：最佳平面的 RMS 距離 <= 長邊的 0.3 %，而且（面積加權）99.5 % 以上的三角形法線跟平均法線差在 3 度內 → 平面。
+//   有厚度的板子（前後兩個大面平行、面積差不多）→ 取朝觀眾的那一面當螢幕，側邊和背面跟著同一個函數算。
+//   任何一片不是平面 → 整個物件第 1 階段不處理（「這塊是弧面，第 2 階段才支援」）。
+//
+// 座標：螢幕片的 right / up / normal
+//   normal = 三角形繞向的法線（LED 只畫正面，觀眾站在 normal 這一側看）；鏡像過的節點（行列式 < 0）繞向會反，要乘回來。
+//   牆（|normal·Y| < 0.9）：up = 世界朝上投影到平面；地屏 / 天花板：up = 舞台後方（離觀眾最遠）。
+//   right = up × normal（站在 normal 那一側的人看過去的右邊），畫面的 y 朝下（down = -up）。
+
+import { cross, dot, eigenSym3, length, normalize, scale, sub, WORLD_UP, type Vec3 } from './geometry';
+
+export interface PrimGeom {
+  /** 世界座標的頂點，每個頂點 3 個數字 */
+  pos: Float64Array;
+  /** 三角形的頂點編號（每 3 個一組） */
+  index: Uint32Array;
+  /** 螢幕（材質有 LED）的 primitive */
+  screen: boolean;
+  /** 節點世界矩陣行列式的正負：鏡像過 = -1（三角形繞向反過來） */
+  sign: 1 | -1;
+  /** 原本的 UV（每個頂點 2 個數字）；沒有 = null */
+  uv: ArrayLike<number> | null;
+}
+
+export interface ObjectGeom { prims: PrimGeom[] }
+
+export interface PieceFrame {
+  origin: Vec3;
+  right: Vec3;
+  down: Vec3;
+  normal: Vec3;
+  /** 螢幕範圍：沿 right、down 的最小 / 最大（文件單位，從 origin 算） */
+  minX: number; maxX: number; minY: number; maxY: number;
+}
+
+/** 一片平面螢幕 */
+export interface Piece {
+  frame: PieceFrame;
+  /** 寬（沿 right）、高（沿 down），文件單位 */
+  widthU: number;
+  heightU: number;
+  /** 螢幕面的面積（文件單位平方） */
+  area: number;
+  /** 螢幕面的重心（世界座標） */
+  center: Vec3;
+  /** normal · 舞台正面：1 = 正對觀眾，< 0 = 背對觀眾 */
+  facing: number;
+  /** 平面誤差 / 長邊 */
+  flatness: number;
+}
+
+export type UnsupportedKind = 'arc' | 'fold' | 'other' | 'toomany' | 'empty';
+
+export interface ObjectAnalysis {
+  kind: 'flat' | 'unsupported';
+  unsupported?: UnsupportedKind;
+  /** 由左到右（從觀眾席看） */
+  pieces: Piece[];
+  /** 給畫面顯示的提醒（白話） */
+  warnings: string[];
+  /** 物件所有頂點的外框 */
+  bbox: { min: Vec3; max: Vec3 };
+  screenTriangles: number;
+}
+
+export const RMS_FLAT_REL = 0.003;
+export const NORMAL_TOLERANCE_DEG = 3;
+export const NORMAL_OUTLIER_AREA = 0.005;
+export const MAX_PIECES_PER_OBJECT = 8;
+/** 比整個螢幕面積小這個比例的碎片（螺絲、貼字）不算一片螢幕，跟著最近的那片算 */
+export const TINY_PIECE_AREA = 0.005;
+const WELD_REL = 1e-4;
+
+/** 舞台正面（水平、指向觀眾）：所有 LED 三角面依面積加總（跟 stageCamera.ts 的 stageFrontDirection 同一個算法）。沒有 LED → +Z */
+export function stageFrontOf(objects: readonly ObjectGeom[]): Vec3 {
+  let sx = 0, sz = 0;
+  for (const o of objects) {
+    for (const p of o.prims) {
+      for (let t = 0; t + 2 < p.index.length; t += 3) {
+        const a = p.index[t] * 3, b = p.index[t + 1] * 3, c = p.index[t + 2] * 3;
+        const abx = p.pos[b] - p.pos[a], aby = p.pos[b + 1] - p.pos[a + 1], abz = p.pos[b + 2] - p.pos[a + 2];
+        const acx = p.pos[c] - p.pos[a], acy = p.pos[c + 1] - p.pos[a + 1], acz = p.pos[c + 2] - p.pos[a + 2];
+        // 只要水平的兩個分量（x、z）
+        sx += (aby * acz - abz * acy) * p.sign;
+        sz += (abx * acy - aby * acx) * p.sign;
+      }
+    }
+  }
+  const l = Math.hypot(sx, sz);
+  return l < 1e-12 ? [0, 0, 1] : [sx / l, 0, sz / l];
+}
+
+/** 物件所有頂點的外框 */
+export function boundsOf(geom: ObjectGeom): { min: Vec3; max: Vec3 } {
+  const min: Vec3 = [Infinity, Infinity, Infinity], max: Vec3 = [-Infinity, -Infinity, -Infinity];
+  for (const p of geom.prims) {
+    for (let i = 0; i + 2 < p.pos.length; i += 3) {
+      for (let k = 0; k < 3; k++) {
+        const v = p.pos[i + k];
+        if (v < min[k]) min[k] = v;
+        if (v > max[k]) max[k] = v;
+      }
+    }
+  }
+  return { min, max };
+}
+
+interface ScreenTris {
+  /** 每個三角形 9 個數字 */
+  p: Float64Array;
+  /** 單位法線（已經乘過鏡像的正負） */
+  n: Float64Array;
+  area: Float64Array;
+  /** 三個角的焊接編號 */
+  w: Int32Array;
+  count: number;
+}
+
+function collectScreenTris(geom: ObjectGeom, diag: number): ScreenTris {
+  const tol = Math.max(diag * WELD_REL, 1e-12);
+  const welds = new Map<string, number>();
+  let total = 0;
+  for (const pr of geom.prims) if (pr.screen) total += Math.floor(pr.index.length / 3);
+  const p = new Float64Array(total * 9), n = new Float64Array(total * 3), area = new Float64Array(total), w = new Int32Array(total * 3);
+  let count = 0;
+  for (const pr of geom.prims) {
+    if (!pr.screen) continue;
+    const nv = pr.pos.length / 3;
+    const weldOf = new Int32Array(nv).fill(-1);
+    const weld = (vi: number): number => {
+      let id = weldOf[vi];
+      if (id >= 0) return id;
+      const key = `${Math.round(pr.pos[vi * 3] / tol)},${Math.round(pr.pos[vi * 3 + 1] / tol)},${Math.round(pr.pos[vi * 3 + 2] / tol)}`;
+      id = welds.get(key) ?? -1;
+      if (id < 0) { id = welds.size; welds.set(key, id); }
+      weldOf[vi] = id;
+      return id;
+    };
+    for (let t = 0; t + 2 < pr.index.length; t += 3) {
+      const ia = pr.index[t], ib = pr.index[t + 1], ic = pr.index[t + 2];
+      const a = ia * 3, b = ib * 3, c = ic * 3;
+      const abx = pr.pos[b] - pr.pos[a], aby = pr.pos[b + 1] - pr.pos[a + 1], abz = pr.pos[b + 2] - pr.pos[a + 2];
+      const acx = pr.pos[c] - pr.pos[a], acy = pr.pos[c + 1] - pr.pos[a + 1], acz = pr.pos[c + 2] - pr.pos[a + 2];
+      const nx = (aby * acz - abz * acy) * pr.sign, ny = (abz * acx - abx * acz) * pr.sign, nz = (abx * acy - aby * acx) * pr.sign;
+      const l2 = Math.hypot(nx, ny, nz);
+      const ar = l2 / 2;
+      if (!(ar > diag * diag * 1e-14)) continue;  // 沒有面積的三角形
+      const o = count * 9;
+      p[o] = pr.pos[a]; p[o + 1] = pr.pos[a + 1]; p[o + 2] = pr.pos[a + 2];
+      p[o + 3] = pr.pos[b]; p[o + 4] = pr.pos[b + 1]; p[o + 5] = pr.pos[b + 2];
+      p[o + 6] = pr.pos[c]; p[o + 7] = pr.pos[c + 1]; p[o + 8] = pr.pos[c + 2];
+      n[count * 3] = nx / l2; n[count * 3 + 1] = ny / l2; n[count * 3 + 2] = nz / l2;
+      area[count] = ar;
+      w[count * 3] = weld(ia); w[count * 3 + 1] = weld(ib); w[count * 3 + 2] = weld(ic);
+      count++;
+    }
+  }
+  return { p, n, area, w, count };
+}
+
+function components(tris: ScreenTris): number[][] {
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    let r = x;
+    while ((parent.get(r) ?? r) !== r) r = parent.get(r)!;
+    let c = x;
+    while ((parent.get(c) ?? c) !== r) { const nx = parent.get(c)!; parent.set(c, r); c = nx; }
+    return r;
+  };
+  const union = (a: number, b: number) => { const ra = find(a), rb = find(b); if (ra !== rb) parent.set(ra, rb); };
+  for (let t = 0; t < tris.count; t++) {
+    const a = tris.w[t * 3], b = tris.w[t * 3 + 1], c = tris.w[t * 3 + 2];
+    if (!parent.has(a)) parent.set(a, a);
+    if (!parent.has(b)) parent.set(b, b);
+    if (!parent.has(c)) parent.set(c, c);
+    union(a, b); union(b, c);
+  }
+  const groups = new Map<number, number[]>();
+  for (let t = 0; t < tris.count; t++) {
+    const r = find(tris.w[t * 3]);
+    const g = groups.get(r);
+    if (g) g.push(t); else groups.set(r, [t]);
+  }
+  return [...groups.values()];
+}
+
+interface PlaneFit {
+  centroid: Vec3;
+  normal: Vec3;
+  /** 最佳平面的 RMS 距離 */
+  rms: number;
+  longExtent: number;
+  area: number;
+  flat: boolean;
+}
+
+function fitPlane(tris: ScreenTris, ids: readonly number[]): PlaneFit {
+  let W = 0;
+  const c: Vec3 = [0, 0, 0];
+  const S: Vec3 = [0, 0, 0];
+  for (const t of ids) {
+    const a = tris.area[t];
+    W += a;
+    for (let k = 0; k < 3; k++) {
+      c[k] += (a / 3) * (tris.p[t * 9 + k] + tris.p[t * 9 + 3 + k] + tris.p[t * 9 + 6 + k]);
+      S[k] += tris.n[t * 3 + k] * a;
+    }
+  }
+  const centroid = scale(c, 1 / W) as Vec3;
+  const m = [0, 0, 0, 0, 0, 0];
+  for (const t of ids) {
+    const w3 = tris.area[t] / 3;
+    for (let v = 0; v < 3; v++) {
+      const dx = tris.p[t * 9 + v * 3] - centroid[0], dy = tris.p[t * 9 + v * 3 + 1] - centroid[1], dz = tris.p[t * 9 + v * 3 + 2] - centroid[2];
+      m[0] += w3 * dx * dx; m[1] += w3 * dx * dy; m[2] += w3 * dx * dz;
+      m[3] += w3 * dy * dy; m[4] += w3 * dy * dz; m[5] += w3 * dz * dz;
+    }
+  }
+  const eig = eigenSym3(m);
+  let normal = eig.vectors[0];
+  if (dot(normal, S) < 0) normal = scale(normal, -1) as Vec3;
+  const rms = Math.sqrt(Math.max(0, eig.values[0]) / W);
+  // 長邊：沿兩個大特徵向量的範圍
+  const e1 = eig.vectors[1], e2 = eig.vectors[2];
+  let lo1 = Infinity, hi1 = -Infinity, lo2 = Infinity, hi2 = -Infinity;
+  for (const t of ids) {
+    for (let v = 0; v < 3; v++) {
+      const d: Vec3 = [tris.p[t * 9 + v * 3] - centroid[0], tris.p[t * 9 + v * 3 + 1] - centroid[1], tris.p[t * 9 + v * 3 + 2] - centroid[2]];
+      const x = dot(d, e1), y = dot(d, e2);
+      if (x < lo1) lo1 = x; if (x > hi1) hi1 = x;
+      if (y < lo2) lo2 = y; if (y > hi2) hi2 = y;
+    }
+  }
+  const longExtent = Math.max(hi1 - lo1, hi2 - lo2);
+  let outlier = 0;
+  const cosTol = Math.cos((NORMAL_TOLERANCE_DEG * Math.PI) / 180);
+  for (const t of ids) {
+    const d = tris.n[t * 3] * normal[0] + tris.n[t * 3 + 1] * normal[1] + tris.n[t * 3 + 2] * normal[2];
+    if (d < cosTol) outlier += tris.area[t];
+  }
+  const flat = longExtent > 0 && rms <= RMS_FLAT_REL * longExtent && outlier <= NORMAL_OUTLIER_AREA * W;
+  return { centroid, normal, rms, longExtent, area: W, flat };
+}
+
+/** 厚板子：前後兩個大面平行、面積差不多 → 取朝觀眾的那一面的三角形；不是厚板子 = null */
+function slabFace(tris: ScreenTris, ids: readonly number[], total: number, front: Vec3): number[] | null {
+  const order = [...ids].sort((a, b) => tris.area[b] - tris.area[a]);
+  const cosTol = Math.cos((NORMAL_TOLERANCE_DEG * Math.PI) / 180);
+  const clusters: { n: Vec3; area: number; ids: number[] }[] = [];
+  for (const t of order) {
+    const n: Vec3 = [tris.n[t * 3], tris.n[t * 3 + 1], tris.n[t * 3 + 2]];
+    let hit = clusters.find(c => dot(c.n, n) >= cosTol);
+    if (!hit) {
+      if (clusters.length >= 64) return null;
+      hit = { n, area: 0, ids: [] };
+      clusters.push(hit);
+    }
+    hit.area += tris.area[t];
+    hit.ids.push(t);
+  }
+  clusters.sort((a, b) => b.area - a.area);
+  if (clusters.length < 2) return null;
+  const [c1, c2] = clusters;
+  if (dot(c1.n, c2.n) > -0.98) return null;
+  if (c2.area < c1.area * 0.8) return null;
+  if (c1.area + c2.area < total * 0.85) return null;
+  const pick = dot(c2.n, front) > dot(c1.n, front) ? c2 : c1;
+  return pick.ids;
+}
+
+/** 弧面 / 折角 / 其他：看法線散在幾個方向 */
+function classifyNonFlat(tris: ScreenTris, ids: readonly number[]): UnsupportedKind {
+  const m = [0, 0, 0, 0, 0, 0];
+  let total = 0;
+  const cosTol = Math.cos((NORMAL_TOLERANCE_DEG * Math.PI) / 180);
+  const clusters: { n: Vec3; area: number }[] = [];
+  for (const t of ids) {
+    const a = tris.area[t];
+    const nx = tris.n[t * 3], ny = tris.n[t * 3 + 1], nz = tris.n[t * 3 + 2];
+    m[0] += a * nx * nx; m[1] += a * nx * ny; m[2] += a * nx * nz;
+    m[3] += a * ny * ny; m[4] += a * ny * nz; m[5] += a * nz * nz;
+    total += a;
+    const hit = clusters.find(c => dot(c.n, [nx, ny, nz]) >= cosTol);
+    if (hit) hit.area += a; else if (clusters.length < 256) clusters.push({ n: [nx, ny, nz], area: a });
+  }
+  const eig = eigenSym3(m);
+  const trace = eig.values[0] + eig.values[1] + eig.values[2];
+  const significant = clusters.filter(c => c.area >= total * 0.02).length;
+  if (trace > 0 && eig.values[0] / trace < 0.02) return significant <= 3 ? 'fold' : 'arc';
+  return 'other';
+}
+
+function buildPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3): Piece | null {
+  const n = normalize(fit.normal);
+  let up: Vec3;
+  if (Math.abs(dot(n, WORLD_UP)) < 0.9) {
+    up = normalize(sub(WORLD_UP, scale(n, dot(WORLD_UP, n))));
+  } else {
+    // 地屏 / 天花板：畫面上方 = 舞台後方（離觀眾最遠）
+    const back: Vec3 = scale(front, -1);
+    up = normalize(sub(back, scale(n, dot(back, n))));
+  }
+  if (length(up) < 0.5) return null;
+  const right = normalize(cross(up, n));
+  const down = scale(up, -1) as Vec3;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  const o = fit.centroid;
+  for (const t of ids) {
+    for (let v = 0; v < 3; v++) {
+      const d: Vec3 = [tris.p[t * 9 + v * 3] - o[0], tris.p[t * 9 + v * 3 + 1] - o[1], tris.p[t * 9 + v * 3 + 2] - o[2]];
+      const x = dot(d, right), y = dot(d, down);
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+  }
+  const widthU = maxX - minX, heightU = maxY - minY;
+  if (!(widthU > 0) || !(heightU > 0)) return null;
+  return {
+    frame: { origin: o, right, down, normal: n, minX, maxX, minY, maxY },
+    widthU, heightU,
+    area: fit.area,
+    center: fit.centroid,
+    facing: dot(n, front),
+    flatness: fit.longExtent > 0 ? fit.rms / fit.longExtent : 0,
+  };
+}
+
+/** 從觀眾席看，由左到右：沿 (世界朝上 × 舞台正面) 的位置 */
+export function audienceRight(front: Vec3): Vec3 {
+  return normalize(cross(WORLD_UP, front));
+}
+
+export function analyzeObject(geom: ObjectGeom, front: Vec3): ObjectAnalysis {
+  const bbox = boundsOf(geom);
+  const diag = length(sub(bbox.max, bbox.min));
+  const empty = (unsupported: UnsupportedKind, warnings: string[] = []): ObjectAnalysis =>
+    ({ kind: 'unsupported', unsupported, pieces: [], warnings, bbox, screenTriangles: 0 });
+  if (!(diag > 0)) return empty('empty');
+  const tris = collectScreenTris(geom, diag);
+  if (tris.count === 0) return empty('empty');
+  let totalArea = 0;
+  for (let t = 0; t < tris.count; t++) totalArea += tris.area[t];
+
+  const comps = components(tris).sort((a, b) => b.length - a.length);
+  const pieces: Piece[] = [];
+  const warnings: string[] = [];
+  let worst: UnsupportedKind | null = null;
+  const rank: Record<string, number> = { arc: 3, fold: 2, other: 1 };
+  for (const ids of comps) {
+    let compArea = 0;
+    for (const t of ids) compArea += tris.area[t];
+    const tiny = compArea < totalArea * TINY_PIECE_AREA;
+    let fit = fitPlane(tris, ids);
+    let faceIds: readonly number[] = ids;
+    if (!fit.flat) {
+      const face = slabFace(tris, ids, compArea, front);
+      if (face) {
+        const f2 = fitPlane(tris, face);
+        if (f2.flat) { fit = f2; faceIds = face; }
+      }
+    }
+    if (!fit.flat) {
+      if (tiny) continue;
+      const kind = classifyNonFlat(tris, ids);
+      if (!worst || rank[kind] > rank[worst]) worst = kind;
+      continue;
+    }
+    if (tiny) continue;
+    const piece = buildPiece(tris, faceIds, fit, front);
+    if (piece) pieces.push(piece);
+  }
+  if (worst) return { kind: 'unsupported', unsupported: worst, pieces: [], warnings, bbox, screenTriangles: tris.count };
+  if (pieces.length === 0) return empty('empty');
+  if (pieces.length > MAX_PIECES_PER_OBJECT) {
+    return { kind: 'unsupported', unsupported: 'toomany', pieces: [], warnings, bbox, screenTriangles: tris.count };
+  }
+  // 由左到右（觀眾席看過去）
+  const right = audienceRight(front);
+  pieces.sort((a, b) => dot(a.center, right) - dot(b.center, right));
+  if (pieces.some(p => p.facing < -0.2)) {
+    warnings.push('有一片的正面朝向舞台後方（背對觀眾）：LED 只畫正面，觀眾席看不到這片的畫面');
+  }
+  return { kind: 'flat', pieces, warnings, bbox, screenTriangles: tris.count };
+}
+
+// ───────────────────────── 頂點 → 螢幕片 ─────────────────────────
+
+export interface PieceLocal { piece: number; lx: number; ly: number; dist: number }
+
+/** 這個點離某片螢幕（長方形範圍）有多遠、在它的哪裡（lx、ly = 0~1 的比例，可能超出 0~1） */
+export function localOnPiece(piece: Piece, x: number, y: number, z: number): { lx: number; ly: number; dist: number } {
+  const f = piece.frame;
+  const dx = x - f.origin[0], dy = y - f.origin[1], dz = z - f.origin[2];
+  const px = dx * f.right[0] + dy * f.right[1] + dz * f.right[2];
+  const py = dx * f.down[0] + dy * f.down[1] + dz * f.down[2];
+  const pz = dx * f.normal[0] + dy * f.normal[1] + dz * f.normal[2];
+  const ox = Math.max(f.minX - px, 0, px - f.maxX);
+  const oy = Math.max(f.minY - py, 0, py - f.maxY);
+  return { lx: (px - f.minX) / (f.maxX - f.minX), ly: (py - f.minY) / (f.maxY - f.minY), dist: Math.hypot(pz, ox, oy) };
+}
+
+/** 每個頂點屬於哪一片螢幕（離哪一片最近）；lx、ly 已經夾進 0~1 */
+export function assignVertices(prim: PrimGeom, pieces: readonly Piece[]): { piece: Int16Array; lx: Float64Array; ly: Float64Array; dist: Float64Array } {
+  const nv = Math.floor(prim.pos.length / 3);
+  const piece = new Int16Array(nv), lx = new Float64Array(nv), ly = new Float64Array(nv), dist = new Float64Array(nv);
+  for (let v = 0; v < nv; v++) {
+    let best = -1, bd = Infinity, bx = 0, by = 0;
+    for (let i = 0; i < pieces.length; i++) {
+      const r = localOnPiece(pieces[i], prim.pos[v * 3], prim.pos[v * 3 + 1], prim.pos[v * 3 + 2]);
+      if (r.dist < bd) { bd = r.dist; best = i; bx = r.lx; by = r.ly; }
+    }
+    piece[v] = best;
+    lx[v] = Math.min(1, Math.max(0, bx));
+    ly[v] = Math.min(1, Math.max(0, by));
+    dist[v] = bd;
+  }
+  return { piece, lx, ly, dist };
+}
+
