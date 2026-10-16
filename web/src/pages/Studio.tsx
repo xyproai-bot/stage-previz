@@ -1124,6 +1124,10 @@ function StudioInner({ projectId }: { projectId: string }) {
                   onStagePropsChange={band.onStagePropsChange}
                   cameraBookmarks={camBm.bookmarks}
                   onCameraBookmarksChange={camBm.onChange}
+                  stageShow={{
+                    title: selectedSong ? songTitle(selectedSong) : undefined,
+                    transport: videoMode ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay } : undefined,
+                  }}
                   {...mech.sceneProps}
                   toolbarMode={isAnimatorViewer ? 'viewer' : 'full'}
                   lookSettings={isAnimatorViewer ? view.lookSettings : personalLook.effective}

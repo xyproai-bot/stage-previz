@@ -62,6 +62,10 @@ import Icon from './Icon';
 import { promptDialog } from './dialogs';
 import CameraBookmarkPanel from './CameraBookmarkPanel';
 import type { CameraBookmark } from '../lib/cameraBookmarks';
+import { Maximize } from 'lucide-react';
+import StageShowBar from './StageShowBar';
+import { useStageFullscreen } from '../lib/useStageFullscreen';
+import { isStageShowActive, type StageShowInfo } from '../lib/stageShow';
 import { toast } from '../lib/toast';
 import StageToolbar, { type ToolDef, type ToolMenuEntry, type ToolMenuSection } from './StageToolbar';
 import { LED_CANVAS_RANGE, normalizeLedCanvas, type LedCanvas } from '../lib/ledCanvas';
@@ -165,6 +169,8 @@ interface Props {
   onAddAnchoredComment?: (anchor: import('../lib/api').CommentAnchor) => void;
   /** 有給（專案 id）才有工具列的「視角」：常用看台視角 + 專案共用的視角書籤；不傳則停用功能 */
   bookmarkScope?: string;
+  /** 有給才有「全螢幕預演」（F 或工具列）：3D 舞台佔滿整個螢幕、操作介面全藏起來，小條上有播放 / 時間 / 歌名 / 離開（lib/stageShow.ts） */
+  stageShow?: StageShowInfo;
   /** 專案共用的視角書籤（lib/cameraBookmarks.ts；每個人都能點了飛過去） */
   cameraBookmarks?: CameraBookmark[];
   /** 有給 = 可以存目前視角 / 改名 / 換順序 / 刪除（製作、導演）；沒給 = 只能看 */
@@ -314,13 +320,15 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
-  const readOnly = readOnlyProp || viewer;
+  const containerRef = useRef<HTMLDivElement>(null);
+  // 全螢幕預演：3D 舞台這一塊拉滿整個螢幕；預演中一律唯讀（不選物件、不拖 gizmo）
+  const show = useStageFullscreen(containerRef, !!stageShow);
+  const readOnly = readOnlyProp || viewer || show.active;
   const viewerRef = useRef(viewer);
   viewerRef.current = viewer;
-  const containerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -576,6 +584,21 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     setMeasureMode(false);
     setAddPinMode(false);
   }, [viewer]);
+  // 進入全螢幕預演：開著的面板、量測、漫遊、3D 留言、選到的樂手都收起來（只剩畫面）
+  useEffect(() => {
+    if (!show.active) return;
+    setLookPanelOpen(false);
+    setMaterialPanelOpen(false);
+    setHomeViewPanelOpen(false);
+    setBookmarkPanelOpen(false);
+    setScalePanelOpen(false);
+    setNdiPopoverOpen(false);
+    setMoreMenuOpen(false);
+    setWalkMode(false);
+    setMeasureMode(false);
+    setAddPinMode(false);
+    setSelectedPropId(null);
+  }, [show.active]);
   function loadBookmark(bm: CameraBookmark) {
     flyCamera(new THREE.Vector3(...bm.position), new THREE.Vector3(...bm.target), bm.fov);
   }
@@ -3128,8 +3151,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      // 只看模式：快捷鍵全部關掉
-      if (viewerRef.current) return;
+      // 只看模式：快捷鍵全部關掉；全螢幕預演中也是（W / E / Q / L / X 都是編輯用的）
+      if (viewerRef.current || isStageShowActive()) return;
       // 唯讀模式：保留 L / X，不啟用 W/E/Q/Esc
       if (readOnlyRef.current) {
         // 審片頁的 L 是播放（J / K / L）→ 物件名稱只能從工具列開
@@ -3317,6 +3340,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     menu: { icon: Camera, label: cameraBookmarks.length > 0 ? `視角…（${cameraBookmarks.length}）` : '視角…', hint: viewsTitle, onSelect: openBookmarkPanel },
   };
 
+  // 「全螢幕預演」：頁面有給 stageShow 才有（F 也一樣）
+  const showTitle = '全螢幕預演（按 F）：3D 舞台佔滿整個螢幕、藏起所有操作介面；滑鼠一動會出現播放和離開';
+  const showTool: ToolDef = {
+    id: 'show', group: 'show', priority: 5,
+    render: (l) => toolBtn({ icon: Maximize, label: '全螢幕預演', title: showTitle, labeled: l, onClick: show.enter }),
+    menu: { icon: Maximize, label: '全螢幕預演', shortcut: 'F', hint: showTitle, onSelect: show.enter },
+  };
+
   const tools: ToolDef[] = [];
   if (!readOnly) {
     tools.push({
@@ -3373,6 +3404,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       menu: { icon: Tag, label: '物件名稱', shortcut: transportKeys ? undefined : 'L', checked: showLabels, onSelect: () => setShowLabels(s => !s) },
     });
   }
+  if (stageShow) tools.push(showTool);
   tools.push({
     id: 'reset', group: 'camera', priority: 0,
     render: () => (
@@ -3519,7 +3551,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   }] : baseSections;
 
   return (
-    <div className="stage-scene" ref={containerRef}>
+    <div
+      className={'stage-scene' + (show.active ? ' is-show' + (show.mode === 'css' ? ' is-show--css' : '') + (show.barVisible ? '' : ' is-bar-hidden') : '')}
+      ref={containerRef}
+    >
       <StageToolbar
         tools={tools}
         sections={menuSections}
@@ -3793,6 +3828,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       {/* 自動調低畫質時的小提示（不擋操作） */}
       {qualityLevel !== 'high' && (
         <div className="stage-scene__quality-note">畫質自動調低以保持順暢</div>
+      )}
+      {/* 全螢幕預演的小條（滑鼠一動出現 2.5 秒） */}
+      {stageShow && show.active && (
+        <StageShowBar visible={show.barVisible} info={stageShow} fallbackTitle={cueName ?? projectName} onExit={show.exit} />
       )}
       {/* Help overlay */}
       <div className="stage-scene__help">

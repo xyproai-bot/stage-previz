@@ -1124,6 +1124,10 @@ function SongDetail({
                 onStagePropsChange={band.onStagePropsChange}
                 cameraBookmarks={camBm.bookmarks}
                 onCameraBookmarksChange={camBm.onChange}
+                stageShow={{
+                  title: songTitle(song),
+                  transport: videoMode ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay } : undefined,
+                }}
                 {...mech.sceneProps}
                 lookSettings={personalLook.effective}
                 onLookSettingsChange={personalLook.set}

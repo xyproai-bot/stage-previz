@@ -1,0 +1,77 @@
+/* 全螢幕預演（lib/useStageFullscreen.ts）：3D 舞台那一塊（.stage-scene）加上 is-show，除了畫面和小條，其他全部藏起來 */
+.stage-scene.is-show { background: #000; }
+.stage-scene.is-show > :not(canvas):not(.stage-show-bar) { display: none !important; }
+.stage-scene.is-show.is-bar-hidden { cursor: none; }
+
+/* 瀏覽器不能全螢幕（iPhone Safari）：用 CSS 蓋滿整個視窗 */
+.stage-scene.is-show--css {
+  position: fixed !important;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  z-index: 900;
+}
+html.stage-show-lock, html.stage-show-lock body { overflow: hidden; }
+
+/* 小條：平常不顯示（沒有 is-visible），不佔位置、點不到 */
+.stage-show-bar {
+  position: absolute;
+  left: 50%;
+  bottom: max(18px, env(safe-area-inset-bottom));
+  transform: translateX(-50%) translateY(8px);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  padding: 6px 8px 6px 10px;
+  background: rgba(14, 16, 20, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  backdrop-filter: blur(10px);
+  color: var(--text, #e8eaed);
+  font-size: 13px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 20;
+}
+.stage-show-bar.is-visible {
+  opacity: 1;
+  transform: translateX(-50%);
+  pointer-events: auto;
+}
+.stage-show-bar__time { font-variant-numeric: tabular-nums; color: var(--text-muted, #aab); white-space: nowrap; }
+.stage-show-bar__title {
+  min-width: 0;
+  max-width: 28ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.stage-show-bar__btn,
+.stage-show-bar__exit {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.stage-show-bar__btn { padding: 0; }
+.stage-show-bar__btn:hover,
+.stage-show-bar__exit:hover { background: rgba(255, 255, 255, 0.18); }
+/* 手機窄螢幕：歌名縮短，放得下播放鈕、時間、離開 */
+@media (max-width: 480px) {
+  .stage-show-bar { gap: 8px; }
+  .stage-show-bar__title { max-width: 12ch; }
+}

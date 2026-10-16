@@ -32,6 +32,7 @@ import { useProjectViewSettings } from '../lib/projectViewSettings';
 import { useStageProps } from '../lib/useStageProps';
 import { canEditStageProps } from '../lib/stageProps';
 import { useCameraBookmarks } from '../lib/useCameraBookmarks';
+import { isStageShowActive } from '../lib/stageShow';
 import { canEditCameraBookmarks } from '../lib/cameraBookmarks';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueTransitionSeconds, crossfadeLabel, NEW_CUE_CROSSFADE_SECONDS, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
@@ -304,6 +305,8 @@ export default function ProjectEditor() {
   const navRef = useRef({ masterCues: [] as Cue[], visibleSongs: [] as Song[], selectedCueId: null as string | null, selectedSongId: null as string | null });
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // 全螢幕預演中：復原 / 重做、換歌、換 cue 都關掉（這一頁沒有影片要控制）
+      if (isStageShowActive()) return;
       // Cmd/Ctrl+Z = 復原；Cmd/Ctrl+Shift+Z 或 Ctrl+Y = 重做
       // 在會打字的欄位裡交給瀏覽器自己的復原；勾選框、機關滑桿上照樣復原（lib/keyTarget.ts）
       if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -1275,6 +1278,7 @@ export default function ProjectEditor() {
               onStagePropsChange={band.onStagePropsChange}
               cameraBookmarks={camBm.bookmarks}
               onCameraBookmarksChange={camBm.onChange}
+              stageShow={{ title: selectedSong ? songTitle(selectedSong) : undefined }}
               lookSettings={personalLook.effective}
               onLookSettingsChange={personalLook.set}
               lookCustomized={personalLook.customized}

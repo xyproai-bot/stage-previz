@@ -13,6 +13,7 @@ import { versionKey } from '../songVersions';
 import { commentOpenPlan } from '../playbackPolicy';
 import { toast } from '../toast';
 import { nextShuttle, reviewActionFor, type Shuttle } from './reviewShortcuts';
+import { isStageShowActive, reviewActionAllowedInShow } from '../stageShow';
 import { estimateFps, fpsFromFrameCount, stepFrameTime } from './timecode';
 import { loopSeekTarget, normalizeRange, seekLeavesRange } from './playhead';
 import {
@@ -583,6 +584,8 @@ export function useReviewSession(o: ReviewSessionOptions): ReviewSession {
       if (dialogOpen(e.target)) return;
       const action = reviewActionFor(e, { pointerLocked: !!document.pointerLockElement });
       if (!action) return;
+      // 全螢幕預演中：只留播放、逐格、換 cue；標區段、換歌、清畫記這些剪輯類的不動
+      if (!reviewActionAllowedInShow(action, isStageShowActive())) return;
       const st = stateRef.current;
       const oo = optsRef.current;
       if (action === 'nextCue' || action === 'prevCue') {

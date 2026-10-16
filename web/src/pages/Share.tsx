@@ -16,6 +16,7 @@ import { normalizeMaterialOverrides } from '../lib/stageLook/materialOverrides';
 import { normalizeHomeView } from '../lib/homeView';
 import { normalizeStageProps } from '../lib/stageProps';
 import { normalizeCameraBookmarks } from '../lib/cameraBookmarks';
+import { songTitle } from '../lib/songCode';
 import { normalizeLedCanvas } from '../lib/ledCanvas';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
@@ -561,6 +562,10 @@ export default function Share() {
                 stageProps={stageProps}
                 bookmarkScope={data.project.id}
                 cameraBookmarks={cameraBookmarks}
+                stageShow={{
+                  title: (() => { const s = data.songs.find(x => x.id === selectedSongId); return s ? songTitle(s) : undefined; })(),
+                  transport: videoMode ? { playing: local.playing, time: local.time, duration: local.duration, onTogglePlay: local.togglePlay } : undefined,
+                }}
                 {...mech.sceneProps}
                 lookSettings={projectLook}
                 materialOverrides={materialOverrides}
