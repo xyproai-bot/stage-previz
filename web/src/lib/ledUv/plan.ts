@@ -301,10 +301,12 @@ export interface LegacyScreen {
 export interface LegacyPlan {
   canvas: CanvasSize;
   screens: LegacyScreen[];
-  /** 沒辦法放進舊版面的螢幕（原本的畫面橫跨畫布邊緣）：舊影片在這幾塊會貼不對 */
+  /** 沒辦法放進舊版面的螢幕（原本的畫面橫跨畫布邊緣），而且原本的 UV 也存不進模型：舊影片在這幾塊會貼不對 */
   unprotected: string[];
-  /** 放進去了，但原本的 UV 不是整齊的長方形，貼出來可能有點歪 */
+  /** 放進去了，但原本的 UV 不是整齊的長方形（又存不進模型），貼出來可能有點歪 */
   approximate: string[];
+  /** 原本的 UV 會存進模型的第二組 UV（TEXCOORD_1）的物件 id：這些物件的舊影片一個像素都不差（長方形版型只是備援） */
+  originalUv: string[];
 }
 
 /** 這次新切出來的螢幕（一個物件有好幾片分開的平面）：後台建手動螢幕用 */
@@ -316,13 +318,16 @@ const EXACT = 0.02;
  * 舊版面：版型畫布 = 套用前的整張畫布；每塊螢幕放在它原本的像素位置，方向用「新座標 → 原本範圍」找出來的。
  * 版型的來源範圍是看「現在模型的 UV 外框」（新的位置），目的地是原本的位置 → 舊影片的畫面照原樣貼回新的 UV 上。
  */
-export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanvas: CanvasSize): LegacyPlan {
+export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanvas: CanvasSize, exactIds: ReadonlySet<string> = new Set()): LegacyPlan {
   const screens: LegacyScreen[] = [];
   const unprotected: string[] = [], approximate: string[] = [];
+  const originalUv: string[] = [];
   for (const o of plan.objects) {
     const inp = inputs.find(i => i.id === o.id);
     const info = inp?.info;
     if (!inp || !info) continue;
+    const exact = exactIds.has(o.id) && (o.mode === 'keep' || o.mode === 'auto');
+    if (exact) originalUv.push(o.id);
     if (o.mode === 'keep' && o.keep) {
       if (inp.manuals.length > 0) {
         for (const m of inp.manuals) {
@@ -331,7 +336,7 @@ export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanv
           screens.push({ key: `s:${m.id}`, objectId: o.id, name: m.name, dest: { x: x0, y: y0, w: Math.max(1, x1 - x0), h: Math.max(1, y1 - y0) }, rotate: 0, flipH: false, flipV: false });
         }
       } else if (info.oldRegion!.wraps) {
-        unprotected.push(o.name);
+        if (!exact) unprotected.push(o.name);
       } else {
         screens.push({ key: `o:${o.id}`, objectId: o.id, name: o.name, dest: info.oldRegion!.rect, rotate: 0, flipH: false, flipV: false });
       }
@@ -339,8 +344,8 @@ export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanv
       o.pieces.forEach((p, i) => {
         const old = info.oldPieces[i];
         if (!old) return;  // 原本就沒有 UV：舊影片本來就沒有畫面可以保護
-        if (old.region.wraps) { unprotected.push(p.name); return; }
-        if (old.err > EXACT) approximate.push(p.name);
+        if (old.region.wraps) { if (!exact) unprotected.push(p.name); return; }
+        if (old.err > EXACT && !exact) approximate.push(p.name);
         const key = o.pieces.length > 1 ? `s:@${o.id}#${i}` : `o:${o.id}`;
         // 版型的方向 = 原本的方向 ∘ 新排法方向的反方向（新排法轉過 / 翻過，舊影片的畫面才貼得回原本的樣子）
         const now = p.placed ? { rotate: p.placed.rotate, flipH: p.placed.flipH, flipV: p.placed.flipV } : IDENTITY_ORIENTATION;
@@ -349,7 +354,7 @@ export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanv
       });
     }
   }
-  return { canvas: oldCanvas, screens, unprotected, approximate };
+  return { canvas: oldCanvas, screens, unprotected, approximate, originalUv };
 }
 
 /** 一個物件有好幾片分開的平面 → 每一片建一個手動螢幕（範圍 = 排好的長方形） */

@@ -43,7 +43,8 @@ import { LedLightRig, type LedLightProps } from '../lib/stageLook/ledLightRig';
 import { LedEnvironment, LED_LAYER } from '../lib/stageLook/ledEnvironment';
 import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textureColorReader';
 import { AdaptiveQuality, QUALITY, detectQualityProfile, type QualityLevel } from '../lib/stageLook/quality';
-import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut, setLedTemplate, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut, setLedOriginalUv, setLedTemplate, updateLedSurface } from '../lib/stageLook/ledSurface';
+import { materialsWithOriginalUv, planWantsOriginalUv } from '../lib/stageLook/ledOriginalUv';
 import { ensureOwnLedMaterials } from '../lib/stageLook/ledOwnMaterial';
 import { pickNdiColorCurve, type NdiColorLut } from '../lib/ndiColor';
 import { readPixels } from '../lib/ndiFrameGrab';
@@ -2397,6 +2398,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // LED 物件各自一份材質：模型裡的 LED 通常共用同一個材質，版型 / 亮度 / 色調 / 選取是每個物件的設定，
       // 共用的話後面的物件會蓋掉前面的（只剩最後一塊有畫面）。細節見 lib/stageLook/ledOwnMaterial.ts
       if (isLed) ensureOwnLedMaterials(obj);
+      // 舊影片（自動貼 UV 以前做的）：模型存了原本的 UV（uv1）就直接用它取色，一個像素都不差；沒存的材質照舊用版型的長方形
+      const origUvMats = tplData && ledTemplate && planWantsOriginalUv(ledTemplate, id) ? materialsWithOriginalUv(obj) : null;
 
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
@@ -2420,7 +2423,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // 畫面 = emissiveMap × tint × 亮度，正面看 = 原檔顏色（不壓色、不吃曝光；ledSurface.ts + ledOutputPass.ts）
           // 像素顆粒 / 側看變暗也在 ledSurface shader
           configureLedMaterial(m, { mode: 'live', texture: ledTexture, tint: ledTint, brightness: ledBrightness });
-          setLedTemplate(m, tplData);
+          const useOrig = !!origUvMats && origUvMats.has(m);
+          setLedTemplate(m, useOrig ? null : tplData);
+          setLedOriginalUv(m, useOrig);
           ledMaterials.add(m);
           // selected highlight：LED 不洗白，這裡只在沒畫面、沒亮度時加一點點當提示
           if (isSelected && ledBrightness < 0.05 && !ledTexture) {
@@ -2431,7 +2436,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // === LED in Quick mode（有畫面）===
           // 快速模式：給動畫師 1:1 對顏色 → 只有畫面，不打燈、不反光、不壓色（以前放在 map 會被燈光打暗一大半）
           configureLedMaterial(m, { mode: 'quick', texture: ledTexture });
-          setLedTemplate(m, tplData);
+          const useOrig = !!origUvMats && origUvMats.has(m);
+          setLedTemplate(m, useOrig ? null : tplData);
+          setLedOriginalUv(m, useOrig);
           ledMaterials.add(m);
         } else {
           // === 一般物件 / Quick mode 的 LED（沒貼圖時）===
@@ -2441,6 +2448,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           // emissive 只在 selected 時 highlight
           updateLedSurface(m, { on: false, mode: 'off' });
           setLedTemplate(m, null);
+          setLedOriginalUv(m, false);
           applyMaterialSettings(m, materialOverrides?.[m.name], {
             color: mat.color, roughness: mat.roughness, metalness: mat.metalness, opacity: mat.opacity,
           });

@@ -303,6 +303,38 @@
   align-items: center;
   gap: 6px;
 }
+
+/* 曲面：照形狀展開 / 保留原本 UV（兩選一） */
+.uvchoice {
+  display: inline-flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.uvchoice__btn {
+  min-height: 28px;
+  padding: 2px 10px;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  cursor: pointer;
+  font-size: 12px;
+}
+.uvchoice__btn + .uvchoice__btn {
+  border-left: 1px solid var(--border-strong);
+}
+.uvchoice__btn.is-on {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* 整圈圓柱的接縫位置 */
+.uvseam {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
 .uvdist {
   font-size: 11px;
   padding: 2px 8px;

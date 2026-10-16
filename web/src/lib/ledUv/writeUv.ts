@@ -115,10 +115,8 @@ export function applyUvs(doc: Document, objects: ReadonlyMap<string, SceneObject
       let status: Uv1Status = 'none';
       let uv1Acc: Accessor | null = null;
       if (keepOriginal && geomPrim.screen && old0) {
-        if (old1 && old1.getName() === ORIGINAL_UV_NAME) status = 'carried';
-        else if (old1) status = 'blocked';
-        else {
-          status = 'fresh';
+        status = uv1StatusOf(old0, old1);
+        if (status === 'fresh') {
           uv1Acc = doc.createAccessor(ORIGINAL_UV_NAME).setType('VEC2').setArray(floatCopy(old0, split ? split.origin : null) as Float32Array<ArrayBuffer>).setBuffer(buffer);
         }
         seen.add(status);
@@ -155,6 +153,24 @@ export function applyUvs(doc: Document, objects: ReadonlyMap<string, SceneObject
     if (nodeParents(m).length === 0) m.dispose();
   }
   return stats;
+}
+
+/** 一個螢幕 primitive 的原本 UV 要怎麼存：有 TEXCOORD_1 嗎、是我們存的嗎 */
+function uv1StatusOf(old0: Accessor | null, old1: Accessor | null): Uv1Status {
+  if (!old0) return 'none';
+  if (!old1) return 'fresh';
+  return old1.getName() === ORIGINAL_UV_NAME ? 'carried' : 'blocked';
+}
+
+/** 套用以前先預測：這個物件的原本 UV 會怎麼存（畫面上告訴製作舊影片能不能精確保護） */
+export function predictUv1(obj: SceneObject): Uv1Status {
+  const seen = new Set<Uv1Status>();
+  obj.refs.forEach((ref, i) => {
+    if (!obj.geom.prims[i].screen) return;
+    const s = uv1StatusOf(ref.prim.getAttribute('TEXCOORD_0'), ref.prim.getAttribute('TEXCOORD_1'));
+    if (s !== 'none') seen.add(s);
+  });
+  return summarizeUv1(seen);
 }
 
 function summarizeUv1(seen: ReadonlySet<Uv1Status>): Uv1Status {

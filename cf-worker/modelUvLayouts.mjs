@@ -16,6 +16,14 @@
 //   歌選的版型（songs.template_id）不動：AE 即時 / 本地檔案是現在在做的新畫面，而且歌的版型也是新上傳影片的預設，
 //   改成舊版面會讓之後新做的影片被當成舊畫布。想用舊版面看舊的本地檔案，到歌單的「LED 版型」自己選「舊版面」。
 //   換回舊版模型時，這些影片還原成 NULL（因為舊的 UV 本來就對得上舊畫面）；再換回新版時重新套上。
+//
+// 第 4 階段 · 更牢的保護 + 連續套用：
+//   - 舊版面的快照多一個 originalUv（物件 id 清單）：套用時前端把這些物件「原本的 UV」存進新模型的第二組 UV（TEXCOORD_1），
+//     這些物件的舊影片取色改用它，一個像素都不差（跨過畫布邊緣、弧長不均勻的也是）；舊版面的長方形版型只是備援
+//     （舊版前端只看長方形、不認識 originalUv，照舊能用）
+//   - 每個模型版本記住是從哪個版本套用出來的（parent_key，migration 0037）。連續套用兩次（v0 → v1 → v2）、來回換版本時，
+//     舊影片的保護要沿著這條線走：換到某個版本時，這個版本和它所有祖先套用時改過的影片都要在「舊版面」上；
+//     離開時，只還原「新版本不在這條線上」的那些。以前只看自己這一筆，v1 → v2 → v0 → v2 之後最早那批影片就沒保護了
 
 import {
   normalizeManualScreenInput, normalizePlacementInputs, normalizeTemplateName, parseScreenKey,
@@ -27,6 +35,8 @@ import { ensureFullTemplate, MAX_MANUAL_SCREENS, MAX_TEMPLATES } from './ledTemp
 export const LEGACY_TEMPLATE_NAME = '舊版面';
 export const MAX_RECIPE_BYTES = 256 * 1024;
 const NOTE_MAX = 80;
+const MAX_ORIGINAL_UV = 200;
+const MAX_CHAIN = 64;
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const REF_RE = /^[a-zA-Z0-9_#-]{1,100}$/;
 const CHUNK = 80;
@@ -156,6 +166,11 @@ export async function applyAutoUv(request, env, ctx, log) {
       }
       resolved.push({ ...s, key: k });
     }
+    const rawOriginal = Array.isArray(lg.originalUv) ? lg.originalUv : [];
+    if (rawOriginal.length > MAX_ORIGINAL_UV || rawOriginal.some(x => typeof x !== 'string' || !objects.has(x))) {
+      return bad('舊版面的「原本 UV」清單不對（物件找不到，可能被刪掉了，請重新整理）');
+    }
+    const originalUv = [...new Set(rawOriginal)];
     const placed = normalizePlacementInputs(resolved);
     if (!placed.ok) return bad(placed.error);
     const screens = [];
@@ -170,7 +185,7 @@ export async function applyAutoUv(request, env, ctx, log) {
         screens.push({ key: p.key, objectId: sv.objectId, uv: sv.uv, dest: p.dest, rotate: p.rotate, flipH: p.flipH, flipV: p.flipV });
       }
     }
-    if (screens.length > 0) legacy = { canvas, screens };
+    if (screens.length > 0 || originalUv.length > 0) legacy = { canvas, screens, originalUv };
   }
 
   const curCanvasJson = cur.led_canvas ? JSON.stringify(normalizeLedCanvas(cur.led_canvas)) : null;
@@ -210,7 +225,10 @@ export async function applyAutoUv(request, env, ctx, log) {
         `INSERT INTO led_template_screens (template_id, screen_key, dest_x, dest_y, dest_w, dest_h, rotate, flip_h, flip_v) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(legacyId, p.key, p.dest.x, p.dest.y, p.dest.w, p.dest.h, p.rotate, p.flipH ? 1 : 0, p.flipV ? 1 : 0));
     }
-    const plan = { v: TEMPLATE_VERSION, id: legacyId, name: legacyName, canvas: legacy.canvas, scalePct: 100, screens: legacy.screens };
+    const plan = {
+      v: TEMPLATE_VERSION, id: legacyId, name: legacyName, canvas: legacy.canvas, scalePct: 100, screens: legacy.screens,
+      ...(legacy.originalUv.length > 0 ? { originalUv: legacy.originalUv } : {}),
+    };
     legacyPlanJson = JSON.stringify(plan);
     stamped = ((await env.DB.prepare(`SELECT id FROM song_videos WHERE project_id = ? AND template_snapshot IS NULL`).bind(projectId).all()).results || []).map(r => r.id);
     for (const part of chunks(stamped)) {
@@ -228,16 +246,16 @@ export async function applyAutoUv(request, env, ctx, log) {
     ).bind(projectId, cur.model_r2_key, curCanvasJson, '套用自動貼 UV 前', tId, t));
   }
   stmts.push(env.DB.prepare(
-    `INSERT OR REPLACE INTO model_uv_layouts (project_id, model_key, led_canvas, recipe, note, legacy_template_id, legacy_plan, stamped_videos, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(projectId, key, JSON.stringify(ledCanvas), recipe, note || '自動貼 UV', legacyId, legacyPlanJson, legacy ? JSON.stringify(stamped) : null, tId, t));
+    `INSERT OR REPLACE INTO model_uv_layouts (project_id, model_key, led_canvas, recipe, note, legacy_template_id, legacy_plan, stamped_videos, parent_key, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(projectId, key, JSON.stringify(ledCanvas), recipe, note || '自動貼 UV', legacyId, legacyPlanJson, legacy ? JSON.stringify(stamped) : null, cur.model_r2_key || null, tId, t));
 
   try {
     await env.DB.batch(stmts);
   } catch (e) {
     return bad('套用沒有成功（資料庫拒絕了）：' + String(e?.message || e).slice(0, 160), 400);
   }
-  await log?.('upload', 'model', key, { note, ledCanvas, autoUv: true, legacyTemplate: legacyName, stampedVideos: stamped.length });
+  await log?.('upload', 'model', key, { note, ledCanvas, autoUv: true, legacyTemplate: legacyName, stampedVideos: stamped.length, originalUv: legacy ? legacy.originalUv.length : 0 });
   return ok({
     ok: true, key, url: `/r2/${key}`, ledCanvas,
     legacyTemplateId: legacyId, legacyTemplateName: legacyName, stampedVideos: stamped.length,
@@ -341,7 +359,29 @@ export async function versionInfoMap(env, projectId) {
 }
 
 /**
- * 換成某個版本：模型 + 畫布（這個版本有紀錄就換回它的畫布）+ 舊影片（離開套用過自動貼 UV 的版本 → 舊影片還原；進入 → 重新套上），一個交易。
+ * 某個版本和它所有祖先（沿 parent_key 往上）的紀錄，最近的在前面。
+ * 沒有 parent_key 的紀錄（第 4 階段以前套用的、一般上傳的）= 這條線只有它自己。有環或太長就停。
+ */
+function lineageRows(byKey, key) {
+  const out = [];
+  const seen = new Set();
+  let cur = key ? byKey.get(key) : null;
+  while (cur && !seen.has(cur.model_key) && out.length < MAX_CHAIN) {
+    seen.add(cur.model_key);
+    out.push(cur);
+    cur = cur.parent_key ? byKey.get(cur.parent_key) : null;
+  }
+  return out;
+}
+
+const stampsOf = (row) => (row.legacy_template_id && row.legacy_plan ? parseJsonList(row.stamped_videos) : []);
+
+/**
+ * 換成某個版本：模型 + 畫布（這個版本有紀錄就換回它的畫布）+ 舊影片的保護，一個交易。
+ * 舊影片：每個版本套用時「那一刻沒有版型的影片」(stamped_videos) 被寫上它的「舊版面」。
+ * 換版本時看兩條線（版本 + 祖先）的差：只在「離開的線」上的 → 還原成沒有版型（NULL = 做給那個版本的整張畫布，UV 本來就對得上）；
+ * 只在「進去的線」上的 → 重新套上它的舊版面（還是 NULL 的才套，使用者自己換過版型的不動）。兩條線都有的 → 不動。
+ * 所以 v0 → v1 → v2 → v0 → v2 之後，最早（做給 v0）和中間（做給 v1）的影片都還在保護裡。
  * 回傳 { ledCanvas, restoredCanvas }
  */
 export async function activateVersion(env, projectId, key) {
@@ -351,30 +391,38 @@ export async function activateVersion(env, projectId, key) {
   let restored = false;
   let canvasJson = null;
   if (prevKey && prevKey !== key) {
-    const [prevRow, targetRow] = await Promise.all([layoutRow(env, projectId, prevKey), layoutRow(env, projectId, key)]);
+    const all = (await env.DB.prepare(`SELECT * FROM model_uv_layouts WHERE project_id = ?`).bind(projectId).all()).results || [];
+    const byKey = new Map(all.map(r => [r.model_key, r]));
+    const prevRow = byKey.get(prevKey) || null;
+    const targetRow = byKey.get(key) || null;
     if (prevRow) {
       // 離開之前把現在的畫布記在這個版本上（製作可能在這個版本上手動改過畫布）
       stmts.push(env.DB.prepare(`UPDATE model_uv_layouts SET led_canvas = (SELECT led_canvas FROM projects WHERE id = ?) WHERE project_id = ? AND model_key = ?`).bind(projectId, projectId, prevKey));
-      const ids = parseJsonList(prevRow.stamped_videos);
-      if (prevRow.legacy_template_id) {
-        for (const part of chunks(ids)) {
-          stmts.push(env.DB.prepare(
-            `UPDATE song_videos SET template_id = NULL, template_snapshot = NULL WHERE project_id = ? AND template_id = ? AND id IN (${part.map(() => '?').join(',')})`
-          ).bind(projectId, prevRow.legacy_template_id, ...part));
-        }
+    }
+    const leaving = lineageRows(byKey, prevKey);
+    const entering = lineageRows(byKey, key);
+    const inEntering = new Set(entering.map(r => r.model_key));
+    const inLeaving = new Set(leaving.map(r => r.model_key));
+    for (const row of leaving) {
+      if (inEntering.has(row.model_key) || !row.legacy_template_id) continue;
+      for (const part of chunks(stampsOf(row))) {
+        stmts.push(env.DB.prepare(
+          `UPDATE song_videos SET template_id = NULL, template_snapshot = NULL WHERE project_id = ? AND template_id = ? AND id IN (${part.map(() => '?').join(',')})`
+        ).bind(projectId, row.legacy_template_id, ...part));
+      }
+    }
+    // 先還原再套上（兩條線不同的版本可能有重疊的影片，例如同一個版本上套用兩次的兩個分支）；最老的先套
+    for (const row of [...entering].reverse()) {
+      if (inLeaving.has(row.model_key)) continue;
+      for (const part of chunks(stampsOf(row))) {
+        stmts.push(env.DB.prepare(
+          `UPDATE song_videos SET template_id = ?, template_snapshot = ? WHERE project_id = ? AND template_snapshot IS NULL AND id IN (${part.map(() => '?').join(',')})`
+        ).bind(row.legacy_template_id, row.legacy_plan, projectId, ...part));
       }
     }
     if (targetRow) {
       restored = true;
       canvasJson = targetRow.led_canvas || null;
-      const ids = parseJsonList(targetRow.stamped_videos);
-      if (targetRow.legacy_plan && targetRow.legacy_template_id) {
-        for (const part of chunks(ids)) {
-          stmts.push(env.DB.prepare(
-            `UPDATE song_videos SET template_id = ?, template_snapshot = ? WHERE project_id = ? AND template_snapshot IS NULL AND id IN (${part.map(() => '?').join(',')})`
-          ).bind(targetRow.legacy_template_id, targetRow.legacy_plan, projectId, ...part));
-        }
-      }
     }
   }
   if (restored) {
@@ -387,8 +435,13 @@ export async function activateVersion(env, projectId, key) {
 }
 
 /** 刪掉某個版本時，它的紀錄也刪掉 */
-export function deleteVersionRow(env, projectId, key) {
-  return env.DB.prepare(`DELETE FROM model_uv_layouts WHERE project_id = ? AND model_key = ?`).bind(projectId, key).run();
+export async function deleteVersionRow(env, projectId, key) {
+  // 從它套用出來的版本改接到它的上一個版本，保護的線不會斷在中間
+  const row = await layoutRow(env, projectId, key);
+  const stmts = [];
+  if (row) stmts.push(env.DB.prepare(`UPDATE model_uv_layouts SET parent_key = ? WHERE project_id = ? AND parent_key = ?`).bind(row.parent_key || null, projectId, key));
+  stmts.push(env.DB.prepare(`DELETE FROM model_uv_layouts WHERE project_id = ? AND model_key = ?`).bind(projectId, key));
+  return env.DB.batch(stmts);
 }
 
 /**
@@ -401,7 +454,7 @@ export async function inheritLayoutOnUpload(env, projectId, prevKey, newKey, use
   if (!prev) return;
   const canvas = (await env.DB.prepare(`SELECT led_canvas FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first())?.led_canvas || null;
   await env.DB.prepare(
-    `INSERT OR IGNORE INTO model_uv_layouts (project_id, model_key, led_canvas, recipe, note, legacy_template_id, legacy_plan, stamped_videos, created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(projectId, newKey, canvas, prev.recipe, prev.note ? `${prev.note}（沿用）` : null, prev.legacy_template_id, prev.legacy_plan, prev.stamped_videos, userId || null, nowIso()).run();
+    `INSERT OR IGNORE INTO model_uv_layouts (project_id, model_key, led_canvas, recipe, note, legacy_template_id, legacy_plan, stamped_videos, parent_key, created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(projectId, newKey, canvas, prev.recipe, prev.note ? `${prev.note}（沿用）` : null, prev.legacy_template_id, prev.legacy_plan, prev.stamped_videos, prev.parent_key || null, userId || null, nowIso()).run();
 }

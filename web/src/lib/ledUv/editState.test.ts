@@ -7,7 +7,8 @@ const SNAP: UvEditSnapshot = {
   v: 1,
   selected: { so_a: true, so_b: false },
   forms: { 'o:so_a': { ...EMPTY_FORM, pitch: '3.9' }, 'o:so_c#1': { ...EMPTY_FORM, mode: 'pixels', pw: '3077', ph: '1026' } },
-  overrides: { so_a: 'arc' },
+  overrides: { so_a: 'arc', so_b: 'free' },
+  seams: { so_a: 45, so_c: -90 },
   gutter: '8',
   arrangement: {
     v: 1, canvasMode: 'custom', canvas: { width: 8800, height: 2024 },
@@ -34,11 +35,14 @@ describe('editState', () => {
     // 排法壞掉 → 整份不用（不要拿一半的排法）
     expect(parseEditSnapshot({ ...SNAP, arrangement: { v: 1, items: [{ key: 'a', x: 1.5, y: 0, rotate: 0, flipH: false, flipV: false }] } })).toBeNull();
     const dirty = parseEditSnapshot({
-      v: 1, extra: 'x', selected: { a: true, b: 'yes' }, overrides: { a: 'auto', b: 'arc', c: 'weird' }, gutter: 'abc',
+      v: 1, extra: 'x', selected: { a: true, b: 'yes' }, overrides: { a: 'auto', b: 'arc', c: 'weird', d: 'free' }, gutter: 'abc',
+      seams: { a: 30, b: 0, c: 'x', d: 999, e: -999, f: NaN },
       forms: { ok: { mode: 'pitch', pitch: '3.9' }, badMode: { mode: 'x' }, tooLong: { mode: 'pitch', pitch: 'x'.repeat(100) } },
     })!;
     expect(dirty.selected).toEqual({ a: true });
-    expect(dirty.overrides).toEqual({ b: 'arc' });
+    expect(dirty.overrides).toEqual({ b: 'arc', d: 'free' });
+    expect(dirty.seams).toEqual({ a: 30, d: 180, e: -180 });      // 0 不存、壞的丟掉、超出範圍收進 -180~180
+    expect(parseEditSnapshot({ v: 1 })!.seams).toEqual({});        // 舊版存的沒有 seams
     expect(dirty.gutter).toBe('0');
     expect(Object.keys(dirty.forms)).toEqual(['ok']);
     expect(dirty.forms.ok).toEqual({ ...EMPTY_FORM, pitch: '3.9' });
@@ -50,5 +54,6 @@ describe('editState', () => {
     expect(p.selected).toEqual({ so_a: true });
     expect(Object.keys(p.forms)).toEqual(['o:so_a']);
     expect(p.overrides).toEqual({ so_a: 'arc' });
+    expect(p.seams).toEqual({ so_a: 45 });
   });
 });

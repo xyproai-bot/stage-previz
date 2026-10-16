@@ -115,6 +115,11 @@ export function distortionLevel(d: DistortionStat): DistortionLevel {
   return v <= DISTORTION_OK ? 'ok' : v <= DISTORTION_WARN ? 'warn' : 'bad';
 }
 
+/** 這個物件預設要不要自動貼：曲面（擠出 / 自由）攤平以後變形超過門檻（紅）→ 預設保留原本的 UV，由製作自己決定要不要照形狀展開 */
+export function defaultSelected(pieces: readonly { kind: 'flat' | 'arc' | 'ext' | 'free'; distortion: DistortionStat }[]): boolean {
+  return !pieces.some(p => (p.kind === 'ext' || p.kind === 'free') && distortionLevel(p.distortion) === 'bad');
+}
+
 /** 一行字：變形百分比 + 白話說明 */
 export function distortionText(d: DistortionStat): string {
   const lv = distortionLevel(d);

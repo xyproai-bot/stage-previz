@@ -101,7 +101,7 @@ export interface ApplyBody {
   ledCanvas: CanvasSize;
   note: string;
   recipe: Record<string, unknown>;
-  legacy: { canvas: CanvasSize; screens: Pick<LegacyScreen, 'key' | 'dest' | 'rotate' | 'flipH' | 'flipV'>[] } | null;
+  legacy: { canvas: CanvasSize; screens: Pick<LegacyScreen, 'key' | 'dest' | 'rotate' | 'flipH' | 'flipV'>[]; originalUv?: string[] } | null;
   pieceScreens: PieceScreen[];
   screenUpdates: { id: string; uv: UvBox }[];
 }

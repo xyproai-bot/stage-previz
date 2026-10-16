@@ -19,6 +19,8 @@ export interface UvEditSnapshot {
   forms: Record<string, SizeForm>;
   /** 物件 id → 手動指定的類型（只存不是「自動辨識」的） */
   overrides: Record<string, SurfaceOverride>;
+  /** 物件 id → 整圈圓柱的接縫位置（從背面往觀眾右手邊轉幾度；只存不是 0 的） */
+  seams: Record<string, number>;
   /** 螢幕間隔（字，輸入框裡的樣子） */
   gutter: string;
   /** 自己排的排法；沒動過 = null（照舞台自動排） */
@@ -60,12 +62,16 @@ export function parseEditSnapshot(raw: unknown): UvEditSnapshot | null {
   }
   const overrides: Record<string, SurfaceOverride> = {};
   if (isObj(raw.overrides)) {
-    for (const [k, v] of Object.entries(raw.overrides).slice(0, MAX_ENTRIES)) if (k.length <= MAX_KEY && (v === 'flat' || v === 'arc')) overrides[k] = v;
+    for (const [k, v] of Object.entries(raw.overrides).slice(0, MAX_ENTRIES)) if (k.length <= MAX_KEY && (v === 'flat' || v === 'arc' || v === 'free')) overrides[k] = v;
+  }
+  const seams: Record<string, number> = {};
+  if (isObj(raw.seams)) {
+    for (const [k, v] of Object.entries(raw.seams).slice(0, MAX_ENTRIES)) if (k.length <= MAX_KEY && typeof v === 'number' && Number.isFinite(v) && v !== 0) seams[k] = Math.max(-180, Math.min(180, v));
   }
   const gutter = typeof raw.gutter === 'string' && /^\d{1,2}$/.test(raw.gutter) ? raw.gutter : '0';
   const arrangement = raw.arrangement === null || raw.arrangement === undefined ? null : parseArrangement(raw.arrangement);
   if (raw.arrangement !== null && raw.arrangement !== undefined && !arrangement) return null;
-  return { v: 1, selected, forms, overrides, gutter, arrangement };
+  return { v: 1, selected, forms, overrides, seams, gutter, arrangement };
 }
 
 /** 只留還在的物件 / 螢幕片（模型換過了、物件刪掉了） */
@@ -76,6 +82,7 @@ export function pruneEditSnapshot(s: UvEditSnapshot, objectIds: ReadonlySet<stri
     selected: Object.fromEntries(Object.entries(s.selected).filter(([k]) => objectIds.has(k))),
     forms: Object.fromEntries(Object.entries(s.forms).filter(([k]) => objectIds.has(ownerOf(k)))),
     overrides: Object.fromEntries(Object.entries(s.overrides).filter(([k]) => objectIds.has(k))),
+    seams: Object.fromEntries(Object.entries(s.seams).filter(([k]) => objectIds.has(k))),
   };
 }
 

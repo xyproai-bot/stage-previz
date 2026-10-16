@@ -13,7 +13,7 @@ import { objectUvs, type Plan } from './plan';
 import type { PrimUv } from './place';
 import { stageFrontOf, type SurfaceOverride } from './surfaces';
 import { verifyOutputUv, verifyUvEdit, type OutputCheckReport } from './verifyUv';
-import { applyUvs, prepareOutputCompression, type Uv1Status } from './writeUv';
+import { applyUvs, predictUv1, prepareOutputCompression, type Uv1Status } from './writeUv';
 
 /** 跟後台一樣：模型檔最大 100 MB */
 export const MAX_MODEL_BYTES = 100 * 1024 * 1024;
@@ -50,6 +50,8 @@ export interface AnalyzeOk {
   draco: boolean;
   /** 給畫面顯示的提醒（例如 LED 材質有貼圖位移） */
   warnings: string[];
+  /** 物件 id → 套用時原本的 UV 會怎麼存進 TEXCOORD_1（fresh = 舊影片可以精確保護；blocked = 模型已經有別人的 TEXCOORD_1，退回長方形版型） */
+  uv1: Record<string, Uv1Status>;
 }
 export type AnalyzeResult = AnalyzeOk | { ok: false; reason: string };
 
@@ -77,11 +79,15 @@ export function analyzeDoc(doc: Document, draco: boolean, objects: readonly Want
   const front = stageFrontOf([...read.objects.values()].map(o => o.geom));
   const only = opts.only ? new Set(opts.only) : null;
   const infos: Record<string, ObjectInfo | null> = {};
+  const uv1: Record<string, Uv1Status> = {};
   for (const w of objects) {
     if (only && !only.has(w.id)) continue;
     const so = read.objects.get(w.id);
+    if (so) uv1[w.id] = predictUv1(so);
     infos[w.id] = so ? describeObject(so.geom, front, oldCanvas, opts.overrides?.[w.id] ?? 'auto', opts.seams?.[w.id] ?? 0) : null;
   }
+  // 自由曲面攤平後的網格很大，只有 worker 裡的 3D 預覽 / 套用要用（它們各自重新分析），不用整份傳回畫面
+  for (const info of Object.values(infos)) for (const p of info?.pieces ?? []) delete p.free;
   const warnings: string[] = [];
   const names = new Set<string>();
   for (const so of read.objects.values()) {
@@ -95,7 +101,7 @@ export function analyzeDoc(doc: Document, draco: boolean, objects: readonly Want
       }
     }
   }
-  return { ok: true, infos, front, diag: read.diag, scaleFactor: read.scaleFactor, draco, warnings };
+  return { ok: true, infos, front, diag: read.diag, scaleFactor: read.scaleFactor, draco, warnings, uv1 };
 }
 
 export async function analyzeModelBytes(io: PlatformIO, input: Uint8Array, objects: readonly WantedObject[], oldCanvas: CanvasSize, opts: AnalyzeOptions = {}): Promise<AnalyzeResult> {

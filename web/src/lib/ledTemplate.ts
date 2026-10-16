@@ -55,6 +55,11 @@ export interface LedTemplatePlan {
   /** LED 真實點數 → 這個版型的比例（100 / 50 / 自訂） */
   scalePct: number;
   screens: Placement[];
+  /**
+   * 自動貼 UV 的「舊版面」快照才有：這些物件（stage_objects.id）的原本 UV 存在模型的第二組 UV（TEXCOORD_1），
+   * 套用以前做的影片取色改用它（lib/stageLook/ledOriginalUv.ts），一個像素都不差。沒有 = 照 screens 的長方形取色（舊版前端也只看 screens）
+   */
+  originalUv?: string[];
 }
 
 /** 螢幕在整張畫布裡的範圍（UV 單位）：u / v 各一段，start 在 [0, 1)，length 在 (0, 1]，可以跨過 0 / 1 接縫 */
@@ -576,6 +581,9 @@ export function parsePlan(raw: unknown): LedTemplatePlan | null {
     screens.push({ key, objectId, uv, dest: { x, y, w, h }, rotate, flipH: s.flipH === true, flipV: s.flipV === true });
   }
   const scale = num(obj.scalePct);
+  const originalUv = Array.isArray(obj.originalUv)
+    ? [...new Set(obj.originalUv.filter((x): x is string => typeof x === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(x)))].slice(0, MAX_PLACEMENTS)
+    : [];
   return {
     v: 1,
     id: typeof obj.id === 'string' ? obj.id : null,
@@ -583,5 +591,6 @@ export function parsePlan(raw: unknown): LedTemplatePlan | null {
     canvas,
     scalePct: scale !== null && scale >= SCALE_RANGE[0] && scale <= SCALE_RANGE[1] ? scale : 100,
     screens,
+    ...(originalUv.length > 0 ? { originalUv } : {}),
   };
 }

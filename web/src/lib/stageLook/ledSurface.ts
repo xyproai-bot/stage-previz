@@ -9,6 +9,10 @@
 //   4. LED 畫布版型（uLedTplOn；lib/ledTemplate.ts）：影片是「版型畫布」時，每塊螢幕用自己的範圍把整張畫布的 UV 換成版型貼圖上的位置
 //      （轉 90° / 翻轉也在這裡），沒放進版型的螢幕黑的。只換「去貼圖哪裡取色」，像素格照舊用真實點數；
 //      uLedTplOn = 0（沒有版型 / 「全部」）時走原本那一行，顏色一個位元都不會變。
+//   5. 舊影片用模型存的原本 UV（uLedUvSet；lib/ledOriginalUv.ts）：自動貼 UV 套用時，LED 螢幕原本的 UV 存進模型的第二組 UV（TEXCOORD_1 = three 的 uv1），
+//      套用以前做的影片（「舊版面」保護的那些）取色改用這一組 → 跟套用前一個像素都不差（連跨過畫布邊緣、弧長不均勻的都是）。
+//      只換「去貼圖哪裡取色」那個座標（vLedUv1 = 跟 vEmissiveMapUv 同一個貼圖變換）；uLedUvSet = 0（預設，其他影片 / 測試圖 / 沒存原本 UV 的物件）時
+//      走原本的取色，顏色路徑一個位元都不會變；像素格照舊用新 UV（真實點數）。
 //   數學跟 ledColorMath.ts 一樣（有單元測試）。黑亮底色 / 反射在 configureLedMaterial 設。
 
 import * as THREE from 'three';
@@ -81,6 +85,8 @@ export interface LedSurfaceUniforms {
   /** 每塊 2 個數字（vec2[MAX]，攤平） */
   uLedTplOff: { value: Float32Array };
   uLedTplHalf: { value: THREE.Vector2 };
+  /** 取色用哪一組 UV：0 = 模型現在的 UV（vEmissiveMapUv，原本的路）；1 = 模型存的原本 UV（uv1），舊影片用 */
+  uLedUvSet: { value: number };
 }
 
 export function createLedSurfaceUniforms(): LedSurfaceUniforms {
@@ -98,6 +104,7 @@ export function createLedSurfaceUniforms(): LedSurfaceUniforms {
     uLedTplMat: { value: new Float32Array(MAX_SCREENS_PER_OBJECT * 4) },
     uLedTplOff: { value: new Float32Array(MAX_SCREENS_PER_OBJECT * 2) },
     uLedTplHalf: { value: new THREE.Vector2(0, 0) },
+    uLedUvSet: { value: 0 },
   };
 }
 
@@ -164,6 +171,10 @@ uniform vec4 uLedTplDst[LED_TPL_MAX];
 uniform vec4 uLedTplMat[LED_TPL_MAX];
 uniform vec2 uLedTplOff[LED_TPL_MAX];
 uniform vec2 uLedTplHalf;
+uniform float uLedUvSet;
+#ifdef USE_EMISSIVEMAP
+varying vec2 vLedUv1;
+#endif
 uniform float uLedOn;
 uniform vec2 uLedTexels;
 uniform float uLedGridStrength;
@@ -234,7 +245,10 @@ const LED_EMISSIVE_MAP = /* glsl */`
   // LED 畫布版型：整張畫布的 UV → 這塊螢幕在版型貼圖上的 UV（lib/ledTemplate.ts mapUvToTemplate 同一套算法）；沒開 = 原本的 UV
   vec2 ledSampleUv = vEmissiveMapUv;
   float ledCovered = 1.0;
-  if ( uLedTplOn > 0.5 ) {
+  if ( uLedUvSet > 0.5 ) {
+    // 舊影片：直接用模型存的原本 UV（uv1）取色，不經過版型
+    ledSampleUv = vLedUv1;
+  } else if ( uLedTplOn > 0.5 ) {
     ledCovered = 0.0;
     for ( int i = 0; i < LED_TPL_MAX; i ++ ) {
       if ( i >= uLedTplCount ) break;
@@ -316,13 +330,34 @@ if ( uLedMaskOut > 0.5 && uLedMode > 1.5 ) gl_FragColor.a = 0.0;
 #endif
 `;
 
+// 頂點：把 uv1（TEXCOORD_1 = 原本的 UV）過一次跟 emissiveMap 同樣的貼圖變換，送給 fragment。
+// three 只有在某張貼圖指定第二組 UV 時才宣告 uv1，所以沒宣告的時候自己宣告（#ifndef USE_UV1，兩邊不會重複）；幾何沒有 uv1 的 mesh 讀到的是 (0, 0)，uLedUvSet = 0 的材質不會用它
+const LED_VERTEX_PARS = /* glsl */`
+#ifdef USE_EMISSIVEMAP
+varying vec2 vLedUv1;
+#ifndef USE_UV1
+attribute vec2 uv1;
+#endif
+#endif
+`;
+const LED_VERTEX_MAIN = /* glsl */`
+#ifdef USE_EMISSIVEMAP
+vLedUv1 = ( emissiveMapTransform * vec3( uv1, 1 ) ).xy;
+#endif
+`;
+
 export function patchLedShader(
-  shader: { uniforms: Record<string, { value: unknown }>; fragmentShader: string },
+  shader: { uniforms: Record<string, { value: unknown }>; fragmentShader: string; vertexShader?: string },
   uniforms: LedSurfaceUniforms,
   decodeVideo = false,
   colorLut = false,
 ) {
   Object.assign(shader.uniforms, uniforms, LED_SHARED_UNIFORMS);
+  if (typeof shader.vertexShader === 'string') {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <uv_pars_vertex>', '#include <uv_pars_vertex>' + LED_VERTEX_PARS)
+      .replace('#include <uv_vertex>', '#include <uv_vertex>' + LED_VERTEX_MAIN);
+  }
   shader.fragmentShader = (decodeVideo ? '#define LED_DECODE_VIDEO\n' : '')
     + (colorLut ? '#define LED_COLOR_LUT\n' + LED_COLOR_LUT_DECL : '')
     + LED_UNIFORM_DECL + shader.fragmentShader
@@ -371,6 +406,16 @@ export function setLedTemplate(material: THREE.MeshStandardMaterial, data: Templ
   u.uLedTplMat.value.set(data.mat);
   u.uLedTplOff.value.set(data.off);
   u.uLedTplHalf.value.set(data.half[0], data.half[1]);
+}
+
+/**
+ * 舊影片取色用模型存的原本 UV（uv1）：true = 這個材質改用 uv1（同時不用版型）；false = 原本的取色。
+ * 只有「模型這個物件的 mesh 全都有 uv1」才能開（lib/stageLook/ledOriginalUv.ts 檢查），StageScene 決定。
+ */
+export function setLedOriginalUv(material: THREE.MeshStandardMaterial, on: boolean): void {
+  const u = material.userData.ledSurface as LedSurfaceUniforms | undefined;
+  if (!u) return;
+  u.uLedUvSet.value = on ? 1 : 0;
 }
 
 const WHITE = new THREE.Color(0xffffff);
