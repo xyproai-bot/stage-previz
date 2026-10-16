@@ -9,9 +9,11 @@
 //   三角形照位置焊起來分成幾片（跟 index 無關：硬邊匯出會把同一個位置的頂點複製很多份）；
 //   每一片：最佳平面的 RMS 距離 <= 長邊的 0.3 %，而且（面積加權）99.5 % 以上的三角形法線跟平均法線差在 3 度內 → 平面。
 //   有厚度的板子（前後兩個大面平行、面積差不多）→ 取朝觀眾的那一面當螢幕，側邊和背面跟著同一個函數算。
-//   不是平面的那一片 → 試著當圓柱面的一段弧（cylinder.ts，第 2 階段）；也不是圓柱（折角、波浪、圓錐…）→ 整個物件不處理，
-//   並估一下「硬貼會變形多少」給製作看（自由曲面第 4 階段才支援）。
-//   製作可以手動指定整個物件「平面」或「弧面」（override），指定了就照他的，變形百分比照實告訴他。
+//   不是平面的那一片 → 試著當圓柱面的一段弧（cylinder.ts，第 2 階段；整圈 360 度的封閉圓柱第 4 階段，接縫放在背對觀眾那一側）；
+//   不是圓柱 → 試著當「沿直線擠出的曲面」（波浪、折角…，extrusion.ts：側面形狀照弧長拉直，不拉伸，第 4 階段）；
+//   也不是 → 試著用 LSCM 攤平（freeform.ts，第 4 階段：圓錐、一塊球面…，會有拉伸，變形百分比照實告訴製作）；
+//   都做不到（有洞、封閉…）→ 整個物件不處理，並估一下「硬貼會變形多少」給製作看。
+//   製作可以手動指定整個物件「平面」「弧面」或「自由曲面」（override），指定了就照他的，變形百分比照實告訴他。
 //
 // 座標：螢幕片的 right / up / normal
 //   normal = 三角形繞向的法線（LED 只畫正面，觀眾站在 normal 這一側看）；鏡像過的節點（行列式 < 0）繞向會反，要乘回來。
@@ -19,7 +21,9 @@
 //   right = up × normal（站在 normal 那一側的人看過去的右邊），畫面的 y 朝下（down = -up）。
 
 import { cross, dot, eigenSym3, length, normalize, scale, sub, WORLD_UP, type Vec3 } from './geometry';
-import { arcLocal, arcPoint, fitArc, type ArcMap } from './cylinder';
+import { arcLocal, arcPoint, fitArc, resolveSeamCorners, type ArcMap } from './cylinder';
+import { extLocal, extPoint, fitExtrusion, type ExtMap } from './extrusion';
+import { fitFreeform, freeLocal, type FreeMap } from './freeform';
 
 export interface PrimGeom {
   /** 世界座標的頂點，每個頂點 3 個數字 */
@@ -48,9 +52,9 @@ export interface PieceFrame {
 /** 攤平造成的變形（比例：0.012 = 1.2 %）：每個三角形「畫面上的面積 / 實際的面積」跟 1 差多少 */
 export interface DistortionStat { max: number; mean: number }
 
-/** 一片螢幕：平面，或圓柱面的一段弧 */
+/** 一片螢幕：平面、圓柱面的一段弧（或整圈）、沿直線擠出的曲面（波浪、折角）、自由曲面（LSCM 攤平） */
 export interface Piece {
-  kind: 'flat' | 'arc';
+  kind: 'flat' | 'arc' | 'ext' | 'free';
   frame: PieceFrame;
   /** 寬（沿 right）、高（沿 down），文件單位 */
   widthU: number;
@@ -65,6 +69,10 @@ export interface Piece {
   flatness: number;
   /** 弧面才有：圓柱的擬合結果（半徑、角度範圍、凸或凹、方向） */
   arc?: ArcMap;
+  /** 擠出曲面才有：側面形狀的折線、擠出方向 */
+  ext?: ExtMap;
+  /** 自由曲面才有：攤平後的網格 */
+  free?: FreeMap;
   /** 螢幕頂點的外框（排版算舞台位置用） */
   bbox: { min: Vec3; max: Vec3 };
   /** 攤平的變形 */
@@ -75,10 +83,10 @@ export interface Piece {
   forced: boolean;
 }
 
-export type UnsupportedKind = 'arc' | 'fold' | 'other' | 'toomany' | 'empty' | 'closed' | 'arcfail';
+export type UnsupportedKind = 'arc' | 'fold' | 'other' | 'toomany' | 'empty' | 'closed' | 'arcfail' | 'freefail';
 
-/** 製作手動指定整個物件的類型：auto = 自動辨識 */
-export type SurfaceOverride = 'auto' | 'flat' | 'arc';
+/** 製作手動指定整個物件的類型：auto = 自動辨識；free = 自由曲面（先試沿直線擠出，不行再用 LSCM 攤平） */
+export type SurfaceOverride = 'auto' | 'flat' | 'arc' | 'free';
 
 export interface ObjectAnalysis {
   /** ok = 每一片都能貼（平面或弧面）；unsupported = 這個物件不處理 */
@@ -147,6 +155,8 @@ interface ScreenTris {
   area: Float64Array;
   /** 三個角的焊接編號 */
   w: Int32Array;
+  /** 1 = 節點是鏡像的（行列式 < 0）：繞向反過來，角的順序要換過才是「朝觀眾」的逆時針 */
+  flip: Uint8Array;
   count: number;
 }
 
@@ -155,7 +165,7 @@ function collectScreenTris(geom: ObjectGeom, diag: number): ScreenTris {
   const welds = new Map<string, number>();
   let total = 0;
   for (const pr of geom.prims) if (pr.screen) total += Math.floor(pr.index.length / 3);
-  const p = new Float64Array(total * 9), n = new Float64Array(total * 3), area = new Float64Array(total), w = new Int32Array(total * 3);
+  const p = new Float64Array(total * 9), n = new Float64Array(total * 3), area = new Float64Array(total), w = new Int32Array(total * 3), flip = new Uint8Array(total);
   let count = 0;
   for (const pr of geom.prims) {
     if (!pr.screen) continue;
@@ -185,11 +195,12 @@ function collectScreenTris(geom: ObjectGeom, diag: number): ScreenTris {
       p[o + 6] = pr.pos[c]; p[o + 7] = pr.pos[c + 1]; p[o + 8] = pr.pos[c + 2];
       n[count * 3] = nx / l2; n[count * 3 + 1] = ny / l2; n[count * 3 + 2] = nz / l2;
       area[count] = ar;
+      flip[count] = pr.sign < 0 ? 1 : 0;
       w[count * 3] = weld(ia); w[count * 3 + 1] = weld(ib); w[count * 3 + 2] = weld(ic);
       count++;
     }
   }
-  return { p, n, area, w, count };
+  return { p, n, area, w, flip, count };
 }
 
 function components(tris: ScreenTris): number[][] {
@@ -383,6 +394,12 @@ function measureDistortion(tris: ScreenTris, ids: readonly number[], piece: Piec
     const a3 = tris.area[t];
     if (!(a3 > 0)) continue;
     const l = [0, 1, 2].map(k => { const c = cornerOf(tris, t, k); return localOnPiece(piece, c[0], c[1], c[2]); });
+    if (piece.arc?.closed) {
+      // 封閉圓柱：接縫上的角是 0 還是 1，看同一個三角形的其他角（跟寫 UV 同一個規則）
+      const key = arcIsY ? 'ly' : 'lx';
+      const r = resolveSeamCorners([l[0][key], l[1][key], l[2][key]], [!!l[0].seam, !!l[1].seam, !!l[2].seam]);
+      for (let k = 0; k < 3; k++) l[k][key] = r[k];
+    }
     const auv = Math.abs((l[1].lx - l[0].lx) * (l[2].ly - l[0].ly) - (l[2].lx - l[0].lx) * (l[1].ly - l[0].ly)) / 2 * W * H;
     let ratio = auv / a3;
     if (piece.arc) {
@@ -444,8 +461,8 @@ function buildPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, fro
 type ArcBuild = { piece: Piece; outward: number } | { piece: null; reason: 'degenerate' | 'flat' | 'closed' | 'fit' };
 
 /** 圓柱面的一段弧；force = 製作手動指定（殘差再大也貼，變形多少照實算） */
-function buildArcPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3, force: boolean): ArcBuild {
-  const res = fitArc({ ...arcInputOf(tris, ids), front, force });
+function buildArcPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3, force: boolean, seamDeg = 0): ArcBuild {
+  const res = fitArc({ ...arcInputOf(tris, ids), front, force, seamDeg });
   if (!res.ok) return { piece: null, reason: res.reason };
   const m = res.map;
   const P = (lx: number, ly: number) => arcPoint(m, lx, ly);
@@ -474,12 +491,105 @@ function buildArcPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, 
   return { piece, outward: res.outwardScore };
 }
 
+type ExtBuild = { piece: Piece } | { piece: null; reason: 'degenerate' | 'flat' | 'notExtrusion' | 'profile' | 'closedProfile' };
+
+/** 沿直線擠出的曲面（波浪、折角、不規則的弧…）：側面形狀照弧長拉直 */
+function buildExtPiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3, forced: boolean): ExtBuild {
+  const n = ids.length;
+  const tri = new Float64Array(n * 9), triN = new Float64Array(n * 3), triArea = new Float64Array(n);
+  ids.forEach((t, i) => {
+    for (let k = 0; k < 9; k++) tri[i * 9 + k] = tris.p[t * 9 + k];
+    for (let k = 0; k < 3; k++) triN[i * 3 + k] = tris.n[t * 3 + k];
+    triArea[i] = tris.area[t];
+  });
+  const res = fitExtrusion({ tri, triN, triArea, front });
+  if (!res.ok) return { piece: null, reason: res.reason };
+  const m = res.map;
+  const P = (lx: number, ly: number) => extPoint(m, lx, ly);
+  const piece: Piece = {
+    kind: 'ext',
+    frame: {
+      origin: P(0.5, 0.5),
+      right: normalize(sub(P(0.51, 0.5), P(0.49, 0.5))),
+      down: normalize(sub(P(0.5, 0.51), P(0.5, 0.49))),
+      normal: res.meanNormal,
+      minX: 0, maxX: res.width, minY: 0, maxY: res.height,
+    },
+    widthU: res.width,
+    heightU: res.height,
+    area: fit.area,
+    center: fit.centroid,
+    facing: dot(res.meanNormal, front),
+    flatness: 0,
+    ext: m,
+    bbox: boxOfIds(tris, ids),
+    distortion: { max: 0, mean: 0 },
+    tol: Math.max(TOL_REL * (res.width + res.height), 3 * m.maxResidual),
+    forced,
+  };
+  piece.distortion = measureDistortion(tris, ids, piece);
+  return { piece };
+}
+
+type FreeBuild = { piece: Piece; flippedRatio: number } | { piece: null; reason: 'degenerate' | 'topology' | 'solve' };
+
+/** 自由曲面：LSCM 攤平（圓盤狀的網格；有洞、封閉、繞向不一致的不行） */
+function buildFreePiece(tris: ScreenTris, ids: readonly number[], fit: PlaneFit, front: Vec3, forced: boolean): FreeBuild {
+  const compact = new Map<number, number>();
+  const vp: number[] = [];
+  const tri = new Int32Array(ids.length * 3);
+  ids.forEach((t, i) => {
+    const order = tris.flip[t] ? [0, 2, 1] : [0, 1, 2];
+    order.forEach((k, j) => {
+      const w = tris.w[t * 3 + k];
+      let id = compact.get(w);
+      if (id === undefined) {
+        id = compact.size;
+        compact.set(w, id);
+        vp.push(tris.p[t * 9 + k * 3], tris.p[t * 9 + k * 3 + 1], tris.p[t * 9 + k * 3 + 2]);
+      }
+      tri[i * 3 + j] = id;
+    });
+  });
+  const res = fitFreeform({ vpos: Float64Array.from(vp), tri, front });
+  if (!res.ok) return { piece: null, reason: res.reason };
+  const m = res.map;
+  const up = Math.abs(dot(res.meanNormal, WORLD_UP)) < 0.9
+    ? normalize(sub(WORLD_UP, scale(res.meanNormal, dot(WORLD_UP, res.meanNormal))))
+    : normalize(sub(scale(front, -1), scale(res.meanNormal, dot(scale(front, -1), res.meanNormal))));
+  const piece: Piece = {
+    kind: 'free',
+    frame: {
+      origin: fit.centroid,
+      right: normalize(cross(up, res.meanNormal)),
+      down: scale(up, -1) as Vec3,
+      normal: res.meanNormal,
+      minX: 0, maxX: res.width, minY: 0, maxY: res.height,
+    },
+    widthU: res.width,
+    heightU: res.height,
+    area: fit.area,
+    center: fit.centroid,
+    facing: dot(res.meanNormal, front),
+    flatness: 0,
+    free: m,
+    bbox: boxOfIds(tris, ids),
+    distortion: { max: 0, mean: 0 },
+    tol: Math.max(TOL_REL * (res.width + res.height), 1e-6 * Math.max(res.width, res.height)),
+    forced,
+  };
+  piece.distortion = measureDistortion(tris, ids, piece);
+  // 攤平後有地方翻到背面（重疊）：不管面積比例怎麼算都不能說沒變形
+  if (m.flippedRatio > 0.001) piece.distortion = { max: Math.max(piece.distortion.max, 1), mean: Math.max(piece.distortion.mean, m.flippedRatio) };
+  return { piece, flippedRatio: m.flippedRatio };
+}
+
 /** 從觀眾席看，由左到右：沿 (世界朝上 × 舞台正面) 的位置 */
 export function audienceRight(front: Vec3): Vec3 {
   return normalize(cross(WORLD_UP, front));
 }
 
-export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOverride = 'auto'): ObjectAnalysis {
+export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOverride = 'auto', seamDeg = 0): ObjectAnalysis {
   const bbox = boundsOf(geom);
   const diag = length(sub(bbox.max, bbox.min));
   const empty = (unsupported: UnsupportedKind, warnings: string[] = []): ObjectAnalysis =>
@@ -495,9 +605,12 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOv
   const warnings: string[] = [];
   let worst: UnsupportedKind | null = null;
   let freeform: ObjectAnalysis['freeform'];
-  const rank: Record<string, number> = { arcfail: 5, closed: 4, arc: 3, fold: 2, other: 1 };
+  const rank: Record<string, number> = { freefail: 6, arcfail: 5, closed: 4, arc: 3, fold: 2, other: 1 };
   const worse = (k: UnsupportedKind) => { if (!worst || rank[k] > rank[worst]) worst = k; };
   let mixedFacing = false;
+  const tryFlat = override === 'auto' || override === 'flat';
+  const tryArc = override === 'auto' || override === 'arc';
+  const tryFree = override === 'auto' || override === 'free';
   for (const ids of comps) {
     let compArea = 0;
     for (const t of ids) compArea += tris.area[t];
@@ -506,7 +619,7 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOv
     let fit = fitPlane(tris, ids);
     let piece: Piece | null = null;
     let fail: UnsupportedKind | null = null;
-    if (override !== 'arc') {
+    if (tryFlat) {
       let faceIds: readonly number[] = ids;
       if (!fit.flat) {
         const face = slabFace(tris, ids, compArea, front);
@@ -521,18 +634,40 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOv
         if (!piece) fail = 'other';
       }
     }
-    if (!piece && !fail) {
-      const arc = buildArcPiece(tris, ids, fit, front, override === 'arc');
+    let closedNonCircle = false;
+    if (!piece && !fail && tryArc) {
+      const arc = buildArcPiece(tris, ids, fit, front, override === 'arc', seamDeg);
       if (arc.piece) {
         piece = arc.piece;
         if (Math.abs(arc.outward) < 0.8) mixedFacing = true;
-      } else if (arc.reason === 'closed') {
-        fail = 'closed';
       } else if (override === 'arc') {
         fail = 'arcfail';
+      } else if (arc.reason === 'closed') {
+        closedNonCircle = true;
+      }
+    }
+    if (!piece && !fail && tryFree) {
+      // 沿直線擠出的曲面（波浪、折角…）：側面形狀照弧長拉直；不是的話用 LSCM 攤平
+      const ext = buildExtPiece(tris, ids, fit, front, override === 'free');
+      // 自動辨識：擠出的攤法要是還是拉伸得很厲害（其實不是真的擠出，只是法線差不多垂直）→ 改用 LSCM 試試
+      if (ext.piece && (override === 'free' || ext.piece.distortion.max <= DISTORTION_WARN)) {
+        piece = ext.piece;
+      } else {
+        const free = buildFreePiece(tris, ids, fit, front, override === 'free');
+        if (free.piece) {
+          piece = free.piece;
+          if (free.flippedRatio > 0.001) warnings.push(`攤平後有 ${(free.flippedRatio * 100).toFixed(1)}% 的面積翻到背面（重疊）：這塊形狀太複雜，建議選「保留原本 UV」或在 C4D 手動展開`);
+        } else if (override === 'free') {
+          fail = 'freefail';
+        }
+      }
+    }
+    if (!piece && !fail) {
+      if (closedNonCircle) {
+        fail = 'closed';
       } else {
         fail = classifyNonFlat(tris, ids);
-        // 不是平面也不是圓柱：估一下硬貼會變形多少（用最接近的平面或圓柱）
+        // 什麼都攤不平：估一下硬貼會變形多少（用最接近的平面或圓柱）
         const cands: { distortion: DistortionStat; via: 'flat' | 'arc' }[] = [];
         const pf = buildPiece(tris, ids, { ...fit, normal: fit.meanNormal }, front, true);
         if (pf) cands.push({ distortion: pf.distortion, via: 'flat' });
@@ -540,6 +675,7 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOv
         if (pa.piece) cands.push({ distortion: pa.piece.distortion, via: 'arc' });
         cands.sort((a, b) => a.distortion.mean - b.distortion.mean);
         if (cands[0] && (!freeform || cands[0].distortion.mean > freeform.distortion.mean)) freeform = cands[0];
+        if (tryFree && override === 'auto') fail = 'freefail';
       }
     }
     if (piece) pieces.push(piece);
@@ -564,9 +700,12 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOv
 
 export interface PieceLocal { piece: number; lx: number; ly: number; dist: number }
 
-/** 這個點離某片螢幕有多遠、在它的哪裡（lx、ly = 0~1 的比例，可能超出 0~1）；平面片看長方形，弧面片看圓柱面的那一段 */
-export function localOnPiece(piece: Piece, x: number, y: number, z: number): { lx: number; ly: number; dist: number } {
+/** 這個點離某片螢幕有多遠、在它的哪裡（lx、ly = 0~1 的比例，可能超出 0~1）；平面片看長方形，弧面片看圓柱面的那一段；
+ *  seam = 封閉圓柱接縫上的點（沿弧的位置是 0 還是 1 要看同一個三角形的其他角，resolveSeamCorners） */
+export function localOnPiece(piece: Piece, x: number, y: number, z: number): { lx: number; ly: number; dist: number; seam?: boolean } {
   if (piece.arc) return arcLocal(piece.arc, x, y, z);
+  if (piece.ext) return extLocal(piece.ext, x, y, z);
+  if (piece.free) return freeLocal(piece.free, x, y, z);
   const f = piece.frame;
   const dx = x - f.origin[0], dy = y - f.origin[1], dz = z - f.origin[2];
   const px = dx * f.right[0] + dy * f.right[1] + dz * f.right[2];
@@ -583,9 +722,9 @@ export function localOnPiece(piece: Piece, x: number, y: number, z: number): { l
  * 它的三角形常常橫跨好幾片螢幕，如果各頂點各歸各的，排版時這幾片被擺得很遠，這些三角形的 UV 就會拉成橫跨整張畫布的大三角形，
  * 把這個物件在對位圖上的外框撐到整張畫布。整個歸同一片，UV 就全部落在那一片的長方形裡。
  */
-export function assignVertices(prim: PrimGeom, pieces: readonly Piece[]): { piece: Int16Array; lx: Float64Array; ly: Float64Array; dist: Float64Array } {
+export function assignVertices(prim: PrimGeom, pieces: readonly Piece[]): { piece: Int16Array; lx: Float64Array; ly: Float64Array; dist: Float64Array; seam: Uint8Array } {
   const nv = Math.floor(prim.pos.length / 3);
-  const piece = new Int16Array(nv), lx = new Float64Array(nv), ly = new Float64Array(nv), dist = new Float64Array(nv);
+  const piece = new Int16Array(nv), lx = new Float64Array(nv), ly = new Float64Array(nv), dist = new Float64Array(nv), seam = new Uint8Array(nv);
   let only = -1;
   if (!prim.screen && pieces.length > 1 && nv > 0) {
     // 歸給面積最大的那一片（平手取編號小的）：只看螢幕片自己的大小，不看這個 primitive 的頂點，
@@ -597,16 +736,17 @@ export function assignVertices(prim: PrimGeom, pieces: readonly Piece[]): { piec
     }
   }
   for (let v = 0; v < nv; v++) {
-    let best = -1, bd = Infinity, bx = 0, by = 0;
+    let best = -1, bd = Infinity, bx = 0, by = 0, bs = false;
     for (let i = only >= 0 ? only : 0; i < (only >= 0 ? only + 1 : pieces.length); i++) {
       const r = localOnPiece(pieces[i], prim.pos[v * 3], prim.pos[v * 3 + 1], prim.pos[v * 3 + 2]);
-      if (r.dist < bd) { bd = r.dist; best = i; bx = r.lx; by = r.ly; }
+      if (r.dist < bd) { bd = r.dist; best = i; bx = r.lx; by = r.ly; bs = !!r.seam; }
     }
     piece[v] = best;
+    seam[v] = bs ? 1 : 0;
     lx[v] = Math.min(1, Math.max(0, bx));
     ly[v] = Math.min(1, Math.max(0, by));
     dist[v] = bd;
   }
-  return { piece, lx, ly, dist };
+  return { piece, lx, ly, dist, seam };
 }
 

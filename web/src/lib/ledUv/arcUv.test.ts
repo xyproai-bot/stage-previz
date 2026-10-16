@@ -8,6 +8,7 @@ import { buildPlan, objectUvs, type PlanObjectIn } from './plan';
 import { distortionLevel, distortionText, freeformText, UNSUPPORTED_TEXT } from './text';
 import { resolveSize } from './size';
 import { arcPrim, conePrim, gridPrim, mirroredX, moved, wavePrim } from './testing';
+import { spherePrim } from './testShapes';
 import { cross, dot, normalize, sub, type Vec3 } from './geometry';
 
 const FRONT: Vec3 = [0, 0, 1];
@@ -90,19 +91,19 @@ describe('弧面辨識：半徑、角度、凸或凹、攤平後的大小', () =
     }
   });
 
-  it('整圈 360 度的圓柱要拆頂點 → 第 4 階段才支援，說明白；圓錐、波浪不是圓柱 → 不收', () => {
+  it('整圈 360 度的圓柱（第 4 階段）：收，弧長 = 一整圈；圓錐、波浪不是圓柱 → 改走擠出 / 自由曲面（freeUv.test.ts）', () => {
     for (const seg of [32, 64, 128]) {
       const closed = analyzeObject(obj(arcPrim(3, 360, 2, seg)), FRONT);
-      expect(closed.kind, `seg ${seg}`).toBe('unsupported');
-      expect(closed.unsupported).toBe('closed');
+      expect(closed.kind, `seg ${seg}`).toBe('ok');
+      const p = closed.pieces[0];
+      expect(p.kind).toBe('arc');
+      expect(p.arc!.closed).toBe(true);
+      expect(p.widthU).toBeCloseTo(2 * Math.PI * 3, 6);
+      expect(p.heightU).toBeCloseTo(2, 6);
     }
-    expect(UNSUPPORTED_TEXT.closed).toContain('360');
-    const cone = analyzeObject(obj(conePrim(5, 3, 90, 3)), FRONT);
-    expect(cone.kind).toBe('unsupported');
-    expect(cone.freeform).toBeDefined();
-    const wave = analyzeObject(obj(wavePrim(14, 3, 0.8, 2)), FRONT);
-    expect(wave.kind).toBe('unsupported');
-    expect(wave.unsupported).toBe('arc');
+    expect(UNSUPPORTED_TEXT.closed).toContain('不是正圓');
+    expect(analyzeObject(obj(conePrim(5, 3, 90, 3)), FRONT).pieces[0].kind).toBe('free');
+    expect(analyzeObject(obj(wavePrim(14, 3, 0.8, 2)), FRONT).pieces[0].kind).toBe('ext');
   });
 });
 
@@ -233,14 +234,17 @@ describe('變形百分比', () => {
     expect(distortionText(forced.pieces[0].distortion)).toContain('會變形');
   });
 
-  it('不是平面也不是圓柱（圓錐、波浪）：照實估「硬貼會變形多少」，超過門檻標紅', () => {
+  it('什麼都攤不平（整顆球）：照實估「硬貼會變形多少」，超過門檻標紅；圓錐、波浪不用硬貼，攤平後 0 變形', () => {
+    const ball = analyzeObject(obj(spherePrim(3, 12)), FRONT);
+    expect(ball.kind).toBe('unsupported');
+    expect(ball.freeform!.distortion.max).toBeGreaterThan(DISTORTION_WARN);
+    expect(distortionLevel(ball.freeform!.distortion)).toBe('bad');
+    expect(freeformText(ball.freeform!)).toContain('硬把它');
     const cone = analyzeObject(obj(conePrim(6, 2, 120, 3, 36)), FRONT);
-    expect(cone.kind).toBe('unsupported');
-    expect(cone.freeform!.distortion.max).toBeGreaterThan(DISTORTION_WARN);
-    expect(distortionLevel(cone.freeform!.distortion)).toBe('bad');
-    expect(freeformText(cone.freeform!)).toContain('硬把它');
+    expect(cone.kind).toBe('ok');
+    expect(distortionLevel(cone.pieces[0].distortion)).toBe('ok');
     const wave = analyzeObject(obj(wavePrim(14, 3, 1.5, 2)), FRONT);
-    expect(wave.freeform!.distortion.max).toBeGreaterThan(DISTORTION_WARN);
+    expect(distortionLevel(wave.pieces[0].distortion)).toBe('ok');
   });
 
   it('門檻：<= 0.5 % 綠、<= 5 % 黃（輕微拉伸）、超過紅；文字寫百分比', () => {
@@ -258,13 +262,15 @@ describe('手動指定：平面 / 弧面', () => {
     expect(flat.kind).toBe('unsupported');
     expect(flat.unsupported).toBe('arcfail');
     expect(UNSUPPORTED_TEXT.arcfail).toContain('改回「自動」');
-    expect(analyzeObject(obj(arcPrim(3, 360, 2, 64)), FRONT, 'arc').unsupported).toBe('closed');
+    expect(analyzeObject(obj(arcPrim(3, 360, 2, 64)), FRONT, 'arc').pieces[0].arc!.closed).toBe(true);   // 整圈現在收了
+    // 球硬要當圓柱也做得出來（整圈），但變形一定是紅的
+    expect(distortionLevel(analyzeObject(obj(spherePrim(3, 12)), FRONT, 'arc').pieces[0].distortion)).toBe('bad');
   });
 
   it('指定「弧面」：不太圓的弧也貼（變形多少照實告訴製作）', () => {
-    // 圓錐的一段：自動辨識不收，手動指定弧面就當圓柱攤平，變形百分比大 → 標紅
+    // 圓錐的一段：自動辨識是自由曲面（可以攤平，0 變形）；手動指定弧面就當圓柱攤平，圓柱貼不準 → 有變形
     const cone = conePrim(5, 4.5, 90, 3, 24);
-    expect(analyzeObject(obj(cone), FRONT).kind).toBe('unsupported');
+    expect(analyzeObject(obj(cone), FRONT).pieces[0].kind).toBe('free');
     const forced = analyzeObject(obj(cone), FRONT, 'arc');
     expect(forced.kind).toBe('ok');
     expect(forced.pieces[0].kind).toBe('arc');
@@ -404,7 +410,7 @@ describe('buildPlan：弧面也能排、量到的大小是弧長', () => {
     const front = stageFrontOf([arc]);
     const info = describeObject(arc, front, old);
     const plan = buildPlan([{ id: 'a', name: 'a', order: 0, info, selected: true, sizes: { 0: { mode: 'pixels', pixels: { w: 600, h: 100 } } }, manuals: [] }], { front, metersPerUnit: 1, oldCanvas: old });
-    const uv = objectUvs(arc, plan.objects[0], info, plan.canvas)[0]!;
+    const uv = objectUvs(arc, plan.objects[0], info, plan.canvas)[0]!.uv;
     expect(uv.length).toBe((arc.prims[0].pos.length / 3) * 2);
     const placed = plan.objects[0].pieces[0].placed!;
     for (let v = 0; v < uv.length; v += 2) {

@@ -68,7 +68,8 @@ function describePieces(geom: ObjectGeom, a: ObjectAnalysis, oldCanvas: CanvasSi
       const nv = as.piece.length;
       const step = Math.max(1, Math.floor(nv / SAMPLE_CAP));
       for (let v = 0; v < nv; v += step) {
-        if (as.piece[v] !== i || as.dist[v] > tol) continue;
+        // 封閉圓柱的接縫上的頂點（沿弧是 0 還是 1 不確定）不拿來比方向
+        if (as.piece[v] !== i || as.dist[v] > tol || as.seam[v]) continue;
         const l = uvToLocal(region.span, p.uv![v * 2], p.uv![v * 2 + 1]);
         if (l) samples.push([as.lx[v], as.ly[v], l[0], l[1]]);
       }
@@ -78,8 +79,8 @@ function describePieces(geom: ObjectGeom, a: ObjectAnalysis, oldCanvas: CanvasSi
   });
 }
 
-export function describeObject(geom: ObjectGeom, front: Vec3, oldCanvas: CanvasSize, override: SurfaceOverride = 'auto'): ObjectInfo {
-  const a = analyzeObject(geom, front, override);
+export function describeObject(geom: ObjectGeom, front: Vec3, oldCanvas: CanvasSize, override: SurfaceOverride = 'auto', seamDeg = 0): ObjectInfo {
+  const a = analyzeObject(geom, front, override, seamDeg);
   const oldRegion = uvRegion(oldUvTriangles(geom.prims), oldCanvas);
   return { ...a, oldRegion, oldPieces: a.kind === 'ok' ? describePieces(geom, a, oldCanvas) : [] };
 }

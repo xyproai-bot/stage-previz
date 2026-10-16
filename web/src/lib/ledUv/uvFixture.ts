@@ -7,12 +7,14 @@
 //   LED_G_雙翼   同一個 primitive 裡兩片分開的牆
 //   LED_H_沒選   平面，但測試裡不勾（保留）
 //   LED_I_框     平面 LED + 外框（另一個 primitive，不是 LED 材質）
-//   LED_J_波浪   波浪形長條（不是平面也不是圓柱：保留原本的 UV，告訴製作硬貼會變形多少）
+//   LED_J_波浪   波浪形長條（沿 Y 擠出的曲面：第 4 階段照弧長拉直，0 變形）
 //   LED_K_凹弧   60 度凹的弧面（圓心在觀眾這邊，法線朝內）
+//   LED_L_球     整顆球（攤不平：保留原本的 UV，告訴製作硬貼會變形多少）
 //   MECH_01      一般物件
 
 import { Document, type Accessor, type Buffer as GBuffer, type Primitive } from '@gltf-transform/core';
 import { arcPrim, gridPrim, mergePrims, wavePrim } from './testing';
+import { spherePrim } from './testShapes';
 import type { PrimGeom } from './surfaces';
 import type { Vec3 } from './geometry';
 
@@ -107,10 +109,13 @@ export function buildUvFixture(): UvFixture {
   // K：凹弧（圓心在觀眾這邊，法線朝內），60 度
   wrapper.addChild(meshNode('LED_K_凹弧', 'LED_K_凹弧', [toPrim(oldUv(arcPrim(8, 60, 3, 24, 150, true), 0.4, 0.78, 0.15, 0.1)).setMaterial(led)]).setTranslation([20, 1, 4]));
 
+  // L：整顆球（攤不平）
+  wrapper.addChild(meshNode('LED_L_球', 'LED_L_球', [toPrim(oldUv(spherePrim(1.5, 10), 0.05, 0.2, 0.1, 0.1)).setMaterial(led)]).setTranslation([-20, 4, 6]));
+
   // 一般物件
   wrapper.addChild(meshNode('MECH_01_升降台', 'MECH_01_升降台', [toPrim(oldUv(gridPrim([-1, 0, 0], X, Z, 2, 2, 1), 0, 0, 1, 1)).setMaterial(metal)]).setTranslation([0, 0, 2]));
 
-  const names = ['LED_A_主牆', 'LED_B_左側', 'LED_C_右側', 'LED_D_地屏', 'LED_E_小半圓', 'LED_F_鏡像', 'LED_G_雙翼', 'LED_H_沒選', 'LED_I_框', 'LED_J_波浪', 'LED_K_凹弧'];
+  const names = ['LED_A_主牆', 'LED_B_左側', 'LED_C_右側', 'LED_D_地屏', 'LED_E_小半圓', 'LED_F_鏡像', 'LED_G_雙翼', 'LED_H_沒選', 'LED_I_框', 'LED_J_波浪', 'LED_K_凹弧', 'LED_L_球'];
   const objects = names.map((n, i) => ({ id: `so_${i}`, meshName: n, display: n.replace(/^LED_[A-Z]_/, '') }));
   return { doc, objects };
 }

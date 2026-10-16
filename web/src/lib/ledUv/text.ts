@@ -3,13 +3,14 @@
 import { DISTORTION_OK, DISTORTION_WARN, type DistortionStat, type SurfaceOverride, type UnsupportedKind } from './surfaces';
 
 export const UNSUPPORTED_TEXT: Record<UnsupportedKind, string> = {
-  arc: '這塊是彎的，但不是標準的圓柱（弧形不規則），自由曲面第 4 階段才支援，先保留原本的 UV',
-  fold: '這塊有折角（不是平面也不是圓柱），第 4 階段才支援，先保留原本的 UV',
-  other: '這塊不是平面也不是圓柱，自由曲面第 4 階段才支援，先保留原本的 UV',
-  toomany: '這個物件分成超過 8 片，第 4 階段之後才支援',
+  arc: '這塊是彎的，但沒辦法攤平，先保留原本的 UV',
+  fold: '這塊有折角，但沒辦法攤平，先保留原本的 UV',
+  other: '這塊不是平面也不是圓柱，沒辦法攤平，先保留原本的 UV',
+  toomany: '這個物件分成超過 8 片，目前不支援，先保留原本的 UV',
   empty: '這個物件沒有可以貼的面',
-  closed: '這塊是整圈 360 度的圓柱，接縫要拆頂點，第 4 階段才支援，先保留原本的 UV',
-  arcfail: '這塊沒辦法當弧面貼（太平、不是圓柱，或整圈 360 度），請改回「自動」或選「平面」',
+  closed: '這塊是整圈封閉的，但不是正圓的圓柱，接縫不知道怎麼切，先保留原本的 UV',
+  arcfail: '這塊沒辦法當弧面貼（太平、不是圓柱），請改回「自動」或選「平面」',
+  freefail: '這塊的網格沒辦法攤平（有破洞、整個封閉、面的方向不一致，或形狀太複雜），先保留原本的 UV；可以在 C4D 手動展開',
 };
 
 export const SPLITS_TEXT = '這塊已經手動切成幾塊螢幕，目前還不能自動貼，先保留原本的 UV（可以搬位置）';
@@ -29,8 +30,35 @@ export const OVERRIDE_LABEL: Record<SurfaceOverride, string> = {
   auto: '自動辨識',
   flat: '平面',
   arc: '弧面',
+  free: '自由曲面',
 };
-export const OVERRIDE_HINT = '辨識錯了可以手動指定：選「平面」會把整塊壓成一個平面（弧面會變形），選「弧面」會當成圓柱的一段攤平';
+export const OVERRIDE_HINT = '辨識錯了可以手動指定：選「平面」會把整塊壓成一個平面（弧面會變形），選「弧面」會當成圓柱的一段攤平，選「自由曲面」會照形狀攤平（沿直線擠出的波浪、折角照弧長拉直；其他形狀用保角攤平，會有一點拉伸）';
+
+/** 這一片是哪一種（畫面上的白話） */
+export function pieceKindText(p: { kind: 'flat' | 'arc' | 'ext' | 'free'; arc?: { convex: boolean; span: number; closed: boolean } }): string {
+  if (p.kind === 'flat') return '平面';
+  if (p.kind === 'arc' && p.arc) return arcText(p.arc.convex, (p.arc.span * 180) / Math.PI, p.arc.closed);
+  if (p.kind === 'ext') return '曲面 · 沿直線擠出，照弧長拉直（不拉伸）';
+  return '自由曲面 · 照形狀展開（會有一點拉伸）';
+}
+
+/** 封閉圓柱的接縫 */
+export const SEAM_TEXT = {
+  title: '接縫位置',
+  hint: '整圈 360 度的圓柱，畫面要在某個地方切開才能攤平。預設切在背對觀眾的那一側（舞台後方），觀眾看不到；可以往觀眾的右手邊（正數）或左手邊（負數）轉。接縫會貼到最近的一排頂點上，所以實際的角度會跟你填的差一點。',
+  reset: '回到背面',
+  right: '往右 15°',
+  left: '往左 15°',
+  actual: (deg: number) => (Math.abs(deg) < 0.05 ? '接縫在背對觀眾的那一側' : `接縫從背面往${deg > 0 ? '右' : '左'}轉了 ${Math.abs(deg).toFixed(1)}°`),
+  inputLabel: '接縫從背面轉幾度（往觀眾的右手邊為正）',
+} as const;
+
+/** 自由曲面可以選：照形狀展開，或保留原本的 UV */
+export const FREE_CHOICE = {
+  unwrap: '照形狀展開',
+  keep: '保留原本 UV',
+  hint: '這塊是曲面：「照形狀展開」會重新攤平並排進新的畫布；「保留原本 UV」不攤平，原本的 UV 整片搬到新位置（大小、方向、取樣都不變）。',
+} as const;
 
 export const BLOCKED_TEXT = {
   noSelection: '還沒有選任何要自動貼的螢幕',
@@ -102,7 +130,8 @@ export function freeformText(f: { distortion: DistortionStat; via: 'flat' | 'arc
   return `硬把它${how}貼，最大會變形 ${pct(f.distortion.max)}%（平均 ${pct(f.distortion.mean)}%）`;
 }
 
-/** 弧面的白話：凸 / 凹、角度 */
-export function arcText(convex: boolean, spanDeg: number): string {
+/** 弧面的白話：凸 / 凹、角度（整圈 360 度的封閉圓柱） */
+export function arcText(convex: boolean, spanDeg: number, closed = false): string {
+  if (closed) return `整圈圓柱 · ${convex ? '凸（外面看）' : '凹（裡面看）'} · 360°`;
   return `弧面 · ${convex ? '凸（外面看）' : '凹（裡面看）'} · ${Math.round(spanDeg)}°`;
 }

@@ -12,6 +12,7 @@ import type { Plan } from './plan';
 import type { UvPreviewResult } from './previewUv';
 import type { SurfaceOverride } from './surfaces';
 import { verifyUvScene } from './verifyScene';
+import type { Uv1Status } from './writeUv';
 
 export type { AnalyzeOk, AnalyzeResult, BuildPhase, WantedObject } from './pipeline';
 export type { UvPreview, UvPreviewResult, PrimPreview } from './previewUv';
@@ -69,8 +70,10 @@ function runWorker<T extends WorkerMessage>(
 export interface AnalyzeInput {
   objects: WantedObject[];
   oldCanvas: CanvasSize;
-  /** 製作手動指定的類型（物件 id → 平面 / 弧面） */
+  /** 製作手動指定的類型（物件 id → 平面 / 弧面 / 自由曲面） */
   overrides?: Record<string, SurfaceOverride | undefined>;
+  /** 封閉圓柱的接縫位置（物件 id → 從背面往觀眾右手邊轉幾度） */
+  seams?: Record<string, number | undefined>;
   /** 只重新分析這幾個物件 */
   only?: string[];
 }
@@ -140,7 +143,7 @@ export function openUvSession(): UvSession {
 }
 
 export type BuildOutcome =
-  | { ok: true; blob: Blob; beforeBytes: number; afterBytes: number; primitives: number; clonedMeshes: number; draco: boolean; maxPixelError: number }
+  | { ok: true; blob: Blob; beforeBytes: number; afterBytes: number; primitives: number; clonedMeshes: number; draco: boolean; maxPixelError: number; uv1: Record<string, Uv1Status>; splitPrimitives: number }
   | { ok: false; reason: string; issues?: string[] };
 
 export async function buildLedModel(
@@ -165,5 +168,5 @@ export async function buildLedModel(
   } catch (e) {
     return { ok: false, reason: `檢查時出錯：${e instanceof Error ? e.message : String(e)}` };
   }
-  return { ok: true, blob, beforeBytes: r.beforeBytes, afterBytes: r.afterBytes, primitives: r.primitives, clonedMeshes: r.clonedMeshes, draco: r.draco, maxPixelError: r.output.maxPixelError };
+  return { ok: true, blob, beforeBytes: r.beforeBytes, afterBytes: r.afterBytes, primitives: r.primitives, clonedMeshes: r.clonedMeshes, draco: r.draco, maxPixelError: r.output.maxPixelError, uv1: r.uv1, splitPrimitives: r.splitPrimitives };
 }

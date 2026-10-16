@@ -7,8 +7,7 @@ import { createNodeIO, installNodeModelDecoders } from '../modelCompress/testing
 import { analyzeModelBytes, buildModelBytes, type AnalyzeOk, type BuildOk } from './pipeline';
 import { buildPlan, type PlanObjectIn } from './plan';
 import { verifyUvScene } from './verifyScene';
-import { UNSUPPORTED_TEXT } from './text';
-import { DISTORTION_OK, DISTORTION_WARN } from './surfaces';
+import { DISTORTION_OK } from './surfaces';
 import { readLedObjects } from './docRead';
 import { shelfArrangement, uvReadingCheck } from './testing';
 
@@ -52,11 +51,18 @@ describe.runIf(have)('真的 stage.glb：彎的 LED', () => {
     }
   });
 
-  it('LED_Sky（波浪形）不是平面也不是圓柱：保留原本的 UV，告訴製作硬貼會變形多少（紅色）', () => {
+  it('LED_Sky（波浪形）：沿 Y 擠出的曲面（第 4 階段）→ 側面形狀照弧長拉直，變形 < 0.5 %（以前是硬貼會變形、保留原本的 UV）', () => {
     const info = ana.infos[objects.find(o => o.meshName === 'LED_Sky')!.id]!;
-    expect(info.kind).toBe('unsupported');
-    expect(info.unsupported).toBe('arc');
-    expect(info.freeform!.distortion.max).toBeGreaterThan(DISTORTION_WARN);
+    expect(info.kind).toBe('ok');
+    const p = info.pieces[0];
+    expect(p.kind).toBe('ext');
+    expect(Math.abs(p.ext!.axis[1])).toBeGreaterThan(0.999);     // 擠出方向 = 世界 Y
+    expect(p.ext!.profileVertical).toBe(false);                  // 波浪是左右方向
+    expect(p.heightU).toBeGreaterThan(1.4);                      // 高 1.5 m
+    expect(p.heightU).toBeLessThan(1.6);
+    expect(p.widthU).toBeGreaterThan(45.4);                      // 弧長比兩端的距離（45.4 m）長
+    expect(p.distortion.max).toBeLessThan(DISTORTION_OK);
+    expect(p.facing).toBeGreaterThan(0.9);
   });
 
   it('LED2_Stage / LED3_Stage：一道凹的弧牆（半徑約 15 m、29 度）+ 六塊平面；舞台地板那一大塊不是螢幕', () => {
@@ -81,8 +87,8 @@ describe.runIf(have)('真的 stage.glb：彎的 LED', () => {
     }));
     const plan = buildPlan(ins, { front: ana.front, metersPerUnit: ana.scaleFactor, oldCanvas: OLD });
     expect(plan.blockers).toEqual([]);
-    expect(plan.objects.find(o => o.name === 'LED_Sky')!.mode).toBe('keep');
-    expect(plan.objects.find(o => o.name === 'LED_Sky')!.reason).toBe(UNSUPPORTED_TEXT.arc);
+    expect(plan.objects.find(o => o.name === 'LED_Sky')!.mode).toBe('auto');
+    expect(plan.objects.find(o => o.name === 'LED_Sky')!.pieces[0].surface).toBe('ext');
     const up = plan.objects.find(o => o.name === 'LED_1_UP')!;
     expect(up.pieces[0].placed!.w).toBeGreaterThan(850);  // 17.27 m / 20 mm
     expect(up.pieces[0].placed!.w).toBeLessThan(870);

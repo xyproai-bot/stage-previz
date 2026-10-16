@@ -15,7 +15,7 @@ import { resolveArrangement, type ArrangeNative, type ArrangeProblems, type Arra
 import { composeOrientation, IDENTITY_ORIENTATION, invertOrientation, isIdentity } from './orient';
 import { resolveSize, type Measured, type SizeResult, type SizeSpec } from './size';
 import type { ObjectInfo } from './objectInfo';
-import { flatUvForPrim, keepUvForPrim, type KeepMap } from './place';
+import { flatUvForPrim, keepUvForPrim, type KeepMap, type PrimUv } from './place';
 import { audienceRight, type DistortionStat, type ObjectGeom, type Piece, type SurfaceOverride } from './surfaces';
 import { BLOCKED_TEXT, KEEP_TEXT, MISSING_TEXT, NO_UV_TEXT, SPLITS_TEXT, UNSUPPORTED_TEXT, WARN_TEXT } from './text';
 
@@ -33,8 +33,10 @@ export interface PlanObjectIn {
   sizes: Record<number, SizeSpec | undefined>;
   /** 這個物件已經手動切出來的螢幕 */
   manuals: ManualBox[];
-  /** 製作手動指定的類型（平面 / 弧面）；沒指定 = 自動辨識。info 要是照同一個指定分析出來的 */
+  /** 製作手動指定的類型（平面 / 弧面 / 自由曲面）；沒指定 = 自動辨識。info 要是照同一個指定分析出來的 */
   override?: SurfaceOverride;
+  /** 封閉圓柱的接縫：從背面往觀眾右手邊轉幾度（沒指定 = 0）。info 要是照同一個設定分析出來的 */
+  seamDeg?: number;
 }
 
 export type ObjectMode = 'auto' | 'keep' | 'none' | 'missing';
@@ -43,12 +45,16 @@ export interface PlanPiece {
   index: number;
   key: string;
   name: string;
-  /** 平面 / 弧面（弧面的 measured.w 是真正的弧長） */
-  surface: 'flat' | 'arc';
-  /** 弧面：凸（觀眾在圓柱外面看）= true、凹 = false；平面沒有 */
+  /** 平面 / 弧面 / 擠出曲面（波浪、折角）/ 自由曲面（弧面的 measured.w 是真正的弧長，擠出曲面是側面形狀的弧長） */
+  surface: 'flat' | 'arc' | 'ext' | 'free';
+  /** 弧面：凸（觀眾在圓柱外面看）= true、凹 = false；其他沒有 */
   convex?: boolean;
   /** 弧面的角度範圍（度） */
   spanDeg?: number;
+  /** 整圈 360 度的封閉圓柱（接縫會拆頂點） */
+  closed?: boolean;
+  /** 封閉圓柱：接縫實際落在離背面多遠（度，往觀眾右手邊為正） */
+  seamDeg?: number;
   /** 攤平的變形 */
   distortion: DistortionStat;
   measured: Measured;
@@ -76,6 +82,8 @@ export interface PlanObject {
   warnings: string[];
   /** 製作手動指定的類型（沒指定 = 自動） */
   override: SurfaceOverride;
+  /** 製作設定的封閉圓柱接縫位置（度；沒設 = 0） */
+  seamDeg: number;
   /** 不能貼的曲面：硬貼會變形多少（給製作看為什麼保留原本的 UV） */
   freeform?: { distortion: DistortionStat; via: 'flat' | 'arc' };
 }
@@ -117,8 +125,8 @@ export const pieceKey = (id: string, count: number, i: number): string => (count
 export const pieceName = (name: string, count: number, i: number): string => (count > 1 ? `${name} ${i + 1}` : name);
 
 function cornersOf(p: Piece): Vec3[] {
-  // 弧面：用螢幕頂點的外框八個角算舞台上的位置
-  if (p.kind === 'arc') return boxPoints(p.bbox.min, p.bbox.max);
+  // 弧面、擠出曲面、自由曲面：用螢幕頂點的外框八個角算舞台上的位置
+  if (p.kind !== 'flat') return boxPoints(p.bbox.min, p.bbox.max);
   const f = p.frame;
   const out: Vec3[] = [];
   for (const x of [f.minX, f.maxX]) for (const y of [f.minY, f.maxY]) {
@@ -163,7 +171,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
 
   for (const inp of sorted) {
     const info = inp.info;
-    const obj: PlanObject = { id: inp.id, name: inp.name, mode: 'none', reason: '', pieces: [], keep: null, warnings: [], override: inp.override ?? 'auto', freeform: info?.freeform };
+    const obj: PlanObject = { id: inp.id, name: inp.name, mode: 'none', reason: '', pieces: [], keep: null, warnings: [], override: inp.override ?? 'auto', seamDeg: inp.seamDeg ?? 0, freeform: info?.freeform };
     objects.push(obj);
     if (!info) { obj.mode = 'missing'; obj.reason = MISSING_TEXT; continue; }
     obj.warnings.push(...info.warnings);
@@ -180,7 +188,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
         const key = pieceKey(inp.id, count, i);
         const name = pieceName(inp.name, count, i);
         const size = spec ? resolveSize(spec, measured) : null;
-        const pp: PlanPiece = { index: i, key, name, surface: piece.kind, ...(piece.arc ? { convex: piece.arc.convex, spanDeg: (piece.arc.span * 180) / Math.PI } : {}), distortion: piece.distortion, measured, size, placed: null };
+        const pp: PlanPiece = { index: i, key, name, surface: piece.kind, ...(piece.arc ? { convex: piece.arc.convex, spanDeg: (piece.arc.span * 180) / Math.PI, ...(piece.arc.closed ? { closed: true, seamDeg: piece.arc.seamDeg } : {}) } : {}), distortion: piece.distortion, measured, size, placed: null };
         obj.pieces.push(pp);
         if (!size) { blockers.push(BLOCKED_TEXT.size(name, '還沒填點數')); return; }
         if (!size.ok) { blockers.push(BLOCKED_TEXT.size(name, size.error || '點數不能用')); return; }
@@ -258,15 +266,21 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
   return { objects, canvas, blockers, warnings, rows: pack.rows, pack, items: natives, arranged: !!resolved, problems: resolved ? resolved.problems : null, arrangeBlockers };
 }
 
-/** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null */
-export function objectUvs(geom: ObjectGeom, obj: PlanObject, info: ObjectInfo, canvas: CanvasSize): (Float32Array | null)[] {
+/** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null。整圈圓柱的接縫頂點會有 split */
+export function objectUvs(geom: ObjectGeom, obj: PlanObject, info: ObjectInfo, canvas: CanvasSize): (PrimUv | null)[] {
   if (obj.mode === 'auto' && obj.pieces.every(p => p.placed)) {
     const placed = obj.pieces.map(p => p.placed!);
-    return geom.prims.map(p => flatUvForPrim(p, info.pieces, i => placed[i], canvas).uv);
+    return geom.prims.map((p): PrimUv => {
+      const r = flatUvForPrim(p, info.pieces, i => placed[i], canvas);
+      return r.split ? { uv: r.uv, split: r.split } : { uv: r.uv };
+    });
   }
   if (obj.mode === 'keep' && obj.keep) {
     const keep = obj.keep.map;
-    return geom.prims.map(p => keepUvForPrim(p, keep, canvas));
+    return geom.prims.map((p): PrimUv | null => {
+      const uv = keepUvForPrim(p, keep, canvas);
+      return uv ? { uv } : null;
+    });
   }
   return geom.prims.map(() => null);
 }

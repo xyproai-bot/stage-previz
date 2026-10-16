@@ -10,6 +10,7 @@ import { canvasPoint, flatUvForPrim } from './place';
 import { buildLegacy, buildPlan, objectUvs, pieceScreensOf, type PlanObjectIn } from './plan';
 import { uvRegion } from './region';
 import { arcPrim, gridPrim, mirroredX, moved, slabPrim, wavePrim } from './testing';
+import { spherePrim } from './testShapes';
 import { UNSUPPORTED_TEXT } from './text';
 import { dot, type Vec3 } from './geometry';
 
@@ -97,7 +98,7 @@ describe('analyzeObject：平面與座標方向', () => {
     expect(flipped.pieces[0].facing).toBeGreaterThan(0.99);
   });
 
-  it('有一點雜訊的平面還是平面；圓柱的弧面第 2 階段支援；波浪、折角不支援，說明白', () => {
+  it('有一點雜訊的平面還是平面；圓柱的弧面第 2 階段支援；波浪、折角第 4 階段當擠出曲面（不拉伸）；整顆球攤不平，說明白', () => {
     const noisy = gridPrim([-6, 0, 0], X, Y, 12, 4, 12);
     for (let i = 2; i < noisy.pos.length; i += 3) noisy.pos[i] += (((i * 7919) % 13) / 13 - 0.5) * 0.004;
     expect(analyzeObject(obj(noisy), FRONT).kind).toBe('ok');
@@ -105,15 +106,20 @@ describe('analyzeObject：平面與座標方向', () => {
     expect(arc.kind).toBe('ok');
     expect(arc.pieces[0].kind).toBe('arc');
     const wave = analyzeObject(obj(wavePrim(14, 3, 0.8, 2)), FRONT);
-    expect(wave.kind).toBe('unsupported');
-    expect(wave.unsupported).toBe('arc');
-    expect(UNSUPPORTED_TEXT.arc).toContain('不是標準的圓柱');
+    expect(wave.kind).toBe('ok');
+    expect(wave.pieces[0].kind).toBe('ext');
+    expect(wave.pieces[0].distortion.max).toBeLessThan(1e-9);
     const fold = analyzeObject(obj(
       gridPrim([-6, 0, 0], X, Y, 6, 3),
       gridPrim([0, 0, 0], normalizeV([1, 0, -0.6]), Y, 6, 3),
     ), FRONT);
-    expect(fold.kind).toBe('unsupported');
-    expect(fold.unsupported).toBe('fold');
+    expect(fold.kind).toBe('ok');
+    expect(fold.pieces[0].kind).toBe('ext');
+    expect(fold.pieces[0].widthU).toBeCloseTo(12, 6);      // 折起來的兩片展開 = 6 + 6，不是投影的寬度
+    const ball = analyzeObject(obj(spherePrim(3, 12)), FRONT);
+    expect(ball.kind).toBe('unsupported');
+    expect(ball.unsupported).toBe('freefail');
+    expect(UNSUPPORTED_TEXT.freefail).toContain('沒辦法攤平');
   });
 
   it('分開的幾片：各自是一片，由左到右排；碎片（螺絲）不算一片；超過 8 片不處理', () => {
@@ -327,7 +333,7 @@ describe('buildPlan：選哪些、保留哪些、舊版面', () => {
   // 三個物件：兩塊平面（一塊舊 UV 是正的、一塊舊 UV 轉了 90 度）、一塊弧面（保留）
   const wallA = gridPrim([-6, 1, 0], X, Y, 12, 4, 4);             // 舊 UV 預設：s → u、1-t → v（畫面正的）
   const wallB = gridPrim([-6, 8, 0], X, Y, 6, 3, 4, { oldUv: (s, t) => [t, s] }); // 舊 UV 轉了：v 跟著 x
-  const arc = wavePrim(12, 3, 0.6, 2);  // 波浪：不是平面也不是圓柱 → 保留
+  const arc = spherePrim(2, 12);  // 整顆球：攤不平 → 保留原本的 UV
   const OLD = { width: 8800, height: 2024 };
   // 舊 UV 都擺在畫布不同的地方
   function relocate(p: ReturnType<typeof gridPrim>, u0: number, v0: number, du: number, dv: number) {
@@ -368,7 +374,7 @@ describe('buildPlan：選哪些、保留哪些、舊版面', () => {
     expect(byId.a.mode).toBe('auto');
     expect(byId.b.mode).toBe('auto');
     expect(byId.c.mode).toBe('keep');
-    expect(byId.c.reason).toBe(UNSUPPORTED_TEXT.arc);
+    expect(byId.c.reason).toBe(UNSUPPORTED_TEXT.freefail);
     // a: 12 m / 10 mm = 1200 點；b: 6 m → 600
     expect(byId.a.pieces[0].placed).toMatchObject({ w: 1200, h: 400 });
     expect(byId.b.pieces[0].placed).toMatchObject({ w: 600, h: 300 });
@@ -380,7 +386,7 @@ describe('buildPlan：選哪些、保留哪些、舊版面', () => {
   it('保留的物件：UV 整數像素平移，形狀、大小、取樣的像素不變', () => {
     const plan = buildPlan([input('a', 0, true, { mode: 'pitch', pitchMm: 10 }), input('c', 2, false)], ctx);
     const c = plan.objects.find(o => o.id === 'c')!;
-    const uv = objectUvs(geoms.c, c, infos.c, plan.canvas)[0]!;
+    const uv = objectUvs(geoms.c, c, infos.c, plan.canvas)[0]!.uv;
     const region = infos.c.oldRegion!;
     const after = uvRegion(Array.from(geoms.c.prims[0].index, ix => [uv[ix * 2], uv[ix * 2 + 1]]).flat(), plan.canvas)!;
     expect(after.rect.w).toBe(region.rect.w);
@@ -409,7 +415,7 @@ describe('buildPlan：選哪些、保留哪些、舊版面', () => {
     for (const id of ['a', 'b', 'c']) {
       const g = geoms[id];
       const o = plan.objects.find(x => x.id === id)!;
-      const newUv = objectUvs(g, o, infos[id], plan.canvas);
+      const newUv = objectUvs(g, o, infos[id], plan.canvas).map(x => x!.uv);
       const scr = legacy.screens.find(s => s.key === `o:${id}`)!;
       // 版型的來源範圍 = 現在模型的 UV 外框（新的位置）
       const nr = uvRegion(g.prims.flatMap((p, pi) => Array.from(p.index, ix => [newUv[pi]![ix * 2], newUv[pi]![ix * 2 + 1]]).flat()), plan.canvas)!;
@@ -417,6 +423,8 @@ describe('buildPlan：選哪些、保留哪些、舊版面', () => {
       const prim = g.prims[0];
       let checked = 0;
       for (let v = 0; v < prim.pos.length / 3; v += 3) {
+        // 貼著畫布右邊 / 下邊的頂點（u 或 v 剛好 = 1）跟畫布另一邊是同一個位置，版型的長方形分不出來（這正是第 4 階段改用 TEXCOORD_1 的原因之一）：不比
+        if (newUv[0]![v * 2] >= 1 - 1e-9 || newUv[0]![v * 2 + 1] >= 1 - 1e-9) continue;
         const m = mapUvToTemplate(pl, nr.span, OLD, newUv[0]![v * 2], newUv[0]![v * 2 + 1]);
         if (!m) continue;
         const oldU = prim.uv![v * 2] - Math.floor(prim.uv![v * 2] - infos[id].oldRegion!.span.us + 1e-5);

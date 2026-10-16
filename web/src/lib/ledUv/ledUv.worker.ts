@@ -24,7 +24,7 @@ import type { Plan } from './plan';
 import type { SurfaceOverride } from './surfaces';
 
 export type WorkerRequest =
-  | { id: number; kind: 'analyze'; input?: ArrayBuffer; objects: WantedObject[]; oldCanvas: CanvasSize; overrides?: Record<string, SurfaceOverride | undefined>; only?: string[] }
+  | { id: number; kind: 'analyze'; input?: ArrayBuffer; objects: WantedObject[]; oldCanvas: CanvasSize; overrides?: Record<string, SurfaceOverride | undefined>; seams?: Record<string, number | undefined>; only?: string[] }
   | { id: number; kind: 'preview'; objects: WantedObject[]; plan: Plan; oldCanvas: CanvasSize }
   | { id: number; kind: 'build'; input: ArrayBuffer; objects: WantedObject[]; plan: Plan; oldCanvas: CanvasSize };
 
@@ -81,7 +81,7 @@ ctx.onmessage = async (e) => {
         session = { doc: opened.doc, draco: opened.draco };
       }
       if (!session) { ctx.postMessage({ id: req.id, type: 'analyze', result: { ok: false, reason: '還沒讀進模型' } }); return; }
-      const opts: AnalyzeOptions = { overrides: req.overrides, only: req.only };
+      const opts: AnalyzeOptions = { overrides: req.overrides, seams: req.seams, only: req.only };
       ctx.postMessage({ id: req.id, type: 'analyze', result: analyzeDoc(session.doc, session.draco, req.objects, req.oldCanvas, opts) });
       return;
     }
@@ -90,7 +90,12 @@ ctx.onmessage = async (e) => {
       const result = buildUvPreview(session.doc, req.objects, req.plan, req.oldCanvas);
       const transfer: Transferable[] = [];
       if (result.ok) {
-        for (const list of Object.values(result.preview.objects)) for (const p of list) if (p.uv) transfer.push(p.uv.buffer as ArrayBuffer);
+        for (const list of Object.values(result.preview.objects)) {
+          for (const p of list) {
+            if (p.uv) transfer.push(p.uv.buffer as ArrayBuffer);
+            if (p.split) transfer.push(p.split.origin.buffer as ArrayBuffer, p.split.index.buffer as ArrayBuffer);
+          }
+        }
       }
       ctx.postMessage({ id: req.id, type: 'preview', result }, transfer);
       return;

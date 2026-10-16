@@ -36,7 +36,7 @@ export async function verifyUvScene(
   const stripUv = (snap: typeof a) => {
     for (const n of snap.nodes) {
       if (!n.geometry || !n.path.split('/').some(seg => changedNames.has(seg.replace(/#\d+$/, '')))) continue;
-      n.geometry = { ...n.geometry, attributes: n.geometry.attributes.filter(x => !x.startsWith('uv:')) };
+      n.geometry = { ...n.geometry, attributes: n.geometry.attributes.filter(x => !x.startsWith('uv:') && !x.startsWith('uv1:')) };
     }
   };
   stripUv(a);

@@ -10,9 +10,10 @@ import type { Vec3 } from './geometry';
 import { readLedObjects, type SceneRead } from './docRead';
 import { describeObject, type ObjectInfo } from './objectInfo';
 import { objectUvs, type Plan } from './plan';
+import type { PrimUv } from './place';
 import { stageFrontOf, type SurfaceOverride } from './surfaces';
 import { verifyOutputUv, verifyUvEdit, type OutputCheckReport } from './verifyUv';
-import { applyUvs, prepareOutputCompression } from './writeUv';
+import { applyUvs, prepareOutputCompression, type Uv1Status } from './writeUv';
 
 /** 跟後台一樣：模型檔最大 100 MB */
 export const MAX_MODEL_BYTES = 100 * 1024 * 1024;
@@ -62,8 +63,10 @@ export async function openModelBytes(io: PlatformIO, input: Uint8Array): Promise
 }
 
 export interface AnalyzeOptions {
-  /** 製作手動指定的類型（物件 id → 平面 / 弧面）；沒有 = 自動辨識 */
+  /** 製作手動指定的類型（物件 id → 平面 / 弧面 / 自由曲面）；沒有 = 自動辨識 */
   overrides?: Readonly<Record<string, SurfaceOverride | undefined>>;
+  /** 封閉圓柱的接縫位置（物件 id → 從背面往觀眾右手邊轉幾度）；沒有 = 0 */
+  seams?: Readonly<Record<string, number | undefined>>;
   /** 只重新分析這幾個物件（舞台正面還是照全部物件算） */
   only?: readonly string[];
 }
@@ -77,7 +80,7 @@ export function analyzeDoc(doc: Document, draco: boolean, objects: readonly Want
   for (const w of objects) {
     if (only && !only.has(w.id)) continue;
     const so = read.objects.get(w.id);
-    infos[w.id] = so ? describeObject(so.geom, front, oldCanvas, opts.overrides?.[w.id] ?? 'auto') : null;
+    infos[w.id] = so ? describeObject(so.geom, front, oldCanvas, opts.overrides?.[w.id] ?? 'auto', opts.seams?.[w.id] ?? 0) : null;
   }
   const warnings: string[] = [];
   const names = new Set<string>();
@@ -104,15 +107,15 @@ export async function analyzeModelBytes(io: PlatformIO, input: Uint8Array, objec
 /** 照排好的方案算每個被處理的物件的新 UV（寫檔和 3D 預覽共用）；模型跟排版時不一樣 = 失敗 */
 export function computePlanUvs(
   read: SceneRead, plan: Plan, oldCanvas: CanvasSize,
-): { ok: true; infos: Record<string, ObjectInfo | null>; uvs: Map<string, (Float32Array | null)[]> } | { ok: false; reason: string } {
+): { ok: true; infos: Record<string, ObjectInfo | null>; uvs: Map<string, (PrimUv | null)[]> } | { ok: false; reason: string } {
   const front = stageFrontOf([...read.objects.values()].map(o => o.geom));
   const infos: Record<string, ObjectInfo | null> = {};
-  const uvs = new Map<string, (Float32Array | null)[]>();
+  const uvs = new Map<string, (PrimUv | null)[]>();
   for (const o of plan.objects) {
     if (o.mode !== 'auto' && o.mode !== 'keep') continue;
     const so = read.objects.get(o.id);
     if (!so) return { ok: false, reason: `模型裡找不到物件「${o.name}」` };
-    const info = describeObject(so.geom, front, oldCanvas, o.override ?? 'auto');
+    const info = describeObject(so.geom, front, oldCanvas, o.override ?? 'auto', o.seamDeg ?? 0);
     infos[o.id] = info;
     if (o.mode === 'auto' && (info.kind !== 'ok' || info.pieces.length !== o.pieces.length)) {
       return { ok: false, reason: `「${o.name}」的分析結果跟排版時不一樣（模型是不是換過了？請重新分析）` };
@@ -133,6 +136,9 @@ export interface BuildOk {
   clonedMeshes: number;
   draco: boolean;
   output: OutputCheckReport;
+  /** 物件 id → 原本的 UV 存進 TEXCOORD_1 的結果（fresh = 舊影片可以精確保護） */
+  uv1: Record<string, Uv1Status>;
+  splitPrimitives: number;
 }
 export type BuildResult = BuildOk | { ok: false; reason: string; issues?: string[] };
 
@@ -155,7 +161,7 @@ export async function buildModelBytes(
     const { infos, uvs } = computed;
 
     onPhase?.('write');
-    const stats = applyUvs(edit, read.objects, uvs);
+    const stats = applyUvs(edit, read.objects, uvs, { keepOriginalUv: true });
     const nodes = edit.getRoot().listNodes();
     const changed = new Set(stats.changed.map(c => `${nodes.indexOf(c.node)}:${c.primIndex}`));
     const editIssues = verifyUvEdit(orig, edit, changed);
@@ -172,7 +178,7 @@ export async function buildModelBytes(
     if (!docReport.ok) return { ok: false, reason: `寫出再讀回來的模型有不一樣：${docReport.issues[0]}`, issues: docReport.issues };
     const output = verifyOutputUv(out, objects, plan, infos);
     if (!output.ok) return { ok: false, reason: `貼出來的位置檢查沒過：${output.issues[0]}`, issues: output.issues };
-    return { ok: true, bytes, beforeBytes: input.byteLength, afterBytes: bytes.byteLength, primitives: stats.primitives, clonedMeshes: stats.clonedMeshes, draco: pre.draco, output };
+    return { ok: true, bytes, beforeBytes: input.byteLength, afterBytes: bytes.byteLength, primitives: stats.primitives, clonedMeshes: stats.clonedMeshes, draco: pre.draco, output, uv1: stats.uv1, splitPrimitives: stats.splitPrimitives };
   } catch (e) {
     return { ok: false, reason: `處理模型時出錯：${e instanceof Error ? e.message : String(e)}` };
   }

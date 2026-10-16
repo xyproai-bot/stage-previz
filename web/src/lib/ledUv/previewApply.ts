@@ -42,9 +42,30 @@ function shallowWithUv(geo: THREE.BufferGeometry, uv: Float32Array): THREE.Buffe
   return g;
 }
 
+/** 整圈圓柱：接縫頂點要複製，每個屬性都長出一樣的新頂點、索引換成改過的 → 整個新的 geometry（不跟原本的共用任何資料） */
+function splitWithUv(geo: THREE.BufferGeometry, uv: Float32Array, split: { origin: Uint32Array; index: Uint32Array }): THREE.BufferGeometry {
+  const g = new THREE.BufferGeometry();
+  for (const name of Object.keys(geo.attributes)) {
+    if (name === 'uv') continue;
+    const att = geo.attributes[name];
+    const size = att.itemSize, n = att.count;
+    const Ctor = (att as THREE.BufferAttribute).array.constructor as new (len: number) => Float32Array;
+    const arr = new Ctor((n + split.origin.length) * size);
+    const get = [att.getX, att.getY, att.getZ, att.getW];
+    for (let i = 0; i < n; i++) for (let k = 0; k < size; k++) arr[i * size + k] = get[k].call(att, i);
+    for (let j = 0; j < split.origin.length; j++) for (let k = 0; k < size; k++) arr[(n + j) * size + k] = arr[split.origin[j] * size + k];
+    g.setAttribute(name, new THREE.BufferAttribute(arr, size, att.normalized));
+  }
+  g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  g.setIndex(new THREE.BufferAttribute(Uint32Array.from(split.index), 1));
+  for (const grp of geo.groups) g.addGroup(grp.start, grp.count, grp.materialIndex);
+  g.userData = geo.userData;
+  return g;
+}
+
 /** 把預覽換上去。rootOf：物件 id → 場景裡那個物件（最上層的 Object3D） */
 export function applyUvPreview(preview: UvPreview, rootOf: (objectId: string) => THREE.Object3D | undefined): AppliedUvPreview {
-  const swaps: { mesh: THREE.Mesh; orig: THREE.BufferGeometry; tmp: THREE.BufferGeometry }[] = [];
+  const swaps: { mesh: THREE.Mesh; orig: THREE.BufferGeometry; tmp: THREE.BufferGeometry; own: boolean }[] = [];
   const applied: string[] = [], missing: string[] = [];
   for (const [id, prims] of Object.entries(preview.objects)) {
     const root = rootOf(id);
@@ -66,9 +87,10 @@ export function applyUvPreview(preview: UvPreview, rootOf: (objectId: string) =>
       const uv = prims[i].uv;
       if (!m || !uv) return;
       const orig = m.geometry;
-      const tmp = shallowWithUv(orig, uv);
+      const split = prims[i].split;
+      const tmp = split ? splitWithUv(orig, uv, split) : shallowWithUv(orig, uv);
       m.geometry = tmp;
-      swaps.push({ mesh: m, orig, tmp });
+      swaps.push({ mesh: m, orig, tmp, own: !!split });
     });
     applied.push(id);
   }
@@ -80,9 +102,11 @@ export function applyUvPreview(preview: UvPreview, rootOf: (objectId: string) =>
       restored = true;
       for (const s of swaps) {
         s.mesh.geometry = s.orig;
-        // 共用的資料不能跟著 dispose（會把原本的 GPU 資料刪掉）
-        for (const name of Object.keys(s.tmp.attributes)) if (name !== 'uv') s.tmp.deleteAttribute(name);
-        s.tmp.setIndex(null);
+        // 共用的資料不能跟著 dispose（會把原本的 GPU 資料刪掉）；拆過接縫的是整份新的，直接 dispose
+        if (!s.own) {
+          for (const name of Object.keys(s.tmp.attributes)) if (name !== 'uv') s.tmp.deleteAttribute(name);
+          s.tmp.setIndex(null);
+        }
         s.tmp.dispose();
       }
       swaps.length = 0;

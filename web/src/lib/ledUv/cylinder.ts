@@ -3,7 +3,8 @@
 // 一片弧面螢幕 = 圓柱面的一段。作法：
 //   1. 軸：三角形法線（面積加權）的共變異矩陣最小的特徵向量（圓柱面的法線都垂直於軸；不管網格切得多粗都成立）
 //   2. 半徑、圓心：把螢幕頂點投影到垂直於軸的平面，Kåsa 圓擬合再用高斯牛頓修成幾何誤差最小
-//   3. 弧的角度範圍：頂點的角度排好，找最大的空隙，空隙以外就是弧（只收一段弧，整圈 360 度要拆頂點 → 第 4 階段）
+//   3. 弧的角度範圍：頂點的角度排好，找最大的空隙，空隙以外就是弧；整圈 360 度（沒有空隙）= 封閉圓柱（第 4 階段）：
+//      接縫放在背對觀眾的那一側（再照製作的設定轉動），而且貼在一排現有的頂點上（不切三角形）；接縫上的頂點要拆成兩個（place.ts）
 //   4. 凸 / 凹：法線朝外（凸，觀眾在圓柱外面看）或朝內（凹，觀眾在圓柱裡面看）；LED 只畫正面，觀眾站在法線那一側
 //   5. 方向：牆（法線跟世界朝上差很多）上方 = 世界朝上；地屏 / 天花板（法線幾乎垂直）上方 = 舞台後方；
 //      右邊 = 上 × 法線（站在法線那一側的人看過去的右邊），所以凸、凹、鏡像過的都不會左右反
@@ -39,6 +40,10 @@ export interface ArcMap {
   axisRev: boolean;
   /** 螢幕頂點離圓柱面最遠的距離（容差用） */
   maxResidual: number;
+  /** 整圈 360 度的封閉圓柱：thetaStart 是接縫的角度，span = 2π，接縫上的頂點兩邊的 UV 差一整圈（place.ts 拆頂點） */
+  closed: boolean;
+  /** 封閉圓柱：接縫實際落在離「背對觀眾那一側」多遠（度，往觀眾的右手邊為正；貼在最近的一排頂點，所以不一定剛好是製作設定的角度）。開口的弧 = 0 */
+  seamDeg: number;
 }
 
 export type ArcFailReason = 'degenerate' | 'flat' | 'closed' | 'fit';
@@ -70,6 +75,8 @@ export interface ArcFitInput {
   front: Vec3;
   /** 製作手動選了「弧面」：殘差太大也貼（變形多少由變形百分比告訴他），只擋做不出來的 */
   force?: boolean;
+  /** 封閉圓柱的接縫位置：從背面往觀眾右手邊轉幾度（預設 0 = 背對觀眾的那一側） */
+  seamDeg?: number;
 }
 
 export const ARC_RMS_REL = 0.005;
@@ -159,6 +166,24 @@ export function basisFor(axis: Vec3): [Vec3, Vec3] {
 }
 
 const mod2pi = (a: number): number => ((a % TWO_PI) + TWO_PI) % TWO_PI;
+/** 角度差收進 (-π, π] */
+const wrapPi = (a: number): number => mod2pi(a + Math.PI) - Math.PI;
+
+/** 封閉圓柱：離接縫這麼近（占一整圈的比例）的頂點算「在接縫上」（網格是一排頂點剛好在接縫，浮點誤差遠小於這個） */
+export const SEAM_FRAC_EPS = 2e-5;
+
+/**
+ * 封閉圓柱上一個三角形的三個角，沿弧的位置（0~1）：
+ * 接縫上的頂點（0 或 1，浮點誤差會讓它落在這邊或那邊）看同一個三角形的其他角決定是 0 還是 1：
+ * 其他角在前半圈 → 0、在後半圈 → 1（三角形都小於半圈）。其他角也都在接縫上（扁掉的三角形）→ 0。
+ * UV 寫入、變形百分比、輸出檢查都用這一個，所以彼此一定一致。
+ */
+export function resolveSeamCorners(a: readonly [number, number, number], onSeam: readonly [boolean, boolean, boolean]): [number, number, number] {
+  let sum = 0, n = 0;
+  for (let k = 0; k < 3; k++) if (!onSeam[k]) { sum += a[k]; n++; }
+  const side = n === 0 ? 0 : sum / n < 0.5 ? 0 : 1;
+  return [onSeam[0] ? side : a[0], onSeam[1] ? side : a[1], onSeam[2] ? side : a[2]];
+}
 
 /** 圓柱的一段弧：擬合 + 方向。做不出來 = 原因 */
 export function fitArc(inp: ArcFitInput): ArcFitResult {
@@ -212,13 +237,13 @@ export function fitArc(inp: ArcFitInput): ArcFitResult {
     if (g > 1e-9) steps.push(g);
     if (g > gap) { gap = g; gapEnd = sorted[i + 1]; }
   }
-  const span = TWO_PI - gap;
-  // 整圈：最大的空隙跟一般相鄰頂點的間隔差不多 = 沒有缺口（圓柱網格接縫那一格），要拆頂點才攤得開
+  const openSpan = TWO_PI - gap;
+  // 整圈：最大的空隙跟一般相鄰頂點的間隔差不多 = 沒有缺口（圓柱網格接縫那一格）→ 封閉圓柱，接縫自己選（下面）
   steps.sort((x, y) => x - y);
   const typicalStep = steps.length ? steps[Math.floor(steps.length / 2)] : 0;
-  if (span > ARC_CLOSED_RAD || (typicalStep > 0 && gap <= 1.5 * typicalStep)) return { ok: false, reason: 'closed' };
-  if (!(span > MIN_SPAN_RAD)) return { ok: false, reason: 'flat' };
-  const thetaStart = gapEnd;
+  const closed = openSpan > ARC_CLOSED_RAD || (typicalStep > 0 && gap <= 1.5 * typicalStep);
+  if (!closed && !(openSpan > MIN_SPAN_RAD)) return { ok: false, reason: 'flat' };
+  const span = closed ? TWO_PI : openSpan;
   const arcLen = R * span;
   const longExtent = Math.max(arcLen, height);
   // 半徑比整片螢幕大太多 = 其實是平的（沒辦法算出可靠的半徑）
@@ -234,7 +259,30 @@ export function fitArc(inp: ArcFitInput): ArcFitResult {
   const rms = Math.sqrt(sumSq / np);
   const ref = Math.min(R, longExtent);
   const rmsRel = rms / ref, maxRel = maxRes / ref;
-  if (!inp.force && (rmsRel > ARC_RMS_REL || maxRel > ARC_MAX_REL)) return { ok: false, reason: 'fit' };
+  if (!inp.force && (rmsRel > ARC_RMS_REL || maxRel > ARC_MAX_REL)) return { ok: false, reason: closed ? 'closed' : 'fit' };
+
+  // 接縫（封閉圓柱）：預設在背對觀眾的那一側（從圓心看過去朝舞台後方的方向），照製作的設定往觀眾的右手邊轉，
+  // 再貼到最近的一排頂點上（接縫剛好是一排頂點，就不用切三角形）
+  let thetaStart = gapEnd;
+  let seamDeg = 0;
+  if (closed) {
+    let bx = -(front[0] * e1[0] + front[1] * e1[1] + front[2] * e1[2]);
+    let by = -(front[0] * e2[0] + front[1] * e2[1] + front[2] * e2[2]);
+    if (Math.hypot(bx, by) < 1e-6) {
+      // 軸幾乎對著觀眾（圓柱躺著、開口朝觀眾）：沒有「背面」，改放在最下面
+      bx = -(e1[1]); by = -(e2[1]);
+      if (Math.hypot(bx, by) < 1e-6) { bx = 1; by = 0; }
+    }
+    const back = Math.atan2(by, bx);
+    const want = back - ((inp.seamDeg ?? 0) * Math.PI) / 180;
+    let best = th[0], bd = Infinity;
+    for (let i = 0; i < np; i++) {
+      const d = Math.abs(wrapPi(th[i] - want));
+      if (d < bd) { bd = d; best = th[i]; }
+    }
+    thetaStart = best;
+    seamDeg = (-wrapPi(best - back) * 180) / Math.PI;
+  }
 
   // 圓心（3D）：軸上 h = 0 的點
   const center: Vec3 = [
@@ -294,7 +342,7 @@ export function fitArc(inp: ArcFitInput): ArcFitResult {
   // 軸是畫面左右時：lx 朝右 = 軸的 (-τ·ε) 方向，正 = h 越大越右邊 → lx = (h - hMin)/高 → axisRev = false ✓
 
   const map: ArcMap = {
-    center, axis, e1, e2, radius: R, thetaStart, span, hMin, hMax, convex, arcVertical, arcRev, axisRev, maxResidual: maxRes,
+    center, axis, e1, e2, radius: R, thetaStart, span, hMin, hMax, convex, arcVertical, arcRev, axisRev, maxResidual: maxRes, closed, seamDeg,
   };
   return {
     ok: true,
@@ -311,7 +359,7 @@ export function fitArc(inp: ArcFitInput): ArcFitResult {
  * 空間裡的點 → 弧上的位置 (lx, ly = 0~1，可能超出)。
  * 落在弧的缺口（弧以外的角度）的點夾到最近的一端；dist = 離圓柱面這一段有多遠（選「最近的一片」用）
  */
-export function arcLocal(m: ArcMap, x: number, y: number, z: number): { lx: number; ly: number; dist: number } {
+export function arcLocal(m: ArcMap, x: number, y: number, z: number): { lx: number; ly: number; dist: number; seam?: boolean } {
   const dx = x - m.center[0], dy = y - m.center[1], dz = z - m.center[2];
   const a = dx * m.e1[0] + dy * m.e1[1] + dz * m.e1[2];
   const b = dx * m.e2[0] + dy * m.e2[1] + dz * m.e2[2];
@@ -329,7 +377,11 @@ export function arcLocal(m: ArcMap, x: number, y: number, z: number): { lx: numb
   const arcFrac = m.arcRev ? 1 - frac : frac;
   const overH = Math.max(m.hMin - h, 0, h - m.hMax);
   const dist = Math.hypot(rho - m.radius, over * m.radius, overH);
-  return m.arcVertical ? { lx: axisFrac, ly: arcFrac, dist } : { lx: arcFrac, ly: axisFrac, dist };
+  // 封閉圓柱：接縫上的點（frac 在 0 或 1 的誤差範圍內）— 0 還是 1 要看同一個三角形的其他角（resolveSeamCorners）
+  const seam = m.closed && (frac < SEAM_FRAC_EPS || frac > 1 - SEAM_FRAC_EPS);
+  return m.arcVertical
+    ? { lx: axisFrac, ly: arcFrac, dist, ...(seam ? { seam } : {}) }
+    : { lx: arcFrac, ly: axisFrac, dist, ...(seam ? { seam } : {}) };
 }
 
 /** 圓柱面上的點（弧長比例 0~1、沿軸比例 0~1 → 世界座標）：給測試和 3D 預覽的檢查用 */

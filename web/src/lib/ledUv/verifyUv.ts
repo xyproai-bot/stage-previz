@@ -1,12 +1,14 @@
 // 自動貼 UV：寫完以後的檢查（在 worker 裡跑；沒過就不上傳）
 //
 //   第 1 關 verifyUvEdit（原檔 vs 改完還沒壓縮的）：節點名稱 / 階層 / 位置 / 旋轉 / 縮放 / extras、材質、貼圖、場景，一模一樣；
-//           每個 primitive 的頂點、法線、索引、其他所有資料逐個數字一樣，只有我們要換的那幾個 primitive 的 TEXCOORD_0 可以不一樣
+//           每個 primitive 的頂點、法線、索引、其他所有資料逐個數字一樣，只有我們要換的那幾個 primitive 的 TEXCOORD_0 可以不一樣，
+//           另外可以多一個 TEXCOORD_1（值 = 原本的 TEXCOORD_0，舊影片保護用）；
+//           整圈圓柱接縫拆了頂點的 primitive：頂點數變多，但「每個三角形的每個角」除了 UV 以外的所有資料都跟原檔一樣（畫出來的形狀一模一樣）
 //   第 2 關 verifyDocuments（既有的壓縮檢查：改完的 vs 輸出檔重新讀回來）：Draco 壓縮、寫出再讀回，頂點 / UV 在誤差內
 //   第 3 關 verifyOutputUv（輸出檔重新讀回來）：自動貼的每個頂點的 UV = 依位置重新算一次的結果（誤差 0.01 像素以內）；
 //           每個物件在畫布上的外框 = 排好的長方形（整數像素，一點都不差）
 
-import type { Document, Node, Primitive, Property } from '@gltf-transform/core';
+import type { Accessor, Document, Node, Primitive, Property } from '@gltf-transform/core';
 import type { CanvasSize, PixelRect } from '../ledMap';
 import { uvRegion } from './region';
 import { readLedObjects } from './docRead';
@@ -29,6 +31,24 @@ function equalsSkipping(a: Property, b: Property, skip: string[]): boolean {
   return a.equals(b as never, new Set(skip));
 }
 
+/** 三角形的每個角：x 的屬性（用 x 的索引）跟 y 的屬性（用 y 的索引）一樣。回傳第一個不一樣的角（-1 = 全部一樣） */
+function firstCornerDiff(ax: Accessor, ay: Accessor, ix: ArrayLike<number>, iy: ArrayLike<number>, tol = 0): number {
+  const size = ax.getElementSize();
+  if (size !== ay.getElementSize()) return 0;
+  const A = ax.getArray()!, B = ay.getArray()!;
+  for (let c = 0; c < ix.length; c++) {
+    const vx = ix[c] * size, vy = iy[c] * size;
+    for (let k = 0; k < size; k++) if (Math.abs(A[vx + k] - B[vy + k]) > tol) return c;
+  }
+  return -1;
+}
+
+const indexOf = (p: Primitive): ArrayLike<number> => {
+  const idx = p.getIndices()?.getArray();
+  if (idx) return idx;
+  const n = p.getAttribute('POSITION')?.getCount() ?? 0;
+  return Uint32Array.from({ length: n - (n % 3) }, (_, i) => i);
+};
 /** changed = 「節點編號:第幾個 primitive」，這些 primitive 的 TEXCOORD_0 可以不一樣 */
 export function verifyUvEdit(orig: Document, edit: Document, changed: ReadonlySet<string>): string[] {
   const issues: string[] = [];
@@ -69,17 +89,55 @@ export function verifyUvEdit(orig: Document, edit: Document, changed: ReadonlySe
       if (!equalsSkipping(x, y, ['attributes', 'indices', 'targets'])) add(`${where}：材質或繪製方式變了`);
       const sx = x.listSemantics().slice().sort(), sy = y.listSemantics().slice().sort();
       const mayChange = changed.has(`${i}:${k}`);
-      const norm = (list: string[]) => (mayChange ? list.filter(s => s !== 'TEXCOORD_0') : list);
-      if (!sameJson(norm(sx), norm(sy))) { add(`${where}：頂點資料的種類變了`); return; }
-      for (const s of norm(sx)) {
-        const ax = x.getAttribute(s)!, ay = y.getAttribute(s)!;
-        if (ax.getComponentType() !== ay.getComponentType() || ax.getElementSize() !== ay.getElementSize() || !sameArray(ax.getArray(), ay.getArray())) add(`${where}：${s} 的資料變了`);
+      if (!mayChange) {
+        if (!sameJson(sx, sy)) { add(`${where}：頂點資料的種類變了`); return; }
+        for (const s of sx) {
+          const ax = x.getAttribute(s)!, ay = y.getAttribute(s)!;
+          if (ax.getComponentType() !== ay.getComponentType() || ax.getElementSize() !== ay.getElementSize() || !sameArray(ax.getArray(), ay.getArray())) add(`${where}：${s} 的資料變了`);
+        }
+        if (!sameArray(x.getIndices()?.getArray(), y.getIndices()?.getArray())) add(`${where}：三角形的索引變了`);
+      } else {
+        // 被換 UV 的 primitive：TEXCOORD_0 可以變；可以多一個 TEXCOORD_1（原本的 UV）；其他逐個角比對
+        const rest = sx.filter(s => s !== 'TEXCOORD_0');
+        const extra = sy.filter(s => s !== 'TEXCOORD_0' && !sx.includes(s));
+        if (rest.some(s => !sy.includes(s)) || extra.some(s => s !== 'TEXCOORD_1')) { add(`${where}：頂點資料的種類變了`); return; }
+        const nx = x.getAttribute('POSITION')?.getCount() ?? 0, ny = y.getAttribute('POSITION')?.getCount() ?? 0;
+        const u0 = y.getAttribute('TEXCOORD_0');
+        if (!u0 || u0.getType() !== 'VEC2' || u0.getCount() !== ny) add(`${where}：新的 TEXCOORD_0 格式不對`);
+        const ix = indexOf(x), iy = indexOf(y);
+        if (ix.length !== iy.length) { add(`${where}：三角形的數量變了`); return; }
+        if (ny === nx) {
+          for (const s of rest) {
+            const ax = x.getAttribute(s)!, ay = y.getAttribute(s)!;
+            if (ax.getComponentType() !== ay.getComponentType() || ax.getElementSize() !== ay.getElementSize() || !sameArray(ax.getArray(), ay.getArray())) add(`${where}：${s} 的資料變了`);
+          }
+          if (!sameArray(ix, iy)) add(`${where}：三角形的索引變了`);
+        } else if (ny < nx) {
+          add(`${where}：頂點變少了`);
+        } else {
+          // 拆接縫：原本的頂點留在原位、每個角（三角形的每個頂點）的資料跟原檔一樣
+          for (const s of rest) {
+            const ax = x.getAttribute(s)!, ay = y.getAttribute(s)!;
+            const size = ax.getElementSize();
+            const A = ax.getArray()!, B = ay.getArray()!;
+            let same = ax.getComponentType() === ay.getComponentType() && size === ay.getElementSize();
+            for (let q = 0; same && q < nx * size; q++) if (A[q] !== B[q]) same = false;
+            if (!same) { add(`${where}：${s} 原本的頂點被改了`); continue; }
+            const bad = firstCornerDiff(ax, ay, ix, iy);
+            if (bad >= 0) add(`${where}：${s} 在第 ${Math.floor(bad / 3) + 1} 個三角形的資料跟原檔不一樣（拆接縫弄錯了）`);
+          }
+          // 三角形用的頂點：沒拆的角索引要一樣；拆過的角，位置要一樣（上面已經逐角比對 POSITION）
+          for (let c = 0; c < ix.length; c++) {
+            if (iy[c] !== ix[c] && iy[c] < nx) { add(`${where}：第 ${Math.floor(c / 3) + 1} 個三角形的索引被改了（不是接縫）`); break; }
+          }
+        }
+        // 多出來的 TEXCOORD_1 = 原本的 TEXCOORD_0（每個角都一樣）
+        if (extra.includes('TEXCOORD_1')) {
+          const o = x.getAttribute('TEXCOORD_0'), n1 = y.getAttribute('TEXCOORD_1')!;
+          if (!o) add(`${where}：原本沒有 UV，卻多了 TEXCOORD_1`);
+          else if (n1.getType() !== 'VEC2' || n1.getCount() !== ny || firstCornerDiff(o, n1, ix, iy, 1e-6) >= 0) add(`${where}：存下來的原本 UV（TEXCOORD_1）跟原本的 TEXCOORD_0 不一樣`);
+        }
       }
-      if (mayChange) {
-        const u = y.getAttribute('TEXCOORD_0');
-        if (!u || u.getType() !== 'VEC2' || u.getCount() !== (x.getAttribute('POSITION')?.getCount() ?? -1)) add(`${where}：新的 TEXCOORD_0 格式不對`);
-      }
-      if (!sameArray(x.getIndices()?.getArray(), y.getIndices()?.getArray())) add(`${where}：三角形的索引變了`);
       if (x.listTargets().length !== y.listTargets().length) add(`${where}：變形目標變了`);
     });
   });
@@ -172,8 +230,11 @@ export function verifyOutputUv(
       });
       const expected = objectUvs(so.geom, o, info, plan.canvas);
       so.geom.prims.forEach((p, pi) => {
-        const e = expected[pi];
-        if (!e || !p.uv) { add(`「${o.name}」第 ${pi + 1} 組沒有 UV`); return; }
+        const pu = expected[pi];
+        if (!pu || !p.uv) { add(`「${o.name}」第 ${pi + 1} 組沒有 UV`); return; }
+        // 輸出檔的接縫頂點已經拆好了（每個頂點只有一邊用它），重算出來不會再拆
+        if (pu.split || pu.uv.length !== p.uv.length) { add(`「${o.name}」第 ${pi + 1} 組的接縫頂點跟重新算的不一樣`); return; }
+        const e = pu.uv;
         for (let v = 0; v < e.length; v += 2) {
           const dx = Math.abs(e[v] - p.uv[v]) * plan.canvas.width, dy = Math.abs(e[v + 1] - p.uv[v + 1]) * plan.canvas.height;
           maxPixelError = Math.max(maxPixelError, dx, dy);
