@@ -99,6 +99,21 @@ describe.runIf(have)('真的 stage.glb：彎的 LED', () => {
     expect((b as BuildOk).output.maxPixelError).toBeLessThan(0.01);
     const r = await verifyUvScene(ab(bytes), ab(out), plan, objects);
     expect(r.issues).toEqual([]);
+    // 第 4 階段：每個 LED 螢幕原本的 UV 存進 TEXCOORD_1（真的檔、Draco 進 Draco 出）→ 舊影片精確保護
+    const fresh = (b as BuildOk).uv1;
+    for (const n of ['LED_1_DOWN', 'LED_1_UP', 'LED_4', 'LED_Sky']) expect(fresh[objects.find(o => o.meshName === n)!.id], n).toBe('fresh');
+    const before = readLedObjects(await io.readBinary(bytes), objects).objects, after = readLedObjects(await io.readBinary(out), objects).objects;
+    for (const n of ['LED_4', 'LED_Sky']) {
+      const id = objects.find(o => o.meshName === n)!.id;
+      const pb = before.get(id)!.geom.prims[0], pa = after.get(id)!.geom.prims[0];
+      const uv1 = after.get(id)!.refs[0].prim.getAttribute('TEXCOORD_1')!.getArray()!;
+      const key = (p: { pos: ArrayLike<number> }, v: number) => `${Math.round(p.pos[v * 3] * 100)},${Math.round(p.pos[v * 3 + 1] * 100)},${Math.round(p.pos[v * 3 + 2] * 100)}`;
+      const want = new Map<string, number[][]>();
+      for (const v of pb.index) { const k = key(pb, v); (want.get(k) ?? want.set(k, []).get(k)!).push([pb.uv![v * 2], pb.uv![v * 2 + 1]]); }
+      let worst = 0;
+      for (const v of pa.index) worst = Math.max(worst, Math.min(...want.get(key(pa, v))!.map(o => Math.max(Math.abs(o[0] - uv1[v * 2]) * OLD.width, Math.abs(o[1] - uv1[v * 2 + 1]) * OLD.height))));
+      expect(worst, n).toBeLessThan(0.05);      // 原本的畫布像素，Draco 24 bit 量化也不到 0.05 個
+    }
     // 接縫：弧牆上、弧牆下同一個點距、同樣的寬 → 畫布上左右對齊（弧長一樣，每一欄是同一段弧）、上面的在上、不重疊（要不要上下剛好貼在一起，看排版：同一排有比較高的螢幕就會置中，手動排是第 3 階段）
     const upP = up.pieces[0].placed!, downP = plan.objects.find(o => o.name === 'LED_1_DOWN')!.pieces[0].placed!;
     expect(upP.x).toBe(downP.x);
