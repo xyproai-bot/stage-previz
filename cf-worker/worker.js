@@ -77,6 +77,8 @@ import {
 // 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
 import * as mech from './mechanisms.mjs';
 import * as ledTpl from './ledTemplates.mjs';
+// 自動貼 UV：新模型版本 + 畫布 + 舊版面一次換好、模型版本搭配的畫布
+import * as uvLayouts from './modelUvLayouts.mjs';
 // 登入狀態什麼時候失效（重設登入碼 / 停用帳號 → 那個人其他裝置的登入失效）
 import {
   SESSION_TTL_SEC, sessionIssuedAtSec, sessionTokenExp, sessionTokenHash, sessionAllowed,
@@ -545,6 +547,8 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
       return mechResp(request.method === 'PATCH'
         ? ledTpl.updateTemplate(request, env, ctx, route.tplId, mechLog(request, env, projectId))
         : ledTpl.deleteTemplate(request, env, ctx, route.tplId, mechLog(request, env, projectId)));
+    case 'ledUv.apply':           return mechResp(uvLayouts.applyAutoUv(request, env, ctx, mechLog(request, env, projectId)));
+    case 'ledUv.impact':          return mechResp(uvLayouts.uvImpact(env, ctx));
     case 'ledScreens.create':     return mechResp(ledTpl.createScreen(request, env, ctx, mechLog(request, env, projectId)));
     case 'ledScreens.item':
       return mechResp(request.method === 'PATCH'
@@ -2452,10 +2456,20 @@ async function handleModel(request, env, projectId, subAction, subAction2) {
       customMetadata: { projectId, uploadedAt: new Date().toISOString() },
     });
 
+    // ?hold=1（自動貼 UV）：只放進 R2、先不換成目前使用的版本；前端檢查完再用 POST /led-uv/apply 一次換好
+    if (new URL(request.url).searchParams.get('hold') === '1') {
+      await logActivity(request, env, projectId, 'upload', 'model', key, { key, sizeBytes: cl, held: true });
+      return jsonResp({ ok: true, key, url: `/r2/${key}`, held: true });
+    }
+
     // 更新 project.model_r2_key
+    const before = await env.DB.prepare(`SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
     await env.DB.prepare(
       `UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`
     ).bind(key, projectId).run();
+    // 上一版有自動貼 UV / 畫布的紀錄 → 這一版沿用（例如壓縮模型），換版本時畫布和舊影片才不會亂
+    try { await uvLayouts.inheritLayoutOnUpload(env, projectId, before?.model_r2_key || null, key, await getRequestUserId(request, env)); }
+    catch (e) { console.warn('inheritLayoutOnUpload failed', e?.message || e); }
 
     await logActivity(request, env, projectId, 'upload', 'model', key, { key, sizeBytes: cl });
     return jsonResp({ ok: true, key, url: `/r2/${key}` });
@@ -2501,9 +2515,14 @@ async function listModelVersions(env, projectId) {
   ).bind(projectId).first();
   const activeKey = row?.model_r2_key || null;
 
+  // 自動貼 UV：每個版本搭配的畫布、說明（沒有紀錄的版本這幾欄是 null / false）
+  let layouts = new Map();
+  try { layouts = await uvLayouts.versionInfoMap(env, projectId); } catch (e) { console.warn('versionInfoMap failed', e?.message || e); }
+
   // 上傳時間用 R2 記的時間（不從檔名解析：舊的「時間.glb」、新的「時間-隨機.glb」都一樣）
   const versions = (listed.objects || []).map(obj => {
     const ts = modelVersionTimestamp(obj);
+    const lay = layouts.get(obj.key);
     return {
       key: obj.key,
       url: `/r2/${obj.key}`,
@@ -2511,6 +2530,10 @@ async function listModelVersions(env, projectId) {
       uploaded: obj.uploaded?.toISOString?.() || null,
       timestamp: ts,
       isActive: obj.key === activeKey,
+      note: lay?.note ?? null,
+      ledCanvas: lay?.ledCanvas ?? null,
+      hasLayout: !!lay?.hasLayout,
+      autoUv: !!lay?.autoUv,
     };
   }).sort((a, b) => b.timestamp - a.timestamp);
 
@@ -2533,15 +2556,15 @@ async function activateModelVersion(request, env, projectId) {
     `SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`
   ).bind(projectId).first();
 
-  await env.DB.prepare(
-    `UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`
-  ).bind(key, projectId).run();
+  // 換版本：模型 + 這個版本搭配的 LED 畫布 + 自動貼 UV 時改成用「舊版面」的舊影片，一個交易（modelUvLayouts.mjs）
+  const swapped = await uvLayouts.activateVersion(env, projectId, key);
 
   await logActivity(request, env, projectId, 'activate', 'model', key, {
     fromKey: beforeRow?.model_r2_key,
     toKey: key,
+    ...(swapped.restoredCanvas ? { ledCanvas: swapped.ledCanvas } : {}),
   });
-  return jsonResp({ ok: true, key, url: `/r2/${key}` });
+  return jsonResp({ ok: true, key, url: `/r2/${key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas });
 }
 
 // 刪除某舊版本（不能刪當前 active）
@@ -2557,6 +2580,7 @@ async function deleteModelVersion(request, env, projectId, tsFile) {
   }
 
   await env.MODELS.delete(key);
+  try { await uvLayouts.deleteVersionRow(env, projectId, key); } catch (e) { console.warn('deleteVersionRow failed', e?.message || e); }
   await logActivity(request, env, projectId, 'delete', 'model', key, { key });
   return jsonResp({ ok: true });
 }
