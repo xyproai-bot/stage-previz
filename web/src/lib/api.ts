@@ -715,13 +715,18 @@ export interface ModelVersion {
   uploaded: string | null;
   timestamp: number;
   isActive: boolean;
+  /** 自動貼 UV 留下的說明、這個版本搭配的 LED 畫布（舊的後台沒有這幾欄） */
+  note?: string | null;
+  ledCanvas?: { width: number; height: number } | null;
+  hasLayout?: boolean;
+  autoUv?: boolean;
 }
 
 export async function listModelVersions(projectId: string): Promise<{ versions: ModelVersion[]; activeKey: string | null }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions`);
 }
 
-export async function activateModelVersion(projectId: string, key: string): Promise<{ key: string; url: string }> {
+export async function activateModelVersion(projectId: string, key: string): Promise<{ key: string; url: string; restoredCanvas?: boolean; ledCanvas?: { width: number; height: number } | null }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions/activate`, {
     method: 'POST',
     body: JSON.stringify({ key }),

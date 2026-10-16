@@ -50,6 +50,7 @@ import { SONG_STATUS_LABEL } from '../lib/songReview';
 import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
 import LedTemplatesDialog from '../components/LedTemplatesDialog';
+import LedUvPanel from '../components/LedUvPanel';
 import { useLedTemplates } from '../lib/useLedTemplates';
 import { useLedPatternCanvas, type LedPatternSource } from '../lib/useLedPatternCanvas';
 import { setSongTemplate } from '../lib/ledTemplateApi';
@@ -65,7 +66,7 @@ import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
   Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, LayoutPanelLeft, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
-  Palette, Pencil, Plus, Redo2, RotateCcw, Search, Shapes, Sprout, Trash2, Undo2, Upload, UserPlus, X,
+  Palette, Pencil, Plus, Redo2, RotateCcw, Ruler, Search, Shapes, Sprout, Trash2, Undo2, Upload, UserPlus, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import './ProjectEditor.css';
@@ -217,6 +218,12 @@ export default function ProjectEditor() {
   const customLedTemplates = useMemo(() => (ledTpls.list?.templates ?? []).filter(t => t.kind === 'custom'), [ledTpls.list]);
   const ledObjectInfos = useMemo(
     () => stageObjects.filter(o => o.category === 'led_panel').map(o => ({ id: o.id, name: o.displayName || o.meshName, order: o.order })),
+    [stageObjects],
+  );
+  // 自動貼 UV（和版型面板都是貼在頁面下方，一次只開一個）
+  const [uvOpen, setUvOpen] = useState(false);
+  const uvObjects = useMemo(
+    () => stageObjects.filter(o => o.category === 'led_panel').map(o => ({ id: o.id, meshName: o.meshName, name: o.displayName || o.meshName, order: o.order })),
     [stageObjects],
   );
   // 從專案卡片的「客戶畫面」→「建立分享連結」過來 → 一進來就打開分享連結視窗
@@ -988,7 +995,8 @@ export default function ProjectEditor() {
     { key: 'diff', label: '對比', menuLabel: '兩個 cue 對比', title: '兩個 cue 並排對比', icon: Columns2, onSelect: () => setDiffOpen(true), disabled: !selectedSong || masterCues.length < 2, secondary: true },
     { key: 'import', label: '匯入 Cue', menuLabel: '從別首歌匯入 cue', title: '從別首歌匯入 cue（巡迴複製、跨專案沿用）', icon: Import, onSelect: () => setImportCuesOpen(true), disabled: !selectedSong, secondary: true },
     { key: 'search', label: '搜留言', menuLabel: '搜尋留言', title: '搜尋專案內所有歌的留言', icon: Search, onSelect: () => setCommentSearchOpen(true), secondary: true },
-    ...(user?.role !== 'admin' || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => setLedTplOpen(true), secondary: true }]),
+    ...(user?.role !== 'admin' || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => { setUvOpen(false); setLedTplOpen(true); }, secondary: true }]),
+    ...(user?.role !== 'admin' || !modelUrl || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUv', label: '自動貼 UV', menuLabel: '自動貼 UV（LED 的 UV 和對位圖）', title: '自動貼 UV：選 LED 螢幕、填點距或總點數，系統展開 UV、排好畫布、存成新的模型版本', icon: Ruler, onSelect: () => { setLedTplOpen(false); setUvOpen(true); }, secondary: true }]),
     { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
     { key: 'invite', label: '邀請', menuLabel: '邀請連結', title: '邀請連結：傳給導演 / 動畫師，點開就加進這個專案（不用登入碼）', icon: UserPlus, onSelect: () => setInviteOpen(true) },
     { key: 'drive', label: 'Drive', menuLabel: projectMeta?.drive_folder_id ? 'Drive 來源（已設定）' : 'Drive 來源', title: 'Drive 來源設定', icon: Cloud, onSelect: () => setDriveOpen(true), secondary: true },
@@ -1454,12 +1462,32 @@ export default function ProjectEditor() {
         onSetCanvas={view.canEdit ? view.setLedCanvas : undefined}
       />
 
+      <LedUvPanel
+        open={uvOpen && user?.role === 'admin'}
+        projectId={projectId || ''}
+        projectName={projectMeta?.name}
+        ledObjects={uvObjects}
+        list={ledTpls.list}
+        ledCanvas={view.ledCanvas}
+        scaleCorrection={view.scaleCorrection}
+        onClose={() => setUvOpen(false)}
+        onApplied={(r) => {
+          // 新模型、新畫布（後台已經一起換好）、新的「舊版面」版型
+          view.setLedCanvas(r.ledCanvas);
+          refreshModel();
+          void ledTpls.reload();
+        }}
+      />
+
       <ModelVersionsDialog
         open={versionsOpen}
         projectId={projectId || ''}
         onClose={() => setVersionsOpen(false)}
-        onChanged={() => {
+        onChanged={(info) => {
+          // 換回舊版時，後台把畫布也換回來了（沒有這個版本的紀錄 = 畫布不動）
+          if (info?.restoredCanvas) view.setLedCanvas(info.ledCanvas);
           refreshModel();
+          void ledTpls.reload();
         }}
       />
 

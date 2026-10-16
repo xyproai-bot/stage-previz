@@ -13,8 +13,8 @@ interface Props {
   open: boolean;
   projectId: string;
   onClose: () => void;
-  /** 切換版本 / 刪除版本後呼叫，讓父層 refresh 模型 */
-  onChanged: () => void;
+  /** 切換版本 / 刪除版本後呼叫，讓父層 refresh 模型；切換時後台把 LED 畫布也換回那個版本的（restoredCanvas） */
+  onChanged: (info?: { restoredCanvas: boolean; ledCanvas: { width: number; height: number } | null }) => void;
 }
 
 function formatTime(iso: string | null) {
@@ -90,8 +90,8 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
     }))) return;
     setBusyKey(v.key);
     try {
-      await api.activateModelVersion(projectId, v.key);
-      onChanged();
+      const r = await api.activateModelVersion(projectId, v.key);
+      onChanged({ restoredCanvas: !!r.restoredCanvas, ledCanvas: r.ledCanvas ?? null });
       await refresh();
     } catch (e) {
       toast.error('沒有換成：' + (e instanceof Error ? e.message : String(e)));
@@ -217,6 +217,11 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
                       <span className="dot">·</span>
                       <span className="mono">{v.key.split('/').pop()}</span>
                     </div>
+                    {(v.note || v.ledCanvas) && (
+                      <div className="version-row__meta muted small" data-testid="version-uv-note">
+                        {v.note}{v.note && v.ledCanvas ? ' · ' : ''}{v.ledCanvas ? `LED 畫布 ${v.ledCanvas.width} × ${v.ledCanvas.height}` : ''}
+                      </div>
+                    )}
                   </div>
                   <div className="version-row__actions">
                     {isAdmin && v.isActive && (

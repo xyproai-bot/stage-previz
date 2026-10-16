@@ -86,8 +86,8 @@ export interface PlanContext {
 
 const MAX_CANVAS_SIDE = 32768;
 
-const pieceKey = (id: string, count: number, i: number): string => (count > 1 ? `o:${id}#${i}` : `o:${id}`);
-const pieceName = (name: string, count: number, i: number): string => (count > 1 ? `${name} ${i + 1}` : name);
+export const pieceKey = (id: string, count: number, i: number): string => (count > 1 ? `o:${id}#${i}` : `o:${id}`);
+export const pieceName = (name: string, count: number, i: number): string => (count > 1 ? `${name} ${i + 1}` : name);
 
 function cornersOf(p: Piece): Vec3[] {
   const f = p.frame;
