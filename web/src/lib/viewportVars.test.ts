@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { KEYBOARD_MIN_PX, PHONE_MAX_WIDTH, isPhoneLayout, viewportVars } from './viewportVars';
+import { COMPACT_MAX_WIDTH, KEYBOARD_MIN_PX, PHONE_MAX_WIDTH, isCompactLayout, isPhoneLayout, viewportVars } from './viewportVars';
 import { readFileSync } from 'node:fs';
 import indexHtml from '../../index.html?raw';
 
@@ -9,6 +9,7 @@ const previewCss = readText('../pages/Preview.css');
 const shareCss = readText('../pages/Share.css');
 const guestPanelCss = readText('../components/GuestCommentsPanel.css');
 const globalCss = readText('../styles/global.css');
+const studioCss = readText('../pages/Studio.css');
 
 describe('isPhoneLayout：手機寬度（留言變成底下拉上來的面板）', () => {
   const g = globalThis as unknown as { window?: unknown };
@@ -99,5 +100,57 @@ describe('viewportVars：看得到的高度 → CSS 變數', () => {
   it('offsetTop 是負數或 NaN 當 0', () => {
     expect(viewportVars({ height: 800, offsetTop: -3, scale: 1, layoutHeight: 844 }).vvTop).toBe('0px');
     expect(viewportVars({ height: 800, offsetTop: NaN, scale: 1, layoutHeight: 844 }).vvTop).toBe('0px');
+  });
+});
+
+describe('動畫師工作站（Studio）的手機 / iPad 版面跟 CSS 對得上', () => {
+  const g = globalThis as unknown as { window?: unknown };
+  afterEach(() => { delete g.window; });
+  const compactQuery = `@media (max-width: ${COMPACT_MAX_WIDTH}px)`;
+  /** 從某個 @media 開頭，取到對應的右大括號為止 */
+  const block = (css: string, head: string) => {
+    const start = css.indexOf(head);
+    if (start < 0) return '';
+    let depth = 0;
+    for (let i = css.indexOf('{', start); i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}' && --depth === 0) return css.slice(start, i + 1);
+    }
+    return css.slice(start);
+  };
+
+  it('isCompactLayout 問的寬度跟 CSS 一樣（1199px 以下 = iPad、手機）', () => {
+    expect(isCompactLayout()).toBe(false);
+    const asked: string[] = [];
+    g.window = { matchMedia: (q: string) => { asked.push(q); return { matches: true }; } };
+    expect(isCompactLayout()).toBe(true);
+    expect(asked).toEqual([`(max-width: ${COMPACT_MAX_WIDTH}px)`]);
+    expect(studioCss).toContain(compactQuery);
+    expect(COMPACT_MAX_WIDTH).toBeLessThan(1200);
+  });
+
+  it('手機直放的面板（absolute 定位）用 640px，跟 isPhoneLayout 一樣', () => {
+    expect(studioCss).toContain(`@media (max-width: ${PHONE_MAX_WIDTH}px) and (orientation: portrait)`);
+    expect(block(studioCss, `@media (max-width: ${PHONE_MAX_WIDTH}px) and (orientation: portrait)`)).toMatch(/\.studio-right\s*\{[^}]*position:\s*absolute/);
+  });
+
+  it('電腦版（≥1200）不被影響：面板的 absolute、整頁高度、歌單一行都只在窄螢幕的區塊裡', () => {
+    // 所有「會改版面」的規則都在 max-width 的 @media 裡 → 把那些區塊拿掉之後剩下的（電腦版）不能有它們
+    let desktop = studioCss;
+    for (const m of studioCss.match(/@media [^{]*\{/g) ?? []) desktop = desktop.replace(block(desktop, m), '');
+    expect(desktop).not.toMatch(/\.studio-right\s*\{[^}]*position:\s*absolute/);
+    expect(desktop).not.toMatch(/\.studio\s*\{[^}]*--vvh/);
+    expect(desktop).not.toMatch(/\.studio-songs__toggle\s*\{[^}]*display:\s*flex/);
+    expect(desktop).toMatch(/\.studio-scrim,[^{]*\{\s*display:\s*none/);
+    expect(desktop).toMatch(/grid-template-columns:\s*240px 1fr 340px/);
+  });
+
+  it('整頁高度用看得到的高度（--vvh，退回 100dvh），不是會被網址列蓋住的 100vh', () => {
+    expect(block(studioCss, compactQuery)).toMatch(/\.studio\s*\{[^}]*height:\s*var\(--vvh,\s*100dvh\)/);
+  });
+
+  it('手機、iPad：整頁不會左右捲、輸入欄位 16px', () => {
+    expect(globalCss).toMatch(/@media \(max-width: 1199px\)[^}]*has\(\.studio\)[^}]*overflow-x:\s*clip/);
+    expect(globalCss).toMatch(/\.my-projects, \.studio\) :is\(input/);
   });
 });

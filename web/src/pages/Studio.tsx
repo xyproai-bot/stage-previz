@@ -12,6 +12,7 @@ import AnnotationLayer from '../components/AnnotationLayer';
 import { CommentFilterBar, ReviewCompose, readFollow, saveFollow, type StatusFilter } from '../components/ReviewCompose';
 import ExportCommentsDialog from '../components/ExportCommentsDialog';
 import { isTouchDevice, revealStage, useReviewSession, type ReviewSession } from '../lib/review/useReviewSession';
+import { isCompactLayout, isPhoneLayout } from '../lib/viewportVars';
 import { playheadCommentId } from '../lib/review/playhead';
 import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
@@ -168,6 +169,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   const [stageObjects, setStageObjects] = useState<StageObject[]>([]);
   const [modelUrl, setModelUrl] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('cues');
+  // 手機（窄螢幕）：右邊的 cue / 審查 / 活動是從底下拉上來的面板（CSS 的 .studio-right）；iPad、電腦這個狀態沒作用
+  const [sheetOpen, setSheetOpen] = useState(false);
   // 通知點進來（?song=&video=&comment=）：選到那首歌、那一版、打開留言捲到那則
   const [searchParams, setSearchParams] = useSearchParams();
   const [target, setTarget] = useState<(DeepLink & { nonce: number }) | null>(null);
@@ -448,7 +451,7 @@ function StudioInner({ projectId }: { projectId: string }) {
     if (songFilter === 'mine' && song.animatorUserId !== user?.id) setSongFilter('all');
     setSongSearch('');
     setSelectedSongId(song.id);
-    if (target.commentId || target.videoId) setTab('review');
+    if (target.commentId || target.videoId) { setTab('review'); setSheetOpen(true); }
   }, [target, songs, songsLoading]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // 沒選 cue 時 viewport 顯示 stage objects 的 default position
@@ -478,9 +481,9 @@ function StudioInner({ projectId }: { projectId: string }) {
   // 一頁只有一個 <video>：歌曲影片、本地檔案輪流用它（同時是 LED 貼圖、也是小視窗的畫面）
   const player = useLocalVideo();
   const media = useLocalMedia(player);
-  // 上次選的來源；沒選過 = AE 即時（跟以前一樣）
+  // 上次選的來源；沒選過 = AE 即時（跟以前一樣）；手機、iPad（觸控）沒選過 = 影片（Safari 不支援 AE 即時，說明卡會蓋住大半個 3D 畫面）
   const [sourcePref, setSourcePref] = useState<LedSource | null>(() => readLedSource(SOURCE_KEY));
-  const source: LedSource = sourcePref ?? 'ndi';
+  const source: LedSource = sourcePref ?? (isTouchDevice() ? 'version' : 'ndi');
   const chooseSource = useCallback((next: LedSource) => {
     setSourcePref(next);
     saveLedSource(SOURCE_KEY, next);
@@ -675,6 +678,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   }, [visibleSongs, selectedSongId]);
   const focusComposer = useCallback(() => {
     setTab('review');
+    setSheetOpen(true);  // 手機：先把面板拉上來，輸入框才看得到
     requestAnimationFrame(() => requestAnimationFrame(() => {
       const el = composerRef.current;
       if (!el) return;
@@ -682,6 +686,24 @@ function StudioInner({ projectId }: { projectId: string }) {
       el.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }));
   }, []);
+  // 螢幕鍵盤跳出來（看得到的高度縮小）時，右邊面板裡正在打字的欄位捲到看得到的地方
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null;
+    if (!vv) return;
+    const onResize = () => {
+      const el = document.activeElement;
+      if (el instanceof HTMLElement && /^(TEXTAREA|INPUT)$/.test(el.tagName) && el.closest('.studio-right__body')) {
+        // 整個「寫留言」區塊（輸入框 + 送出按鈕）一起捲進來，不只是輸入框
+        const box = el.closest('.studio-review__compose') ?? el;
+        requestAnimationFrame(() => requestAnimationFrame(() => box.scrollIntoView({ block: 'nearest' })));
+      }
+    };
+    vv.addEventListener('resize', onResize);
+    return () => vv.removeEventListener('resize', onResize);
+  }, []);
+  // 通知點進來要看某一則留言 → 手機把面板拉上來；換歌 → 收回去
+  useEffect(() => { if (focusComment) setSheetOpen(true); }, [focusComment]);
+  useEffect(() => { setSheetOpen(false); }, [selectedSongId]);
   const session = useReviewSession({
     player, videoActive: versionVideoMode, resetKey: selectedSongId, viewApiRef,
     versions: { items: versions.items, currentKey: selectedVersion?.key ?? null, select: versions.select },
@@ -696,6 +718,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   const stageRef = useRef<HTMLDivElement>(null);
   const openComment = useCallback((c: SongComment) => {
     setTab('review');
+    // 手機：面板收下去，才看得到跳過去的那一格、3D 視角和畫記
+    if (isPhoneLayout()) setSheetOpen(false);
     void session.open(c);
     revealStage(stageRef.current);
     requestAnimationFrame(() => {
@@ -709,6 +733,8 @@ function StudioInner({ projectId }: { projectId: string }) {
   }, [session]);
   const startDraw = useCallback(() => {
     if (!session.draft.start()) return;
+    // 手機、iPad：3D 畫面捲回來畫（不跳鍵盤；手機的面板也收下去）；電腦：留言框拿到焦點，畫好直接打字
+    if (isPhoneLayout()) setSheetOpen(false);
     if (isTouchDevice()) { setTab('review'); revealStage(stageRef.current); }
     else focusComposer();
   }, [session.draft, focusComposer]);
@@ -1057,7 +1083,8 @@ function StudioInner({ projectId }: { projectId: string }) {
             <>
               <LedSourceSwitch
                 source={source}
-                onChange={chooseSource}
+                // 手機、iPad：選「本地檔案」把歌單打開（本地檔案的清單和「加入影片 / 圖片」在歌單裡）
+                onChange={(s) => { chooseSource(s); if (s === 'file' && isCompactLayout()) setSongsSheetOpen(true); }}
                 showVersion
                 /* 正在放哪一版就寫哪一版（比較時切到 V1 不會還寫「影片 V2」） */
                 versionLabel={(source === 'version' ? selectedVersion?.label : null) || versions.items[0]?.label || (selectedSong.latestVideoVersion ? `V${selectedSong.latestVideoVersion}` : null)}
@@ -1172,6 +1199,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     label={selectedVersion.label}
                     detail={versionByline(selectedVersion) || selectedVersion.title}
                     storageKey="sp_mini_player:studio"
+                    collapseOnTouch
                     onRetry={retryVersion}
                     compare={compare}
                     comments={selectedComments}
@@ -1317,15 +1345,18 @@ function StudioInner({ projectId }: { projectId: string }) {
           )}
         </main>
 
-        <aside className="studio-right">
+        {/* 手機：面板拉開時，上面其餘的畫面壓暗，點一下收回去（電腦、iPad 這個不顯示） */}
+        {sheetOpen && <div className="studio-scrim" onClick={() => setSheetOpen(false)} aria-hidden="true" />}
+        <aside className={'studio-right' + (sheetOpen ? ' is-open' : '')}>
+          {/* 手機：這一排收起來時就是面板露出來的那一條；點哪一個分頁就拉開到哪一頁，再點一次收起來 */}
           <div className="studio-right__tabs">
             <button
               className={'tab' + (tab === 'cues' ? ' is-active' : '')}
-              onClick={() => setTab('cues')}
+              onClick={() => { setSheetOpen(o => (tab === 'cues' ? !o : true)); setTab('cues'); }}
             >Cue（{masterCues.length}）</button>
             <button
               className={'tab' + (tab === 'review' ? ' is-active' : '')}
-              onClick={() => setTab('review')}
+              onClick={() => { setSheetOpen(o => (tab === 'review' ? !o : true)); setTab('review'); }}
               title={selectedUnread > 0 ? `${selectedUnread} 則新留言` : undefined}
             >
               審查 / 留言
@@ -1333,8 +1364,16 @@ function StudioInner({ projectId }: { projectId: string }) {
             </button>
             <button
               className={'tab' + (tab === 'activity' ? ' is-active' : '')}
-              onClick={() => setTab('activity')}
+              onClick={() => { setSheetOpen(o => (tab === 'activity' ? !o : true)); setTab('activity'); }}
             ><Icon icon={HistoryIcon} /> 活動</button>
+            <button
+              type="button"
+              className="studio-right__sheet-toggle"
+              onClick={() => setSheetOpen(o => !o)}
+              aria-expanded={sheetOpen}
+              aria-label={sheetOpen ? '收起面板' : '打開面板'}
+              title={sheetOpen ? '收起面板' : '打開面板'}
+            ><Icon icon={sheetOpen ? ChevronDown : ChevronUp} size="md" /></button>
           </div>
           <div className="studio-right__body">
             {tab === 'cues' && (
@@ -1671,6 +1710,19 @@ function ReviewTab({
       <section className="studio-review__notes">
         <div className="studio-review__notes-head">
           <span>留言／備註</span>
+          {/* 手機、iPad：留言清單在前、寫留言的框在最後，這個按鈕直接跳去寫（電腦版不顯示） */}
+          {canPost && (
+            <button
+              type="button"
+              className="link-btn studio-review__jump"
+              onClick={() => {
+                const el = composerRef.current;
+                if (!el) return;
+                (el.closest('.studio-review__compose') ?? el).scrollIntoView({ block: 'center', behavior: 'smooth' });
+                el.focus({ preventScroll: true });
+              }}
+            >寫留言</button>
+          )}
           <button className="link-btn" onClick={handleRefresh} disabled={refreshing}>{refreshing ? '更新中…' : '重新整理'}</button>
         </div>
 

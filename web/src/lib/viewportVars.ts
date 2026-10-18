@@ -49,6 +49,13 @@ export function isPhoneLayout(): boolean {
     && window.matchMedia(`(max-width: ${PHONE_MAX_WIDTH}px)`).matches;
 }
 
+/** iPad、手機寬度（動畫師工作站把歌單收成上面一行）；要跟 Studio.css 的 `@media (max-width: 1199px)` 一樣 */
+export const COMPACT_MAX_WIDTH = 1199;
+export function isCompactLayout(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia(`(max-width: ${COMPACT_MAX_WIDTH}px)`).matches;
+}
+
 /** 開始跟著瀏覽器回報的範圍更新 CSS 變數；回傳取消用的函式 */
 export function installViewportVars(): () => void {
   if (typeof window === 'undefined' || !window.visualViewport) return () => {};

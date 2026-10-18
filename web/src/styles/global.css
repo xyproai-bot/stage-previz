@@ -208,11 +208,15 @@ html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   /* 只有導演頁、分享頁、登入、我的專案（整頁固定的版面）：管理頁的寬表格照舊可以左右捲 */
   :is(html, body):has(.preview, .share, .login-page, .my-projects) { overflow-x: clip; }
 }
+@media (max-width: 1199px) {
+  /* 動畫師工作站（整頁固定的版面，iPad 橫放 1180 寬也算） */
+  :is(html, body):has(.studio) { overflow-x: clip; }
+}
 @media (hover: none) and (pointer: coarse) {
   button, a, summary, label, [role='button'], [role='tab'], select { touch-action: manipulation; }
   /* 導演頁、分享頁是整頁固定的版面：手指往下滑不要觸發「下拉重新整理」（3D 畫面、留言捲到頭時會誤觸） */
   html:has(.preview), html:has(.share) { overscroll-behavior-y: none; }
-  :is(.preview, .share, .login-page, .my-projects) :is(input:not([type='checkbox'], [type='radio'], [type='range']), textarea, select) {
+  :is(.preview, .share, .login-page, .my-projects, .studio) :is(input:not([type='checkbox'], [type='radio'], [type='range']), textarea, select) {
     font-size: 16px;
   }
 }
