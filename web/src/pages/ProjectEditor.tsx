@@ -59,6 +59,9 @@ import { useLedPatternCanvas, type LedPatternSource } from '../lib/useLedPattern
 import { setSongTemplate } from '../lib/ledTemplateApi';
 import { chooseLedTemplate, ledTemplateChip, liveSourceHint, songTemplatePlan } from '../lib/ledLiveTemplate';
 import LedTemplateChip, { LedTemplateHint } from '../components/LedTemplateChip';
+import LedTimelineDialog, { SongTimelineSummary } from '../components/LedTimelineDialog';
+import { cueTimesOf, useSongTimeline } from '../lib/useSongTimeline';
+import { parseSwitches, type TimelineSwitch } from '../lib/ledTemplateTimeline';
 import SongVideosDialog from '../components/SongVideosDialog';
 import { isJobActive, jobStatusText, useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, type VideoJob } from '../lib/videoJobs';
 import { songTitle } from '../lib/songCode';
@@ -67,7 +70,7 @@ import Icon from '../components/Icon';
 import PhoneEditNote from '../components/PhoneEditNote';
 import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowRightLeft, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
   Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, LayoutPanelLeft, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
   Palette, Pencil, Plus, Redo2, RotateCcw, Ruler, Search, Shapes, Sprout, Trash2, Undo2, Upload, UserPlus, X,
 } from 'lucide-react';
@@ -463,18 +466,32 @@ export default function ProjectEditor() {
 
   // AE 即時照這首歌選的 LED 版型放到 LED 上（lib/ledLiveTemplate.ts）；版型面板開著的測試圖蓋過一切
   const songTplPlan = useMemo(() => songTemplatePlan(ledTpls.list, selectedSong?.templateId), [ledTpls.list, selectedSong?.templateId]);
-  // 3D 工具列「⋯」的對位圖 / AE 合成腳本 / 位置表：這首歌用了版型就照版型下載
-  const ledSongTpl = useMemo(() => (songTplPlan && ledTpls.list ? { plan: songTplPlan, manuals: ledTpls.list.screens } : null), [songTplPlan, ledTpls.list]);
+  // 中途換版型（時間線）：開頭 = 歌選的版型，換版型的點 = 歌的 templateSwitches；Cue 的時間用畫面上最新的
+  const songTimelineState = useSongTimeline(ledTpls.list, selectedSong?.templateId, selectedSong?.templateSwitches, cuesSongId === selectedSongId ? cues : null);
+  const [ledSegPick, setLedSegPick] = useState<number | null>(null);        // AE 即時沒有播放時間：手動選看哪一段（只有這個畫面，不存）
+  useEffect(() => { setLedSegPick(null); }, [selectedSongId]);
+  // 3D 工具列「⋯」的對位圖 / AE 合成腳本 / 位置表：這首歌用了版型就照版型下載（有中途換版型就整條時間線一起）
+  const ledSongTpl = useMemo(
+    () => (songTplPlan && ledTpls.list ? { plan: songTplPlan, manuals: ledTpls.list.screens, timeline: songTimelineState.timeline, songName: selectedSong?.name } : null),
+    [songTplPlan, ledTpls.list, songTimelineState.timeline, selectedSong?.name],
+  );
   const [ledFullView, setLedFullView] = useState(false);          // 「暫時用整張畫布看」：只有這個畫面，不存
   useEffect(() => { setLedFullView(false); }, [selectedSongId]);
   const [aeFrameSize, setAeFrameSize] = useState<{ width: number; height: number } | null>(null);
   const ledChoice = useMemo(
-    () => chooseLedTemplate({ source: 'ndi', previewPlan: tplPreview?.plan ?? null, songPlan: songTplPlan, fullView: ledFullView }),
-    [tplPreview?.plan, songTplPlan, ledFullView],
+    () => chooseLedTemplate({ source: 'ndi', previewPlan: tplPreview?.plan ?? null, songPlan: songTplPlan, songTimeline: songTimelineState.timeline, fullView: ledFullView }),
+    [tplPreview?.plan, songTplPlan, songTimelineState.timeline, ledFullView],
   );
+  // AE 即時沒有播放時間：中途換版型時，看「手動選的那一段」，沒選就看選到的 Cue 的影片時間（沒有 = 開頭）
+  const ledHoldSec = useMemo(() => {
+    const tl = ledChoice.timeline;
+    if (!tl) return 0;
+    if (ledSegPick !== null && tl.segments[ledSegPick]) return tl.segments[ledSegPick].fromSec;
+    return selectedCue?.videoTimeSec ?? 0;
+  }, [ledChoice.timeline, ledSegPick, selectedCue?.videoTimeSec]);
   const ledChip = useMemo(
-    () => ledTemplateChip(ledChoice, { source: 'ndi', songPlan: songTplPlan, list: ledTpls.list }),
-    [ledChoice, songTplPlan, ledTpls.list],
+    () => ledTemplateChip(ledChoice, { source: 'ndi', songPlan: songTplPlan, list: ledTpls.list, timeSec: ledHoldSec, clocked: false, pickedSegment: ledSegPick }),
+    [ledChoice, songTplPlan, ledTpls.list, ledHoldSec, ledSegPick],
   );
   const ledHint = useMemo(
     () => liveSourceHint({ choice: ledChoice, frame: aeFrameSize, source: 'ndi', fullCanvas: ledTpls.list?.fullCanvas ?? null, templates: customLedTemplates }),
@@ -646,6 +663,11 @@ export default function ProjectEditor() {
       toast.error('指派沒有存到：' + friendlyError(e));
     }
   }
+  // 中途換版型存好了：歌單上這首歌的開頭版型和換版型的點換成後台回的，再重讀版型清單（幾首歌在用）
+  function handleTimelineSaved(songId: string, out: { templateId: string | null; templateSwitches: TimelineSwitch[] }) {
+    setSongs(list => list.map(s => s.id === songId ? { ...s, templateId: out.templateId, templateSwitches: out.templateSwitches } : s));
+    void ledTpls.reload();
+  }
   // 每首歌選的 LED 版型（null = 整張畫布）
   async function handleSongTemplate(songId: string, templateId: string | null) {
     if (!projectId) return;
@@ -674,6 +696,9 @@ export default function ProjectEditor() {
 
   // ── Cue templates / palette ──
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  // 「中途換版型」對話框開在哪一首歌上
+  const [timelineSongId, setTimelineSongId] = useState<string | null>(null);
+  const timelineSong = timelineSongId ? songs.find(x => x.id === timelineSongId) ?? null : null;
 
   async function handleSaveCueAsTemplate(cueId: string, cueName: string) {
     if (!projectId) return;
@@ -1218,6 +1243,26 @@ export default function ProjectEditor() {
                           </select>
                         </label>
                       )}
+                      {customLedTemplates.length > 0 && (
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <SongTimelineSummary
+                            switches={parseSwitches(s.templateSwitches)}
+                            templates={customLedTemplates}
+                            cueTimes={s.id === selectedSongId && cuesSongId === s.id ? cueTimesOf(cues) : undefined}
+                          />
+                          <button
+                            type="button"
+                            className="song-item__tl-btn"
+                            onClick={() => setTimelineSongId(s.id)}
+                            disabled={!s.templateId || !customLedTemplates.some(t => t.id === s.templateId)}
+                            title={s.templateId && customLedTemplates.some(t => t.id === s.templateId)
+                              ? '同一首歌的影片中途換版型：到了指定的 Cue 或時間，LED 改用另一個版型的排法（影片還是一個檔）'
+                              : '先在上面選一個自己排的版型當開頭，才能設定中途換版型'}
+                          >
+                            <Icon icon={ArrowRightLeft} size="xs" /> {parseSwitches(s.templateSwitches).length > 0 ? '編輯中途換版型' : '中途換版型…'}
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </li>
                 );
@@ -1263,7 +1308,7 @@ export default function ProjectEditor() {
             {ledChip && (
               <div className="tpl-bar">
                 <span className="tpl-bar__label">AE 即時</span>
-                <LedTemplateChip chip={ledChip} onToggleFullView={() => setLedFullView(v => !v)} />
+                <LedTemplateChip chip={ledChip} onToggleFullView={() => setLedFullView(v => !v)} onPickSegment={setLedSegPick} />
               </div>
             )}
             <LedTemplateHint hint={ledHint} />
@@ -1308,6 +1353,8 @@ export default function ProjectEditor() {
               onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
               ledUvPreview={uvOpen ? uvPreview : null}
               ledTemplate={ledChoice.plan}
+              ledTimeline={ledChoice.timeline ?? null}
+              ledTimelineSec={ledHoldSec}
               ledSongTemplate={ledSongTpl}
               ledPreviewCanvas={tplPreview ? tplPattern.canvas : null}
               ledPreviewVersion={tplPattern.version}
@@ -1456,6 +1503,16 @@ export default function ProjectEditor() {
         }}
       />
 
+      {timelineSong && projectId && (
+        <LedTimelineDialog
+          open
+          projectId={projectId}
+          song={{ id: timelineSong.id, name: timelineSong.name, templateId: timelineSong.templateId ?? null, switches: parseSwitches(timelineSong.templateSwitches) }}
+          templates={customLedTemplates}
+          onClose={() => setTimelineSongId(null)}
+          onSaved={handleTimelineSaved}
+        />
+      )}
       <LedTemplatesDialog
         open={ledTplOpen && user?.role === 'admin'}
         projectId={projectId || ''}

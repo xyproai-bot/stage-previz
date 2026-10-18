@@ -3,7 +3,8 @@
 //   這首歌用了版型 → 每個下載都有兩個：「（版型 1）」跟著版型、「（整張畫布）」還是整張畫布的
 
 export type LedDownloadKind = 'png' | 'jsx' | 'csv' | 'json';
-export type LedDownloadScope = 'plain' | 'full' | { template: string };
+/** timeline = true：這首歌有中途換版型，下載整條版型時間線（template 寫「版型時間線」） */
+export type LedDownloadScope = 'plain' | 'full' | { template: string; timeline?: boolean };
 
 const PLAIN: Record<LedDownloadKind, string> = {
   png: '下載對位圖（PNG）',
@@ -27,6 +28,14 @@ export function ledMapMenuLabel(kind: LedDownloadKind, scope: LedDownloadScope):
 /** 滑鼠停上去的說明：版型的下載說清楚是版型畫布、和整張畫布差在哪 */
 export function ledMapMenuHint(kind: LedDownloadKind, scope: LedDownloadScope): string | undefined {
   const name = typeof scope === 'object' ? scope.template : null;
+  if (typeof scope === 'object' && scope.timeline) {
+    switch (kind) {
+      case 'png': return '這首歌中途換版型：每個版型各一張模板圖（一次下載好幾個檔案，瀏覽器問下載多個檔案請按允許），放進 AE 當各段的參考圖層';
+      case 'jsx': return '在 AE 按「File > Scripts > Run Script File…」（檔案 > 指令碼 > 執行指令碼檔案）跑：自動建好一個合成，每一段版型各有一組導引圖層（模板圖 + 螢幕外框），只在那一段的時間顯示，換版型的時間在時間軸上有標記（都不會算圖出去）';
+      case 'csv': return 'Excel 打得開：每個版型一個區段，寫清楚每塊螢幕的位置、轉向、翻轉、實際點數、比例，和每一段從什麼時候開始（給 LED 工程師、d3 操作員）';
+      case 'json': return '給程式讀：跟 CSV 一樣的內容（整條版型時間線）';
+    }
+  }
   switch (kind) {
     case 'png':
       return name !== null

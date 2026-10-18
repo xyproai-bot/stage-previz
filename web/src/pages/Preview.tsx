@@ -1157,6 +1157,7 @@ function SongDetail({
                 })}
                 ledVideo={videoMode && player.ready ? player.video : null}
                 ledTemplate={videoMode ? selected?.template ?? null : null}
+                ledTimeline={videoMode ? selected?.timeline ?? null : null}
                 poseAtFrame={poseAtFrame}
                 viewApiRef={viewApiRef}
                 transportKeys

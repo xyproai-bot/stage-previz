@@ -45,6 +45,9 @@ import { TextureColorReader, type LedColorSource } from '../lib/stageLook/textur
 import { AdaptiveQuality, QUALITY, detectQualityProfile, type QualityLevel } from '../lib/stageLook/quality';
 import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut, setLedOriginalUv, setLedTemplate, updateLedSurface } from '../lib/stageLook/ledSurface';
 import { materialsWithOriginalUv, planWantsOriginalUv } from '../lib/stageLook/ledOriginalUv';
+import { createFrameClock, type FrameClock } from '../lib/ledFrameClock';
+import { createSegmentSwitcher, type SegmentObject, type SegmentSwitcher } from '../lib/stageLook/ledTimelineSwitch';
+import { segmentIndexAt, timelineSummary, type LedTimeline } from '../lib/ledTemplateTimeline';
 import { ensureOwnLedMaterials } from '../lib/stageLook/ledOwnMaterial';
 import { pickNdiColorCurve, type NdiColorLut } from '../lib/ndiColor';
 import { readPixels } from '../lib/ndiFrameGrab';
@@ -81,7 +84,7 @@ import { downloadBlob, drawTestPattern, renderAlignmentMapPng } from '../lib/led
 import type { UvPreview } from '../lib/ledUv/previewUv';
 import { applyUvPreview } from '../lib/ledUv/previewApply';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
-import { downloadSongTemplateFile, type LedSongTemplate } from '../lib/ledTemplateDownload';
+import { downloadSongTemplateFile, downloadSongTimelineFile, type LedSongTemplate } from '../lib/ledTemplateDownload';
 import { ledMapMenuHint, ledMapMenuLabel, type LedDownloadKind, type LedDownloadScope } from '../lib/ledMapMenuText';
 import './StageScene.css';
 
@@ -233,6 +236,15 @@ interface Props {
    */
   ledTemplate?: LedTemplatePlan | null;
   /**
+   * 中途換版型（lib/ledTemplateTimeline.ts）：同一首歌的影片前半段用版型 A 的排法、某個時間以後換成版型 B。有給（至少兩段）就蓋過 ledTemplate：
+   * 每一段每個物件的取色資料先算好，播放中依「這一格畫面是影片的第幾秒」（requestVideoFrameCallback 的畫面時間，沒有就用 currentTime）
+   * 在換版型的那一格剛好換，拉時間軸前後來回也對；顏色那條路不動。沒有播放時間的畫面（AE 即時、本地圖片）用 ledTimelineSec。
+   * 頁面要把它用 useMemo 包住（內容沒變就同一個物件），不然每次都重算。
+   */
+  ledTimeline?: LedTimeline | null;
+  /** 沒有播放時間的畫面（AE 即時、本地圖片）用這個時間（秒）決定現在是時間線的哪一段；預設 0 = 開頭 */
+  ledTimelineSec?: number;
+  /**
    * 編輯 LED 版型時的測試圖（lib/ledTemplateDraw.ts 畫的）：有給就蓋過影片 / 圖片 / 測試圖，每塊 LED 照 ledTemplate 的放法從這張圖取色。
    * 走跟影片一樣的「版型貼回」路徑，只是貼圖是畫出來的；不經過影片的顏色那一條路。ledPreviewVersion 加 1 = 圖重畫過了、要重傳。
    */
@@ -328,7 +340,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledMapMenu = true, hideDownloads = false, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledTimeline = null, ledTimelineSec = 0, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledMapMenu = true, hideDownloads = false, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const containerRef = useRef<HTMLDivElement>(null);
@@ -506,7 +518,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   projectCanvasRef.current = normalizeLedCanvas(ledCanvas);
   // LED 畫布版型：現在用的版型、每個 LED 物件在整張畫布上的範圍（從模型的 UV 算，一個物件只算一次）、燈光取色的位置換算
   const ledTemplateRef = useRef<LedTemplatePlan | null>(null);
-  ledTemplateRef.current = ledTemplate;
+  ledTemplateRef.current = ledTimeline && ledTimeline.segments.length >= 2 ? ledTimeline.segments[0].plan : ledTemplate;
+  // 中途換版型：影片的畫面時鐘、沒有播放時間時用的時間、換段落的開關（材質設定那一步建好，每一幀 tick 叫 sync）
+  const ledClockRef = useRef<FrameClock | null>(null);
+  const ledTimelineSecRef = useRef(0);
+  ledTimelineSecRef.current = ledTimelineSec;
+  const ledSegmentsRef = useRef<SegmentSwitcher | null>(null);
   const onNdiFrameSizeRef = useRef(onNdiFrameSize);
   onNdiFrameSizeRef.current = onNdiFrameSize;
   const ndiReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
@@ -1231,6 +1248,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       // 機關：這一幀的值（影片時間軸 / 點 cue 走過去）→ 套到每個物件（整個畫面只在這裡寫 mesh 的位置）
       commitPosesRef.current(nowTs, !!framePoses);
+
+      // 中途換版型：這一格畫面是影片的第幾秒 → 換到那一段的排法。跟這一幀要畫的畫面同一幀生效（上傳貼圖在後面的 render），不會閃
+      ledSegmentsRef.current?.sync();
 
       const rmode = renderModeRef.current;
 
@@ -2125,6 +2145,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (ledPreviewCanvas && ledMediaTextureRef.current) ledMediaTextureRef.current.needsUpdate = true;
   }, [ledPreviewCanvas, ledPreviewVersion]);
 
+  // 中途換版型要知道「現在這一格是影片的第幾秒」（只有真的有時間線、而且放的是影片才開；要排在下面「材質」那個 effect 前面）
+  const hasLedTimeline = !!(ledTimeline && ledTimeline.segments.length >= 2);
+  useEffect(() => {
+    if (!ledVideo || !hasLedTimeline || ledPreviewCanvas) { ledClockRef.current = null; return; }
+    const frameClock = createFrameClock(ledVideo);
+    ledClockRef.current = frameClock;
+    return () => {
+      frameClock.dispose();
+      if (ledClockRef.current === frameClock) ledClockRef.current = null;
+    };
+  }, [ledVideo, hasLedTimeline, ledPreviewCanvas]);
+
   // ── LED 對位圖 / 測試圖：每塊 LED 在畫布上的位置（從模型的 UV 算）──
   const resolvedCanvas = useMemo(
     () => resolveLedCanvas(ledUvPreview ? ledUvPreview.canvas : ledCanvas, mediaSize),
@@ -2281,7 +2313,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (busy) setLedMapBusy(busy);
     try {
       await new Promise(r => requestAnimationFrame(() => r(null)));
-      const n = await downloadSongTemplateFile(kind, ledSongTemplate.plan, songTemplateDefs(ledSongTemplate, full), { projectName: projectName || '', date: todayString(), fullCanvas: full });
+      const defs = songTemplateDefs(ledSongTemplate, full);
+      const meta = { projectName: projectName || '', date: todayString(), fullCanvas: full };
+      // 這首歌有中途換版型：整條時間線一起下載（每個版型一份）
+      const n = ledSongTemplate.timeline
+        ? await downloadSongTimelineFile(kind, ledSongTemplate.timeline, defs, { ...meta, songName: ledSongTemplate.songName })
+        : await downloadSongTemplateFile(kind, ledSongTemplate.plan, defs, meta);
       toast[n.level](n.text, n.duration);
     } finally {
       if (busy) setLedMapBusy(null);
@@ -2342,6 +2379,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const ledIds = new Set<string>();
     const ledMaterials = new Set<THREE.MeshStandardMaterial>();
     const mirrorFlagged = hasMirrorFloor(materialOverrides || {});
+    // 中途換版型（至少兩段才算）：每一段每個物件的取色資料先算好；現在是第幾段看影片的畫面時鐘（沒有影片 = 頁面給的時間）
+    const timeline = ledTimeline && ledTimeline.segments.length >= 2 ? ledTimeline : null;
+    const segTime = () => (ledClockRef.current ? ledClockRef.current.time() : ledTimelineSecRef.current);
+    const startSeg = timeline ? segmentIndexAt(timeline, segTime()) : 0;
+    const segObjects: SegmentObject[] = [];
 
     meshes.forEach((obj, id) => {
       const so = stageObjMap.get(id);
@@ -2390,10 +2432,22 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       // LED 畫布版型：這個物件的螢幕放法（對「影片 / 圖片」和 AE 即時收到的那張版型畫布；測試圖、imageUrl 都是整張畫布）
       let tplData: ReturnType<typeof buildObjectUniforms> | null = null;
-      if (ledTemplate && isLed && ledTexture && (ledTexture === ledMediaTextureRef.current || ledTexture === ndiLiveTextureRef.current?.texture)) {
+      let segPer: SegmentObject['per'] | null = null;
+      if ((timeline || ledTemplate) && isLed && ledTexture && (ledTexture === ledMediaTextureRef.current || ledTexture === ndiLiveTextureRef.current?.texture)) {
         const srcFor = (p: Placement): SrcSpan | null => (p.uv ? spanFromUv(p.uv) : ledObjectSpan(obj));
-        tplData = buildObjectUniforms(ledTemplate, id, srcFor);
-        ledTemplateRemapRef.current.set(id, (r) => mapUvRectToTemplate(ledTemplate, id, srcFor, r));
+        if (timeline) {
+          segPer = timeline.segments.map(seg => ({
+            plan: seg.plan,
+            data: buildObjectUniforms(seg.plan, id, srcFor),
+            remap: (r: UvRect) => mapUvRectToTemplate(seg.plan, id, srcFor, r),
+          }));
+          tplData = segPer[startSeg].data;
+          ledTemplateRemapRef.current.set(id, segPer[startSeg].remap);
+        } else {
+          const plan = ledTemplate!;
+          tplData = buildObjectUniforms(plan, id, srcFor);
+          ledTemplateRemapRef.current.set(id, (r) => mapUvRectToTemplate(plan, id, srcFor, r));
+        }
       } else {
         ledTemplateRemapRef.current.delete(id);
       }
@@ -2402,7 +2456,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // 共用的話後面的物件會蓋掉前面的（只剩最後一塊有畫面）。細節見 lib/stageLook/ledOwnMaterial.ts
       if (isLed) ensureOwnLedMaterials(obj);
       // 舊影片（自動貼 UV 以前做的）：模型存了原本的 UV（uv1）就直接用它取色，一個像素都不差；沒存的材質照舊用版型的長方形
-      const origUvMats = tplData && ledTemplate && planWantsOriginalUv(ledTemplate, id) ? materialsWithOriginalUv(obj) : null;
+      const curPlan = timeline ? timeline.segments[startSeg].plan : ledTemplate;
+      const wantsOrigAny = segPer ? segPer.some(s => planWantsOriginalUv(s.plan, id)) : !!(ledTemplate && planWantsOriginalUv(ledTemplate, id));
+      const origAllMats = tplData && wantsOrigAny ? materialsWithOriginalUv(obj) : null;
+      const origUvMats = origAllMats && curPlan && planWantsOriginalUv(curPlan, id) ? origAllMats : null;
+      const segMats: THREE.MeshStandardMaterial[] = [];
 
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
@@ -2429,6 +2487,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           const useOrig = !!origUvMats && origUvMats.has(m);
           setLedTemplate(m, useOrig ? null : tplData);
           setLedOriginalUv(m, useOrig);
+          segMats.push(m);
           ledMaterials.add(m);
           // selected highlight：LED 不洗白，這裡只在沒畫面、沒亮度時加一點點當提示
           if (isSelected && ledBrightness < 0.05 && !ledTexture) {
@@ -2442,6 +2501,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           const useOrig = !!origUvMats && origUvMats.has(m);
           setLedTemplate(m, useOrig ? null : tplData);
           setLedOriginalUv(m, useOrig);
+          segMats.push(m);
           ledMaterials.add(m);
         } else {
           // === 一般物件 / Quick mode 的 LED（沒貼圖時）===
@@ -2479,6 +2539,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         }
       });
 
+      if (segPer && segMats.length > 0) segObjects.push({ id, materials: segMats, per: segPer, originalUvMaterials: origAllMats });
+
       // 3. LED 照明：記下取色來源 / 燈參數；發光面只算一次（換模型才重算）
       if (isLed && so) {
         ledSourcesRef.current.set(id, ledTexture
@@ -2505,11 +2567,18 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     });
 
     ledMaterialsRef.current = ledMaterials;
+    // 中途換版型：每一幀 tick 叫 sync（看現在是第幾段，跟套用的不一樣就整批換）
+    ledSegmentsRef.current = timeline && segObjects.length > 0
+      ? createSegmentSwitcher({
+        objects: segObjects, startIndex: startSeg, pick: () => segmentIndexAt(timeline, segTime()),
+        setRemap: (oid, remap) => { ledTemplateRemapRef.current.set(oid, remap); },
+      })
+      : null;
     ledRigRef.current?.retainObjects(ledIds);
     for (const id of [...ledSourcesRef.current.keys()]) {
       if (!ledIds.has(id)) { ledSourcesRef.current.delete(id); ledLightPropsRef.current.delete(id); }
     }
-  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, ledTemplate, ledPreviewCanvas, testPatternTex, forceTestPattern, ledUvPreview]);
+  }, [stageObjects, renderMode, states, selectedObjectIds, ndiActive, modelVersion, materialOverrides, ledVideo, ledImage, ledTemplate, ledTimeline, ledPreviewCanvas, testPatternTex, forceTestPattern, ledUvPreview]);
 
   // ── 淡入淡出的半透明 shader 先編好（不然第一次換 cue 淡入淡出會卡一下）──
   // 模型載好 / 切模式 / 改材質 / 換 LED 畫面 / 畫質換了（燈數會變）→ 等畫面穩一點再編
@@ -3515,7 +3584,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // 「更多」選單固定的一段：LED 對位圖（給動畫師做 AE 合成用）
   const canvasNow = resolvedCanvas.canvas;
   // 四個下載（對位圖 / AE 合成腳本 / 位置表 CSV / JSON）：這首歌用了版型 → 版型的在前、整張畫布的在後；沒有版型 → 跟以前一樣
-  const songTplScope: LedDownloadScope | null = ledSongTemplate && projectCanvasRef.current ? { template: ledSongTemplate.plan.name } : null;
+  const songTplScope: LedDownloadScope | null = ledSongTemplate && projectCanvasRef.current
+    ? (ledSongTemplate.timeline ? { template: '版型時間線', timeline: true } : { template: ledSongTemplate.plan.name })
+    : null;
   const dlIcons = { png: ImageDown, jsx: FileCode, csv: FileSpreadsheet, json: FileBraces } as const;
   const dlItem = (kind: LedDownloadKind, scope: LedDownloadScope): ToolMenuEntry => {
     const tpl = typeof scope === 'object';
@@ -3556,7 +3627,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       <>
         畫布 {canvasNow.width} × {canvasNow.height}（{canvasSourceText(resolvedCanvas.source)}）
         {resolvedCanvas.source !== 'project' && !onLedCanvasChange && <><br />AE 合成要做多大，以製作給的為準</>}
-        {songTplScope && ledSongTemplate && <><br />這首歌用的版型：{ledSongTemplate.plan.name}（{ledSongTemplate.plan.canvas.width} × {ledSongTemplate.plan.canvas.height}）</>}
+        {songTplScope && ledSongTemplate && (ledSongTemplate.timeline
+          ? <><br />這首歌中途換版型：{timelineSummary(ledSongTemplate.timeline)}（{ledSongTemplate.plan.canvas.width} × {ledSongTemplate.plan.canvas.height}）</>
+          : <><br />這首歌用的版型：{ledSongTemplate.plan.name}（{ledSongTemplate.plan.canvas.width} × {ledSongTemplate.plan.canvas.height}）</>)}
       </>
     ),
   }] : [];

@@ -11,7 +11,9 @@ import type { LedTemplatePlan, ManualScreen, ScreenDef } from './ledTemplate';
 import type { LedDownloadKind } from './ledMapMenuText';
 import { renderTemplateGuidePng, type TemplateGuidePng } from './ledTemplateDraw';
 import { guideFileName } from './ledTemplatePattern';
-import { templateTableFileName, templateTableToCsv, templateTableToJson } from './ledTemplateTable';
+import { templateTableFileName, templateTableToCsv, templateTableToJson, timelineTableFileName, timelineTableToCsv, timelineTableToJson } from './ledTemplateTable';
+import { aeTimelineScriptFileName, buildAeTimelineScript } from './aeTimelineScript';
+import { timelineCanvas, type LedTimeline } from './ledTemplateTimeline';
 
 export interface TemplateDownloadMeta {
   projectName: string;
@@ -58,8 +60,11 @@ export async function downloadTemplateAeScript(
   return { withGuide: !!guide, fileName };
 }
 
-/** 這首歌選的版型（3D 工具列「⋯」的下載跟著它）：版型排法 + 專案手動切的螢幕（算螢幕清單用） */
-export interface LedSongTemplate { plan: LedTemplatePlan; manuals: readonly ManualScreen[] }
+/**
+ * 這首歌選的版型（3D 工具列「⋯」的下載跟著它）：版型排法 + 專案手動切的螢幕（算螢幕清單用）。
+ * 這首歌有中途換版型（timeline）時，plan 是開頭的版型，下載整條時間線（每個版型一份）
+ */
+export interface LedSongTemplate { plan: LedTemplatePlan; manuals: readonly ManualScreen[]; timeline?: LedTimeline | null; songName?: string }
 
 /** 下載完要跳的小提示 */
 export interface LedDownloadNotice { level: 'success' | 'warn' | 'error'; text: string; duration?: number }
@@ -105,4 +110,96 @@ export function downloadTemplateTable(kind: 'csv' | 'json', plan: LedTemplatePla
   const text = kind === 'csv' ? templateTableToCsv(plan, defs, meta) : templateTableToJson(plan, defs, meta);
   downloadBlob(new Blob([text], { type: kind === 'csv' ? 'text/csv;charset=utf-8' : 'application/json' }), fileName);
   return fileName;
+}
+
+// ───────────────────────── 版型時間線（同一首歌中途換版型）─────────────────────────
+
+/** 每一段只留模型裡找得到的螢幕 */
+function shownTimeline(tl: LedTimeline, defs: readonly ScreenDef[]): LedTimeline {
+  const keys = new Set(defs.map(d => d.key));
+  return { v: 1, segments: tl.segments.map(s => ({ ...s, plan: { ...s.plan, screens: s.plan.screens.filter(p => keys.has(p.key)) } })) };
+}
+
+/** 時間線裡每個版型各一份（同一個版型出現好幾段只算一次，照第一次出現的順序） */
+function distinctPlans(tl: LedTimeline): { id: string; plan: LedTemplatePlan }[] {
+  const out: { id: string; plan: LedTemplatePlan }[] = [];
+  for (const s of tl.segments) if (!out.some(x => x.id === s.templateId)) out.push({ id: s.templateId, plan: s.plan });
+  return out;
+}
+
+/** 下載時間線座標表（CSV 前面有 BOM，Excel 看得到中文） */
+export function downloadTimelineTable(kind: 'csv' | 'json', tl: LedTimeline, defs: readonly ScreenDef[], meta: TemplateDownloadMeta & { songName?: string }): string {
+  const fileName = timelineTableFileName(kind, meta.projectName, meta.songName, timelineCanvas(tl));
+  const text = kind === 'csv' ? timelineTableToCsv(tl, defs, meta) : timelineTableToJson(tl, defs, meta);
+  downloadBlob(new Blob([text], { type: kind === 'csv' ? 'text/csv;charset=utf-8' : 'application/json' }), fileName);
+  return fileName;
+}
+
+/** 下載 AE 合成腳本（時間線）：每個版型一張模板圖夾在腳本裡（畫不出來的那張只放外框） */
+export async function downloadTimelineAeScript(
+  tl: LedTimeline, defs: readonly ScreenDef[], meta: TemplateDownloadMeta & { songName?: string },
+): Promise<{ withGuide: boolean; fileName: string }> {
+  const canvas = timelineCanvas(tl);
+  if (canvas.width > AE_MAX_COMP_SIDE || canvas.height > AE_MAX_COMP_SIDE) {
+    throw new AeCanvasTooBigError(`版型畫布 ${canvas.width} × ${canvas.height} 超過 AE 合成的上限 ${AE_MAX_COMP_SIDE} px`);
+  }
+  const guides: Record<string, AeMapImage | null> = {};
+  let withGuide = false;
+  for (const { id, plan } of distinctPlans(tl)) {
+    try {
+      const png = await renderTemplateGuidePng(plan, defs, { maxSide: AE_MAP_MAX_SIDE });
+      guides[id] = {
+        fileName: aeTemplateGuideFileName(meta.projectName, plan.name, plan.canvas),
+        width: png.width, height: png.height, base64: await blobToBase64(png.blob),
+      };
+      withGuide = true;
+    } catch (e) {
+      guides[id] = null;
+      console.warn('[aeTimelineScript] 模板圖沒畫出來，這個版型只放外框', plan.name, e);
+    }
+  }
+  const js = buildAeTimelineScript({ timeline: tl, defs, projectName: meta.projectName, songName: meta.songName, date: meta.date, guides });
+  const fileName = aeTimelineScriptFileName(meta.projectName, meta.songName, canvas);
+  downloadBlob(new Blob([js], { type: 'application/javascript;charset=utf-8' }), fileName);
+  return { withGuide, fileName };
+}
+
+/**
+ * 3D 工具列「⋯」→ LED 對位圖：這首歌有中途換版型時，四個下載照整條時間線出
+ *   模板圖 = 每個版型各一張（一次下載好幾個檔案）、AE 合成腳本 = 一個合成、每一段各有一組圖層、座標表 = 每個版型一個區段
+ */
+export async function downloadSongTimelineFile(
+  kind: LedDownloadKind, timeline: LedTimeline, defs: readonly ScreenDef[], meta: TemplateDownloadMeta & { songName?: string },
+): Promise<LedDownloadNotice> {
+  const shown = shownTimeline(timeline, defs);
+  if (shown.segments.every(s => s.plan.screens.length === 0)) {
+    return { level: 'error', text: '這首歌的版型時間線裡還沒有螢幕，或模型裡找不到它們（要等模型載好）' };
+  }
+  try {
+    if (kind === 'png') {
+      const plans = distinctPlans(shown);
+      let shrunk: string | null = null;
+      for (let i = 0; i < plans.length; i++) {
+        const { png, fileName } = await renderTemplateGuideFile(plans[i].plan, defs, meta.projectName);
+        downloadBlob(png.blob, fileName);
+        if (png.scale < 1 && !shrunk) shrunk = guideShrinkWarning(png, plans[i].plan.canvas);
+        if (i + 1 < plans.length) await new Promise(r => setTimeout(r, 400));   // 連續下載幾個檔案，瀏覽器才不會當成一個
+      }
+      return shrunk
+        ? { level: 'warn', text: shrunk, duration: 8000 }
+        : { level: 'success', text: `版型時間線的模板圖下載好了（${plans.length} 個版型，每個一張）；瀏覽器問「下載多個檔案」請按允許` };
+    }
+    if (kind === 'jsx') {
+      const r = await downloadTimelineAeScript(shown, defs, meta);
+      return {
+        level: 'success', duration: 8000,
+        text: `AE 合成腳本（版型時間線）下載好了：在 AE 按「File > Scripts > Run Script File…」選它${r.withGuide ? '' : '（這次沒有夾模板圖，外框都有）'}`,
+      };
+    }
+    downloadTimelineTable(kind, shown, defs, meta);
+    return { level: 'success', text: `版型時間線的座標表下載好了（${kind === 'csv' ? 'CSV，Excel 打得開' : 'JSON'}）` };
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    return { level: 'error', text: (e instanceof AeCanvasTooBigError ? '' : '沒有下載成功：') + reason };
+  }
 }

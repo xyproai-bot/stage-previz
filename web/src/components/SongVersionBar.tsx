@@ -15,6 +15,7 @@ import type { VideoJob } from '../lib/videoJobs';
 import type { VersionItem } from '../lib/songVersions';
 import { useViewAs } from '../lib/viewAsContext';
 import { versionTemplateLabel } from '../lib/ledTemplate';
+import { timelineVersionLabel } from '../lib/ledTemplateTimeline';
 import './SongVersionBar.css';
 
 interface Props {
@@ -72,7 +73,9 @@ function versionTooltip(it: VersionItem): string {
     `${it.label}${it.title ? `：${it.title}` : ''}`,
     [it.by ? `${it.by}交的` : '', it.at ? formatDateTime(it.at) : ''].filter(Boolean).join(' · '),
     it.note ? `說明：${it.note}` : '',
-    versionTemplateLabel(it.template, { width: it.video?.width ?? null, height: it.video?.height ?? null }) ?? '',
+    (it.timeline
+      ? timelineVersionLabel(it.timeline, { width: it.video?.width ?? null, height: it.video?.height ?? null })
+      : versionTemplateLabel(it.template, { width: it.video?.width ?? null, height: it.video?.height ?? null })) ?? '',
   ];
   return lines.filter(Boolean).join('\n');
 }

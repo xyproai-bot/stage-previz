@@ -11,6 +11,7 @@ import type { ProjectRole } from './mockData';
 import type { ShareSongVideo, SongVideo, SongVideoStatus } from './videoApi';
 import { parseServerTime } from './serverTime';
 import { parsePlan, type LedTemplatePlan } from './ledTemplate';
+import { parseTimeline, type LedTimeline } from './ledTemplateTimeline';
 
 export interface VersionItem {
   /** 'v:<影片 id>'（版本）或 'd:<Drive 檔案 id>'（舊的 Drive 影片） */
@@ -38,6 +39,8 @@ export interface VersionItem {
   video: SongVideo | null;
   /** 這一版做的時候用的 LED 版型排法（沒有 = 整張畫布，Drive 舊影片也是） */
   template: LedTemplatePlan | null;
+  /** 這一版上傳時整條版型時間線（中途換版型；每個換版型的時間在上傳那一刻就定了）。沒有 = 單一版型，看 template */
+  timeline: LedTimeline | null;
 }
 
 export const versionKey = (id: string) => `v:${id}`;
@@ -61,6 +64,7 @@ export function itemFromVideo(v: SongVideo, absolute: (u: string) => string): Ve
     status: v.status,
     video: v,
     template: parsePlan(v.template),
+    timeline: parseTimeline(v.templateTimeline),
   };
 }
 
@@ -82,6 +86,7 @@ export function itemFromShareVideo(v: ShareSongVideo, absolute: (u: string) => s
     status: 'ready',
     video: null,
     template: parsePlan(v.template),
+    timeline: parseTimeline(v.templateTimeline),
   };
 }
 
@@ -118,6 +123,7 @@ export function itemsFromLegacyDrive(files: LegacyDriveVideo[]): VersionItem[] {
     status: 'ready' as const,
     video: null,
     template: null,
+    timeline: null,
   }));
 }
 

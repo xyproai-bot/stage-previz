@@ -76,6 +76,53 @@
 - `POST …/songs/:sid/videos/uploads` 可以多帶 `"templateId"`：不帶 = 歌現在選的；帶 `null` = 整張畫布；帶不認識的 id = 當沒帶。貼連結 / Drive 同步的版本用歌那時選的。
 - 版本 JSON 多 `templateId`（沒有 = `null`）和 `template`（快照，格式同上面 `templates[]` 的一項，沒有 `kind` / `songCount`；沒有 = `null`）。分享連結的影片 JSON 多 `template`。
 
+## 同一首歌中途換版型（時間線，0039）
+
+設計：`docs/superpowers/specs/2026-10-15-led-canvas-templates-design.md` 6d。資料表 `song_template_switches`（`cf-worker/migrations/0039_template_timeline.sql`）、`song_videos.template_timeline`。共用的檢查和格式：`web/src/lib/ledTemplateTimeline.ts`。
+
+- **開頭的版型** = 歌選的版型（`songs.template_id` / `templateId`，舊的版型選單就是它）；**換版型的點** = `templateSwitches`（最多 12 個）。
+- 一個點二選一：**Cue**（`cueId`，跟著 Cue 的影片時間走；Cue 的時間改了點跟著動；Cue 刪掉點一起刪）或**時間**（`atSec`，秒）。時間要大於 0（0 秒就是開頭）。只有這首歌的**正式** Cue（不是提案）、而且有影片時間的能用。
+- **畫布大小要一樣**：開頭和所有換版型的版型，畫布寬高完全相同（影片只有一個大小）。不一樣 → 409 + 中文說明（寫出兩個版型各是多大）。時間線只能用自己排的版型（不能是「全部」）。
+
+### `GET /api/projects/:id/songs`
+
+每首歌多 `templateSwitches`（沒有 = `[]`）：
+
+```json
+"templateId": "lt_a",
+"templateSwitches": [
+  { "id": "tsw_x", "cueId": "c_4", "cueName": "Cue 4", "cueTimeSec": 83, "atSec": 83, "templateId": "lt_b" },
+  { "id": "tsw_y", "cueId": null, "cueName": null, "cueTimeSec": null, "atSec": 130, "templateId": "lt_a" }
+]
+```
+`cueTimeSec` 是 Cue 現在的影片時間（Cue 還沒有時間 = `null`，這個點先不生效）；`atSec` 是直接寫的時間（用 Cue 時是存檔那一刻 Cue 的時間，備用）。
+
+### `PUT /api/projects/:id/songs/:sid/template-timeline`（製作）
+
+整份換掉：`{ "start": "lt_a", "switches": [ { "cueId": "c_4", "templateId": "lt_b" }, { "atSec": 130, "templateId": "lt_a" } ] }` → `{ templateId, templateSwitches }`。`start` 是 `null` / 「全部」的 id 時不能有換版型的點。檢查：版型都存在、都是自己排的、畫布一樣大、Cue 有影片時間、時間大於 0、兩個點不能在同一個時間。錯誤一律 409 + `{ error, timeline: true }`（格式不對 400）。導演 / 動畫師 403。
+
+### 護欄
+
+- 還有歌在用的版型不能刪：開頭選了它**或**換版型換成它都算（`songCount` 同一首歌只算一次）。
+- 改版型的畫布大小時，它如果在某首歌的時間線裡、改完會跟那首歌別的版型不一樣大 → 409（`inTimeline: true`）。
+- 舊的 `PATCH …/songs/:sid` `{ template_id }` 換開頭：這首歌有換版型的點時，不能改成「全部」、不能換成畫布大小不同的版型（409 + 說明）。
+
+### 影片版本
+
+新的一版上傳那一刻（沒有明確指定別的版型時）把整條時間線記下來，版本 JSON 多 `templateTimeline`（沒有 = `null`）：
+
+```json
+{ "v": 1,
+  "plans": { "lt_a": { "…": "版型 A 的排法" }, "lt_b": { "…": "版型 B 的排法" } },
+  "segments": [ { "fromSec": 0, "templateId": "lt_a", "label": null },
+                { "fromSec": 83, "templateId": "lt_b", "label": "Cue 4" } ] }
+```
+Cue 的時間在上傳那一刻就定下來，之後 Cue 或版型改了這一版不變。`template` / `templateId` 仍然是開頭的版型（舊版前端照舊看得到）。分享連結的影片 JSON 也多 `templateTimeline`。算不出時間的點（Cue 沒有時間）不進快照；全部都算不出就沒有時間線。
+
+### 複製專案 / 匯出匯入
+
+匯出檔多 `songTemplateSwitches`；複製、匯入時歌、Cue、版型的 id 換成新的（Cue 對不到的改成純時間）；舊的匯出檔沒有這個欄位 → 沒有換版型。
+
 ## 舊版相容
 
 全部是加欄位 / 加網址：舊版前端不送 `template_id` / `templateId`、不認識新欄位，照常運作；舊版前端會把任何版本當整張畫布播。舊版後台沒有 `led-templates` 網址（404）→ 新版前端當作沒有版型。複製專案帶著版型、手動切的螢幕和每首歌的選擇；匯出檔多 `ledTemplates` / `ledTemplateScreens` / `ledScreens`（舊的匯出檔沒有 → 匯入時沒有版型）。

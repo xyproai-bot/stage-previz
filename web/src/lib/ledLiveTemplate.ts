@@ -9,10 +9,17 @@
 //   歌曲影片版本                      → 那一版自己的快照（版型之後改了也不變），沒有快照 = 整張畫布
 //   AE 即時、本地檔案（「現場」來源） → 這首歌「現在」選的版型；「暫時用整張畫布看」開著 = 整張畫布
 // LED 顏色、像素格的真實點數都不在這裡動（StageScene 依有沒有版型取同一套路徑）。
+//
+// 中途換版型（第 3 階段，lib/ledTemplateTimeline.ts）：同一套規則，只是「版型」變成「一條時間線」——
+//   歌曲影片版本 → 上傳那一刻存的時間線；AE 即時 / 本地檔案 → 這首歌「現在」的時間線（開頭 = 歌選的版型 + 換版型的點）。
+//   choice.plan 仍然是「開頭的版型」（舊的呼叫端只看它也行）；choice.timeline 有值時 StageScene 依播放時間在段落之間換。
 
 import { compareVideoToTemplate, type LedTemplatePlan } from './ledTemplate';
 import type { CanvasSize } from './ledMap';
 import type { LedTemplate, LedTemplateList } from './ledTemplateApi';
+import {
+  buildTimeline, formatSwitchTime, segmentIndexAt, type CueTimes, type LedTimeline, type TimelineSwitch,
+} from './ledTemplateTimeline';
 
 /** LED 畫面放什麼（跟 components/LedSourceSwitch 的 LedSource 一樣；這裡不 import 元件） */
 export type LedSourceKind = 'version' | 'ndi' | 'file';
@@ -28,6 +35,24 @@ export function songTemplatePlan(list: LedTemplateList | null | undefined, templ
   return list.templates.find(t => t.id === templateId && t.kind === 'custom') ?? null;
 }
 
+/**
+ * 這首歌現在的版型時間線：開頭 = 歌選的版型（startId），換版型的點 = switches；cues = 畫面上讀到的 Cue（最新的時間）。
+ * 沒有開頭版型 / 沒有算得出時間的點 / 版型清單還沒讀到 = null（就是單一版型）
+ */
+export function songTimelineOf(
+  list: LedTemplateList | null | undefined,
+  startId: string | null | undefined,
+  switches: readonly TimelineSwitch[] | null | undefined,
+  cues?: CueTimes,
+): LedTimeline | null {
+  if (!list || !switches || switches.length === 0) return null;
+  const start = songTemplatePlan(list, startId);
+  if (!start) return null;
+  const plans = new Map<string, LedTemplate>();
+  for (const t of list.templates) if (t.kind === 'custom') plans.set(t.id, t);
+  return buildTimeline(start, switches, plans, cues);
+}
+
 export type LedTemplateOrigin =
   /** 版型面板開著：版型的測試圖 */
   | 'preview'
@@ -41,9 +66,11 @@ export type LedTemplateOrigin =
   | 'none';
 
 export interface LedTemplateChoice {
-  /** 給 StageScene 的 ledTemplate；null = 整張畫布 */
+  /** 給 StageScene 的 ledTemplate；null = 整張畫布。有時間線時是開頭的版型 */
   plan: LedTemplatePlan | null;
   origin: LedTemplateOrigin;
+  /** 中途換版型：有值 = StageScene 依播放時間在段落之間換（給 ledTimeline）；沒有 = 單一版型 */
+  timeline?: LedTimeline;
 }
 
 export interface ChooseInput {
@@ -55,15 +82,23 @@ export interface ChooseInput {
   versionPlan?: LedTemplatePlan | null;
   /** 這首歌選的版型（songTemplatePlan 的結果） */
   songPlan?: LedTemplatePlan | null;
+  /** 那一版影片的版型時間線（上傳時存的；沒有 = 單一版型） */
+  versionTimeline?: LedTimeline | null;
+  /** 這首歌現在的版型時間線（songTimelineOf 的結果） */
+  songTimeline?: LedTimeline | null;
   /** 「暫時用整張畫布看」（只對 AE 即時 / 本地檔案有用，不存） */
   fullView?: boolean;
 }
 
 export function chooseLedTemplate(i: ChooseInput): LedTemplateChoice {
   if (i.previewPlan) return { plan: i.previewPlan, origin: 'preview' };
-  if (i.source === 'version') return i.versionPlan ? { plan: i.versionPlan, origin: 'version' } : { plan: null, origin: 'none' };
+  if (i.source === 'version') {
+    if (i.versionTimeline) return { plan: i.versionTimeline.segments[0].plan, origin: 'version', timeline: i.versionTimeline };
+    return i.versionPlan ? { plan: i.versionPlan, origin: 'version' } : { plan: null, origin: 'none' };
+  }
   if (isLiveSource(i.source) && i.songPlan) {
-    return i.fullView ? { plan: null, origin: 'override' } : { plan: i.songPlan, origin: 'song' };
+    if (i.fullView) return { plan: null, origin: 'override' };
+    return i.songTimeline ? { plan: i.songPlan, origin: 'song', timeline: i.songTimeline } : { plan: i.songPlan, origin: 'song' };
   }
   return { plan: null, origin: 'none' };
 }
@@ -79,6 +114,17 @@ export interface LedTemplateChipInfo {
   canToggle: boolean;
   /** 現在正暫時用整張畫布看 */
   fullView: boolean;
+  /** 中途換版型才有：現在在第幾段、每一段叫什麼（AE 即時 / 本地圖片沒有播放時間，可以在這裡選要看哪一段） */
+  timeline?: ChipTimeline;
+}
+
+export interface ChipTimeline {
+  activeIndex: number;
+  segments: { index: number; text: string }[];
+  /** 跟著播放時間走（影片版本、本地影片）；false = 沒有播放時間（AE 即時、本地圖片），靠選的 Cue 或手動選一段 */
+  clocked: boolean;
+  /** 手動選的那一段（null = 跟著選到的 Cue） */
+  picked: number | null;
 }
 
 const sizeText = (c: CanvasSize) => `${c.width}×${c.height}`;
@@ -89,7 +135,15 @@ const sizeText = (c: CanvasSize) => `${c.width}×${c.height}`;
  */
 export function ledTemplateChip(
   choice: LedTemplateChoice,
-  opts: { source: LedSourceKind | null; songPlan: LedTemplatePlan | null; list: LedTemplateList | null | undefined },
+  opts: {
+    source: LedSourceKind | null; songPlan: LedTemplatePlan | null; list: LedTemplateList | null | undefined;
+    /** 現在的播放時間（影片）或選到的 Cue 的時間（AE 即時）；中途換版型時用來決定現在是哪一段 */
+    timeSec?: number;
+    /** 這個畫面有沒有播放時間（影片版本、本地影片 = true） */
+    clocked?: boolean;
+    /** 手動選的那一段 */
+    pickedSegment?: number | null;
+  },
 ): LedTemplateChipInfo | null {
   if (!opts.list) return null;
   const hasCustom = opts.list.templates.some(t => t.kind === 'custom');
@@ -97,6 +151,7 @@ export function ledTemplateChip(
   const canToggle = isLiveSource(opts.source) && !!opts.songPlan && choice.origin !== 'preview';
   const fullView = choice.origin === 'override';
   const { plan } = choice;
+  if (plan && choice.timeline) return timelineChip(choice, choice.timeline, canToggle, fullView, opts);
   if (plan) {
     const text = `LED 版型：${plan.name}（${sizeText(plan.canvas)}）`;
     const title = choice.origin === 'preview'
@@ -114,6 +169,29 @@ export function ledTemplateChip(
     };
   }
   return { text: 'LED 版型：全部', title: '沒有用版型：LED 上的畫面當成整張畫布', canToggle, fullView };
+}
+
+/** 中途換版型的標籤：現在這一段的版型 + 下一個換版型的時間 */
+function timelineChip(
+  choice: LedTemplateChoice, tl: LedTimeline, canToggle: boolean, fullView: boolean,
+  opts: { timeSec?: number; clocked?: boolean; pickedSegment?: number | null },
+): LedTemplateChipInfo {
+  const clocked = !!opts.clocked;
+  const picked = !clocked && opts.pickedSegment != null && opts.pickedSegment >= 0 && opts.pickedSegment < tl.segments.length ? opts.pickedSegment : null;
+  const t = opts.timeSec ?? 0;
+  const activeIndex = picked ?? segmentIndexAt(tl, t);
+  const active = tl.segments[activeIndex];
+  const next = activeIndex + 1 < tl.segments.length ? tl.segments[activeIndex + 1] : null;
+  const where = (s: LedTimeline['segments'][number]) => (s.label ? `${s.label} · ${formatSwitchTime(s.fromSec)}` : formatSwitchTime(s.fromSec));
+  let text = `LED 版型：${active.plan.name}（${sizeText(active.plan.canvas)}）`;
+  if (next) text += ` · ${formatSwitchTime(next.fromSec)} 換成「${next.plan.name}」`;
+  else text += ' · 最後一段';
+  const sourceNote = choice.origin === 'version'
+    ? '這一版影片上傳時的版型時間線（換版型的時間在上傳那一刻就定了，之後 Cue 或版型改了也不變）'
+    : '這首歌現在的版型時間線：影片 / AE 畫面照現在的時間用那一段的版型貼到 LED 上';
+  const title = `${sourceNote}。${tl.segments.map((s, i) => (i === 0 ? `開頭用「${s.plan.name}」` : `${where(s)} 起換成「${s.plan.name}」`)).join('；')}`;
+  const segments = tl.segments.map((s, i) => ({ index: i, text: i === 0 ? `開頭 · ${s.plan.name}` : `${where(s)} · ${s.plan.name}` }));
+  return { text, title, canToggle, fullView, timeline: { activeIndex, segments, clocked, picked } };
 }
 
 // ───────────────────────── 畫面大小 vs 版型 ─────────────────────────

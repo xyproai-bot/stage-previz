@@ -9,6 +9,9 @@ export interface FakeLayer {
   locked: boolean;
   comment?: string;
   blendingMode?: string;
+  /** 圖層從合成的第幾秒開始 / 到第幾秒結束顯示（腳本沒設 = undefined = 整段） */
+  inPoint?: number;
+  outPoint?: number;
   root: FakeProp;
   property: (n: string) => FakeProp;
 }
@@ -18,8 +21,11 @@ export class FakeProp {
   name = '';
   children = new Map<string, FakeProp>();
   added: { type: string; prop: FakeProp }[] = [];
+  /** 時間軸標記（Marker 屬性 / 合成的 markerProperty 用） */
+  markers: { time: number; text: string }[] = [];
   constructor(public type: string) {}
   setValue(v: unknown) { this.value = v; }
+  setValueAtTime(time: number, v: { comment?: string }) { this.markers.push({ time, text: String(v?.comment ?? '') }); }
   property(n: string): FakeProp {
     let p = this.children.get(n);
     if (!p) { p = new FakeProp(n); this.children.set(n, p); }
@@ -32,7 +38,7 @@ export class FakeProp {
   }
 }
 
-export function runInFakeAe(script: string, opts: { answers: (string | null)[]; canWrite?: boolean }) {
+export function runInFakeAe(script: string, opts: { answers: (string | null)[]; canWrite?: boolean; noCompMarkers?: boolean }) {
   const alerts: string[] = [];
   const prompts: { msg: string; def: string }[] = [];
   const files = new Map<string, string>();
@@ -62,8 +68,11 @@ export function runInFakeAe(script: string, opts: { answers: (string | null)[]; 
       items: {
         addFolder: (name: string) => ({ name, remove() {} }),
         addComp: (name: string, width: number, height: number, par: number, duration: number, fps: number) => {
+          const markerRoot = new FakeProp('compMarkers');
+          if (opts.noCompMarkers) markerRoot.setValueAtTime = () => { throw new Error('old AE: no comp markers'); };
           const comp = {
             name, width, height, par, duration, fps, comment: '', parentFolder: null as unknown, opened: false, removed: false,
+            markerProperty: markerRoot,
             layers: {
               addShape: () => makeLayer('shape'),
               addText: (text: string) => {
@@ -96,6 +105,7 @@ export function runInFakeAe(script: string, opts: { answers: (string | null)[]; 
     Shape: class { vertices: unknown; closed = false },
     ImportOptions: class { constructor(public file: File) {} },
     BlendingMode: { SCREEN: 'screen' },
+    MarkerValue: class { constructor(public comment: string) {} },
     ParagraphJustification: { LEFT_JUSTIFY: 'left' },
   };
   const names = Object.keys(env);

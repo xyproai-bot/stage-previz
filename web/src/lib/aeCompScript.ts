@@ -335,7 +335,8 @@ function decodeChunk(s) {
   }
   return out.join("");
 }
-function writeMapFile() {
+function writeMapFile(map) {
+  map = map || DATA.map;
   var dirs = [];
   try { dirs.push(new File($.fileName).parent); } catch (e0) {}
   try { dirs.push(Folder.myDocuments); } catch (e1) {}
@@ -343,10 +344,10 @@ function writeMapFile() {
   for (var d = 0; d < dirs.length; d++) {
     try {
       if (!dirs[d] || !dirs[d].exists) continue;
-      var f = new File(dirs[d].fsName + "/" + DATA.map.fileName);
+      var f = new File(dirs[d].fsName + "/" + map.fileName);
       f.encoding = "BINARY";
       if (!f.open("w")) continue;
-      for (var k = 0; k < DATA.map.b64.length; k++) f.write(decodeChunk(DATA.map.b64[k]));
+      for (var k = 0; k < map.b64.length; k++) f.write(decodeChunk(map.b64[k]));
       f.close();
       if (f.exists && f.length > 0) return f;
     } catch (e3) {}
@@ -398,6 +399,7 @@ function addPanel(comp, p) {
   fill.property("ADBE Vector Fill Opacity").setValue(DATA.fillOpacity);
   try { fill.property("ADBE Vector Fill Rule").setValue(2); } catch (e1) {}
   lockGuide(layer);
+  return layer;
 }
 `;
 

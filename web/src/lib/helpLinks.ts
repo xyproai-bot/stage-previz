@@ -40,6 +40,7 @@ export const HELP_ANCHORS = {
   prodMechConvert: 'prod-mech-convert',
   prodLedCanvas: 'prod-led-canvas',
   prodLedTemplate: 'prod-led-template',
+  prodLedTimeline: 'prod-led-timeline',
   prodAutoUv: 'prod-auto-uv',
   prodView: 'prod-view',
   prodShare: 'prod-share',

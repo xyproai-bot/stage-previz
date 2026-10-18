@@ -616,6 +616,7 @@ export default function Share() {
                 ledVideo={videoMode && local.ready ? local.video : null}
                 ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
                 ledTemplate={versionVideoMode ? selectedVersion?.template ?? null : null}
+                ledTimeline={versionVideoMode ? selectedVersion?.timeline ?? null : null}
                 poseAtFrame={poseAtFrame}
                 projectName={data.project.name}
                 ledCanvas={ledCanvas}

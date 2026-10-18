@@ -32,6 +32,17 @@
 .tpl-chip__toggle:hover { color: var(--text); border-color: var(--text-muted); }
 .tpl-chip__toggle.is-on { background: var(--warn); border-color: var(--warn); color: #000; font-weight: 600; }
 
+.tpl-chip__seg { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); white-space: nowrap; min-width: 0; }
+.tpl-chip__seg select {
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 3px 6px;
+  font-size: 12px;
+  max-width: 220px;
+}
+
 .tpl-hint {
   display: flex;
   align-items: flex-start;
@@ -70,4 +81,5 @@
 }
 @media (hover: none) and (pointer: coarse) {
   .tpl-chip__toggle { min-height: 40px; padding: 8px 12px; }
+  .tpl-chip__seg select { min-height: 40px; }
 }

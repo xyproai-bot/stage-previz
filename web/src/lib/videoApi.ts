@@ -77,6 +77,8 @@ export interface SongVideo {
   templateId?: string | null;
   /** 那個版型當時的排法（快照；版型之後改了也不變）；格式見 lib/ledTemplate.ts parsePlan，沒有 = 整張畫布 */
   template?: unknown;
+  /** 這一版上傳時整條版型時間線（中途換版型；格式見 lib/ledTemplateTimeline.ts parseTimeline；沒有 = 單一版型，舊的後台沒有這欄） */
+  templateTimeline?: unknown;
 }
 
 export interface SongVideoList {
@@ -92,8 +94,10 @@ export interface SongVideoFields {
   code: string | null;
   latestVideoId: string | null;
   latestVideoVersion: number | null;
-  /** 這首歌選的 LED 版型 id（沒選 = 整張畫布；舊的後台沒有這欄） */
+  /** 這首歌選的 LED 版型 id（沒選 = 整張畫布；舊的後台沒有這欄）。有中途換版型的話，這是開頭的版型 */
   templateId?: string | null;
+  /** 中途換版型的點（0039；格式見 lib/ledTemplateTimeline.ts parseSwitches；舊的後台沒有這欄 = 沒有） */
+  templateSwitches?: unknown;
 }
 
 /** 分享連結看到的一版（不含說明、誰交的、原始連結） */
@@ -114,6 +118,8 @@ export interface ShareSongVideo {
   streamUrl: string;
   /** 這一版做的時候用的 LED 版型排法（沒有 = 整張畫布；舊的後台沒有這欄） */
   template?: unknown;
+  /** 這一版上傳時整條版型時間線（中途換版型；沒有 = 單一版型） */
+  templateTimeline?: unknown;
 }
 
 /** 分享頁 /data 回傳的 songs[] 多的欄位 */

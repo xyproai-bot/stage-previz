@@ -21,6 +21,7 @@ import AddVideoDialog from '../components/AddVideoDialog';
 import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
 import LedTemplateChip, { LedTemplateHint } from '../components/LedTemplateChip';
 import { useLedTemplates } from '../lib/useLedTemplates';
+import { useSongTimeline } from '../lib/useSongTimeline';
 import { chooseLedTemplate, ledTemplateChip, liveSourceHint, songTemplatePlan } from '../lib/ledLiveTemplate';
 import ShareSetlist from './ShareSetlist';
 import NotificationBell from '../components/NotificationBell';
@@ -584,8 +585,15 @@ function StudioInner({ projectId }: { projectId: string }) {
     void reloadLedTpls();
   }, [selectedSongId, reloadLedTpls]);
   const songTplPlan = useMemo(() => songTemplatePlan(ledTpls.list, selectedSong?.templateId), [ledTpls.list, selectedSong?.templateId]);
-  // 3D 工具列「⋯」的對位圖 / AE 合成腳本 / 位置表：這首歌用了版型就照版型下載
-  const ledSongTpl = useMemo(() => (songTplPlan && ledTpls.list ? { plan: songTplPlan, manuals: ledTpls.list.screens } : null), [songTplPlan, ledTpls.list]);
+  // 中途換版型（時間線）：開頭 = 歌選的版型，換版型的點 = 歌的 templateSwitches；Cue 的時間用畫面上最新的
+  const songTimelineState = useSongTimeline(ledTpls.list, selectedSong?.templateId, selectedSong?.templateSwitches, cuesFor === selectedSongId ? cues : null);
+  const [ledSegPick, setLedSegPick] = useState<number | null>(null);        // 沒有播放時間的畫面（AE 即時、本地圖片）手動選看哪一段，只有這個畫面，不存
+  useEffect(() => { setLedSegPick(null); }, [selectedSongId]);
+  // 3D 工具列「⋯」的對位圖 / AE 合成腳本 / 位置表：這首歌用了版型就照版型下載（有中途換版型就整條時間線一起）
+  const ledSongTpl = useMemo(
+    () => (songTplPlan && ledTpls.list ? { plan: songTplPlan, manuals: ledTpls.list.screens, timeline: songTimelineState.timeline, songName: selectedSong?.name } : null),
+    [songTplPlan, ledTpls.list, songTimelineState.timeline, selectedSong?.name],
+  );
   const [ledFullView, setLedFullView] = useState(false);
   useEffect(() => { setLedFullView(false); }, [selectedSongId]);
   const [aeFrameSize, setAeFrameSize] = useState<{ width: number; height: number } | null>(null);
@@ -594,14 +602,24 @@ function StudioInner({ projectId }: { projectId: string }) {
     () => chooseLedTemplate({
       source,
       versionPlan: versionVideoMode ? selectedVersion?.template ?? null : null,
+      versionTimeline: versionVideoMode ? selectedVersion?.timeline ?? null : null,
       songPlan: songTplPlan,
+      songTimeline: songTimelineState.timeline,
       fullView: ledFullView,
     }),
-    [source, versionVideoMode, selectedVersion?.template, songTplPlan, ledFullView],
+    [source, versionVideoMode, selectedVersion?.template, selectedVersion?.timeline, songTplPlan, songTimelineState.timeline, ledFullView],
   );
+  // 中途換版型現在看到的時間：影片（版本、本地影片）= 播放時間；AE 即時、本地圖片沒有播放時間 = 手動選的那一段，沒選就是選到的 Cue 的影片時間
+  const ledTimeSec = useMemo(() => {
+    const tl = ledChoice.timeline;
+    if (!tl) return 0;
+    if (videoMode) return player.time;
+    if (ledSegPick !== null && tl.segments[ledSegPick]) return tl.segments[ledSegPick].fromSec;
+    return selectedCue?.videoTimeSec ?? 0;
+  }, [ledChoice.timeline, videoMode, player.time, ledSegPick, selectedCue?.videoTimeSec]);
   const ledChip = useMemo(
-    () => ledTemplateChip(ledChoice, { source, songPlan: songTplPlan, list: ledTpls.list }),
-    [ledChoice, source, songTplPlan, ledTpls.list],
+    () => ledTemplateChip(ledChoice, { source, songPlan: songTplPlan, list: ledTpls.list, timeSec: ledTimeSec, clocked: videoMode, pickedSegment: ledSegPick }),
+    [ledChoice, source, songTplPlan, ledTpls.list, ledTimeSec, videoMode, ledSegPick],
   );
   // 本地檔案現在的畫面大小（影片載好、圖片解碼好才知道）；AE 即時的由 StageScene 通知
   const fileW = source === 'file' ? (media.active?.kind === 'video' ? (fileVideoMode && player.ready ? player.video.videoWidth : 0) : media.image?.naturalWidth ?? 0) : 0;
@@ -1101,7 +1119,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   : media.active ? <><Icon icon={Image} size="xs" /> {media.active.name}</>
                   : media.items.length > 0 ? '點清單裡的檔案，放到 LED 上' : '還沒選檔案'}
               >
-                {ledChip && <LedTemplateChip chip={ledChip} onToggleFullView={() => setLedFullView(v => !v)} />}
+                {ledChip && <LedTemplateChip chip={ledChip} onToggleFullView={() => setLedFullView(v => !v)} onPickSegment={setLedSegPick} />}
                 <HelpLink anchor={HELP_ANCHORS.animSource} />
               </LedSourceSwitch>
               <LedTemplateHint hint={ledHint} />
@@ -1147,6 +1165,8 @@ function StudioInner({ projectId }: { projectId: string }) {
                   ledVideo={videoMode && player.ready ? player.video : null}
                   ledImage={source === 'file' && media.active?.kind === 'image' ? media.image : null}
                   ledTemplate={ledChoice.plan}
+                  ledTimeline={ledChoice.timeline ?? null}
+                  ledTimelineSec={ledTimeSec}
                   ledSongTemplate={ledSongTpl}
                   onNdiFrameSize={setAeFrameSize}
                   poseAtFrame={poseAtFrame}

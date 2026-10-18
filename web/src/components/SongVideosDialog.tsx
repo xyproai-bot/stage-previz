@@ -29,6 +29,7 @@ import { usePlayChecks } from '../lib/versionPlayCheck';
 import { CANNOT_PLAY_TEXT } from '../lib/videoCheck';
 import { useEscapeClose } from '../lib/useEscapeClose';
 import { versionTemplateLabel } from '../lib/ledTemplate';
+import { timelineVersionLabel } from '../lib/ledTemplateTimeline';
 import './NewProjectDialog.css';
 import './SongVideosDialog.css';
 import './DeletedVersions.css';
@@ -234,8 +235,10 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
                         : <div className="songvid-row__note is-empty">（沒有寫說明）</div>}
                       {it.title && <div className="songvid-row__file" title={it.title}>{it.title}</div>}
                       {it.template && (
-                        <div className="songvid-row__file" title="這一版做的時候用的 LED 版型；版型之後改了，這一版照舊貼對">
-                          {versionTemplateLabel(it.template, { width: it.video?.width ?? null, height: it.video?.height ?? null })}
+                        <div className="songvid-row__file" title={it.timeline ? '這一版上傳時整條版型時間線（中途換版型）；換版型的時間在上傳那一刻就定了，之後 Cue 或版型改了，這一版照舊貼對' : '這一版做的時候用的 LED 版型；版型之後改了，這一版照舊貼對'}>
+                          {it.timeline
+                            ? timelineVersionLabel(it.timeline, { width: it.video?.width ?? null, height: it.video?.height ?? null })
+                            : versionTemplateLabel(it.template, { width: it.video?.width ?? null, height: it.video?.height ?? null })}
                         </div>
                       )}
                       {cannotPlay && <div className="songvid-row__issue">在這台電腦播的時候發現：{CANNOT_PLAY_TEXT}</div>}

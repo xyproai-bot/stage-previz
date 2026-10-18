@@ -7,6 +7,7 @@ import { apiBase, getSessionToken } from './api';
 import { saveStatus } from './saveStatus';
 import { parsePlan, type LedTemplatePlan, type ManualScreen, type PlacementInput, type UvBox } from './ledTemplate';
 import type { CanvasSize } from './ledMap';
+import { parseSwitches, type TimelineInput, type TimelineSwitch } from './ledTemplateTimeline';
 
 export interface LedTemplateApiError extends Error {
   status: number;
@@ -133,6 +134,18 @@ export async function createLedScreen(projectId: string, body: { objectId: strin
 
 export async function deleteLedScreen(projectId: string, screenId: string): Promise<void> {
   await call(`${base(projectId)}/led-screens/${enc(screenId)}`, { method: 'DELETE' });
+}
+
+/**
+ * 這首歌的版型時間線（0039）：整份換掉。start = 開頭的版型（也就是這首歌選的版型；有換版型的點就一定要是自己排的版型），
+ * switches = 中途換版型的點（用 Cue 或直接寫時間，二選一）。回傳存好的開頭版型和換版型的點。
+ * 畫布大小不一樣、Cue 沒有影片時間之類的問題，後台回 409 + 中文說明（error.message 可以直接顯示）
+ */
+export async function setSongTimeline(projectId: string, songId: string, body: TimelineInput): Promise<{ templateId: string | null; templateSwitches: TimelineSwitch[] }> {
+  const r = await call<{ templateId?: string | null; templateSwitches?: unknown }>(
+    `${base(projectId)}/songs/${enc(songId)}/template-timeline`, { method: 'PUT', body: JSON.stringify(body) },
+  );
+  return { templateId: r.templateId ?? null, templateSwitches: parseSwitches(r.templateSwitches) };
 }
 
 /** 這首歌用哪個版型（null = 整張畫布） */
