@@ -45,6 +45,13 @@ import {
   hashSharePassword, verifySharePassword, shareLinkHasPassword, shareCredential,
   signShareAccess, verifyShareAccess, SHARE_PASSWORD_MAX, timingSafeEqualStr,
 } from './sharePassword.mjs';
+// 浮水印 / 禁止下載（0038）：規則和預設值前後端共用同一份（web/src/lib/watermark/policy.ts）；
+// 訪客的影片要帶短效播放通行證（shareMedia.mjs）
+import {
+  resolveNewLinkProtection, resolveLinkProtectionPatch, protectionOfRow, readFlag,
+  canSetMemberWatermark, MEMBER_WATERMARK_DENIED_MESSAGE, PROTECTION_FLAG_ERROR, memberWatermarkOn,
+} from '../web/src/lib/watermark/policy.ts';
+import { signSharePlay, decideShareStream, withShareQuery, sharePlaybackCacheControl, shortLinkId } from './shareMedia.mjs';
 // 留言（D1 一則一列）
 // （發 / 改 / 刪在 reviews.mjs；這裡只剩讀清單和舊版 KV 留言串）
 import { sanitizeComment, rowToComment, COMMENT_ID_RE, thumbKeyFromPath } from './comments.mjs';
@@ -624,7 +631,7 @@ async function listProjects(env, me, opts = {}) {
   const projects = await env.DB.prepare(`
     SELECT
       p.id, p.name, p.description, p.thumbnail_r2_key, p.status, p.show_id, p.tags,
-      p.created_at, p.updated_at,
+      p.created_at, p.updated_at, p.watermark_members,
       (SELECT pm.role FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?) AS my_member_role,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id) AS song_count,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'todo') AS songs_todo,
@@ -679,6 +686,8 @@ async function listProjects(env, me, opts = {}) {
     members: membersByProject[p.id] || [],
     // 我在這個專案的角色（審查按鈕要看這個，不是帳號的預設角色）
     myRole: projectRoleOf(me?.role, p.my_member_role),
+    // 0038：成員看片也加浮水印（製作設定；預設關）
+    watermarkMembers: memberWatermarkOn(p.watermark_members),
   }));
 
   return jsonResp({ projects: list });
@@ -734,9 +743,17 @@ async function updateProject(request, env, ctx) {
     return jsonResp({ error: '機關改版了，請重新整理頁面' }, 400);
   }
 
-  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'look_settings', 'material_overrides', 'home_view', 'led_canvas'];
+  const allowed = ['name', 'description', 'status', 'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id', 'show_id', 'tags', 'scale_correction', 'look_settings', 'material_overrides', 'home_view', 'led_canvas', 'watermark_members'];
   // 前端 camelCase showId 轉 snake_case show_id
   if ('showId' in body && !('show_id' in body)) body.show_id = body.showId;
+  // 0038「成員看片也加浮水印」：只有這個專案的製作（路由表本來就只放製作進來，這裡再擋一次、說清楚）
+  if ('watermarkMembers' in body && !('watermark_members' in body)) body.watermark_members = body.watermarkMembers;
+  if ('watermark_members' in body) {
+    if (!canSetMemberWatermark(ctx.role)) return jsonResp({ error: MEMBER_WATERMARK_DENIED_MESSAGE }, 403);
+    const flag = readFlag(body.watermark_members);
+    if (!flag.ok || flag.value === undefined) return jsonResp({ error: PROTECTION_FLAG_ERROR }, 400);
+    body.watermark_members = flag.value ? 1 : 0;
+  }
   // tags 是 array → 存成 JSON string
   if ('tags' in body && Array.isArray(body.tags)) {
     body.tags = JSON.stringify(body.tags.filter(t => typeof t === 'string').slice(0, 20));
@@ -3451,7 +3468,14 @@ async function authMe(request, env) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
   const me = await getCurrentUser(request, env);
   if (!me) return jsonResp({ error: '未登入' }, 401);
-  return jsonResp({ user: me });
+  // 0038：浮水印上印自己的名字 + email（建用戶時系統塞的假 email 不給；查不到就不帶，舊版前端不看這一欄）
+  let email = null;
+  try {
+    const row = await env.DB.prepare(`SELECT email FROM users WHERE id = ? LIMIT 1`).bind(me.id).first();
+    const e = String(row?.email || '').trim();
+    if (e && !/@auto\.local$/i.test(e)) email = e;
+  } catch { /* 沒有 email 就只印名字 */ }
+  return jsonResp({ user: email ? { ...me, email } : me });
 }
 
 // ─── Users (admin) CRUD ───
@@ -5614,7 +5638,8 @@ async function queueDriveVideoVersions(env, proj, pairs) {
 
 // ── 播放（R2，支援 Range）──
 
-async function serveR2Video(request, env, v) {
+// playback.noStore：分享連結「禁止下載」的影片不讓瀏覽器 / 快取存起來
+async function serveR2Video(request, env, v, playback = {}) {
   if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
   const isHead = request.method === 'HEAD';
   const size = Number(v.size_bytes);
@@ -5639,7 +5664,7 @@ async function serveR2Video(request, env, v) {
   headers.set('ETag', obj.httpEtag);
   headers.set('Last-Modified', obj.uploaded.toUTCString());
   // 每一版一個網址、內容永遠不變 → 瀏覽器可以一直快取（要登入才看得到 → private，CDN 不存）
-  headers.set('Cache-Control', 'private, max-age=31536000, immutable');
+  headers.set('Cache-Control', sharePlaybackCacheControl(!!playback.noStore));
   headers.set('Content-Disposition', 'inline');
   headers.set('X-Content-Type-Options', 'nosniff');
   if (isHead) {
@@ -5788,11 +5813,15 @@ async function handleProjectShareLinks(request, env, ctx, token) {
         `SELECT l.token, l.slug, l.project_id, l.song_id,
                 (l.password_hash IS NOT NULL OR l.password IS NOT NULL) AS has_password,
                 l.expires_at, l.view_count, l.last_viewed_at, l.created_at, l.allow_comments, l.label,
+                l.watermark, l.no_download,
                 (SELECT COUNT(*) FROM comments c WHERE c.share_token = l.token) AS guest_comments
            FROM share_links l WHERE l.project_id = ? ORDER BY l.created_at DESC`
       ).bind(projectId).all();
+      const rows = r.results || [];
+      // 連結編號（浮水印上印的那組）：製作對得到是哪一條連結
+      const shortIds = await Promise.all(rows.map(l => shortLinkId(l.token)));
       return jsonResp({
-        links: (r.results || []).map(l => ({
+        links: rows.map((l, i) => ({
           token: l.token,
           slug: l.slug || null,
           projectId: l.project_id,
@@ -5806,6 +5835,9 @@ async function handleProjectShareLinks(request, env, ctx, token) {
           allowComments: !!l.allow_comments,
           label: l.label || null,
           guestCommentCount: Number(l.guest_comments) || 0,
+          // 0038：浮水印、禁止下載（舊連結都是關）、連結編號
+          ...protectionOfRow(l),
+          shortId: shortIds[i],
         })),
       });
     }
@@ -5827,6 +5859,9 @@ async function handleProjectShareLinks(request, env, ctx, token) {
       // 允許看的人留言（只有製作能打開）、連結名稱
       const extra = guest.shareLinkCommentFields(body, ctx.role);
       if (!extra.ok) return jsonResp({ error: extra.error }, extra.status);
+      // 0038：浮水印、禁止下載；沒給（舊版前端）= 新連結的預設，兩個都開
+      const prot = resolveNewLinkProtection(body);
+      if (!prot.ok) return jsonResp({ error: prot.error }, 400);
       const tk = randHex(16);
       const expiresAt = expiresInDays ? new Date(Date.now() + expiresInDays * 86400_000).toISOString() : null;
       // 密碼只存加鹽雜湊，不存明文
@@ -5834,10 +5869,10 @@ async function handleProjectShareLinks(request, env, ctx, token) {
       try {
         await env.DB.prepare(`
           INSERT INTO share_links (token, project_id, song_id, password, password_hash, password_salt, expires_at, created_by_user_id, slug,
-                                   allow_comments, label)
-          VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)
+                                   allow_comments, label, watermark, no_download)
+          VALUES (?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `).bind(tk, projectId, songId, hashed?.hash ?? null, hashed?.salt ?? null, expiresAt, me.id, parsed.slug,
-          extra.fields.allow_comments ?? 0, extra.fields.label ?? null).run();
+          extra.fields.allow_comments ?? 0, extra.fields.label ?? null, prot.fields.watermark, prot.fields.no_download).run();
       } catch (e) {
         if (isSlugTakenError(e)) return jsonResp({ error: SLUG_TAKEN_MESSAGE, slugTaken: true }, 409);
         throw e;
@@ -5845,6 +5880,7 @@ async function handleProjectShareLinks(request, env, ctx, token) {
       return jsonResp({
         token: tk, slug: parsed.slug, expiresAt,
         allowComments: !!extra.fields.allow_comments, label: extra.fields.label ?? null,
+        ...protectionOfRow(prot.fields), shortId: await shortLinkId(tk),
       }, 201);
     }
     return jsonResp({ error: 'Method not allowed' }, 405);
@@ -5864,7 +5900,10 @@ async function handleProjectShareLinks(request, env, ctx, token) {
     const hasSlug = !!body && 'slug' in body;
     const extra = guest.shareLinkCommentFields(body, ctx.role);
     if (!extra.ok) return jsonResp({ error: extra.error }, extra.status);
-    if (!hasSlug && Object.keys(extra.fields).length === 0) return jsonResp({ error: '缺少 slug' }, 400);
+    // 0038：浮水印、禁止下載（有給的才改）
+    const prot = resolveLinkProtectionPatch(body);
+    if (!prot.ok) return jsonResp({ error: prot.error }, 400);
+    if (!hasSlug && Object.keys(extra.fields).length === 0 && Object.keys(prot.fields).length === 0) return jsonResp({ error: '缺少 slug' }, 400);
     const sets = [];
     const vals = [];
     let parsed = null;
@@ -5874,6 +5913,7 @@ async function handleProjectShareLinks(request, env, ctx, token) {
       sets.push('slug = ?'); vals.push(parsed.slug);
     }
     for (const [k, v] of Object.entries(extra.fields)) { sets.push(`${k} = ?`); vals.push(v); }
+    for (const [k, v] of Object.entries(prot.fields)) { sets.push(`${k} = ?`); vals.push(v); }
     let changes = 0;
     try {
       const r = await env.DB.prepare(
@@ -5885,8 +5925,8 @@ async function handleProjectShareLinks(request, env, ctx, token) {
       throw e;
     }
     if (!changes) return jsonResp({ error: '找不到這個分享連結' }, 404);
-    const cur = await env.DB.prepare(`SELECT slug, allow_comments, label FROM share_links WHERE token = ? LIMIT 1`).bind(token).first();
-    return jsonResp({ ok: true, token, slug: cur?.slug ?? null, allowComments: !!cur?.allow_comments, label: cur?.label ?? null });
+    const cur = await env.DB.prepare(`SELECT slug, allow_comments, label, watermark, no_download FROM share_links WHERE token = ? LIMIT 1`).bind(token).first();
+    return jsonResp({ ok: true, token, slug: cur?.slug ?? null, allowComments: !!cur?.allow_comments, label: cur?.label ?? null, ...protectionOfRow(cur) });
   }
   return jsonResp({ error: 'Method not allowed' }, 405);
 }
@@ -5936,7 +5976,7 @@ async function handleShareRouter(request, env, url, ref) {
   ).bind(k, now - LOGIN_LOOKBACK_MS);
   const linkStmt = env.DB.prepare(
     `SELECT l.token, l.project_id, l.song_id, l.password, l.password_hash, l.password_salt, l.expires_at,
-            l.slug, l.allow_comments, l.label, p.status AS project_status
+            l.slug, l.allow_comments, l.label, l.watermark, l.no_download, p.status AS project_status
        FROM share_links l
        JOIN projects p ON p.id = l.project_id
       WHERE l.${bySlug ? 'slug' : 'token'} = ? LIMIT 1`
@@ -6025,7 +6065,19 @@ async function handleShareRouter(request, env, url, ref) {
       access = await signShareAccess(secret, { linkToken: token, credential: cred, now });
     }
   }
-  const withAccess = (path) => access ? `${path}?access=${encodeURIComponent(access.token)}` : path;
+  // 0038：浮水印、禁止下載（舊連結都是關）
+  const protection = protectionOfRow(link);
+  // 影片網址：有密碼的連結接密碼通行證（?access=）；禁止下載的連結再接這支影片的播放通行證（&play=，綁這條連結 + 這支影片，幾小時失效）。
+  // 兩個都沒有就是原本的網址。mediaId = 歌曲影片的 id（舊的 Drive 影片是檔案 id）
+  const mediaUrl = async (path, mediaId) => withShareQuery(path, {
+    access: access ? access.token : null,
+    play: protection.noDownload ? await signSharePlay(getAuthSecret(env), { linkToken: token, mediaId, now }) : null,
+  });
+  // 串流請求要不要放行：禁止下載的連結一定要帶有效的播放通行證（沒帶 / 過期 / 別條連結的 / 別支影片的 → 401）
+  const streamGate = (mediaId) => decideShareStream(getAuthSecret(env), {
+    noDownload: protection.noDownload, playToken: url.searchParams.get('play') || '', linkToken: token, mediaId, now,
+  });
+  const streamDenied = (gate) => jsonResp({ error: gate.error, passExpired: gate.passExpired }, gate.status);
 
   // bump view counter（GET data 才算數，避免 stream 每幀 ++）
   if (sub === 'data' && request.method === 'GET') {
@@ -6068,17 +6120,18 @@ async function handleShareRouter(request, env, url, ref) {
       ledProps: safeJsonObj(o.led_props, null),
     }));
 
+    const shareSongs = await Promise.all((songsR.results || []).map(async s => {
+      const lv = latestVideos.get(s.id);
+      return {
+        id: s.id, name: s.name, order: s.order, status: s.status, code: s.code || null,
+        // 最新可以播的影片版本（R2；沒有 = null）。streamUrl 已經接好通行證
+        latestVideo: lv ? videoToShareApi(lv, await mediaUrl(`${shareBase}/song-videos/${lv.id}/stream`, lv.id)) : null,
+      };
+    }));
     return jsonResp({
       project: { id: proj.id, name: proj.name, description: proj.description },
       modelUrl: proj.model_r2_key ? `/r2/${proj.model_r2_key}` : null,
-      songs: (songsR.results || []).map(s => {
-        const lv = latestVideos.get(s.id);
-        return {
-          id: s.id, name: s.name, order: s.order, status: s.status, code: s.code || null,
-          // 最新可以播的影片版本（R2；沒有 = null）。streamUrl 已經接好通行證
-          latestVideo: lv ? videoToShareApi(lv, withAccess(`${shareBase}/song-videos/${lv.id}/stream`)) : null,
-        };
-      }),
+      songs: shareSongs,
       stageObjects,
       restrictedToSongId: link.song_id,
       scaleCorrection: proj.scale_correction ?? 1,
@@ -6098,6 +6151,14 @@ async function handleShareRouter(request, env, url, ref) {
       access,
       // 0026：製作有沒有打開「允許看的人留言」（連結名稱是團隊內部用的，不給訪客）
       allowComments: !!link.allow_comments,
+      // 0038：浮水印、禁止下載。浮水印上印的字：連結編號（一定有）+ 連結名稱（開了浮水印才給；沒有名稱就用好讀網址名稱）。
+      // 舊版前端不認得這個欄位，照舊能用
+      protection: {
+        watermark: protection.watermark,
+        noDownload: protection.noDownload,
+        linkId: await shortLinkId(token),
+        linkName: protection.watermark ? (link.label || link.slug || null) : null,
+      },
     });
   }
 
@@ -6164,7 +6225,7 @@ async function handleShareRouter(request, env, url, ref) {
            ORDER BY COALESCE(modified_time, cached_at) DESC`
       ).bind(link.project_id, songId).all();
       return jsonResp({
-        videos: (r.results || []).map(f => ({
+        videos: await Promise.all((r.results || []).map(async f => ({
           id: f.id,
           driveFileId: f.drive_file_id,
           filename: f.filename,
@@ -6172,9 +6233,9 @@ async function handleShareRouter(request, env, url, ref) {
           modifiedTime: f.modified_time,
           sizeBytes: f.size_bytes,
           // 公開存取的 stream URL：用同一條分享連結認證（跟這次用的網址同一種開頭）；
-          // 有密碼的連結後面接著通行證（<video> 帶不了 header）
-          streamUrl: withAccess(`${shareBase}/videos/${f.drive_file_id}/stream`),
-        })),
+          // 有密碼的連結後面接著通行證（<video> 帶不了 header）；禁止下載的連結再接播放通行證
+          streamUrl: await mediaUrl(`${shareBase}/videos/${f.drive_file_id}/stream`, f.drive_file_id),
+        }))),
       });
     }
     if (wantVersions) {
@@ -6183,7 +6244,7 @@ async function handleShareRouter(request, env, url, ref) {
         `SELECT * FROM song_videos WHERE song_id = ? AND project_id = ? AND status = 'ready' AND deleted_at IS NULL
           ORDER BY version DESC LIMIT 1`
       ).bind(songId, link.project_id).first();
-      const videos = v ? [videoToShareApi(v, withAccess(`${shareBase}/song-videos/${v.id}/stream`))] : [];
+      const videos = v ? [videoToShareApi(v, await mediaUrl(`${shareBase}/song-videos/${v.id}/stream`, v.id))] : [];
       return jsonResp({ videos, latestVideoId: v?.id || null });
     }
     if (wantMechPositions) {
@@ -6206,19 +6267,25 @@ async function handleShareRouter(request, env, url, ref) {
   if (isStream && sub === 'song-videos' && (request.method === 'GET' || request.method === 'HEAD')) {
     const videoId = segs[4];
     if (!ID_RE.test(videoId)) return jsonResp({ error: 'Video not found' }, 404);
+    // 禁止下載：沒有有效的播放通行證就不碰資料庫、不給檔案
+    const gate = await streamGate(videoId);
+    if (!gate.ok) return streamDenied(gate);
     const v = await env.DB.prepare(
       `SELECT id, project_id, song_id, r2_key, mime, size_bytes FROM song_videos
         WHERE id = ? AND status = 'ready' AND deleted_at IS NULL LIMIT 1`
     ).bind(videoId).first();
     if (!v || v.project_id !== link.project_id) return jsonResp({ error: 'Video not found' }, 404);
     if (link.song_id && link.song_id !== v.song_id) return jsonResp({ error: '不在分享範圍' }, 403);
-    return serveR2Video(request, env, v);
+    return serveR2Video(request, env, v, { noStore: protection.noDownload });
   }
 
   // /api/share/:token/videos/:driveFileId/stream — 公開存取串流（舊的 Drive 直播，之後改用 song-videos）
   if (isStream && sub === 'videos' && (request.method === 'GET' || request.method === 'HEAD')) {
     const driveFileId = segs[4];
     if (!/^[a-zA-Z0-9_-]{1,200}$/.test(driveFileId)) return jsonResp({ error: 'Video not found' }, 404);
+    // 禁止下載：沒有有效的播放通行證就不碰資料庫、不給檔案
+    const gate = await streamGate(driveFileId);
+    if (!gate.ok) return streamDenied(gate);
     // 驗 driveFileId 屬於這個分享範圍（同 project，且如有限制 song 的話也對）
     const f = await env.DB.prepare(`
       SELECT df.project_id, df.song_id, df.mime_type, p.drive_oauth_token_id
@@ -6249,6 +6316,7 @@ async function handleShareRouter(request, env, url, ref) {
       if (v) passHeaders.set(k, v);
     }
     if (!passHeaders.has('content-type') && f.mime_type) passHeaders.set('content-type', f.mime_type);
+    if (protection.noDownload) passHeaders.set('cache-control', sharePlaybackCacheControl(true));
     return new Response(upstream.body, { status: upstream.status, headers: passHeaders });
   }
 

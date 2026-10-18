@@ -20,6 +20,9 @@
 //   站內通知（/api/notifications）                                             登入的人看自己的（describeNotificationRoute）；分享連結的訪客沒有
 //   分享連結：看清單、建立、改網址、取名、刪除                                 admin、導演
 //   分享連結：打開「允許看的人留言」                                          admin（canToggleShareComments；關掉 = admin、導演都可以）
+//   分享連結：「浮水印」「禁止下載」開關（0038）                               admin、導演（跟建連結同權限）；新連結預設兩個都開，舊連結都關
+//                                                                              （規則和預設值在 web/src/lib/watermark/policy.ts，前後台共用；禁止下載的影片網址要帶短效播放通行證：shareMedia.mjs）
+//   專案「成員看片也加浮水印」（0038，projects.watermark_members）             admin（這個專案的 admin，也就是製作；canSetMemberWatermark）；預設關
 //   訪客留言（分享連結，0026）                                                 連結有開「允許看的人留言」的人（密碼 / 通行證照舊）；
 //                                                                              只看得到同一條連結的留言串 + 團隊在底下的回覆；不能改、刪、標已改好
 //   留言縮圖（/api/comment-thumbs/…）                                          網址有 128 bits 隨機碼（跟模型檔一樣），拿得到網址的人才看得到
