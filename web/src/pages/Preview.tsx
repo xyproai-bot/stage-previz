@@ -4,6 +4,8 @@ import * as api from '../lib/api';
 import type { Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import type { ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
+import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
+import { memberWatermarkOn } from '../lib/watermark/policy';
 import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
 import StageScene, { type StageViewApi } from '../components/StageScene';
 import AnnotationLayer from '../components/AnnotationLayer';
@@ -97,6 +99,9 @@ function PreviewInner({ projectId }: { projectId: string }) {
   const va = useViewAs();
 
   const [projectName, setProjectName] = useState<string>('');
+  // 專案有打開「成員看片也加浮水印」→ 3D 畫面和小播放器印上自己的名字和時間（lib/watermark）
+  const [watermarkMembers, setWatermarkMembers] = useState(false);
+  useMemberWatermark(watermarkMembers);
   // 專案名讀不到時不能一直停在「…」，要顯示讀取失敗 + 重試
   const [nameStatus, setNameStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [projectArchived, setProjectArchived] = useState(false);
@@ -158,6 +163,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
       const meta = await api.getProjectMeta(projectId);
       if (meta) {
         setProjectName(meta.name);
+        setWatermarkMembers(!!meta.watermarkMembers);
         setMyRole(meta.myRole ?? null);
         setProjectMembers(meta.members?.map(m => ({ id: m.id, name: m.name })) || []);
         setProjectArchived(false);
@@ -167,6 +173,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
       // 清單裡沒有（封存的專案只有 admin 看得到 / 不是成員）→ 直接問這個專案
       const info = await api.getProjectInfo(projectId);
       setProjectName(info.project.name);
+      setWatermarkMembers(memberWatermarkOn(info.project.watermark_members));
       setMyRole(info.myRole);
       setProjectArchived(info.project.status === 'archived');
       setNameStatus('ready');

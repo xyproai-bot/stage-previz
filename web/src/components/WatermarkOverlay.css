@@ -1,0 +1,22 @@
+/* 浮水印（WatermarkOverlay.tsx）：疊在 3D 畫面 / 影片上，不擋任何操作。
+   白字黑邊 + 整層半透明（約 16%）：亮的、暗的 LED 畫面上都看得到，又不會蓋過畫面。 */
+.wm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+  opacity: 0.16;
+  background-repeat: repeat;
+  user-select: none;
+  -webkit-user-select: none;
+  /* 每 45 秒換位置時慢慢滑過去，不是閃一下 */
+  transition: background-position 2.4s ease-in-out;
+}
+.wm-overlay--compact {
+  /* 在小播放器裡：比影片高，不蓋到控制列（它只放在畫面那一塊裡） */
+  z-index: 3;
+  opacity: 0.2;
+}
+@media (prefers-reduced-motion: reduce) {
+  .wm-overlay { transition: none; }
+}

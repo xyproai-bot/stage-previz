@@ -4,6 +4,7 @@ import {
   StepBack, StepForward, Volume2, VolumeX, X,
 } from 'lucide-react';
 import Icon from './Icon';
+import WatermarkOverlay from './WatermarkOverlay';
 import { formatClock, parkVideo, type LocalVideoState } from '../lib/localVideo';
 import type { SongComment } from '../lib/api';
 import type { CompareOption } from '../lib/abCompare';
@@ -405,6 +406,8 @@ export default function MiniPlayer({
       {collapsed ? scrub : (
         <>
           <div className="mini-player__screen" ref={screenRef} onClick={player.togglePlay}>
+            {/* 浮水印（頁面有登記才畫；蓋在影片上，點擊照樣穿過去） */}
+            <WatermarkOverlay compact />
             {!ready && !error && <div className="mini-player__msg">載入中…</div>}
           </div>
           <div className="mini-player__controls">

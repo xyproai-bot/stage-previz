@@ -35,6 +35,8 @@ export interface Project {
   members: ProjectMember[];
   /** 我在這個專案的角色（全站 admin 一律 admin；不是成員 = null） */
   myRole?: ProjectRole | null;
+  /** 成員看片也加浮水印（0038，製作設定；舊版後台沒有 → undefined = 關） */
+  watermarkMembers?: boolean;
 }
 
 const palette = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];

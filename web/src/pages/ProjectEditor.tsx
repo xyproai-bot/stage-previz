@@ -3,6 +3,8 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, MaterialProps, LedProps } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
+import { memberWatermarkOn } from '../lib/watermark/policy';
 import StageScene from '../components/StageScene';
 import MechanismTab from '../components/mechanisms/MechanismTab';
 import MechanismTimeline from '../components/mechanisms/MechanismTimeline';
@@ -257,6 +259,8 @@ export default function ProjectEditor() {
     }
   }, [projectId]);
   useEffect(() => { refreshProjectMeta(); }, [refreshProjectMeta]);
+  // 專案有打開「成員看片也加浮水印」→ 3D 畫面印上自己的名字和時間（lib/watermark）
+  useMemberWatermark(memberWatermarkOn(projectMeta?.watermark_members));
 
   // ── 復原 / 重做：每個 cue 各一份（lib/editHistory.ts），換 cue 不會復原到別的 cue ──
   const historyRef = useRef(new EditHistory());
@@ -1556,6 +1560,7 @@ export default function ProjectEditor() {
         projectName={projectMeta?.name}
         songs={songs}
         onClose={() => setShareOpen(false)}
+        onProjectChanged={refreshProjectMeta}
       />
 
       <InviteDialog

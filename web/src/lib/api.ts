@@ -99,6 +99,8 @@ export interface AuthUser {
   name: string;
   role: UserRole;
   avatarColor: string;
+  /** 真的 email（浮水印用；系統自己塞的假 email、舊版後台都沒有 → undefined） */
+  email?: string;
 }
 
 export async function authMe(): Promise<AuthUser | null> {
@@ -260,7 +262,7 @@ export async function createProject(input: { name: string; description: string; 
   });
 }
 
-export async function updateProject(id: string, patch: Partial<{ name: string; description: string; status: string; showId: string | null; tags: string[] }>): Promise<void> {
+export async function updateProject(id: string, patch: Partial<{ name: string; description: string; status: string; showId: string | null; tags: string[]; watermarkMembers: boolean }>): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(id)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
@@ -1311,6 +1313,11 @@ export interface ShareLink {
   label?: string | null;
   /** 從這條連結留了幾則 */
   guestCommentCount?: number;
+  /** 浮水印、禁止下載（0038；舊版後台沒這欄 → undefined = 關） */
+  watermark?: boolean;
+  noDownload?: boolean;
+  /** 連結編號（浮水印上印的那組，6 個字；對得到外流的畫面是哪一條連結） */
+  shortId?: string;
 }
 
 export async function listShareLinks(projectId: string): Promise<ShareLink[]> {
@@ -1318,7 +1325,7 @@ export async function listShareLinks(projectId: string): Promise<ShareLink[]> {
   return Array.isArray(data?.links) ? data.links : [];
 }
 
-export async function createShareLink(projectId: string, input: { songId?: string | null; password?: string; expiresInDays?: number; slug?: string | null; allowComments?: boolean; label?: string | null }): Promise<{ token: string; slug?: string | null; expiresAt: string | null }> {
+export async function createShareLink(projectId: string, input: { songId?: string | null; password?: string; expiresInDays?: number; slug?: string | null; allowComments?: boolean; label?: string | null; watermark?: boolean; noDownload?: boolean }): Promise<{ token: string; slug?: string | null; expiresAt: string | null; watermark?: boolean; noDownload?: boolean; shortId?: string }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/share-links`, {
     method: 'POST',
     body: JSON.stringify(input || {}),
@@ -1333,8 +1340,8 @@ export async function updateShareLinkSlug(projectId: string, token: string, slug
   });
 }
 
-/** 改「允許看的人留言」（打開只有製作）、連結名稱 */
-export async function updateShareLink(projectId: string, token: string, patch: { allowComments?: boolean; label?: string | null }): Promise<{ allowComments: boolean; label: string | null }> {
+/** 改「允許看的人留言」（打開只有製作）、連結名稱、浮水印、禁止下載（有給的才改） */
+export async function updateShareLink(projectId: string, token: string, patch: { allowComments?: boolean; label?: string | null; watermark?: boolean; noDownload?: boolean }): Promise<{ allowComments: boolean; label: string | null; watermark?: boolean; noDownload?: boolean }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(token)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
@@ -1379,6 +1386,11 @@ export interface SharePublicData {
   access?: { token: string; expiresAt: number } | null;
   /** 製作有沒有打開「允許看的人留言」（0026；舊版 worker 沒有 → undefined = 沒開） */
   allowComments?: boolean;
+  /**
+   * 浮水印、禁止下載（0038）。舊版 worker 沒有 → undefined = 兩個都沒開。
+   * linkId = 連結編號（浮水印上印的）；linkName = 連結名稱（只有開了浮水印才給；沒有名稱用好讀網址名稱）
+   */
+  protection?: { watermark: boolean; noDownload: boolean; linkId: string; linkName: string | null };
 }
 
 export async function shareError(r: Response): Promise<Error & { status?: number; requiresPassword?: boolean }> {
@@ -1462,6 +1474,8 @@ export interface ProjectFull {
   tags: string | null;   // JSON string
   created_at: string;
   updated_at: string;
+  /** 成員看片也加浮水印（0038；1 = 開；舊版後台沒有 → undefined = 關） */
+  watermark_members?: number;
 }
 export async function getProjectFull(projectId: string): Promise<ProjectFull | null> {
   try {

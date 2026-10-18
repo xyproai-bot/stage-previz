@@ -69,6 +69,7 @@ import { useStageFullscreen } from '../lib/useStageFullscreen';
 import { isStageShowActive, type StageShowInfo } from '../lib/stageShow';
 import { toast } from '../lib/toast';
 import StageToolbar, { type ToolDef, type ToolMenuEntry, type ToolMenuSection } from './StageToolbar';
+import WatermarkOverlay from './WatermarkOverlay';
 import { LED_CANVAS_RANGE, normalizeLedCanvas, type LedCanvas } from '../lib/ledCanvas';
 import {
   buildLedLayout, canvasSourceText, layoutPanel, layoutToCsv, layoutToJson, ledMapFileName, parseCanvasInput, resolveLedCanvas, testPatternSize, todayString,
@@ -257,6 +258,8 @@ interface Props {
   ledUvPreview?: UvPreview | null;
   /** 「更多」選單裡的 LED 對位圖（下載 PNG / CSV / JSON、LED 顯示測試圖）；預設有 */
   ledMapMenu?: boolean;
+  /** 禁止下載（分享連結）：「更多」選單裡的 LED 對位圖 / AE 合成腳本 / 位置表下載不給（LED 顯示測試圖照舊） */
+  hideDownloads?: boolean;
   /**
    * 這首歌選的 LED 版型（自己排的）+ 手動切的螢幕：有給 →「更多」選單的對位圖 / AE 合成腳本 / 位置表照版型下載（lib/ledTemplateDownload.ts），
    * 整張畫布的版本還是在（寫「（整張畫布）」）；沒給 = 跟以前一樣只有整張畫布
@@ -325,7 +328,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledMapMenu = true, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledMapMenu = true, hideDownloads = false, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const containerRef = useRef<HTMLDivElement>(null);
@@ -3533,7 +3536,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     id: 'ledmap',
     title: 'LED 對位圖',
     items: [
-      ...downloadItems,
+      ...(hideDownloads ? [] : downloadItems),
       {
         icon: MonitorCheck,
         label: 'LED 顯示測試圖',
@@ -3851,6 +3854,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       )}
       {/* 疊在 3D 畫面上的東西（審片的畫記），跟畫面一樣大 */}
       {children}
+      {/* 浮水印（頁面有登記才畫；DOM 一層，不進 LED 貼圖，不影響顏色）。全螢幕預演也要留著（StageShow.css） */}
+      <WatermarkOverlay />
       {/* 自動調低畫質時的小提示（不擋操作） */}
       {qualityLevel !== 'high' && (
         <div className="stage-scene__quality-note">畫質自動調低以保持順暢</div>

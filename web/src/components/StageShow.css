@@ -1,6 +1,6 @@
 /* 全螢幕預演（lib/useStageFullscreen.ts）：3D 舞台那一塊（.stage-scene）加上 is-show，除了畫面和小條，其他全部藏起來 */
 .stage-scene.is-show { background: #000; }
-.stage-scene.is-show > :not(canvas):not(.stage-show-bar) { display: none !important; }
+.stage-scene.is-show > :not(canvas):not(.stage-show-bar):not(.wm-overlay) { display: none !important; }
 .stage-scene.is-show.is-bar-hidden { cursor: none; }
 
 /* 瀏覽器不能全螢幕（iPhone Safari）：用 CSS 蓋滿整個視窗 */

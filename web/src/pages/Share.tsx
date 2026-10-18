@@ -31,8 +31,14 @@ import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import ShareSetlist from './ShareSetlist';
 import Icon from '../components/Icon';
+import { shouldWatermarkGuest } from '../lib/watermark/policy';
+import { useWatermarkScope } from '../lib/watermark/store';
+import type { WatermarkIdentity } from '../lib/watermark/text';
+import { applyVideoGuards, shouldBlockMediaEvent } from '../lib/watermark/downloadGuard';
+import { SHARE_PAGE_WATERMARK_NOTE } from '../lib/watermark/copy';
+import { GUEST_NAME_EVENT, readGuestName } from '../lib/review/guestApi';
 import {
-  BookOpen, Image, LoaderCircle, Lock, Pause, Play, Repeat, TriangleAlert, Volume2, VolumeX, X,
+  BookOpen, Image, LoaderCircle, Lock, Pause, Play, Repeat, Stamp, TriangleAlert, Volume2, VolumeX, X,
 } from 'lucide-react';
 import './Share.css';
 
@@ -340,6 +346,35 @@ export default function Share() {
   const cameraBookmarks = useMemo(() => normalizeCameraBookmarks(data?.cameraBookmarks), [data]);
   const ledCanvas = useMemo(() => normalizeLedCanvas(data?.ledCanvas ?? null), [data]);
 
+  // ── 浮水印 / 禁止下載（0038；舊連結和舊版後台都是關）──
+  // 浮水印：3D 畫面和小播放器（還有全螢幕預演）印上「誰在看 + 現在的時間」；訪客寫過留言的名字就印名字，沒有就印連結名稱 + 編號
+  const protection = data?.protection;
+  const watermarkOn = shouldWatermarkGuest(protection);
+  const noDownload = !!protection?.noDownload;
+  const [guestName, setGuestName] = useState(readGuestName);
+  useEffect(() => {
+    const sync = () => setGuestName(readGuestName());
+    window.addEventListener(GUEST_NAME_EVENT, sync);
+    window.addEventListener('storage', sync);
+    return () => { window.removeEventListener(GUEST_NAME_EVENT, sync); window.removeEventListener('storage', sync); };
+  }, []);
+  const watermarkIdentity = useMemo<WatermarkIdentity | null>(
+    () => (watermarkOn && protection
+      ? { kind: 'guest', guestName: guestName || null, linkName: protection.linkName, linkId: protection.linkId }
+      : null),
+    [watermarkOn, protection, guestName],
+  );
+  useWatermarkScope(watermarkIdentity);
+  // 禁止下載：影片拿掉瀏覽器自己的下載鈕；有浮水印的影片也不能浮出去（子母畫面）
+  const playerVideo = local.video;
+  useEffect(() => {
+    applyVideoGuards(playerVideo, { noDownload, watermark: watermarkOn });
+  }, [playerVideo, noDownload, watermarkOn]);
+  // 右鍵「另存」、把畫面拖出去存：打在畫面（影片、3D 舞台、圖片）上才擋，留言框照常能用右鍵
+  const blockMediaEvent = useCallback((e: React.SyntheticEvent) => {
+    if (shouldBlockMediaEvent(e.target)) e.preventDefault();
+  }, []);
+
   // ── LED 上在放影片（歌曲影片 / 本地影片）→ 舞台、cue 列跟著影片時間走 ──
   // cue 在「對應影片時間」剛好到位，提前「轉場」秒數等速出發；暫停就停在半路、拉時間軸就跟著退。
   // 手動點了沒設時間的 cue → 舞台照那個 cue，留到影片走進下一段才回到時間軸（規則在 videoCueSync）
@@ -448,15 +483,18 @@ export default function Share() {
   if (!data) return null;
 
   return (
-    <div className="share">
+    <div className="share" onContextMenu={noDownload ? blockMediaEvent : undefined} onDragStart={noDownload ? blockMediaEvent : undefined}>
       <header className="share-top">
         <span className="share-top__brand"><span className="brand-mark" aria-hidden="true" />STAGE PREVIZ</span>
         <span className="share-top__title">{data.project.name}</span>
+        {watermarkOn && <span className="share-top__wm"><Icon icon={Stamp} size="xs" /> {SHARE_PAGE_WATERMARK_NOTE}</span>}
         <span className="grow" />
         {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
         <a className="share-top__help" href={helpUrl()} target="_blank" rel="noopener" title="使用說明" aria-label="使用說明"><Icon icon={BookOpen} /><span className="share-top__help-label"> 使用說明</span></a>
         <span className="share-top__hint">{data.allowComments ? '公開預覽 · 可以留言' : '公開預覽 · 唯讀'}</span>
       </header>
+      {/* 手機：標題列放不下，這句改放在標題列下面一條細的 */}
+      {watermarkOn && <div className="share-wm-strip" role="note"><Icon icon={Stamp} size="xs" /> {SHARE_PAGE_WATERMARK_NOTE}</div>}
 
       {/* 檔案拖到頁面哪裡都收（左邊清單、舞台都可以）；清單裡拖曳排順序的不算（沒有 'Files'） */}
       <div
@@ -556,6 +594,7 @@ export default function Share() {
                 cueName={selectedCue?.name}
                 modelUrl={data.modelUrl ? api.apiBase() + data.modelUrl : null}
                 toolbarMode="viewer"
+                hideDownloads={noDownload}
                 cueKey={selectedCueId}
                 crossfadeSeconds={cueTransitionSeconds(selectedCue)}
                 scaleCorrection={data.scaleCorrection ?? 1}

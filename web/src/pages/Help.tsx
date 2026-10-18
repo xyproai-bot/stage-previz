@@ -96,6 +96,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.prodAutoUv, label: '自動貼 UV（不用在 C4D 手動展開）' },
       { id: A.prodView, label: '重置攝影機和現場設定' },
       { id: A.prodShare, label: '分享連結和密碼' },
+      { id: A.prodWatermark, label: '浮水印和禁止下載' },
       { id: A.prodInvite, label: '邀請連結' },
       { id: A.prodViewAs, label: '用導演 / 動畫師的畫面看' },
       { id: A.prodLoginCodes, label: '用戶和登入碼' },
@@ -176,6 +177,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.clientOpen, label: '打開連結、輸入密碼' },
       { id: A.clientCamera, label: '轉動視角、重置攝影機' },
       { id: A.clientPlay, label: '看影片' },
+      { id: A.clientWatermark, label: '畫面上的名字和時間（浮水印）' },
       { id: A.clientComment, label: '留言（製作有開的連結）' },
       { id: A.clientLocal, label: '本地檔案' },
       { id: A.clientMobile, label: '手機和 iPad' },
@@ -1500,6 +1502,19 @@ function ProducerChapter() {
         </ul>
       </Section>
 
+      <Section id={A.prodWatermark} title="浮水印和禁止下載">
+        <p>預演的內容多半是還沒公開的演出。這兩個功能是防止外流用的：<strong>浮水印</strong>讓外流的畫面追得到是誰，<strong>禁止下載</strong>把順手就能存的路拿掉。兩個都在「<Ui>分享</Ui>」視窗裡設定，每條連結各自開關。</p>
+        <ul className="help-list">
+          <li><strong>浮水印</strong>：對方看 3D 畫面、影片小視窗、全螢幕預演時，畫面上印著「他是誰」和現在的日期時間（每分鐘更新）。半透明、斜的、整片貼滿，每不到一分鐘慢慢換一個位置，沒辦法單純裁掉。訪客在留言時寫過名字就印名字，沒寫過就印「分享連結：連結名稱」，後面都接一組連結編號。它只是蓋在畫面上的一層，<strong>不會動到 LED 的顏色</strong>。</li>
+          <li><strong>連結編號</strong>：每條連結有一組 6 個字的編號，印在浮水印上，也寫在「已建立的連結」那一條的下面。外流的畫面上看到這組編號，就知道是從哪一條連結出去的。</li>
+          <li><strong>禁止下載</strong>：拿掉所有下載的按鈕（LED 對位圖、AE 合成腳本、位置表的下載也一起拿掉）和右鍵另存。影片網址只能從分享頁播放，幾個小時就失效，複製出去也不能另外存，沒有通行證直接開影片網址會被拒絕。</li>
+          <li><strong>成員看片也加浮水印</strong>（只有製作能改，預設關）：在同一個「<Ui>分享</Ui>」視窗裡打開，專案的製作、導演、動畫師看 3D 畫面和影片時，畫面上也會印自己的名字和時間。</li>
+          <li><strong>新建立的連結兩個預設都開</strong>。這個功能出現以前建的連結不會自動打開，行為跟以前一樣，要在連結清單那一條按浮水印、盾牌的圖示自己打開（關掉時會先問一次）。</li>
+          <li>連結的<strong>名稱</strong>在開了浮水印的連結上會印給對方看，名稱不要寫不想讓對方看到的內容。</li>
+        </ul>
+        <p className="help-muted"><strong>要知道的限制</strong>：可以防止直接下載，但擋不住螢幕錄影；浮水印能追到是誰外流。所以兩個建議一起開。</p>
+      </Section>
+
       <Section id={A.prodInvite} title="邀請連結（給導演、動畫師）">
         <p>最簡單的加人方法：傳一個連結，對方點開按「進入專案」就進來了（新的人會自動建帳號，不用記登入碼）。</p>
         <ol className="help-steps">
@@ -2337,6 +2352,15 @@ function ClientChapter() {
         <p>3D 工具列最右邊的「<Ui><Icon icon={Ellipsis} /></Ui>」：LED 對位圖、LED 顯示測試圖，最下面的「<Ui>說明</Ui>」會打開這份使用說明。</p>
         <F k="shareMenu" />
         <p className="help-muted">「AE 即時」是給動畫師用的（在跑 AE 的電腦上看），看 <Go to={A.aeLive}>AE 即時預覽</Go>。</p>
+      </Section>
+
+      <Section id={A.clientWatermark} title="畫面上的名字和時間（浮水印）">
+        <p>有些連結的 3D 畫面和影片上會印著半透明的字：你在留言時寫的名字（或連結名稱）、一組編號，加上現在的日期時間。這是製作為了防止還沒公開的內容外流加的，不影響觀看，字會慢慢換位置。</p>
+        <ul className="help-list">
+          <li>畫面上方寫著「<Ui>此連結已加浮水印</Ui>」就表示有加。</li>
+          <li>有些連結同時禁止下載：沒有下載按鈕，右鍵也不能另存影片和圖片，影片只能在這個頁面播放。頁面開了好幾個小時之後影片讀不出來，重新整理頁面就好。</li>
+          <li>請不要錄螢幕或拍畫面外傳；外流的畫面可以從上面的名字和編號追到是哪一條連結。</li>
+        </ul>
       </Section>
 
       <Section id={A.clientComment} title="留言（製作有開的連結）">

@@ -13,7 +13,12 @@ export function readGuestName(): string {
 }
 export function saveGuestName(name: string): void {
   try { localStorage.setItem(NAME_KEY, name.trim().slice(0, GUEST_NAME_MAX)); } catch { /* 只是下次要再寫一次 */ }
+  // 同一頁的浮水印要馬上換成這個名字（沒寫過名字時印的是連結名稱）
+  try { window.dispatchEvent(new Event(GUEST_NAME_EVENT)); } catch { /* 沒有 window 就算了 */ }
 }
+
+/** 訪客寫了 / 改了名字（同一頁的別的地方要跟著換，例如浮水印） */
+export const GUEST_NAME_EVENT = 'sp:guest-name';
 
 /** 名字整理（跟後台一樣：一行、拿掉角括號和引號） */
 export function tidyGuestName(raw: string): string {

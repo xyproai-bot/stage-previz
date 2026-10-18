@@ -7,11 +7,16 @@ import {
 } from '../lib/shareSlug';
 import { shareSlugUrl, shareTokenUrl } from '../lib/siteUrl';
 import { parseServerTime } from '../lib/serverTime';
-import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, MessageSquareOff, MessageSquareText, Music, Pencil, Tag, Trash2, X } from 'lucide-react';
+import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, MessageSquareOff, MessageSquareText, Music, Pencil, ShieldBan, Stamp, Tag, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
 import { confirmDialog, promptDialog } from './dialogs';
 import './ShareLinksDialog.css';
 import { useEscapeClose } from '../lib/useEscapeClose';
+import { NEW_LINK_PROTECTION, canSetMemberWatermark, memberWatermarkOn } from '../lib/watermark/policy';
+import {
+  LABEL_ON_WATERMARK_NOTE, LEGACY_LINK_NOTE, MEMBER_WATERMARK_DENIED, MEMBER_WATERMARK_HINT, MEMBER_WATERMARK_LABEL,
+  NO_DOWNLOAD_HINT, NO_DOWNLOAD_LABEL, PROTECTION_LIMIT_NOTE, WATERMARK_HINT, WATERMARK_LABEL,
+} from '../lib/watermark/copy';
 
 interface Props {
   open: boolean;
@@ -20,6 +25,8 @@ interface Props {
   projectName?: string;
   songs: Song[];
   onClose: () => void;
+  /** 專案的設定（成員看片也加浮水印）改了以後通知頁面重新讀 */
+  onProjectChanged?: () => void;
 }
 
 /** 好讀網址的編輯中狀態：名稱 +（可選）4 個隨機字 */
@@ -43,7 +50,7 @@ function tidyTyping(raw: string): string {
   return raw.normalize('NFKC').toLowerCase().replace(/[\s_]+/g, '-');
 }
 
-export default function ShareLinksDialog({ open, projectId, projectName, songs, onClose }: Props) {
+export default function ShareLinksDialog({ open, projectId, projectName, songs, onClose, onProjectChanged }: Props) {
   useEscapeClose(open, onClose);
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [loading, setLoading] = useState(true);
@@ -56,7 +63,14 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
   // 0026：連結名稱（團隊看訪客留言時顯示）、允許看的人留言（預設關）
   const [label, setLabel] = useState('');
   const [allowComments, setAllowComments] = useState(false);
+  // 0038：浮水印、禁止下載（新連結預設兩個都開）
+  const [watermark, setWatermark] = useState<boolean>(NEW_LINK_PROTECTION.watermark);
+  const [noDownload, setNoDownload] = useState<boolean>(NEW_LINK_PROTECTION.noDownload);
   const [creating, setCreating] = useState(false);
+  // 專案的「成員看片也加浮水印」（null = 還沒讀到）+ 我在這個專案的角色（只有製作能改）
+  const [memberWm, setMemberWm] = useState<boolean | null>(null);
+  const [myRole, setMyRole] = useState<string | null>(null);
+  const [savingMemberWm, setSavingMemberWm] = useState(false);
   const [createDraft, setCreateDraft] = useState<SlugDraft>(() => newDraft(projectName));
   // 名稱還沒被改過 → 專案名稱晚一點才拿到時跟著換
   const createBaseTouched = useRef(false);
@@ -78,6 +92,16 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
   }, [projectId]);
 
   useEffect(() => { if (open) { setEditingToken(null); refresh(); } }, [open, refresh]);
+
+  // 打開時讀專案的設定（成員看片也加浮水印）；讀不到就不顯示這一段
+  useEffect(() => {
+    if (!open || !projectId) return;
+    let cancelled = false;
+    api.getProjectInfo(projectId)
+      .then(info => { if (!cancelled) { setMemberWm(memberWatermarkOn(info.project.watermark_members)); setMyRole(info.myRole); } })
+      .catch(() => { if (!cancelled) setMemberWm(null); });
+    return () => { cancelled = true; };
+  }, [open, projectId]);
 
   useEffect(() => {
     if (createBaseTouched.current) return;
@@ -101,10 +125,14 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
         slug: createSlug || null,
         label: label.trim() || null,
         allowComments,
+        watermark,
+        noDownload,
       });
       setPassword('');
       setLabel('');
       setAllowComments(false);
+      setWatermark(NEW_LINK_PROTECTION.watermark);
+      setNoDownload(NEW_LINK_PROTECTION.noDownload);
       // 下一條連結換一組隨機碼（名稱留著）
       setCreateDraft(d => ({ ...d, suffix: randomSlugSuffix() }));
       await refresh();
@@ -173,10 +201,45 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
     }
   }
 
+  /** 改一條連結的「浮水印」或「禁止下載」；關掉比較危險（外流追不到 / 擋不住下載）→ 先問一次，打開不用問 */
+  async function toggleProtection(l: ShareLink, key: 'watermark' | 'noDownload') {
+    const on = !l[key];
+    const name = key === 'watermark' ? WATERMARK_LABEL : NO_DOWNLOAD_LABEL;
+    if (!on && !(await confirmDialog({
+      title: `關掉這條連結的「${name}」？`,
+      message: key === 'watermark'
+        ? '關掉之後，拿到這條連結的人看的畫面不會再印名字和時間，外流時就追不到是誰。'
+        : '關掉之後，這條連結的影片網址不再有時效，下載按鈕也會回來。',
+      confirmLabel: '關掉',
+      destructive: true,
+    }))) return;
+    try {
+      await api.updateShareLink(projectId, l.token, { [key]: on });
+      toast.success(on ? `已打開「${name}」` : `已關掉「${name}」`);
+      await refresh();
+    } catch (e) {
+      toast.error('沒有改成：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function toggleMemberWatermark() {
+    if (memberWm === null || !canSetMemberWatermark(myRole)) return;
+    const on = !memberWm;
+    setSavingMemberWm(true);
+    try {
+      await api.updateProject(projectId, { watermarkMembers: on });
+      setMemberWm(on);
+      toast.success(on ? '團隊成員看片也會加浮水印了' : '已關掉成員看片的浮水印');
+      onProjectChanged?.();
+    } catch (e) {
+      toast.error('沒有改成：' + (e instanceof Error ? e.message : String(e)));
+    } finally { setSavingMemberWm(false); }
+  }
+
   async function editLabel(l: ShareLink) {
     const next = await promptDialog({
       title: '連結的名稱',
-      message: '給誰看的（例：給經紀人、給主辦）。只有團隊看得到，訪客留言時會寫「訪客：名字（這個名稱）」。',
+      message: '給誰看的（例：給經紀人、給主辦）。團隊看得到，訪客留言時會寫「訪客：名字（這個名稱）」；開了浮水印的連結，名稱也會印在對方畫面的浮水印上。',
       label: '名稱',
       defaultValue: l.label || '',
       maxLength: 40,
@@ -259,7 +322,7 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
             </div>
             <div className="share-dlg__row">
               <label className="share-dlg__label-field">
-                <span>名稱（可選，只有團隊看得到）</span>
+                <span>名稱（可選）</span>
                 <input
                   type="text"
                   value={label}
@@ -267,6 +330,7 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                   placeholder="例：給經紀人"
                   maxLength={40}
                 />
+                <small className="share-dlg__field-note">{watermark ? LABEL_ON_WATERMARK_NOTE : '只有團隊看得到。'}</small>
               </label>
             </div>
             <SlugFields
@@ -281,12 +345,45 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                 <small>寫一個名字就能在影片上留言、畫記；只看得到從這條連結留的留言和你們的回覆。你們會收到通知。</small>
               </span>
             </label>
+            <label className="share-dlg__allow">
+              <input type="checkbox" checked={watermark} onChange={e => setWatermark(e.target.checked)} />
+              <span>
+                <strong><Icon icon={Stamp} size="xs" /> {WATERMARK_LABEL}</strong>
+                <small>{WATERMARK_HINT}</small>
+              </span>
+            </label>
+            <label className="share-dlg__allow">
+              <input type="checkbox" checked={noDownload} onChange={e => setNoDownload(e.target.checked)} />
+              <span>
+                <strong><Icon icon={ShieldBan} size="xs" /> {NO_DOWNLOAD_LABEL}</strong>
+                <small>{NO_DOWNLOAD_HINT}</small>
+              </span>
+            </label>
+            <p className="share-dlg__limit">{PROTECTION_LIMIT_NOTE}</p>
             <button className="btn btn--primary btn--sm" onClick={handleCreate} disabled={creating || !!createProblem}>
               {creating ? '建立中…' : '+ 建立分享連結'}
             </button>
           </section>
 
           {error && <div className="share-dlg__err">{error}</div>}
+
+          {memberWm !== null && (
+            <section className="share-dlg__member">
+              <label className={'share-dlg__allow' + (canSetMemberWatermark(myRole) ? '' : ' is-disabled')}>
+                <input
+                  type="checkbox"
+                  checked={memberWm}
+                  disabled={!canSetMemberWatermark(myRole) || savingMemberWm}
+                  onChange={() => { void toggleMemberWatermark(); }}
+                />
+                <span>
+                  <strong><Icon icon={Stamp} size="xs" /> {MEMBER_WATERMARK_LABEL}</strong>
+                  <small>{MEMBER_WATERMARK_HINT}{canSetMemberWatermark(myRole) ? '' : ` ${MEMBER_WATERMARK_DENIED}。`}</small>
+                </span>
+              </label>
+              <p className="share-dlg__limit">{LEGACY_LINK_NOTE}</p>
+            </section>
+          )}
 
           <section className="share-dlg__list">
             <h3>已建立的連結（{links.length}）</h3>
@@ -326,6 +423,11 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                             {!l.allowComments && !!l.guestCommentCount && <> · <Icon icon={MessageSquareOff} size="xs" /> 留言已關（之前 {l.guestCommentCount} 則）</>}
                             {l.lastViewedAt && ` · 上次 ${formatRelative(l.lastViewedAt)}`}
                           </div>
+                          <div className="share-link-row__protect">
+                            <span className={'share-link-row__flag' + (l.watermark ? ' is-on' : '')}><Icon icon={Stamp} size="xs" /> {l.watermark ? '有浮水印' : '沒有浮水印'}</span>
+                            <span className={'share-link-row__flag' + (l.noDownload ? ' is-on' : '')}><Icon icon={ShieldBan} size="xs" /> {l.noDownload ? '禁止下載' : '可以下載'}</span>
+                            {l.shortId && <span className="share-link-row__code" title="浮水印上印的連結編號：外流的畫面上看到這組，就是這一條連結">編號 {l.shortId}</span>}
+                          </div>
                         </div>
                         <div className="share-link-row__actions">
                           <button className="btn btn--ghost btn--sm" onClick={() => copyLink(mainUrl)} title="複製連結" aria-label="複製連結"><Icon icon={Copy} /></button>
@@ -343,6 +445,20 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                             aria-label={l.allowComments ? '關掉「允許看的人留言」' : '允許看的人留言'}
                             aria-pressed={!!l.allowComments}
                           ><Icon icon={l.allowComments ? MessageSquareText : MessageSquareOff} /></button>
+                          <button
+                            className={'btn btn--ghost btn--sm' + (l.watermark ? ' is-on' : '')}
+                            onClick={() => toggleProtection(l, 'watermark')}
+                            title={l.watermark ? '關掉浮水印' : '打開浮水印'}
+                            aria-label={l.watermark ? '關掉浮水印' : '打開浮水印'}
+                            aria-pressed={!!l.watermark}
+                          ><Icon icon={Stamp} /></button>
+                          <button
+                            className={'btn btn--ghost btn--sm' + (l.noDownload ? ' is-on' : '')}
+                            onClick={() => toggleProtection(l, 'noDownload')}
+                            title={l.noDownload ? '關掉禁止下載' : '打開禁止下載'}
+                            aria-label={l.noDownload ? '關掉禁止下載' : '打開禁止下載'}
+                            aria-pressed={!!l.noDownload}
+                          ><Icon icon={ShieldBan} /></button>
                           <button className="btn btn--ghost btn--sm" onClick={() => editLabel(l)} title="改連結的名稱" aria-label="改連結的名稱"><Icon icon={Tag} /></button>
                           <button className="btn btn--ghost btn--sm" onClick={() => handleDelete(l.token)} title="刪除這條連結" aria-label="刪除這條連結"><Icon icon={Trash2} /></button>
                         </div>
