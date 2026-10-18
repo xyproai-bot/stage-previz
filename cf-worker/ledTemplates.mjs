@@ -12,6 +12,9 @@ import {
   FULL_TEMPLATE_NAME, MAX_SCREENS_PER_OBJECT, TEMPLATE_VERSION,
 } from '../web/src/lib/ledTemplate.ts';
 import { normalizeLedCanvas } from '../web/src/lib/ledCanvas.ts';
+import {
+  buildTimeline, canvasMismatch, checkTimeline, normalizeTimelineInput, parseTimeline, serializeTimeline, MAX_SWITCHES,
+} from '../web/src/lib/ledTemplateTimeline.ts';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 /** 一個專案最多幾個版型（不含「全部」） */
@@ -98,7 +101,14 @@ async function loadTemplatesWithPlacements(env, projectId) {
     env.DB.prepare(
       `SELECT lts.* FROM led_template_screens lts JOIN led_templates lt ON lt.id = lts.template_id WHERE lt.project_id = ? ORDER BY lts.rowid ASC`
     ).bind(projectId),
-    env.DB.prepare(`SELECT template_id, COUNT(*) AS n FROM songs WHERE project_id = ? AND template_id IS NOT NULL GROUP BY template_id`).bind(projectId),
+    // 幾首歌在用：開頭選了它，或中途換版型換成它（同一首歌算一次）
+    env.DB.prepare(
+      `SELECT template_id, COUNT(*) AS n FROM (
+         SELECT template_id, id AS song_id FROM songs WHERE project_id = ? AND template_id IS NOT NULL
+         UNION
+         SELECT sw.template_id, sw.song_id FROM song_template_switches sw JOIN songs s ON s.id = sw.song_id WHERE s.project_id = ?
+       ) GROUP BY template_id`
+    ).bind(projectId, projectId),
   ]);
   const placementsBy = new Map();
   for (const r of (p.results || [])) {
@@ -131,7 +141,9 @@ async function loadOne(env, projectId, templateId) {
     env.DB.prepare(`SELECT * FROM led_template_screens WHERE template_id = ? ORDER BY rowid ASC`).bind(templateId).all(),
     projectFullCanvas(env, projectId),
     loadManualScreens(env, projectId),
-    env.DB.prepare(`SELECT COUNT(*) AS n FROM songs WHERE template_id = ?`).bind(templateId).first(),
+    env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM (SELECT id FROM songs WHERE template_id = ? UNION SELECT song_id FROM song_template_switches WHERE template_id = ?)`
+    ).bind(templateId, templateId).first(),
   ]);
   return { row, api: templateToApi(row, p.results || [], manuals, fullCanvas, sc?.n || 0) };
 }
@@ -207,6 +219,11 @@ export async function updateTemplate(request, env, ctx, templateId, log) {
     const problem = await checkScreenKeys(env, projectId, v.screens);
     if (problem) return bad(problem);
   }
+  if (v.canvas && (v.canvas.width !== cur.row.canvas_w || v.canvas.height !== cur.row.canvas_h)) {
+    // 這個版型在某首歌的中途換版型裡：那首歌所有版型的畫布大小要一樣，不能只改它一個
+    const conflict = await timelineCanvasConflict(env, projectId, templateId, v.canvas);
+    if (conflict) return bad(conflict, 409, { inTimeline: true });
+  }
   const sets = [], vals = [];
   if (v.name !== undefined) { sets.push('name = ?'); vals.push(v.name); }
   if (v.canvas) { sets.push('canvas_w = ?', 'canvas_h = ?'); vals.push(v.canvas.width, v.canvas.height); }
@@ -232,7 +249,9 @@ export async function deleteTemplate(request, env, ctx, templateId, log) {
   const cur = await loadOne(env, projectId, templateId);
   if (!cur) return bad('這個專案裡找不到這個版型', 404);
   if (cur.row.kind === 'full') return bad(`「${FULL_TEMPLATE_NAME}」是整張畫布的預設版型，不能刪`, 409);
-  const songs = ((await env.DB.prepare(`SELECT name FROM songs WHERE template_id = ? ORDER BY "order" LIMIT 5`).bind(templateId).all()).results || []).map(s => s.name);
+  const songs = ((await env.DB.prepare(
+    `SELECT name FROM songs WHERE template_id = ? OR id IN (SELECT song_id FROM song_template_switches WHERE template_id = ?) ORDER BY "order" LIMIT 5`
+  ).bind(templateId, templateId).all()).results || []).map(s => s.name);
   if (cur.api.songCount > 0) {
     return bad(`還有 ${cur.api.songCount} 首歌在用這個版型（${songs.join('、')}${cur.api.songCount > songs.length ? '…' : ''}），請先把它們改成別的版型`, 409, { inUse: true, songCount: cur.api.songCount });
   }
@@ -338,6 +357,8 @@ export async function templatePlanForSnapshot(env, projectId, templateId) {
 /**
  * 新的一版影片記住做的時候用的版型和當時的排法：requestedId（上傳時前端帶的）優先，沒有指定就用歌現在選的。
  * 整張畫布（沒選 / 選「全部」）什麼都不寫：欄位是 NULL = 整張畫布
+ * 這首歌有中途換版型（而且這一版用的就是歌的開頭版型）→ 另外把整條時間線（含 Cue 這一刻的時間）存進 template_timeline；
+ * template_snapshot 仍然寫開頭的版型，舊版前端看得到、不認識時間線的地方也不會壞。
  * rows：[{ id, songId }]
  */
 export async function stampVideoTemplates(env, projectId, rows, requestedId = undefined) {
@@ -355,6 +376,7 @@ export async function stampVideoTemplates(env, projectId, rows, requestedId = un
     `SELECT id, template_id FROM songs WHERE project_id = ? AND id IN (${ph})`
   ).bind(projectId, ...songIds).all()).results || []).map(s => [s.id, s.template_id]));
   const plans = new Map();
+  const timelines = new Map();
   const stmts = [];
   for (const r of rows) {
     const tid = useRequested ? requested : (songTpl.get(r.songId) || null);
@@ -362,7 +384,14 @@ export async function stampVideoTemplates(env, projectId, rows, requestedId = un
     if (!plans.has(tid)) plans.set(tid, await templatePlanForSnapshot(env, projectId, tid));
     const plan = plans.get(tid);
     if (!plan) continue;
-    stmts.push(env.DB.prepare(`UPDATE song_videos SET template_id = ?, template_snapshot = ? WHERE id = ?`).bind(tid, JSON.stringify(plan), r.id));
+    let timeline = null;
+    if (!useRequested || tid === (songTpl.get(r.songId) || null)) {
+      if (!timelines.has(r.songId)) timelines.set(r.songId, await timelineSnapshotText(env, projectId, r.songId, plan, plans));
+      timeline = timelines.get(r.songId);
+    }
+    stmts.push(env.DB.prepare(
+      `UPDATE song_videos SET template_id = ?, template_snapshot = ?, template_timeline = ? WHERE id = ?`
+    ).bind(tid, JSON.stringify(plan), timeline, r.id));
   }
   if (stmts.length) await env.DB.batch(stmts);
 }
@@ -371,6 +400,151 @@ export async function stampVideoTemplates(env, projectId, rows, requestedId = un
 export function snapshotToApi(text) {
   if (!text) return null;
   return parsePlan(text);
+}
+
+/** 影片一列的 template_timeline → API 的 templateTimeline（沒有 / 壞資料 = null，前端當單一版型） */
+export function timelineSnapshotToApi(text) {
+  if (!text) return null;
+  if (!parseTimeline(text)) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
+// ─────────────────────────────────────────────
+// 中途換版型（時間線，第 3 階段）
+// ─────────────────────────────────────────────
+
+const switchToApi = (r) => ({
+  id: r.id,
+  cueId: r.cue_id || null,
+  cueName: r.cue_name ?? null,
+  cueTimeSec: r.cue_id ? (r.cue_time ?? null) : null,
+  atSec: r.at_sec ?? null,
+  templateId: r.template_id,
+});
+
+/** 專案每首歌換版型的點：Map(songId → [api]) ；Cue 的名字和目前的影片時間一起 join 出來 */
+export async function loadSwitchesByProject(env, projectId) {
+  const r = await env.DB.prepare(
+    `SELECT sw.id, sw.song_id, sw.cue_id, sw.at_sec, sw.template_id, c.name AS cue_name, c.video_time_sec AS cue_time
+       FROM song_template_switches sw
+       JOIN songs s ON s.id = sw.song_id
+       LEFT JOIN cues c ON c.id = sw.cue_id
+      WHERE s.project_id = ?
+      ORDER BY sw.sort_order ASC, sw.created_at ASC, sw.id ASC`
+  ).bind(projectId).all();
+  const by = new Map();
+  for (const row of (r.results || [])) {
+    if (!by.has(row.song_id)) by.set(row.song_id, []);
+    by.get(row.song_id).push(switchToApi(row));
+  }
+  return by;
+}
+
+async function loadSongSwitches(env, projectId, songId) {
+  return (await loadSwitchesByProject(env, projectId)).get(songId) || [];
+}
+
+/** 專案所有版型（含「全部」）→ Map(id → { id, name, kind, canvas })，「全部」的畫布是專案的 LED 畫布 */
+async function loadTemplateInfos(env, projectId) {
+  const fullCanvas = await projectFullCanvas(env, projectId);
+  const rows = (await env.DB.prepare(`SELECT id, name, kind, canvas_w, canvas_h FROM led_templates WHERE project_id = ?`).bind(projectId).all()).results || [];
+  return new Map(rows.map(r => [r.id, {
+    id: r.id, name: r.name, kind: r.kind,
+    canvas: r.kind === 'full' ? fullCanvas : { width: r.canvas_w, height: r.canvas_h },
+  }]));
+}
+
+/** 這首歌的正式 Cue → Map(id → { name, timeSec })（提案、備案不能當換版型的點） */
+async function loadMasterCueTimes(env, songId) {
+  const rows = (await env.DB.prepare(`SELECT id, name, video_time_sec FROM cues WHERE song_id = ? AND status = 'master'`).bind(songId).all()).results || [];
+  return new Map(rows.map(c => [c.id, { name: c.name, timeSec: c.video_time_sec ?? null }]));
+}
+
+/**
+ * PUT /songs/:sid/template-timeline（製作）：整份換掉一首歌的版型時間線 { start, switches }。
+ * start = 開頭的版型（也就是 songs.template_id；null / 「全部」= 整張畫布，這時不能有換版型的點）。
+ * 檢查：版型都存在、都是自己排的、畫布一樣大、Cue 有影片時間、時間大於 0、同一個時間只能換一次。
+ */
+export async function putSongTimeline(request, env, ctx, songId, log) {
+  const { projectId } = ctx;
+  const body = await readJson(request);
+  const parsed = normalizeTimelineInput(body);
+  if (!parsed.ok) return bad(parsed.error);
+  const { start, switches } = parsed.value;
+  const startR = await resolveTemplateChoice(env, projectId, start);
+  if (!startR.ok) return bad(startR.error);
+  const templates = await loadTemplateInfos(env, projectId);
+  const cues = await loadMasterCueTimes(env, songId);
+  const check = checkTimeline({ start: startR.id, switches, templates, cues });
+  if (!check.ok) return bad(check.error, 409, { timeline: true });
+  const t = nowIso();
+  const stmts = [
+    env.DB.prepare(`UPDATE songs SET template_id = ? WHERE id = ? AND project_id = ?`).bind(startR.id, songId, projectId),
+    env.DB.prepare(`DELETE FROM song_template_switches WHERE song_id = ?`).bind(songId),
+  ];
+  switches.forEach((sw, i) => {
+    const atSec = sw.cueId ? (cues.get(sw.cueId)?.timeSec ?? null) : sw.atSec;
+    stmts.push(env.DB.prepare(
+      `INSERT INTO song_template_switches (id, song_id, cue_id, at_sec, template_id, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
+    ).bind(newId('tsw_') + i, songId, sw.cueId || null, atSec, sw.templateId, i, t));
+  });
+  await env.DB.batch(stmts);
+  await log?.('update', 'song_template_timeline', songId, { start: startR.id, switches: switches.length });
+  return ok({ templateId: startR.id, templateSwitches: await loadSongSwitches(env, projectId, songId) });
+}
+
+/**
+ * 舊的「LED 版型」選單（PATCH songs 的 template_id）換開頭的版型時：這首歌有中途換版型 → 開頭要是自己排的版型、畫布要一樣大。
+ * 沒問題 = null；有問題 = 說明
+ */
+export async function checkStartAgainstSwitches(env, projectId, songId, newStartId) {
+  const switches = await loadSongSwitches(env, projectId, songId);
+  if (!switches.length) return null;
+  if (!newStartId) {
+    return '這首歌有中途換版型的設定，開頭要選自己排的版型。要改成「全部」，請先到「換版型」把中途換版型的點全部拿掉';
+  }
+  const templates = await loadTemplateInfos(env, projectId);
+  const used = [newStartId, ...switches.map(s => s.templateId)].map(id => templates.get(id)).filter(Boolean);
+  return canvasMismatch(used);
+}
+
+/** 改版型的畫布大小前：它在哪首歌的中途換版型裡、改了以後會不會跟那首歌別的版型不一樣大 */
+async function timelineCanvasConflict(env, projectId, templateId, newCanvas) {
+  const songs = (await env.DB.prepare(
+    `SELECT s.id, s.name, s.template_id FROM songs s
+      WHERE s.project_id = ? AND s.id IN (SELECT song_id FROM song_template_switches)
+        AND (s.template_id = ? OR s.id IN (SELECT song_id FROM song_template_switches WHERE template_id = ?))`
+  ).bind(projectId, templateId, templateId).all()).results || [];
+  if (!songs.length) return null;
+  const templates = await loadTemplateInfos(env, projectId);
+  const switchesBy = await loadSwitchesByProject(env, projectId);
+  for (const song of songs) {
+    const ids = [song.template_id, ...(switchesBy.get(song.id) || []).map(sw => sw.templateId)].filter(Boolean);
+    const used = ids.map(id => {
+      const info = templates.get(id);
+      return info && id === templateId ? { ...info, canvas: newCanvas } : info;
+    }).filter(Boolean);
+    const bad = canvasMismatch(used);
+    if (bad) return `這個版型用在「${song.name}」中途換版型的設定裡，那首歌所有版型的畫布大小要一樣。${bad}（或先到那首歌把換版型拿掉）`;
+  }
+  return null;
+}
+
+/**
+ * 上傳那一刻的整條時間線 → 存進 song_videos.template_timeline 的 JSON 文字；這首歌沒有換版型 / 算不出時間 = null。
+ * plansCache：stampVideoTemplates 裡已經讀過的版型排法（Map，會順手補進去）
+ */
+async function timelineSnapshotText(env, projectId, songId, startPlan, plansCache) {
+  const switches = await loadSongSwitches(env, projectId, songId);
+  if (!switches.length) return null;
+  const plans = new Map();
+  for (const sw of switches) {
+    if (!plansCache.has(sw.templateId)) plansCache.set(sw.templateId, await templatePlanForSnapshot(env, projectId, sw.templateId));
+    const plan = plansCache.get(sw.templateId);
+    if (plan) plans.set(sw.templateId, plan);
+  }
+  const tl = buildTimeline(startPlan, switches, plans);
+  return tl ? serializeTimeline(tl) : null;
 }
 
 // ─────────────────────────────────────────────
@@ -387,14 +561,18 @@ export async function exportTemplates(env, projectId) {
     ).bind(projectId),
     env.DB.prepare(`SELECT id, object_id, name, u0, v0, u1, v1, sort_order FROM led_screens WHERE project_id = ? ORDER BY sort_order ASC`).bind(projectId),
   ]);
-  return { ledTemplates: t.results || [], ledTemplateScreens: p.results || [], ledScreens: s.results || [] };
+  const sw = await env.DB.prepare(
+    `SELECT sw.id, sw.song_id, sw.cue_id, sw.at_sec, sw.template_id, sw.sort_order FROM song_template_switches sw
+       JOIN songs s ON s.id = sw.song_id WHERE s.project_id = ? ORDER BY sw.sort_order ASC`
+  ).bind(projectId).all();
+  return { ledTemplates: t.results || [], ledTemplateScreens: p.results || [], ledScreens: s.results || [], songTemplateSwitches: sw.results || [] };
 }
 
 /**
  * 匯入（或複製專案）：重新給 id；物件對不到的螢幕略過；舊的匯出檔沒有這些欄位 → 什麼都不做
  * objIdMap：舊物件 id → 新物件 id；songTemplates：[{ songId（新）, templateId（舊的版型 id） }]
  */
-export async function importTemplates(env, projectId, data, objIdMap, songTemplates = []) {
+export async function importTemplates(env, projectId, data, objIdMap, songTemplates = [], ids = {}) {
   const tpls = Array.isArray(data?.ledTemplates) ? data.ledTemplates.slice(0, MAX_TEMPLATES) : [];
   const manualRaw = Array.isArray(data?.ledScreens) ? data.ledScreens.slice(0, MAX_MANUAL_SCREENS) : [];
   if (!tpls.length && !manualRaw.length) return { templates: 0, screens: 0 };
@@ -444,6 +622,23 @@ export async function importTemplates(env, projectId, data, objIdMap, songTempla
         [0, 90, 180, 270].includes(Number(p.rotate)) ? Number(p.rotate) : 0, p.flip_h ? 1 : 0, p.flip_v ? 1 : 0));
     }
   }
+  // 每首歌中途換版型的點（歌、Cue、版型都換成新的 id；Cue 對不到的改成純時間；版型 / 歌對不到的略過）
+  const switchCounts = new Map();
+  let switchSeq = 0;
+  for (const w of (Array.isArray(data?.songTemplateSwitches) ? data.songTemplateSwitches : [])) {
+    const songId = ids.songIdMap?.get(w?.song_id);
+    const templateId = tplIdMap.get(w?.template_id);
+    if (!songId || !templateId) continue;
+    const n = switchCounts.get(songId) || 0;
+    if (n >= MAX_SWITCHES) continue;
+    const cueId = w.cue_id ? (ids.cueIdMap?.get(w.cue_id) || null) : null;
+    const atSec = typeof w.at_sec === 'number' && Number.isFinite(w.at_sec) && w.at_sec >= 0 ? w.at_sec : null;
+    if (!cueId && atSec === null) continue;
+    switchCounts.set(songId, n + 1);
+    stmts.push(env.DB.prepare(
+      `INSERT INTO song_template_switches (id, song_id, cue_id, at_sec, template_id, sort_order) VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(newId('tsw_') + switchSeq++, songId, cueId, atSec, templateId, Number(w.sort_order) || n));
+  }
   for (let i = 0; i < stmts.length; i += 50) await env.DB.batch(stmts.slice(i, i + 50));
   // 每首歌選的版型接回新的
   const songStmts = [];
@@ -455,7 +650,7 @@ export async function importTemplates(env, projectId, data, objIdMap, songTempla
   return { templates: tplIdMap.size, screens: screenIdMap.size };
 }
 
-export async function copyTemplatesToProject(env, srcProjectId, dstProjectId, objIdMap, songTemplates) {
+export async function copyTemplatesToProject(env, srcProjectId, dstProjectId, objIdMap, songTemplates, ids = {}) {
   const exp = await exportTemplates(env, srcProjectId);
-  return importTemplates(env, dstProjectId, exp, objIdMap, songTemplates);
+  return importTemplates(env, dstProjectId, exp, objIdMap, songTemplates, ids);
 }

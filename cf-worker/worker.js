@@ -508,6 +508,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'songs.patch':           return updateSong(request, env, ctx, songId);
     case 'songs.delete':          return deleteSong(request, env, projectId, songId);
     case 'songs.importCues':      return importCuesFromSong(request, env, projectId, songId);
+    case 'songs.templateTimeline': return mechResp(ledTpl.putSongTimeline(request, env, ctx, songId, mechLog(request, env, projectId)));
     case 'reviews.list':          return reviewsResp(reviews.listSongReviews(env.DB, songId));
 
     case 'videos.list':           return listSongVideos(request, env, ctx);
@@ -1118,6 +1119,7 @@ async function duplicateProject(request, env, projectId) {
   await ledTpl.copyTemplatesToProject(
     env, projectId, newId, objIdMap,
     (oldSongs.results || []).filter(x => x.template_id && songIdMap.get(x.id)).map(x => ({ songId: songIdMap.get(x.id), templateId: x.template_id })),
+    { songIdMap, cueIdMap },
   );
 
   await logActivity(request, env, newId, 'create', 'project', newId, {
@@ -1434,6 +1436,7 @@ async function importProject(request, env) {
   await ledTpl.importTemplates(
     env, newId, body, objIdMap,
     (body.songs || []).filter(x => x.template_id && songIdMap.get(x.id)).map(x => ({ songId: songIdMap.get(x.id), templateId: x.template_id })),
+    { songIdMap, cueIdMap },
   );
 
   await logActivity(request, env, newId, 'create', 'project', newId, {
@@ -1630,6 +1633,8 @@ async function listSongs(env, projectId) {
   const latest = await latestReadyVideos(env, projectId);
   // 最近一次通過 / 需修改、看過的最新版本號（有更新的版本 → 「有新版 V3」）
   const reviewed = await reviews.reviewSummaryBySong(env.DB, projectId);
+  // 每首歌中途換版型的點（0039；沒有 = 空陣列）
+  const switchesBy = await ledTpl.loadSwitchesByProject(env, projectId).catch(() => new Map());
 
   return jsonResp({ songs: (r.results || []).map(s => ({
     id: s.id, name: s.name, order: s.order,
@@ -1639,6 +1644,8 @@ async function listSongs(env, projectId) {
     cueCount: s.cue_count, proposalCount: s.proposal_count,
     // 這首歌選的 LED 版型（0034；沒選 = 整張畫布 = null）
     templateId: s.template_id || null,
+    // 中途換版型的點（0039）：{ id, cueId, cueName, cueTimeSec, atSec, templateId }；開頭的版型是上面的 templateId
+    templateSwitches: switchesBy.get(s.id) || [],
     // 最新可以播的影片版本（沒有 = null）；版本清單：GET /songs/:id/videos
     latestVideoId: latest.get(s.id)?.id || null,
     latestVideoVersion: latest.get(s.id)?.version ?? null,
@@ -1759,6 +1766,9 @@ async function updateSong(request, env, ctx, songId) {
     // LED 版型（0034）：null / 「全部」= 整張畫布；其他要是這個專案的版型
     const t = await ledTpl.resolveTemplateChoice(env, projectId, body.template_id);
     if (!t.ok) return jsonResp({ error: t.error }, 400);
+    // 這首歌有中途換版型：開頭要是自己排的版型、畫布要跟換版型的版型一樣大（0039）
+    const startProblem = await ledTpl.checkStartAgainstSwitches(env, projectId, songId, t.id);
+    if (startProblem) return jsonResp({ error: startProblem, timeline: true }, 409);
     sets.push('template_id = ?'); values.push(t.id);
   }
   if ('drive_folder_id' in body) {
@@ -4856,6 +4866,8 @@ function videoToApi(v, { streamUrl = null, latestId = null, upload = null, dupli
     // 這一版做的時候用的 LED 版型和當時的排法（0034；沒有 = 整張畫布）
     templateId: v.template_id || null,
     template: ledTpl.snapshotToApi(v.template_snapshot),
+    // 這一版上傳時整條版型時間線（中途換版型，0039；沒有 = null = 單一版型）
+    templateTimeline: ledTpl.timelineSnapshotToApi(v.template_timeline),
     ...(upload ? { upload } : {}),
   };
 }
@@ -4877,6 +4889,7 @@ function videoToShareApi(v, streamUrl) {
     readyAt: v.ready_at || null,
     streamUrl,
     template: ledTpl.snapshotToApi(v.template_snapshot),
+    templateTimeline: ledTpl.timelineSnapshotToApi(v.template_timeline),
   };
 }
 

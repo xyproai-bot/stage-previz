@@ -377,6 +377,8 @@ export function describeProjectRoute(method, segs) {
         return bad('songs.item');
       }
       if (b === 'import-cues' && !c) return m === 'POST' ? r('songs.importCues', 'editor', { songId }) : bad('songs.importCues');
+      // LED 版型時間線（中途換版型，0039；docs/led-templates-api.md）：整份換掉，只有製作
+      if (b === 'template-timeline' && !c) return m === 'PUT' ? r('songs.templateTimeline', 'editor', { songId }) : bad('songs.templateTimeline');
       if (b === 'videos') return describeVideoRoute(m, read, songId, c, d, e);
       // 審片紀錄（V2 需修改、V3 已通過…），新的在前
       if (b === 'reviews' && !c) return read ? r('reviews.list', 'member', { songId }) : bad('reviews.list');
