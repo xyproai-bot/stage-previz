@@ -25,8 +25,7 @@ import {
 } from '../lib/ledTemplateEdit';
 import { panelColor, todayString, type PixelRect } from '../lib/ledMap';
 import { downloadBlob } from '../lib/ledMapDraw';
-import { AeCanvasTooBigError } from '../lib/aeCompScriptDownload';
-import { downloadTemplateAeScript, downloadTemplateTable, guideShrinkWarning, renderTemplateGuideFile } from '../lib/ledTemplateDownload';
+import { downloadTemplateTable, downloadTemplateTilesZip, guideContentFor, guideShrinkWarning, renderTemplateGuideFile } from '../lib/ledTemplateDownload';
 import { layoutFromSpans } from '../lib/ledTemplateContent';
 import { wholeCanvasLayout, type LayerBackdrop } from '../lib/ledTemplateContentDraw';
 import { useLedFullMap } from '../lib/useLedFullMap';
@@ -437,7 +436,8 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     setBusy(true);
     try {
       const shown = { ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) };
-      const { png, fileName } = await renderTemplateGuideFile(shown, screens, projectName ?? '');
+      await new Promise(r => requestAnimationFrame(() => r(null)));
+      const { png, fileName } = await renderTemplateGuideFile(shown, screens, projectName ?? '', guideContentFor(screens, downloadMeta()));
       if (png.scale < 1) toast.warn(guideShrinkWarning(png, shown.canvas));
       else toast.success(`模板圖下載好了（${png.width}×${png.height}）`);
       downloadBlob(png.blob, fileName);
@@ -448,18 +448,25 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     }
   }
 
-  /** 版型畫布大小的 AE 合成腳本（.jsx）：跟「下載模板圖」一樣照現在編輯的樣子（沒存也可以） */
-  async function downloadAeScript() {
+  /** 下載用的畫布資料：整張畫布大小 + 3D 物件範圍排出來的測試圖排法（跟編輯器框裡看到的同一張） */
+  function downloadMeta() {
+    const layout = fullCanvas && sceneReady ? layoutFromSpans(ledObjects, spans, fullCanvas) : null;
+    return { projectName: projectName ?? '', date: todayString(), fullCanvas: fullCanvas ?? { width: 0, height: 0 }, layout: layout && layout.panels.length > 0 ? layout : null };
+  }
+
+  /** 每塊 LED 一張圖 + AE 腳本（zip）：跟「下載模板圖」一樣照現在編輯的樣子（沒存也可以） */
+  async function downloadTiles() {
     if (!draft || !plan || busy) return;
+    if (!fullCanvas) { toast.warn('還沒填這個專案的 LED 畫布大小'); return; }
     if (placedCount === 0) { toast.warn('版型裡還沒有螢幕：先把螢幕「加入版型」'); return; }
     setBusy(true);
     try {
       await new Promise(r => requestAnimationFrame(() => r(null)));   // 先讓「忙碌中」顯示出來再開始畫（大畫布要一兩秒）
       const shown = { ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) };
-      const r = await downloadTemplateAeScript(shown, screens, { projectName: projectName ?? '', date: todayString() });
-      toast.success(`AE 合成腳本下載好了：在 AE 按「File > Scripts > Run Script File…」選它${r.withGuide ? '' : '（這次沒有夾模板圖，外框都有）'}`, 8000);
+      const r = await downloadTemplateTilesZip(shown, screens, downloadMeta());
+      toast.success(`每塊 LED 的圖（${r.count} 塊）下載好了：解壓縮後，在 AE 按「File > Scripts > Run Script File…」選裡面的 AE建合成腳本.jsx${r.shrunk ? '（有幾塊太大，圖縮小了，AE 腳本會自動放大回來）' : ''}`, 9000);
     } catch (e) {
-      toast.error((e instanceof AeCanvasTooBigError ? '' : 'AE 合成腳本沒做出來：') + msg(e));
+      toast.error('每塊 LED 的圖沒做出來：' + msg(e));
     } finally {
       setBusy(false);
     }
@@ -552,7 +559,8 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
         {draft && (
           <>
             <button className="btn btn--ghost" onClick={() => void downloadGuide()} disabled={busy} title="下載版型畫布大小的 PNG（每塊螢幕的長方形、名字、像素大小、指著上方的箭頭），給動畫師當 AE 的參考圖層"><Icon icon={Download} /> 下載模板圖</button>
-            <button className="btn btn--ghost" onClick={() => void downloadAeScript()} disabled={busy} title="下載 AE 腳本（.jsx）：在 AE 跑一下，自動建好版型畫布大小的合成（正方形像素），每塊螢幕一個外框，模板圖放在最下面（都是導引圖層，不會算圖出去）"><Icon icon={FileCode} /> 下載 AE 合成腳本</button>
+            <button className="btn btn--ghost" onClick={() => void downloadTiles()} disabled={busy} title="下載一個 zip：每塊 LED 一張圖（大小就是那塊在畫布上的像素）、座標表，還有一支 AE 腳本，在 AE 跑一下就會每塊 LED 建一個合成，再建一個整張畫布大小的總合成"><Icon icon={FileCode} /> 下載每塊 LED 的圖 + AE</button>
+            <span className="ledtpl-dock__hint">解壓縮後，AE 執行裡面的腳本，輸出「總合成」</span>
             <OverflowMenu
               label="下載座標表（選 CSV 或 JSON）"
               align="auto"

@@ -1,9 +1,11 @@
 // LED 畫布版型的測試圖（貼在 3D 的 LED 上）和模板圖（下載給動畫師的 PNG）：用 canvas 畫。
 // 排版的數字在 lib/ledTemplatePattern.ts（純函式，有單元測試），這裡只負責畫。
 
-import { exportScales, pickLegendCorner, type CanvasSize } from './ledMap';
-import { formatPct, type LedTemplatePlan, type ScreenDef } from './ledTemplate';
-import { guideLayout, layoutPattern, type PatternItem } from './ledTemplatePattern';
+import { exportScales, type CanvasSize, type LedLayout } from './ledMap';
+import { drawTestPattern } from './ledMapDraw';
+import type { LedTemplatePlan, ScreenDef, SrcSpan } from './ledTemplate';
+import { contentPieces } from './ledTemplateContent';
+import { guideLayout, layoutPattern, type Matrix6, type PatternItem } from './ledTemplatePattern';
 
 const FONT = '"Noto Sans TC", "PingFang TC", "Microsoft JhengHei", "Heiti TC", "Segoe UI", system-ui, sans-serif';
 const MONO = '"JetBrains Mono", Consolas, "SF Mono", Menlo, monospace';
@@ -151,7 +153,7 @@ export function paintTemplatePattern(canvasEl: HTMLCanvasElement, plan: Pick<Led
  * 模板圖：深色底，每塊螢幕一個長方形 + 名字 + 版型裡的像素大小 + 一支指著「這塊螢幕的上方」的箭頭；字是正的。
  * scale = 輸出像素 / 版型像素。
  */
-export function drawTemplateGuide(ctx: CanvasRenderingContext2D, plan: Pick<LedTemplatePlan, 'name' | 'canvas' | 'scalePct'>, items: readonly PatternItem[], scale: number) {
+export function drawTemplateGuide(ctx: CanvasRenderingContext2D, plan: Pick<LedTemplatePlan, 'name' | 'canvas' | 'scalePct'>, items: readonly PatternItem[], scale: number, content: GuideContent | null = null) {
   const W = plan.canvas.width, H = plan.canvas.height;
   const u = Math.min(4, Math.max(0.5, Math.max(W, H) / 3840));
   const hair = (n: number) => Math.max(n, 1 / scale);
@@ -177,6 +179,12 @@ export function drawTemplateGuide(ctx: CanvasRenderingContext2D, plan: Pick<LedT
 
   for (const it of items) {
     const { x, y, w, h } = it.dest;
+    const span = content?.spanOf(it.key) ?? null;
+    if (content && span) {
+      drawScreenTile(ctx, it, span, content.layout, [scale, 0, 0, scale, 0, 0], scale);
+      ctx.setTransform(scale, 0, 0, scale, 0, 0);
+      continue;
+    }
     ctx.save();
     ctx.beginPath();
     ctx.rect(x, y, w, h);
@@ -220,46 +228,54 @@ export function drawTemplateGuide(ctx: CanvasRenderingContext2D, plan: Pick<LedT
     ctx.restore();
   }
 
-  // 畫布外框 + 說明（放在最空的角落）
+  // 畫布外框
   ctx.strokeStyle = 'rgba(255,255,255,0.35)';
   ctx.lineWidth = hair(2);
   ctx.strokeRect(0, 0, W, H);
-  drawGuideLegend(ctx, plan, items, u);
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-function drawGuideLegend(ctx: CanvasRenderingContext2D, plan: Pick<LedTemplatePlan, 'name' | 'canvas' | 'scalePct'>, items: readonly PatternItem[], u: number) {
-  const c = plan.canvas;
-  const lines = [
-    `版型「${plan.name}」`,
-    `${c.width}×${c.height} 像素 · 比例 ${formatPct(plan.scalePct)}`,
-    '箭頭 = 這塊螢幕的上方（轉動、翻轉後的方向）',
-    '這張是 AE 的參考圖層，不要一起輸出',
+/** 模板圖裡每塊螢幕畫「網站上那張測試圖」要的東西：整張畫布的測試圖排法 + 每塊螢幕取整張畫布的哪一段 */
+export interface GuideContent { layout: LedLayout; spanOf: (key: string) => SrcSpan | null }
+
+function composeMatrix(b: Matrix6, m: Matrix6): Matrix6 {
+  return [
+    b[0] * m[0] + b[2] * m[1], b[1] * m[0] + b[3] * m[1],
+    b[0] * m[2] + b[2] * m[3], b[1] * m[2] + b[3] * m[3],
+    b[0] * m[4] + b[2] * m[5] + b[4], b[1] * m[4] + b[3] * m[5] + b[5],
   ];
-  const titleFs = 28 * u, fs = 18 * u, pad = 14 * u, lh = fs * 1.4;
-  ctx.font = `700 ${titleFs}px ${FONT}`;
-  let w = ctx.measureText(lines[0]).width;
-  ctx.font = `${fs}px ${FONT}`;
-  for (const l of lines.slice(1)) w = Math.max(w, ctx.measureText(l).width);
-  const box = { w: Math.min(c.width, w + pad * 2), h: Math.min(c.height, titleFs * 1.4 + (lines.length - 1) * lh + pad * 2) };
-  if (box.w >= c.width * 0.9 || box.h >= c.height * 0.9) return;   // 畫布太小放不下就不放
-  const corner = pickLegendCorner(items.map(i => ({ rect: i.dest })), c, box);
-  const m = 10 * u;
-  const bx = corner === 'tl' || corner === 'bl' ? m : c.width - box.w - m;
-  const by = corner === 'tl' || corner === 'tr' ? m : c.height - box.h - m;
-  ctx.fillStyle = 'rgba(12,13,16,0.9)';
-  ctx.fillRect(bx, by, box.w, box.h);
-  ctx.strokeStyle = 'rgba(255,255,255,0.28)';
-  ctx.lineWidth = Math.max(1, 1.5 * u);
-  ctx.strokeRect(bx, by, box.w, box.h);
-  ctx.textAlign = 'left';
-  ctx.textBaseline = 'top';
-  ctx.fillStyle = '#10c78a';
-  ctx.font = `700 ${titleFs}px ${FONT}`;
-  ctx.fillText(lines[0], bx + pad, by + pad);
-  ctx.fillStyle = 'rgba(255,255,255,0.86)';
-  ctx.font = `${fs}px ${FONT}`;
-  lines.slice(1).forEach((l, i) => ctx.fillText(l, bx + pad, by + pad + titleFs * 1.4 + i * lh));
+}
+
+/**
+ * 畫一塊螢幕：網站上這塊 LED 顯示的測試圖（外框顏色、格線、圓和十字、color bar、灰階、名稱、x/y/w/h、角落座標），
+ * 照這塊在版型裡的轉動、翻轉擺進 dest，再疊一支指著「這塊螢幕的上方」的箭頭。
+ * base = 版型畫布像素 → 輸出像素的矩陣（整張模板圖 = 單純縮放；單塊的圖 = 再平移到這塊的左上角）；px = 輸出像素 / 版型像素
+ */
+export function drawScreenTile(ctx: CanvasRenderingContext2D, it: PatternItem, span: SrcSpan, layout: LedLayout, base: Matrix6, px: number) {
+  const { x, y, w, h } = it.dest;
+  ctx.save();
+  ctx.setTransform(...base);
+  ctx.beginPath();
+  ctx.rect(x, y, w, h);
+  ctx.clip();
+  ctx.fillStyle = '#000';
+  ctx.fillRect(x, y, w, h);
+  for (const piece of contentPieces(span, layout.canvas, it)) {
+    const m = composeMatrix(base, piece.matrix);
+    ctx.save();
+    ctx.setTransform(...m);
+    ctx.beginPath();
+    ctx.rect(piece.src.x, piece.src.y, piece.src.w, piece.src.h);
+    ctx.clip();
+    const k = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]));
+    drawTestPattern(ctx, layout, k > 0 ? k : px, { matrix: m });
+    ctx.restore();
+  }
+  ctx.setTransform(...base);
+  const g = guideLayout(it.dest);
+  const len = g.arrow.len * 0.7;
+  drawArrow(ctx, g.arrow.cx, g.arrow.cy, len, it.up.dx, it.up.dy, '#ffffff', 'rgba(0,0,0,0.8)', Math.max(len * 0.04, 1.5 / Math.max(px, 1e-6)));
+  ctx.restore();
 }
 
 export interface TemplateGuidePng { blob: Blob; scale: number; width: number; height: number }
@@ -270,7 +286,7 @@ export interface TemplateGuidePng { blob: Blob; scale: number; width: number; he
  */
 export async function renderTemplateGuidePng(
   plan: Pick<LedTemplatePlan, 'name' | 'canvas' | 'scalePct' | 'screens'>, defs: readonly ScreenDef[],
-  opts: { maxSide?: number } = {},
+  opts: { maxSide?: number; content?: GuideContent | null } = {},
 ): Promise<TemplateGuidePng> {
   const { width: W, height: H } = plan.canvas;
   const items = layoutPattern(plan, defs);
@@ -286,7 +302,7 @@ export async function renderTemplateGuidePng(
     try {
       const ctx = el.getContext('2d');
       if (!ctx) continue;
-      drawTemplateGuide(ctx, plan, items, s);
+      drawTemplateGuide(ctx, plan, items, s, opts.content ?? null);
       blob = await new Promise<Blob | null>(resolve => el.toBlob(resolve, 'image/png'));
     } catch (e) {
       console.warn('[ledTemplate] guide PNG at scale', s, 'failed', e);
@@ -296,4 +312,28 @@ export async function renderTemplateGuidePng(
     if (blob) return { blob, scale: s, width: cw, height: ch };
   }
   throw new Error('這台電腦的瀏覽器畫不出這麼大的圖');
+}
+
+/** 單塊螢幕的圖（大小 = 這塊在版型畫布上的像素大小；畫不了就縮小再試，scale 會 < 1） */
+export async function renderTilePng(it: PatternItem, span: SrcSpan, layout: LedLayout): Promise<TemplateGuidePng> {
+  const { w: W, h: H } = it.dest;
+  for (const s of exportScales(W, H).flatMap(v => [v, v / 2]).filter((v, i, a) => a.indexOf(v) === i)) {
+    const cw = Math.max(1, Math.round(W * s)), ch = Math.max(1, Math.round(H * s));
+    const el = document.createElement('canvas');
+    el.width = cw;
+    el.height = ch;
+    let blob: Blob | null = null;
+    try {
+      const ctx = el.getContext('2d');
+      if (!ctx) continue;
+      drawScreenTile(ctx, it, span, layout, [s, 0, 0, s, -it.dest.x * s, -it.dest.y * s], s);
+      blob = await new Promise<Blob | null>(resolve => el.toBlob(resolve, 'image/png'));
+    } catch (e) {
+      console.warn('[ledTemplate] tile PNG at scale', s, 'failed', e);
+    } finally {
+      el.width = 0; el.height = 0;
+    }
+    if (blob) return { blob, scale: s, width: cw, height: ch };
+  }
+  throw new Error(`這台電腦的瀏覽器畫不出「${it.name}」這麼大的圖`);
 }

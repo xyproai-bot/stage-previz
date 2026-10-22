@@ -9,13 +9,18 @@ import type { CanvasSize } from './ledMap';
 import { downloadBlob } from './ledMapDraw';
 import type { LedTemplatePlan, ManualScreen, ScreenDef } from './ledTemplate';
 import type { LedDownloadKind } from './ledMapMenuText';
-import { renderTemplateGuidePng, type TemplateGuidePng } from './ledTemplateDraw';
+import { renderTemplateGuidePng, renderTilePng, type GuideContent, type TemplateGuidePng } from './ledTemplateDraw';
+import { buildAeTilesScript, layoutFromDefs, TILES_DIR, tilesOf, tilesToCsv, tilesZipFileName } from './ledTemplateTiles';
+import { buildZip, type ZipEntry } from './zipStore';
+import type { LedLayout } from './ledMap';
 import { guideFileName } from './ledTemplatePattern';
 import { templateTableFileName, templateTableToCsv, templateTableToJson, timelineTableFileName, timelineTableToCsv, timelineTableToJson } from './ledTemplateTable';
 import { aeTimelineScriptFileName, buildAeTimelineScript } from './aeTimelineScript';
 import { timelineCanvas, type LedTimeline } from './ledTemplateTimeline';
 
 export interface TemplateDownloadMeta {
+  /** 整張畫布的測試圖排法（編輯器有 3D 的物件範圍時給；沒給就用螢幕清單的範圍排） */
+  layout?: LedLayout | null;
   projectName: string;
   /** yyyy-mm-dd */
   date: string;
@@ -24,11 +29,51 @@ export interface TemplateDownloadMeta {
 }
 
 /** 模板圖 PNG（版型畫布的原尺寸；瀏覽器畫不了就縮小，檔名會加「-縮小N%」） */
-export async function renderTemplateGuideFile(plan: LedTemplatePlan, defs: readonly ScreenDef[], projectName: string): Promise<{ png: TemplateGuidePng; fileName: string }> {
-  const png = await renderTemplateGuidePng(plan, defs);
+export async function renderTemplateGuideFile(plan: LedTemplatePlan, defs: readonly ScreenDef[], projectName: string, content: GuideContent | null = null): Promise<{ png: TemplateGuidePng; fileName: string }> {
+  const png = await renderTemplateGuidePng(plan, defs, { content });
   let fileName = guideFileName(projectName, plan);
   if (png.scale < 1) fileName = fileName.replace(/\.png$/, `-縮小${Math.round(png.scale * 100)}%.png`);
   return { png, fileName };
+}
+
+/** 每塊螢幕畫網站上那張測試圖要的東西（整張畫布不知道大小 = null，畫舊的簡單方塊） */
+export function guideContentFor(defs: readonly ScreenDef[], meta: Pick<TemplateDownloadMeta, 'fullCanvas' | 'layout'>): GuideContent | null {
+  const full = meta.fullCanvas;
+  const layout = meta.layout ?? (full && full.width > 0 && full.height > 0 ? layoutFromDefs(defs, full) : null);
+  if (!layout) return null;
+  const byKey = new Map(defs.map(d => [d.key, d.src]));
+  return { layout, spanOf: k => byKey.get(k) ?? null };
+}
+
+/**
+ * 「每塊 LED 一張圖」的 zip：每塊一張 PNG（大小 = 這塊在版型畫布上的像素大小）放在 tiles 資料夾，
+ * 加座標表 CSV 和 AE 腳本（每塊 LED 一個合成 + 一個整張畫布大小的總合成）。
+ */
+export async function downloadTemplateTilesZip(
+  plan: LedTemplatePlan, defs: readonly ScreenDef[], meta: TemplateDownloadMeta, onProgress?: (done: number, total: number) => void,
+): Promise<{ fileName: string; count: number; shrunk: boolean }> {
+  const content = guideContentFor(defs, meta);
+  if (!content) throw new Error('還沒填這個專案的 LED 畫布大小');
+  const { tiles, items } = tilesOf(plan, defs);
+  const entries: ZipEntry[] = [];
+  let shrunk = false;
+  for (let i = 0; i < items.length; i++) {
+    const span = content.spanOf(items[i].key);
+    if (!span) continue;
+    const png = await renderTilePng(items[i], span, content.layout);
+    if (png.scale < 1) shrunk = true;
+    entries.push({ path: `${TILES_DIR}/${tiles[i].fileName}`, data: new Uint8Array(await png.blob.arrayBuffer()) });
+    onProgress?.(i + 1, items.length);
+  }
+  const enc = new TextEncoder();
+  const script = buildAeTilesScript({ plan, tiles, projectName: meta.projectName, date: meta.date });
+  entries.unshift(
+    { path: 'AE建合成腳本.jsx', data: enc.encode(script) },
+    { path: '座標表.csv', data: enc.encode(tilesToCsv(tiles)) },
+  );
+  const fileName = tilesZipFileName(meta.projectName, plan);
+  downloadBlob(buildZip(entries), fileName);
+  return { fileName, count: tiles.length, shrunk };
 }
 
 /** 模板圖縮小了，要告訴使用者怎麼在 AE 裡放大回來 */
@@ -83,17 +128,17 @@ export async function downloadSongTemplateFile(
   }
   try {
     if (kind === 'png') {
-      const { png, fileName } = await renderTemplateGuideFile(shown, defs, meta.projectName);
+      const { png, fileName } = await renderTemplateGuideFile(shown, defs, meta.projectName, guideContentFor(defs, meta));
       downloadBlob(png.blob, fileName);
       return png.scale < 1
         ? { level: 'warn', text: guideShrinkWarning(png, shown.canvas), duration: 8000 }
         : { level: 'success', text: `版型「${plan.name}」的模板圖下載好了（${png.width}×${png.height}）` };
     }
     if (kind === 'jsx') {
-      const r = await downloadTemplateAeScript(shown, defs, meta);
+      const r = await downloadTemplateTilesZip(shown, defs, meta);
       return {
-        level: 'success', duration: 8000,
-        text: `AE 合成腳本（版型「${plan.name}」）下載好了：在 AE 按「File > Scripts > Run Script File…」選它${r.withGuide ? '' : '（這次沒有夾模板圖，外框都有）'}`,
+        level: r.shrunk ? 'warn' : 'success', duration: 9000,
+        text: `版型「${plan.name}」每塊 LED 的圖（${r.count} 塊）和 AE 腳本下載好了：解壓縮後，在 AE 按「File > Scripts > Run Script File…」選裡面的 AE建合成腳本.jsx`,
       };
     }
     downloadTemplateTable(kind, shown, defs, meta);
@@ -180,7 +225,7 @@ export async function downloadSongTimelineFile(
       const plans = distinctPlans(shown);
       let shrunk: string | null = null;
       for (let i = 0; i < plans.length; i++) {
-        const { png, fileName } = await renderTemplateGuideFile(plans[i].plan, defs, meta.projectName);
+        const { png, fileName } = await renderTemplateGuideFile(plans[i].plan, defs, meta.projectName, guideContentFor(defs, meta));
         downloadBlob(png.blob, fileName);
         if (png.scale < 1 && !shrunk) shrunk = guideShrinkWarning(png, plans[i].plan.canvas);
         if (i + 1 < plans.length) await new Promise(r => setTimeout(r, 400));   // 連續下載幾個檔案，瀏覽器才不會當成一個

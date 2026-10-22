@@ -276,12 +276,14 @@ const BARS = ['#bfbfbf', '#bfbf00', '#00bfbf', '#00bf00', '#bf00bf', '#bf0000', 
 export interface TestPatternOptions {
   /** 每塊多畫一組「上」「右」的箭頭（自動貼 UV 的 3D 預覽用：看得出方向有沒有轉、有沒有左右反）；預設不畫，其他地方的測試圖完全不變 */
   upArrow?: boolean;
+  /** 整張畫布像素 → 輸出像素的矩陣（版型下載：把測試圖的一小塊直接畫進每塊螢幕的圖）；不給 = 照 scale 畫整張，跟以前完全一樣 */
+  matrix?: [number, number, number, number, number, number];
 }
 
 export function drawTestPattern(ctx: CanvasRenderingContext2D, layout: LedLayout, scale: number, opts: TestPatternOptions = {}) {
   const c = layout.canvas;
   const px = 1 / scale;  // 貼圖上 1 個像素有多少畫布像素
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  if (opts.matrix) ctx.setTransform(...opts.matrix); else ctx.setTransform(scale, 0, 0, scale, 0, 0);
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, c.width, c.height);
   const names = new Map<string, string>();
