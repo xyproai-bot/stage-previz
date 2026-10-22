@@ -67,7 +67,7 @@ export async function slotStates(env, projectId, cueId, legacyLoad) {
 export async function decorateCueList(env, songId, cues, { share = false } = {}) {
   if (!cues.length || !(await isLibrarySong(env, songId))) return cues;
   const rows = await all(env.DB,
-    `SELECT c.id, c.library_cue_id, l.label, l.name AS lib_name
+    `SELECT c.id, c.library_cue_id, c.crossfade_own, l.label, l.name AS lib_name, l.crossfade_seconds AS lib_crossfade
        FROM cues c LEFT JOIN library_cues l ON l.id = c.library_cue_id WHERE c.song_id = ?`, songId);
   const byId = new Map(rows.map(r => [r.id, r]));
   return cues.map(c => {
@@ -78,7 +78,12 @@ export async function decorateCueList(env, songId, cues, { share = false } = {})
     // 第 8 階段：name 改成 Cue 庫的名稱（導演頁 / 工作站 / 分享頁 / AE 標記都用 name），cue 自己原本的名字放 slotName
     const named = lc ? { ...c, name: r.lib_name, slotName: c.name } : c;
     // 分享連結不給 Cue 庫的 id（訪客只看編號和名稱）
-    return share ? { ...named, libraryCue: lc } : { ...named, libraryCueId: r?.library_cue_id || null, libraryCue: lc };
+    if (share) return { ...named, libraryCue: lc };
+    // 轉場：crossfadeSeconds 已經是有效值（這首歌另外設的，或 Cue 庫的）；多給「是不是另外設的」和 Cue 庫的值，畫面才寫得出來源
+    return {
+      ...named, libraryCueId: r?.library_cue_id || null, libraryCue: lc,
+      ...(lc ? { crossfadeOwn: Number(r.crossfade_own) !== 0, libraryCrossfadeSeconds: r.lib_crossfade == null ? null : Number(r.lib_crossfade) } : {}),
+    };
   });
 }
 

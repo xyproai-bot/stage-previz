@@ -1138,10 +1138,10 @@ async function duplicateProject(request, env, projectId) {
     const newBaseCueId = c.base_cue_id ? cueIdMap.get(c.base_cue_id) || null : null;
     cueStmts.push(env.DB.prepare(`
       INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds,
-                        video_time_sec, status, base_cue_id, thumbnail_r2_key)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        video_time_sec, status, base_cue_id, thumbnail_r2_key, crossfade_own)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(newCueId, newSongId, c.name, c.order, c.position_xyz, c.rotation_xyz, c.fov, c.crossfade_seconds,
-            c.video_time_sec ?? null, c.status, newBaseCueId, c.thumbnail_r2_key));
+            c.video_time_sec ?? null, c.status, newBaseCueId, c.thumbnail_r2_key, Number(c.crossfade_own) === 0 ? 0 : 1));
   }
   if (cueStmts.length > 0) await env.DB.batch(cueStmts);
 
@@ -1535,12 +1535,13 @@ async function importProject(request, env) {
     const newSongId = songIdMap.get(c.song_id);
     if (!newSongId) continue;
     cueStmts.push(env.DB.prepare(`
-      INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds, video_time_sec, status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO cues (id, song_id, name, "order", position_xyz, rotation_xyz, fov, crossfade_seconds, video_time_sec, status, crossfade_own)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(newCueId, newSongId, c.name, c.order, c.position_xyz, c.rotation_xyz,
             c.fov, typeof c.crossfade_seconds === 'number' ? c.crossfade_seconds : DEFAULT_CUE_CROSSFADE_SECONDS,
             typeof c.video_time_sec === 'number' && isFinite(c.video_time_sec) && c.video_time_sec >= 0 ? c.video_time_sec : null,
-            ['master', 'proposal', 'alternate'].includes(c.status) ? c.status : 'master'));
+            ['master', 'proposal', 'alternate'].includes(c.status) ? c.status : 'master',
+            Number(c.crossfade_own) === 0 ? 0 : 1));
   }
   if (cueStmts.length > 0) await env.DB.batch(cueStmts);
 
@@ -2460,10 +2461,14 @@ async function updateCue(request, env, projectId, songId, cueId, ctx) {
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
   // Cue 庫專案：換指向（libraryCueId）和改時間（videoTimeSec，照時間重排）走新的寫法，其他欄位照舊
-  if ('libraryCueId' in body || (('videoTimeSec' in body) && await cueLib.isLibraryProject(env, projectId))) {
+  if ('libraryCueId' in body || (('videoTimeSec' in body || 'crossfadeSeconds' in body) && await cueLib.isLibraryProject(env, projectId))) {
     const rest = { ...body };
-    delete rest.libraryCueId; delete rest.videoTimeSec;
-    const slotBody = { ...(('libraryCueId' in body) ? { libraryCueId: body.libraryCueId } : {}), ...(('videoTimeSec' in body) ? { videoTimeSec: body.videoTimeSec } : {}) };
+    delete rest.libraryCueId; delete rest.videoTimeSec; delete rest.crossfadeSeconds;
+    const slotBody = {
+      ...(('libraryCueId' in body) ? { libraryCueId: body.libraryCueId } : {}),
+      ...(('videoTimeSec' in body) ? { videoTimeSec: body.videoTimeSec } : {}),
+      ...(('crossfadeSeconds' in body) ? { crossfadeSeconds: body.crossfadeSeconds } : {}),
+    };
     const r = await cueLibCrud.patchSlot(env, ctx, songId, cueId, slotBody, mechLog(request, env, projectId));
     if (r.status !== 200 || !Object.keys(rest).length) return jsonResp(r.body, r.status);
     body = rest;

@@ -65,6 +65,7 @@ const usageOf = (slots = []) => ({ songCount: new Set(slots.map(s => s.songId)).
 function libraryCueOut(r, slots, counts) {
   return {
     id: r.id, label: r.label, name: r.name, note: r.note || '', basedOnId: r.based_on_id || null, rev: Number(r.rev),
+    crossfadeSeconds: r.crossfade_seconds == null ? DEFAULT_CROSSFADE : Number(r.crossfade_seconds),
     createdAt: r.created_at, updatedAt: r.updated_at,
     usage: usageOf(slots),
     counts: counts || { objects: 0, mechanisms: 0 },
@@ -263,6 +264,11 @@ async function songSlots(env, songId) {
 }
 
 /** 時間檢查：回 { ok, value } 或 { ok:false, error } 。null / 沒給 = 不對應影片時間 */
+function checkCrossfade(v) {
+  if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 3600) return { ok: false, error: '淡入淡出秒數不對（0 到 3600）' };
+  return { ok: true, value: v };
+}
+
 function checkTime(v) {
   if (v === null || v === undefined) return { ok: true, value: null };
   if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > SLOT_TIME_MAX) return { ok: false, error: `時間要在 0 到 ${SLOT_TIME_MAX} 秒之間` };
@@ -285,11 +291,13 @@ function reorderStmts(env, slots) {
 
 async function slotOut(env, cueId) {
   const c = await env.DB.prepare(
-    `SELECT c.id, c.song_id, c.name, c."order", c.crossfade_seconds, c.video_time_sec, c.status, c.library_cue_id, l.label, l.name AS lib_name
+    `SELECT c.id, c.song_id, c.name, c."order", c.crossfade_seconds, c.crossfade_own, c.video_time_sec, c.status, c.library_cue_id, l.label, l.name AS lib_name, l.crossfade_seconds AS lib_crossfade
        FROM cues c LEFT JOIN library_cues l ON l.id = c.library_cue_id WHERE c.id = ? LIMIT 1`).bind(cueId).first();
   if (!c) return null;
   return {
     id: c.id, songId: c.song_id, name: c.name, order: Number(c.order), crossfadeSeconds: c.crossfade_seconds,
+    crossfadeOwn: Number(c.crossfade_own) !== 0,
+    libraryCrossfadeSeconds: c.library_cue_id && c.lib_crossfade != null ? Number(c.lib_crossfade) : null,
     videoTimeSec: typeof c.video_time_sec === 'number' ? c.video_time_sec : null, status: c.status,
     libraryCueId: c.library_cue_id || null,
     libraryCue: c.library_cue_id ? { id: c.library_cue_id, label: c.label, name: c.lib_name } : null,
@@ -322,6 +330,12 @@ export async function createLibraryCue(request, env, ctx, log) {
   const name = body.name == null ? cleanName(base?.name) : cleanName(body.name);
   if (!name) return bad('名稱不能空白');
   const note = body.note == null ? '' : String(body.note).slice(0, NOTE_MAX);
+  let libCrossfade = base && base.crossfade_seconds != null ? Number(base.crossfade_seconds) : DEFAULT_CROSSFADE;
+  if (body.crossfadeSeconds != null) {
+    const cf = checkCrossfade(body.crossfadeSeconds);
+    if (!cf.ok) return bad(cf.error);
+    libCrossfade = cf.value;
+  }
 
   let rows = null;
   if (body.look != null) {
@@ -349,10 +363,12 @@ export async function createLibraryCue(request, env, ctx, log) {
       if (!t.ok) return bad(t.error);
       const tie = tieError(slots, t.value, null);
       if (tie) return tie;
-      let crossfade = DEFAULT_CROSSFADE;
+      // 有給秒數 = 這首歌另外設；沒給 = 用 Cue 庫的
+      let crossfade = null;
       if (place.crossfadeSeconds != null) {
-        if (typeof place.crossfadeSeconds !== 'number' || !Number.isFinite(place.crossfadeSeconds) || place.crossfadeSeconds < 0) return bad('淡入淡出秒數不對');
-        crossfade = place.crossfadeSeconds;
+        const cf = checkCrossfade(place.crossfadeSeconds);
+        if (!cf.ok) return bad(cf.error);
+        crossfade = cf.value;
       }
       placement = { kind: 'add', song, slots, time: t.value, crossfade };
     }
@@ -360,8 +376,8 @@ export async function createLibraryCue(request, env, ctx, log) {
 
   const id = rid('lc_');
   const stmts = [env.DB.prepare(
-    `INSERT INTO library_cues (id, project_id, label, name, note, based_on_id, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, projectId, lv.label, name, note, base ? base.id : null, ctx.userId || ctx.me?.id || null)];
+    `INSERT INTO library_cues (id, project_id, label, name, note, based_on_id, crossfade_seconds, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, projectId, lv.label, name, note, base ? base.id : null, libCrossfade, ctx.userId || ctx.me?.id || null)];
   if (rows) {
     stmts.push(...writeLookStmts(env, id, rows, null, { replace: false }));
   } else if (base) {
@@ -377,14 +393,14 @@ export async function createLibraryCue(request, env, ctx, log) {
 
   let slotId = null, orderOut = null;
   if (placement?.kind === 'replace') {
-    stmts.push(env.DB.prepare(`UPDATE cues SET library_cue_id = ?, updated_at = datetime('now') WHERE id = ?`).bind(id, placement.target.id));
+    stmts.push(env.DB.prepare(`UPDATE cues SET library_cue_id = ?, crossfade_seconds = CASE WHEN crossfade_own = 0 THEN ? ELSE crossfade_seconds END, updated_at = datetime('now') WHERE id = ?`).bind(id, libCrossfade, placement.target.id));
     slotId = placement.target.id;
   } else if (placement?.kind === 'add') {
     slotId = rid('c_');
     const maxOrder = placement.slots.reduce((m, s) => Math.max(m, Number(s.order)), -1);
     stmts.push(env.DB.prepare(
-      `INSERT INTO cues (id, song_id, name, "order", crossfade_seconds, video_time_sec, status, library_cue_id) VALUES (?, ?, ?, ?, ?, ?, 'master', ?)`
-    ).bind(slotId, place.songId, name, maxOrder + 1, placement.crossfade, placement.time, id));
+      `INSERT INTO cues (id, song_id, name, "order", crossfade_seconds, crossfade_own, video_time_sec, status, library_cue_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'master', ?)`
+    ).bind(slotId, place.songId, name, maxOrder + 1, placement.crossfade ?? libCrossfade, placement.crossfade == null ? 0 : 1, placement.time, id));
     const re = reorderStmts(env, [...placement.slots, { id: slotId, order: maxOrder + 1, video_time_sec: placement.time }]);
     stmts.push(...re.stmts);
     orderOut = re.order;
@@ -437,19 +453,29 @@ export async function patchLibraryCue(request, env, ctx, lcId, log) {
     if (v.label !== row.label) { sets.push('label = ?'); binds.push(v.label); newLabel = v.label; }
   }
   if ('note' in body) { sets.push('note = ?'); binds.push(String(body.note ?? '').slice(0, NOTE_MAX)); }
+  let newCrossfade = null;
+  if ('crossfadeSeconds' in body) {
+    const cf = checkCrossfade(body.crossfadeSeconds);
+    if (!cf.ok) return bad(cf.error);
+    if (cf.value !== Number(row.crossfade_seconds)) { sets.push('crossfade_seconds = ?'); binds.push(cf.value); newCrossfade = cf.value; }
+  }
   if (!sets.length && !('note' in body)) {
-    if (!('name' in body) && !('label' in body)) return bad('沒有可以改的欄位');
+    if (!('name' in body) && !('label' in body) && !('crossfadeSeconds' in body)) return bad('沒有可以改的欄位');
   }
   if (sets.length) {
     try {
-      await env.DB.prepare(`UPDATE library_cues SET ${sets.join(', ')}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND project_id = ?`)
-        .bind(...binds, lcId, ctx.projectId).run();
+      const stmts = [env.DB.prepare(`UPDATE library_cues SET ${sets.join(', ')}, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND project_id = ?`)
+        .bind(...binds, lcId, ctx.projectId)];
+      // 用 Cue 庫轉場的那些歌的 cue，值跟著同步（其他讀轉場的地方不用改）
+      if (newCrossfade != null) stmts.push(env.DB.prepare(`UPDATE cues SET crossfade_seconds = ?, updated_at = datetime('now') WHERE library_cue_id = ? AND crossfade_own = 0`).bind(newCrossfade, lcId));
+      await env.DB.batch(stmts);
     } catch (e) {
       if (isUniqueError(e)) return bad('這個編號已經有了', 409);
       throw e;
     }
   }
   if (newName != null) await log?.('update', 'library_cue', lcId, { kind: 'rename', label: row.label, fromName: row.name, toName: newName, name: newName });
+  if (newCrossfade != null) await log?.('update', 'library_cue', lcId, { kind: 'crossfade', label: row.label, name: row.name, fromSeconds: Number(row.crossfade_seconds), toSeconds: newCrossfade });
   if (newLabel != null) await log?.('update', 'library_cue', lcId, { kind: 'relabel', name: newName ?? row.name, fromLabel: row.label, toLabel: newLabel, label: newLabel });
   return getLibraryCue(env, ctx, lcId);
 }
@@ -498,18 +524,19 @@ export async function addSlot(env, ctx, songId, body, log) {
   const slots = await songSlots(env, songId);
   const tie = tieError(slots, t.value, null);
   if (tie) return tie;
-  let crossfade = DEFAULT_CROSSFADE;
+  let crossfade = null;   // 有給秒數 = 這首歌另外設；沒給 = 用 Cue 庫的
   if (body.crossfadeSeconds != null) {
-    if (typeof body.crossfadeSeconds !== 'number' || !Number.isFinite(body.crossfadeSeconds) || body.crossfadeSeconds < 0) return bad('淡入淡出秒數不對');
-    crossfade = body.crossfadeSeconds;
+    const cf = checkCrossfade(body.crossfadeSeconds);
+    if (!cf.ok) return bad(cf.error);
+    crossfade = cf.value;
   }
   const id = rid('c_');
   const maxOrder = slots.reduce((m, s) => Math.max(m, Number(s.order)), -1);
   const re = reorderStmts(env, [...slots, { id, order: maxOrder + 1, video_time_sec: t.value }]);
   await env.DB.batch([
     env.DB.prepare(
-      `INSERT INTO cues (id, song_id, name, "order", crossfade_seconds, video_time_sec, status, library_cue_id) VALUES (?, ?, ?, ?, ?, ?, 'master', ?)`
-    ).bind(id, songId, lc.name, maxOrder + 1, crossfade, t.value, lc.id),
+      `INSERT INTO cues (id, song_id, name, "order", crossfade_seconds, crossfade_own, video_time_sec, status, library_cue_id) VALUES (?, ?, ?, ?, ?, ?, ?, 'master', ?)`
+    ).bind(id, songId, lc.name, maxOrder + 1, crossfade ?? Number(lc.crossfade_seconds ?? DEFAULT_CROSSFADE), crossfade == null ? 0 : 1, t.value, lc.id),
     ...re.stmts,
   ]);
   await log?.('create', 'cue', id, { songName: ctx.song?.name, name: lc.name, videoTimeSec: t.value, libraryLabel: lc.label, libraryName: lc.name });
@@ -539,8 +566,27 @@ export async function patchSlot(env, ctx, songId, cueId, body, log) {
     const tie = tieError(slots, newTime, cueId);
     if (tie) return tie;
   }
+  let newCf;   // undefined = 不動；null = 改回用 Cue 庫的；數字 = 這首歌另外設
+  if ('crossfadeSeconds' in body) {
+    if (body.crossfadeSeconds === null) {
+      if (!(newLc || cur.library_cue_id)) return bad('這個 cue 還沒指到 Cue 庫的 cue');
+      newCf = null;
+    } else {
+      const cf = checkCrossfade(body.crossfadeSeconds);
+      if (!cf.ok) return bad(cf.error);
+      newCf = cf.value;
+    }
+  }
   const oldLc = cur.library_cue_id ? await env.DB.prepare(`SELECT label, name FROM library_cues WHERE id = ?`).bind(cur.library_cue_id).first() : null;
-  if (newLc) stmts.push(env.DB.prepare(`UPDATE cues SET library_cue_id = ?, updated_at = datetime('now') WHERE id = ?`).bind(newLc.id, cueId));
+  if (newLc) stmts.push(env.DB.prepare(`UPDATE cues SET library_cue_id = ?, crossfade_seconds = CASE WHEN crossfade_own = 0 THEN ? ELSE crossfade_seconds END, updated_at = datetime('now') WHERE id = ?`).bind(newLc.id, Number(newLc.crossfade_seconds ?? DEFAULT_CROSSFADE), cueId));
+  if (newCf !== undefined) {
+    if (newCf === null) {
+      const libCf = Number((newLc || await env.DB.prepare(`SELECT crossfade_seconds FROM library_cues WHERE id = ?`).bind(cur.library_cue_id).first())?.crossfade_seconds ?? DEFAULT_CROSSFADE);
+      stmts.push(env.DB.prepare(`UPDATE cues SET crossfade_own = 0, crossfade_seconds = ?, updated_at = datetime('now') WHERE id = ?`).bind(libCf, cueId));
+    } else {
+      stmts.push(env.DB.prepare(`UPDATE cues SET crossfade_own = 1, crossfade_seconds = ?, updated_at = datetime('now') WHERE id = ?`).bind(newCf, cueId));
+    }
+  }
   let orderOut = null;
   const timeChanged = newTime !== undefined && newTime !== (typeof cur.video_time_sec === 'number' ? cur.video_time_sec : null);
   if (newTime !== undefined) {
@@ -556,6 +602,7 @@ export async function patchSlot(env, ctx, songId, cueId, body, log) {
   if (newLc && newLc.id !== cur.library_cue_id) {
     await log?.('update', 'cue', cueId, { ...base, kind: 'repoint', videoTimeSec: newTime !== undefined ? newTime : curTime, fromLabel: oldLc?.label, fromName: oldLc?.name });
   }
+  if (newCf !== undefined) await log?.('update', 'cue', cueId, { ...base, kind: 'crossfade', toSeconds: newCf, useLibrary: newCf === null });
   if (timeChanged) await log?.('update', 'cue', cueId, { ...base, kind: 'retime', fromTimeSec: curTime, toTimeSec: newTime });
   return ok({ ok: true, slot: await slotOut(env, cueId), ...(orderOut ? { order: orderOut } : {}) });
 }

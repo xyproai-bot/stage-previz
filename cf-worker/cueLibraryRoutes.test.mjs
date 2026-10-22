@@ -189,7 +189,8 @@ test('搬成 Cue 庫模式前後：每個 cue 的物件狀態、機關位置、�
   for (const song of SONGS.p1) {
     const b = before.p1.cues.get(song), a = after.cues.get(song);
     // cue 清單：原本的欄位一樣，多 libraryCueId / libraryCue
-    assert.deepEqual(a.cues.map(({ libraryCueId, libraryCue, slotName, name, ...rest }) => rest), b.cues.map(({ name, ...rest }) => rest));
+    assert.ok(a.cues.every(c => c.crossfadeOwn === true), '搬家後現有的轉場都是「這首歌另外設」，值不變');
+    assert.deepEqual(a.cues.map(({ libraryCueId, libraryCue, slotName, name, crossfadeOwn, libraryCrossfadeSeconds, ...rest }) => rest), b.cues.map(({ name, ...rest }) => rest));
     // 第 8 階段：name = Cue 庫名稱，cue 自己原本的名字放 slotName
     a.cues.forEach((c, i) => { assert.equal(c.name, c.libraryCue.name); assert.equal(c.slotName, b.cues[i].name); });
     for (const c of a.cues) {

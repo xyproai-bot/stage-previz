@@ -43,10 +43,10 @@ async function projectLabels(env, projectId) {
 const cueName = (s) => [...String(s ?? '').trim()].slice(0, CUE_NAME_MAX).join('') || '新的 cue';
 
 /** 新增一個 Cue 庫的 cue（空的）的陳述式 */
-function insertLibraryCue(env, { id, projectId, label, name, basedOnId = null, userId = null, note = '' }) {
+function insertLibraryCue(env, { id, projectId, label, name, basedOnId = null, userId = null, note = '', crossfade = 1 }) {
   return env.DB.prepare(
-    `INSERT INTO library_cues (id, project_id, label, name, note, based_on_id, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).bind(id, projectId, label, name, note, basedOnId, userId);
+    `INSERT INTO library_cues (id, project_id, label, name, note, based_on_id, crossfade_seconds, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(id, projectId, label, name, note, basedOnId, crossfade, userId);
 }
 
 /**
@@ -510,6 +510,7 @@ export async function copyLibraryToProject(env, projectId, d, objIdMap, mechIdMa
     idMap.set(l.id, nid);
     stmts.push(insertLibraryCue(env, {
       id: nid, projectId, label, name: cueName(l.name), note: String(l.note ?? '').slice(0, 2000), userId,
+      crossfade: Number.isFinite(Number(l.crossfade_seconds)) && Number(l.crossfade_seconds) >= 0 && Number(l.crossfade_seconds) <= 3600 ? Number(l.crossfade_seconds) : 1,
     }));
   }
   for (const l of (Array.isArray(d.libraryCues) ? d.libraryCues : [])) {
