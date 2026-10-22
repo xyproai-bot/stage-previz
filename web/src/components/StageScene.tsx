@@ -66,7 +66,7 @@ import Icon from './Icon';
 import { promptDialog } from './dialogs';
 import CameraBookmarkPanel from './CameraBookmarkPanel';
 import type { CameraBookmark } from '../lib/cameraBookmarks';
-import { Maximize } from 'lucide-react';
+import { Maximize, Axis3d } from 'lucide-react';
 import StageShowBar from './StageShowBar';
 import { useStageFullscreen } from '../lib/useStageFullscreen';
 import { isStageShowActive, type StageShowInfo } from '../lib/stageShow';
@@ -377,6 +377,17 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const multiPivotRef = useRef<THREE.Object3D | null>(null);
 
   const [mode, setMode] = useState<Mode>('translate');
+  // 移動 / 旋轉把手要不要出現：關掉後點物件只會選取（右邊面板照樣能打數字），鏡頭隨時可以轉，不會被把手擋住；記在這台電腦
+  const [gizmoOn, setGizmoOn] = useState<boolean>(() => {
+    try { return window.localStorage.getItem('sp_gizmo_on') !== '0'; } catch { return true; }
+  });
+  const toggleGizmo = () => setGizmoOn(v => {
+    const next = !v;
+    try { window.localStorage.setItem('sp_gizmo_on', next ? '1' : '0'); } catch { /* 存不了就只在這次有效 */ }
+    return next;
+  });
+  // 滑鼠停在把手上時會暫時停掉鏡頭控制（不然拖把手時鏡頭也跟著轉）；把手拿掉時要記得還回來
+  const gizmoBlockRef = useRef(false);
   const [space, setSpace] = useState<'world' | 'local'>('world');
   // 物件名稱 label 預設關掉（按 L 或工具列打開）
   const [showLabels, setShowLabels] = useState(false);
@@ -849,7 +860,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
     // hover 在 gizmo 軸上時就先 disable orbit（不然 orbit 先抓走滑鼠 → camera 跟著轉）
     transform.addEventListener('axis-changed', (event: any) => {
+      gizmoBlockRef.current = event.value !== null;
       orbit.enabled = (event.value === null);
+    });
+    // 滑鼠離開 3D 畫面：如果是被把手停掉的鏡頭控制，還回來（不然回到畫面時鏡頭轉不動，像被鎖住）
+    renderer.domElement.addEventListener('pointerleave', () => {
+      if (gizmoBlockRef.current && !transform.dragging) {
+        gizmoBlockRef.current = false;
+        orbit.enabled = true;
+      }
     });
 
     // 3D 畫面上放手的位置 / 角度 → 要存進 cue 的：倒回機關（用放手那一幀畫面上的機關值，pose.ts 的 basePoseFromScene），
@@ -1927,14 +1946,24 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       multiPivotRef.current = null;
     }
 
-    // 唯讀模式：永遠 detach（不顯示 gizmo）
-    if (readOnly) {
+    // 把手拿掉時，被把手停掉的鏡頭控制要還回來（以前會一直停著 → 點過物件後鏡頭像被鎖住）
+    const releaseOrbit = () => {
+      if (gizmoBlockRef.current && !transform.dragging) {
+        gizmoBlockRef.current = false;
+        if (orbitRef.current) orbitRef.current.enabled = true;
+      }
+    };
+
+    // 唯讀模式、或使用者把「把手」關掉：永遠 detach（不顯示 gizmo）
+    if (readOnly || !gizmoOn) {
       transform.detach();
+      releaseOrbit();
       return;
     }
 
     if (selectedObjectIds.length === 0) {
       transform.detach();
+      releaseOrbit();
       return;
     }
     if (selectedObjectIds.length === 1) {
@@ -1965,7 +1994,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     multiPivotRef.current = pivot;
     meshes.forEach(m => pivot.attach(m));
     transform.attach(pivot);
-  }, [selectedObjectIds, states.length, pivotVersion, readOnly, modelVersion]);
+  }, [selectedObjectIds, states.length, pivotVersion, readOnly, modelVersion, gizmoOn]);
 
   // ── Mode / space ──
   useEffect(() => { transformRef.current?.setMode(mode); }, [mode]);
@@ -3457,6 +3486,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       id: 'rotate', group: 'edit', priority: 0,
       render: (l) => toolBtn({ icon: Rotate3d, label: '旋轉', title: '旋轉 (E)', labeled: l, active: mode === 'rotate', pressed: mode === 'rotate', onClick: () => setMode('rotate') }),
       menu: { icon: Rotate3d, label: '旋轉', shortcut: 'E', checked: mode === 'rotate', onSelect: () => setMode('rotate') },
+    });
+    const gizmoTitle = gizmoOn
+      ? '把手：開（點物件會出現移動 / 旋轉把手）。按一下關掉：點物件只選取，鏡頭隨時可以轉'
+      : '把手：關（點物件只選取，用右邊面板打數字）。按一下打開移動 / 旋轉把手';
+    tools.push({
+      id: 'gizmo', group: 'edit', priority: 2,
+      render: (l) => toolBtn({ icon: Axis3d, label: '把手', title: gizmoTitle, labeled: l, active: gizmoOn, pressed: gizmoOn, onClick: toggleGizmo }),
+      menu: { icon: Axis3d, label: '把手', checked: gizmoOn, hint: '關掉後點物件不會出現把手，鏡頭不會被擋住', onSelect: toggleGizmo },
     });
     const spaceTitle = space === 'world' ? '目前是世界座標軸，按一下改成物件自己的軸 (Q)' : '目前是物件自己的軸，按一下改成世界座標軸 (Q)';
     tools.push({
