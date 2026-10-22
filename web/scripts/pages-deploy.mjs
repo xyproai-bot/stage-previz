@@ -57,5 +57,5 @@ for (const name of fs.readdirSync(cacheDir)) {
 console.log(`[pages-deploy] 這次新增 ${added} 個檔、帶上以前的 ${carried} 個、刪掉過期 ${pruned} 個`);
 
 // 3. 上傳
-const r = spawnSync('npx', ['wrangler', 'pages', 'deploy', 'dist', '--project-name', project, '--branch', branch, '--commit-hash', commit, '--commit-message', `${project} ${commit}`], { stdio: 'inherit', shell: process.platform === 'win32' });
+const r = spawnSync('npx', ['wrangler', 'pages', 'deploy', 'dist', '--project-name', project, '--branch', branch, '--commit-hash', commit, '--commit-message', `${project}-${commit}`], { stdio: 'inherit', shell: process.platform === 'win32' });
 process.exit(r.status ?? 1);
