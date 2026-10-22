@@ -23,6 +23,8 @@
 .cue-lib__use.is-unused { opacity: 0.8; }
 .cue-lib__edit { width: 100%; box-sizing: border-box; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--accent, #3b82f6); background: var(--surface-1); color: var(--text); font: inherit; font-size: 13px; }
 .cue-lib__edit--label { flex: none; width: 76px; text-align: center; }
+.cue-lib__edit--fade { width: 56px; margin: 0 4px; text-align: center; }
+.cue-lib__fade:disabled { opacity: 0.6; cursor: default; }
 .cue-lib__edit[aria-invalid='true'] { border-color: var(--danger, #e5484d); }
 .cue-lib__editbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
 .cue-lib__editbar .btn { display: inline-flex; align-items: center; gap: 4px; }

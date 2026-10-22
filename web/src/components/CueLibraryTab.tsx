@@ -2,12 +2,13 @@
 // 只在 Cue 庫模式的專案出現。點一列 = 在 3D 預覽這個 cue 的畫面，不改任何歌。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Hash, Library, ListMusic, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
+import { Check, Copy, Hash, Library, ListMusic, Pencil, Plus, RotateCcw, Search, Timer, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
 import OverflowMenu from './OverflowMenu';
 import type { LibraryCue, LibraryCueUsage } from '../lib/cueLibraryApi';
 import { filterLibraryCues, fmtTime, usageLabel, type LibraryFilter } from '../lib/cueLibraryList';
 import { labelError, LABEL_MAX } from '../lib/lookDraft';
+import { crossfadeLabel, parseCrossfadeInput } from '../lib/cueTiming';
 import './CueLibraryTab.css';
 
 interface Props {
@@ -23,6 +24,8 @@ interface Props {
   /** 回 null = 改好了；回文字 = 錯誤 */
   onRename: (lc: LibraryCue, name: string) => Promise<string | null>;
   onRelabel: (lc: LibraryCue, label: string) => Promise<string | null>;
+  /** 改這個 cue 預設的轉場秒數（沒另外設的歌會跟著變） */
+  onSetFade: (lc: LibraryCue, seconds: number) => Promise<string | null>;
   onDelete: (lc: LibraryCue) => void;
   onResetAll: (lc: LibraryCue) => void;
   /** 點誰在用的連結：跳去那首歌的那個 cue */
@@ -50,10 +53,10 @@ function UsageLinks({ usage, onJump }: { usage: LibraryCueUsage; onJump: Props['
   );
 }
 
-export default function CueLibraryTab({ cues, loading, shownId, previewing, onSelect, onCopy, onRename, onRelabel, onDelete, onResetAll, onJump, onAddToSong, onSaveAs, busy }: Props) {
+export default function CueLibraryTab({ cues, loading, shownId, previewing, onSelect, onCopy, onRename, onRelabel, onSetFade, onDelete, onResetAll, onJump, onAddToSong, onSaveAs, busy }: Props) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<LibraryFilter>('all');
-  const [editing, setEditing] = useState<{ id: string; field: 'name' | 'label' } | null>(null);
+  const [editing, setEditing] = useState<{ id: string; field: 'name' | 'label' | 'fade' } | null>(null);
   const [draft, setDraft] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -71,22 +74,33 @@ export default function CueLibraryTab({ cues, loading, shownId, previewing, onSe
     document.querySelector<HTMLElement>(`[data-libcue="${CSS.escape(shownId)}"]`)?.scrollIntoView({ block: 'nearest' });
   }, [shownId]);
 
-  function startEdit(lc: LibraryCue, field: 'name' | 'label') {
+  function startEdit(lc: LibraryCue, field: 'name' | 'label' | 'fade') {
     setEditing({ id: lc.id, field });
-    setDraft(field === 'name' ? lc.name : lc.label);
+    setDraft(field === 'name' ? lc.name : field === 'fade' ? String(lc.crossfadeSeconds) : lc.label);
     setError(null);
   }
   const editingCue = editing ? cues.find(c => c.id === editing.id) ?? null : null;
   const localError = editing && editingCue
     ? (editing.field === 'label'
       ? labelError(draft, cues.filter(c => c.id !== editingCue.id).map(c => c.label))
-      : (draft.trim() ? null : '名稱不能空白'))
+      : editing.field === 'fade'
+        ? (parseCrossfadeInput(draft) === null ? '轉場秒數要填 0 或正的數字' : null)
+        : (draft.trim() ? null : '名稱不能空白'))
     : null;
 
   async function commit() {
     if (!editing || !editingCue || saving) return;
     if (localError) { setError(localError); return; }
     const value = draft.trim();
+    if (editing.field === 'fade') {
+      const sec = parseCrossfadeInput(draft) as number;
+      if (sec === editingCue.crossfadeSeconds) { setEditing(null); return; }
+      setSaving(true);
+      const e = await onSetFade(editingCue, sec);
+      setSaving(false);
+      if (e) setError(e); else setEditing(null);
+      return;
+    }
     if (value === (editing.field === 'name' ? editingCue.name : editingCue.label)) { setEditing(null); return; }
     setSaving(true);
     const err = await (editing.field === 'name' ? onRename(editingCue, value) : onRelabel(editingCue, value));
@@ -116,11 +130,11 @@ export default function CueLibraryTab({ cues, loading, shownId, previewing, onSe
 
       {current && (
         <div className="cue-lib__now" role="status">
-          <strong>正在看 Cue 庫：Cue {current.label}「{current.name}」</strong>
+          <strong>Cue {current.label}「{current.name}」</strong>
           <span className="cue-lib__nowsub">
             用在：<UsageLinks usage={current.usage} onJump={onJump} />
           </span>
-          {previewing && <span className="cue-lib__nowsub">只是預覽，沒有改任何一首歌。在 3D 上改東西會變成「還沒存的改動」。</span>}
+          {previewing && <span className="cue-lib__nowsub">這首歌沒有用到它。在 3D 上微調會變成「還沒存的改動」，按上面的「覆蓋」只會改 Cue 庫，不動這首歌。</span>}
         </div>
       )}
 
@@ -176,7 +190,34 @@ export default function CueLibraryTab({ cues, loading, shownId, previewing, onSe
                 ) : (
                   <span className="cue-lib__name">{lc.name}</span>
                 )}
-                <span className={'cue-lib__use' + (used ? '' : ' is-unused')}>{usageLabel(lc.usage)}</span>
+                <span className={'cue-lib__use' + (used ? '' : ' is-unused')}>
+                  {usageLabel(lc.usage)}
+                  {' · '}
+                  {isEditing && editing.field === 'fade' ? (
+                    <span className="cue-lib__fadeedit" onClick={(e) => e.stopPropagation()}>
+                      預設轉場
+                      <input
+                        ref={inputRef}
+                        className="cue-lib__edit cue-lib__edit--fade"
+                        value={draft}
+                        inputMode="decimal"
+                        aria-label="預設轉場秒數"
+                        aria-invalid={!!localError}
+                        onChange={(e) => { setDraft(e.target.value); setError(null); }}
+                        onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Enter') void commit(); else if (e.key === 'Escape') setEditing(null); }}
+                      />
+                      秒（0 = 直接切換；沒另外設的歌會跟著變）
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="cue-lib__link cue-lib__fade"
+                      title="這個 cue 預設的轉場；點一下改。歌裡可以另外設自己的"
+                      onClick={(e) => { e.stopPropagation(); startEdit(lc, 'fade'); }}
+                      disabled={busy}
+                    >{crossfadeLabel(lc.crossfadeSeconds)}</button>
+                  )}
+                </span>
                 {isEditing && (
                   <span className="cue-lib__editbar" onClick={(e) => e.stopPropagation()}>
                     {(error || localError) && <span className="cue-lib__error" role="alert">{error || localError}</span>}
@@ -194,6 +235,7 @@ export default function CueLibraryTab({ cues, loading, shownId, previewing, onSe
                     { key: 'copy', label: '另存 / 複製成新的 cue', icon: Copy, onSelect: () => onCopy(lc) },
                     { key: 'rename', label: '改名稱', icon: Pencil, onSelect: () => startEdit(lc, 'name') },
                     { key: 'relabel', label: '改編號', icon: Hash, onSelect: () => startEdit(lc, 'label') },
+                    { key: 'fade', label: '改預設轉場', icon: Timer, onSelect: () => startEdit(lc, 'fade') },
                     { key: 'usage', label: '哪幾首歌在用', icon: ListMusic, onSelect: () => onSelect(lc.id) },
                     { key: 'reset', label: '這個 cue 全部回到預設', icon: RotateCcw, onSelect: () => onResetAll(lc), disabled: busy, separatorBefore: true },
                     { key: 'delete', label: used ? '刪除（還有歌在用）' : '刪除', icon: Trash2, danger: true, onSelect: () => onDelete(lc), disabled: busy },

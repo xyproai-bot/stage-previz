@@ -92,6 +92,13 @@ export function crossfadeLabel(seconds: number): string {
   return Number.isFinite(seconds) && seconds > 0 ? `轉場 ${seconds} 秒` : '直接切換';
 }
 
+/** Cue 庫專案：歌裡的 cue 的轉場，寫出來源（「用 Cue 庫的」/「這首歌另外設」）；舊模式的 cue 沒有來源，照舊 */
+export function slotTransitionText(c: { crossfadeSeconds: number; crossfadeOwn?: boolean; libraryCrossfadeSeconds?: number | null }): string {
+  const base = crossfadeLabel(c.crossfadeSeconds);
+  if (c.libraryCrossfadeSeconds === undefined || c.libraryCrossfadeSeconds === null) return base;
+  return c.crossfadeOwn === false ? `${base} · 用 Cue 庫的` : `${base} · 這首歌另外設`;
+}
+
 // 換 cue 時舞台移動走到哪了（0 = 還在舊位置、1 = 到新位置）
 // 等速：從頭到尾同一個速度，不會一開始慢、最後拖很久（長秒數時特別明顯）
 export function cueMoveProgress(elapsedMs: number, durationMs: number): number {

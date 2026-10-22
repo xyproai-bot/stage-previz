@@ -8,8 +8,8 @@ import CueDragHandle, { useCueRowDrag } from './CueDragHandle';
 import OverflowMenu, { type OverflowItem } from './OverflowMenu';
 import type { Cue } from '../lib/api';
 import type { LibraryCue } from '../lib/cueLibraryApi';
-import { crossfadeLabel, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
 import { canDragOnto, dragHintText, EMPTY_LIBRARY_TEXT, EMPTY_SONG_TEXT, fmtSlotTime, OUT_OF_ORDER_TEXT, slotsOutOfOrder, timeTaken, timeTakenText } from '../lib/songSlots';
+import { parseCrossfadeInput, parseVideoTimeInput, slotTransitionText } from '../lib/cueTiming';
 import { RESET_ALL_MENU_LABEL } from '../lib/cueResetAll';
 import './LookDraftBar.css';
 import './AddSongCueDialog.css';
@@ -26,7 +26,8 @@ interface Props {
   onNewFromTemplate?: () => void;
   /** 回 null = 改好了；回文字 = 錯誤 */
   onChangeTime: (cue: Cue, sec: number | null) => Promise<string | null>;
-  onChangeFade: (cue: Cue, sec: number) => Promise<string | null>;
+  /** sec = null：改回用 Cue 庫的轉場 */
+  onChangeFade: (cue: Cue, sec: number | null) => Promise<string | null>;
   onSwap: (cue: Cue) => void;
   onCopyNew: (cue: Cue) => void;
   onRemove: (cue: Cue) => void;
@@ -101,7 +102,8 @@ export default function SongCueSlots({
   function rowMenu(c: Cue): OverflowItem[] {
     const items: OverflowItem[] = [
       { key: 'time', label: '改時間', icon: Clock, onSelect: () => startEdit(c, 'time') },
-      { key: 'fade', label: '改轉場', icon: Timer, onSelect: () => startEdit(c, 'fade') },
+      { key: 'fade', label: '這首歌另外設轉場', icon: Timer, onSelect: () => startEdit(c, 'fade') },
+      ...(c.libraryCueId && c.crossfadeOwn === true ? [{ key: 'fadeLib', label: '轉場改回用 Cue 庫的', icon: RotateCcw, onSelect: () => { void onChangeFade(c, null); }, disabled: busy }] : []),
       { key: 'swap', label: '換成別的 cue', icon: Repeat, onSelect: () => onSwap(c), disabled: busy },
       { key: 'copy', label: '複製成新的 cue（只改這首歌）', icon: Copy, onSelect: () => onCopyNew(c), disabled: busy || !c.libraryCueId },
       { key: 'show', label: '在 Cue 庫裡看', icon: Library, onSelect: () => { if (c.libraryCueId) onShowInLibrary(c.libraryCueId); }, disabled: !c.libraryCueId },
@@ -152,7 +154,7 @@ export default function SongCueSlots({
                 <div className="cue-item__main">
                   <div className="cue-item__name">{name}</div>
                   <div className="cue-item__meta muted small">
-                    {c.videoTimeSec === null && '沒有時間 · '}{crossfadeLabel(c.crossfadeSeconds)}
+                    {c.videoTimeSec === null && '沒有時間 · '}{slotTransitionText(c)}
                     {lc && lc.usage.songCount > 1 && <span className="song-slots__shared">{lc.usage.songCount} 首歌在用</span>}
                   </div>
                   {isEditing && editing && (

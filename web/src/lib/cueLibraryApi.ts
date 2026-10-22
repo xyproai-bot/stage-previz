@@ -39,6 +39,8 @@ export interface LibraryCue {
   basedOnId: string | null;
   /** 畫面每改一次 +1；更新畫面時帶 ifRev 防止兩個人同時改 */
   rev: number;
+  /** 轉場秒數的預設值（歌裡的 cue 沒另外設就用它）；0 = 直接切換 */
+  crossfadeSeconds: number;
   createdAt: string;
   updatedAt: string;
   usage: LibraryCueUsage;
@@ -77,7 +79,11 @@ export interface LibrarySlot {
   songId: string;
   name: string;
   order: number;
+  /** 有效的轉場秒數（這首歌另外設的，或 Cue 庫的） */
   crossfadeSeconds: number;
+  /** true = 這首歌另外設的；false = 用 Cue 庫的 */
+  crossfadeOwn?: boolean;
+  libraryCrossfadeSeconds?: number | null;
   videoTimeSec: number | null;
   status: 'master' | 'proposal' | 'alternate';
   libraryCueId: string | null;
@@ -89,7 +95,7 @@ export type SlotOrder = { id: string; order: number }[];
 /** 另存時放到哪裡：換掉這首歌的某個 cue，或在這首歌加一個 cue */
 export type SaveAsPlace =
   | { songId: string; replaceCueId: string }
-  | { songId: string; videoTimeSec: number | null; crossfadeSeconds?: number };
+  | { songId: string; videoTimeSec: number | null; crossfadeSeconds?: number };   // 沒給秒數 = 用 Cue 庫的
 
 export interface CreateLibraryCueInput {
   /** 沒給 = 用建議編號（現有最大的開頭整數 + 1） */
@@ -97,6 +103,8 @@ export interface CreateLibraryCueInput {
   /** 沒給 = 用來源的名稱（沒有來源就一定要給） */
   name?: string;
   note?: string;
+  /** 這個新 cue 的預設轉場秒數；沒給 = 跟來源一樣（沒有來源 = 1 秒） */
+  crossfadeSeconds?: number;
   /** 另存的來源；沒給 look 時原樣複製來源的畫面 */
   basedOnId?: string;
   look?: Look;
@@ -164,7 +172,7 @@ export async function createLibraryCue(projectId: string, input: CreateLibraryCu
 }
 
 /** 改名稱 / 編號 / 備註（編號重複 409「這個編號已經有了」） */
-export async function updateLibraryCue(projectId: string, lcId: string, patch: { name?: string; label?: string; note?: string }): Promise<LibraryCue> {
+export async function updateLibraryCue(projectId: string, lcId: string, patch: { name?: string; label?: string; note?: string; crossfadeSeconds?: number }): Promise<LibraryCue> {
   return (await call<{ libraryCue: LibraryCue }>(libPath(projectId, lcId), json('PATCH', patch))).libraryCue;
 }
 
@@ -205,8 +213,8 @@ export async function addSongSlot(projectId: string, songId: string, input: { li
   return call(songCues(projectId, songId), json('POST', input));
 }
 
-/** 換指向 / 改時間（照時間重排）；也可以同時改 name、crossfadeSeconds。回新的 cue；改時間時多一個新順序 */
-export async function updateSongSlot(projectId: string, songId: string, cueId: string, patch: { libraryCueId?: string; videoTimeSec?: number | null; name?: string; crossfadeSeconds?: number }):
+/** 換指向 / 改時間（照時間重排）；也可以同時改 name、crossfadeSeconds（數字 = 這首歌另外設；null = 改回用 Cue 庫的）。回新的 cue；改時間時多一個新順序 */
+export async function updateSongSlot(projectId: string, songId: string, cueId: string, patch: { libraryCueId?: string; videoTimeSec?: number | null; name?: string; crossfadeSeconds?: number | null }):
   Promise<{ ok: true; slot?: LibrarySlot; order?: SlotOrder }> {
   return call(`${songCues(projectId, songId)}/${enc(cueId)}`, json('PATCH', patch));
 }

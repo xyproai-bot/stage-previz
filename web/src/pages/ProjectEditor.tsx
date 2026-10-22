@@ -1089,7 +1089,7 @@ export default function ProjectEditor() {
     setDraftBusy(true);
     try {
       const r = await cueLib.putLibraryLook(pid, lid, look, b.rev);
-      toast.success(`已更新 Cue ${currentLib?.label ?? ''}`);
+      toast.success(`已覆蓋 Cue ${currentLib?.label ?? ''}`);
       // 更新是一步：復原 = 把換掉之前的畫面寫回去（共用這個 cue 的每首歌都會跟著變）
       let rev = r.rev;
       const reload = async () => {
@@ -1130,7 +1130,7 @@ export default function ProjectEditor() {
       message: `Cue ${label}${lib ? `「${lib.name}」` : ''}的改動還沒存。${shared}`,
       choices: [
         { value: 'saveas', label: '另存成新的 cue', primary: true },
-        { value: 'update', label: `更新 Cue ${label}` },
+        { value: 'update', label: `覆蓋 Cue ${label}` },
         { value: 'discard', label: '放棄改動' },
       ],
     });
@@ -1176,7 +1176,7 @@ export default function ProjectEditor() {
   async function afterSlotWrite() {
     await Promise.all([refreshCues(), refreshLibCues(), refreshCueStates(), mechRef.current.refreshPositions()]);
   }
-  async function addSlot(v: { libraryCueId: string; videoTimeSec: number | null; crossfadeSeconds: number }): Promise<string | null> {
+  async function addSlot(v: { libraryCueId: string; videoTimeSec: number | null; crossfadeSeconds?: number }): Promise<string | null> {
     if (!projectId || !selectedSongId) return '先選一首歌';
     try {
       const r = await cueLib.addSongSlot(projectId, selectedSongId, v);
@@ -1203,11 +1203,12 @@ export default function ProjectEditor() {
       return null;
     } catch (e) { return msg(e); }
   }
-  async function changeSlotFade(cue: Cue, sec: number): Promise<string | null> {
+  async function changeSlotFade(cue: Cue, sec: number | null): Promise<string | null> {
     if (!projectId || !selectedSongId) return '先選一首歌';
     try {
       await cueLib.updateSongSlot(projectId, selectedSongId, cue.id, { crossfadeSeconds: sec });
       await refreshCues();
+      if (sec === null) toast.success('這個 cue 的轉場改回用 Cue 庫的');
       return null;
     } catch (e) { return msg(e); }
   }
@@ -1245,7 +1246,7 @@ export default function ProjectEditor() {
 
   const [copyOf, setCopyOf] = useState<cueLib.LibraryCue | null>(null);
   const [libBusy, setLibBusy] = useState(false);
-  async function relabelOrRename(lc: cueLib.LibraryCue, patch: { name?: string; label?: string }): Promise<string | null> {
+  async function relabelOrRename(lc: cueLib.LibraryCue, patch: { name?: string; label?: string; crossfadeSeconds?: number }): Promise<string | null> {
     if (!projectId) return '沒有專案';
     try {
       await cueLib.updateLibraryCue(projectId, lc.id, patch);
@@ -1938,6 +1939,7 @@ export default function ProjectEditor() {
                 onCopy={setCopyOf}
                 onRename={(lc, name) => relabelOrRename(lc, { name })}
                 onRelabel={(lc, label) => relabelOrRename(lc, { label })}
+                onSetFade={(lc, sec) => relabelOrRename(lc, { crossfadeSeconds: sec })}
                 onDelete={(lc) => { void deleteLib(lc); }}
                 onResetAll={(lc) => { void resetAllLib(lc); }}
                 onJump={jumpToSlot}

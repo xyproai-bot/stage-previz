@@ -7,7 +7,7 @@ const usage = (songs: [string, string][]): LibraryCueUsage => ({
   slots: songs.map(([songId, code], i) => ({ cueId: 'c' + i, songId, songName: '歌' + songId, songCode: code || null, videoTimeSec: i * 10 })),
 });
 const mk = (label: string, name: string, u: LibraryCueUsage = usage([]), n = 0): LibraryCue => ({
-  id: 'lc' + label, label, name, note: '', basedOnId: null, rev: 1, createdAt: String(1000 + n), updatedAt: '', usage: u, counts: { objects: 0, mechanisms: 0 },
+  id: 'lc' + label, label, name, note: '', basedOnId: null, rev: 1, crossfadeSeconds: 1, createdAt: String(1000 + n), updatedAt: '', usage: u, counts: { objects: 0, mechanisms: 0 },
 });
 
 describe('Cue 庫清單', () => {

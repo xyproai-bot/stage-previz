@@ -495,6 +495,9 @@ export interface Cue {
   /** Cue 庫專案才有：這個 cue 指到的 Cue 庫的 cue */
   libraryCueId?: string | null;
   libraryCue?: { id: string; label: string; name: string } | null;
+  /** Cue 庫專案：crossfadeSeconds 是有效值；這個 true = 這首歌另外設的，false = 用 Cue 庫的 */
+  crossfadeOwn?: boolean;
+  libraryCrossfadeSeconds?: number | null;
 }
 
 export async function listCues(projectId: string, songId: string): Promise<Cue[]> {

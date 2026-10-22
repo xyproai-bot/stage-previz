@@ -36,36 +36,30 @@ export default function LookDraftBar({ label, name, songCount, summary, hasChang
   return (
     <div className={'look-draft-bar' + (hasChanges ? ' is-dirty' : '')} role="status">
       <div className="look-draft-bar__text">
+        <strong>正在編輯 {cueName}</strong>
         {hasChanges ? (
-          <>
-            <strong>還沒存的改動：{parts.join('、')}</strong>
-            <span className="look-draft-bar__sub">你正在改 {cueName}{songCount !== null && songCount > 1 ? '，' : ' '}{usageText(songCount)}</span>
-          </>
+          <span className="look-draft-bar__sub">還沒存的改動：{parts.join('、')}{songCount !== null && songCount > 1 ? '。' : ' '}{usageText(songCount)}</span>
         ) : (
-          <>
-            <strong>{cueName}</strong>
-            <span className="look-draft-bar__sub">{songCount === null ? '' : songCount <= 0 ? '沒有歌在用' : `${songCount} 首歌在用`}</span>
-          </>
+          <span className="look-draft-bar__sub">在 3D 上微調，再按「覆蓋 Cue {label}」{songCount === null ? '' : songCount <= 0 ? '（沒有歌在用）' : songCount === 1 ? '（只有這首歌在用）' : `（${songCount} 首歌在用）`}</span>
         )}
       </div>
       <div className="look-draft-bar__actions">
-        <button type="button" className={'btn btn--sm ' + (hasChanges ? 'btn--primary' : 'btn--ghost')} onClick={onSaveAs} disabled={busy}>
+        <button type="button" className={'btn btn--sm ' + (hasChanges ? 'btn--primary' : 'btn--ghost')} onClick={onUpdate} disabled={busy || !hasChanges}
+          title={hasChanges ? '把目前的改動存回這個 cue（可以復原）' : '先在 3D 上改一點東西'}>
+          <Icon icon={RefreshCw} /> 覆蓋 Cue {label}
+        </button>
+        <button type="button" className="btn btn--sm btn--ghost" onClick={onSaveAs} disabled={busy}>
           <Icon icon={Copy} /> 另存成新的 cue
         </button>
+        {hasChanges && (
+          <button type="button" className="btn btn--sm btn--ghost" onClick={onDiscard} disabled={busy}>
+            <Icon icon={Undo2} /> 放棄
+          </button>
+        )}
         {onApplyTemplate && (
           <button type="button" className="btn btn--sm btn--ghost" onClick={onApplyTemplate} disabled={busy} title="把常用擺位套進這個 cue 還沒存的改動">
             <Icon icon={Bookmark} /> 套用常用擺位
           </button>
-        )}
-        {hasChanges && (
-          <>
-            <button type="button" className="btn btn--sm btn--ghost" onClick={onUpdate} disabled={busy}>
-              <Icon icon={RefreshCw} /> 更新 Cue {label}
-            </button>
-            <button type="button" className="btn btn--sm btn--ghost" onClick={onDiscard} disabled={busy}>
-              <Icon icon={Undo2} /> 放棄
-            </button>
-          </>
         )}
       </div>
     </div>

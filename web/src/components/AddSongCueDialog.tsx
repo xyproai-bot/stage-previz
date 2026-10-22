@@ -5,13 +5,14 @@ import { Search, X } from 'lucide-react';
 import Icon from './Icon';
 import type { LibraryCue } from '../lib/cueLibraryApi';
 import { filterLibraryCues, usageLabel } from '../lib/cueLibraryList';
-import { NEW_CUE_CROSSFADE_SECONDS, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
+import { parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
 import { timeTaken, timeTakenText, type SlotLike } from '../lib/songSlots';
 import './NewProjectDialog.css';
 import './LookDraftBar.css';
 import './AddSongCueDialog.css';
 
-export interface AddSongCueValue { libraryCueId: string; videoTimeSec: number | null; crossfadeSeconds: number }
+/** crossfadeSeconds 沒給 = 這首歌的這個 cue 用 Cue 庫的轉場 */
+export interface AddSongCueValue { libraryCueId: string; videoTimeSec: number | null; crossfadeSeconds?: number }
 
 interface Props {
   mode: 'add' | 'swap';
@@ -36,7 +37,7 @@ export default function AddSongCueDialog({ mode, libCues, slots, initialLibraryC
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   });
   const [noTime, setNoTime] = useState(false);
-  const [fade, setFade] = useState(String(NEW_CUE_CROSSFADE_SECONDS));
+  const [fade, setFade] = useState('');   // 空白 = 用 Cue 庫的轉場
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -59,8 +60,9 @@ export default function AddSongCueDialog({ mode, libCues, slots, initialLibraryC
     else if (timeTaken(slots, parsedTime.value)) timeErr = timeTakenText(parsedTime.value);
     else timeValue = parsedTime.value;
   }
-  const fadeValue = parseCrossfadeInput(fade);
-  const fadeErr = mode === 'add' && fadeValue === null ? '轉場秒數要填 0 或正的數字' : null;
+  const fadeValue = fade.trim() === '' ? undefined : parseCrossfadeInput(fade);
+  const fadeErr = mode === 'add' && fadeValue === null ? '轉場秒數要填 0 或正的數字，或留空用 Cue 庫的' : null;
+  const pickedLib = libCues.find(l => l.id === pick);
   const sameAsCurrent = mode === 'swap' && !!pick && pick === currentLibraryCueId;
   const canSubmit = !!pick && !timeErr && !fadeErr && !sameAsCurrent && !busy;
 
@@ -70,7 +72,7 @@ export default function AddSongCueDialog({ mode, libCues, slots, initialLibraryC
     setBusy(true);
     setServerError(null);
     try {
-      const err = await onSubmit({ libraryCueId: pick, videoTimeSec: mode === 'add' && !noTime ? timeValue : null, crossfadeSeconds: fadeValue ?? NEW_CUE_CROSSFADE_SECONDS });
+      const err = await onSubmit({ libraryCueId: pick, videoTimeSec: mode === 'add' && !noTime ? timeValue : null, ...(typeof fadeValue === 'number' ? { crossfadeSeconds: fadeValue } : {}) });
       if (err) setServerError(err);
     } finally { setBusy(false); }
   }
@@ -122,8 +124,9 @@ export default function AddSongCueDialog({ mode, libCues, slots, initialLibraryC
               {timeErr && <div className="cue-save-dlg__error" role="alert">{timeErr}</div>}
               <div className="add-slot-dlg__row">
                 <label htmlFor="add-slot-fade">轉場（秒）</label>
-                <input id="add-slot-fade" value={fade} inputMode="decimal" onChange={(e) => setFade(e.target.value)} aria-invalid={!!fadeErr} />
-                <span className="muted small">0 = 直接切換</span>
+                <input id="add-slot-fade" value={fade} inputMode="decimal" onChange={(e) => setFade(e.target.value)} aria-invalid={!!fadeErr}
+                  placeholder={pickedLib ? `用 Cue 庫的 ${pickedLib.crossfadeSeconds}` : '用 Cue 庫的'} />
+                <span className="muted small">留空 = 用 Cue 庫的；0 = 直接切換</span>
               </div>
               {fadeErr && <div className="cue-save-dlg__error" role="alert">{fadeErr}</div>}
             </>
