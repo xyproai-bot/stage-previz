@@ -5,6 +5,8 @@ import { applyLocalTransform, localTransform, mapUvToTemplate, nativeSize, spanF
 import { analyzeObject, assignVertices, stageFrontOf, audienceRight, type ObjectGeom } from './surfaces';
 import { describeObject, bestOrientation } from './objectInfo';
 import { resolveSize } from './size';
+import { parseEditSnapshot } from './editState';
+import { formToSpec } from './sizeForm';
 import { layoutProblems, packStageShaped, type PackItem } from './pack';
 import { canvasPoint, flatUvForPrim } from './place';
 import { buildLegacy, buildPlan, objectUvs, pieceScreensOf, type PlanObjectIn } from './plan';
@@ -151,8 +153,53 @@ describe('resolveSize：三種輸入', () => {
   const measured = { w: 12, h: 4 };
   it('點距：P3.9 → 12 m / 3.9 mm', () => {
     const r = resolveSize({ mode: 'pitch', pitchMm: 3.9 }, measured);
-    expect(r).toMatchObject({ ok: true, w: 3077, h: 1026 });
-    expect(r.line).toBe('P3.9 → 3077 × 1026 點（12.00 × 4.00 m）');
+    expect(r).toMatchObject({ ok: true, w: 3072, h: 1024 });
+    expect(r.line).toBe('P3.9（0.5 m = 128 點，實際 3.90625 mm） → 3072 × 1024 點（12.00 × 4.00 m）');
+  });
+  it('點距 P3.9 換成實際值：2.5 × 2.0 m = 640 × 512（不是 641 × 513），量到差一點對齊到箱體', () => {
+    const r = resolveSize({ mode: 'pitch', pitchMm: 3.9 }, { w: 2.5, h: 2.0 });
+    expect(r).toMatchObject({ ok: true, w: 640, h: 512 });
+    expect(r.note).toBeUndefined();
+    expect(resolveSize({ mode: 'pitch', pitchMm: 3.9 }, { w: 2.5, h: 2.0 }).w).toBe(640);
+    const off = resolveSize({ mode: 'pitch', pitchMm: 3.9 }, { w: 2.504, h: 2.0 }); // 641 點 → 640
+    expect(off).toMatchObject({ w: 640, h: 512 });
+    expect(off.note).toBe('已對齊到箱體（原本 641）');
+    const both = resolveSize({ mode: 'pitch', pitchMm: 3.9 }, { w: 2.504, h: 2.003 }); // 641 × 513
+    expect(both).toMatchObject({ w: 640, h: 512 });
+    expect(both.note).toBe('已對齊到箱體（原本 641 × 513）');
+  });
+  it('對不齊的（半片）照實顯示：離箱體整數倍超過 2 點不動', () => {
+    const r = resolveSize({ mode: 'pitch', pitchMm: 3.9 }, { w: 2.5 + 0.25 * 0.5, h: 2.0 }); // 約 720 點 = 5.625 箱
+    expect(r.w).toBe(Math.round(2625 / (500 / 128)));
+    expect(r.w % 128).not.toBe(0);
+    expect(r.note).toBeUndefined();
+  });
+  it('各個常見點距的實際值', () => {
+    for (const [nom, n] of [[3.9, 128], [2.6, 192], [1.9, 256], [2.9, 168], [4.8, 104], [1.5, 320]] as const) {
+      const r = resolveSize({ mode: 'pitch', pitchMm: nom }, { w: 1, h: 0.5 });
+      expect(r).toMatchObject({ ok: true, w: 2 * n, h: n });
+    }
+  });
+  it('手動打精確小數（3.90625）照用，不換、不對齊', () => {
+    const r = resolveSize({ mode: 'pitch', pitchMm: 3.90625 }, { w: 2.504, h: 2.0 });
+    expect(r.w).toBe(641);
+    expect(r.note).toBeUndefined();
+    expect(r.line.startsWith('P3.91 →')).toBe(true);
+  });
+  it('每 0.5 m 幾點：128 → 2.5 × 2.0 m = 640 × 512；預設 128 以外也行', () => {
+    expect(resolveSize({ mode: 'perhalf', perHalf: 128 }, { w: 2.5, h: 2.0 })).toMatchObject({ ok: true, w: 640, h: 512 });
+    expect(resolveSize({ mode: 'perhalf', perHalf: 192 }, { w: 2.5, h: 2.0 })).toMatchObject({ w: 960, h: 768 });
+    expect(resolveSize({ mode: 'perhalf', perHalf: 128 }, { w: 2.504, h: 2.0 }).note).toBe('已對齊到箱體（原本 641）');
+    expect(resolveSize({ mode: 'perhalf', perHalf: 0 }, { w: 2.5, h: 2.0 }).ok).toBe(false);
+    expect(resolveSize({ mode: 'perhalf' }, { w: 2.5, h: 2.0 }).ok).toBe(false);
+  });
+  it('表單：舊資料（沒有 perHalf 欄位、點距 3.9）照讀並換成實際值；新模式存取', () => {
+    const old = parseEditSnapshot({ v: 1, forms: { 'o:a': { mode: 'pitch', pitch: '3.9' } } });
+    const f = old!.forms['o:a'];
+    expect(f.perHalf).toBe('128');
+    expect(resolveSize(formToSpec(f)!, { w: 2.5, h: 2.0 })).toMatchObject({ w: 640, h: 512 });
+    const nw = parseEditSnapshot({ v: 1, forms: { 'o:a': { mode: 'perhalf', perHalf: '192' } } });
+    expect(formToSpec(nw!.forms['o:a'])).toEqual({ mode: 'perhalf', perHalf: 192 });
   });
   it('總點數：照填的，量到多大都不管', () => {
     const r = resolveSize({ mode: 'pixels', pixels: { w: 3072, h: 1024 } }, measured);

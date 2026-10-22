@@ -6,6 +6,8 @@ export interface SizeForm {
   mode: SizeMode;
   /** 點距（mm），可以寫 3.9 或 P3.9 */
   pitch: string;
+  /** 每 0.5 m 幾點（預設 128） */
+  perHalf: string;
   /** 總點數 寬 / 高 */
   pw: string;
   ph: string;
@@ -18,7 +20,7 @@ export interface SizeForm {
   rows: string;
 }
 
-export const EMPTY_FORM: SizeForm = { mode: 'pitch', pitch: '', pw: '', ph: '', cmmW: '', cmmH: '', cpxW: '', cpxH: '', cols: '', rows: '' };
+export const EMPTY_FORM: SizeForm = { mode: 'pitch', pitch: '', perHalf: '128', pw: '', ph: '', cmmW: '', cmmH: '', cpxW: '', cpxH: '', cols: '', rows: '' };
 
 const num = (s: string): number | null => parseNumber(s);
 const int = (s: string): number | null => {
@@ -31,6 +33,10 @@ export function formToSpec(f: SizeForm): SizeSpec | undefined {
   if (f.mode === 'pitch') {
     const p = num(f.pitch);
     return p === null ? undefined : { mode: 'pitch', pitchMm: p };
+  }
+  if (f.mode === 'perhalf') {
+    const n = int(f.perHalf);
+    return n === null ? undefined : { mode: 'perhalf', perHalf: n };
   }
   if (f.mode === 'pixels') {
     const w = int(f.pw), h = int(f.ph);
@@ -49,6 +55,7 @@ export const formIsEmpty = (f: SizeForm | undefined): boolean => !f || formToSpe
 
 export const MODE_LABEL: Record<SizeMode, string> = {
   pitch: '點距（mm）',
+  perhalf: '每 0.5 m 幾點',
   pixels: '總點數（寬 × 高）',
   cabinets: '箱體（每箱點數 × 箱數）',
 };

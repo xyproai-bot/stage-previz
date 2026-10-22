@@ -33,8 +33,8 @@ export interface UvEditSnapshot {
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const MODES = new Set(['pitch', 'pixels', 'cabinets']);
-const FORM_FIELDS = ['pitch', 'pw', 'ph', 'cmmW', 'cmmH', 'cpxW', 'cpxH', 'cols', 'rows'] as const;
+const MODES = new Set(['pitch', 'perhalf', 'pixels', 'cabinets']);
+const FORM_FIELDS = ['pitch', 'perHalf', 'pw', 'ph', 'cmmW', 'cmmH', 'cpxW', 'cpxH', 'cols', 'rows'] as const;
 const MAX_ENTRIES = 600;
 const MAX_KEY = 160;
 

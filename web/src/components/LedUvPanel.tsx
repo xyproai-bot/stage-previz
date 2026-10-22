@@ -740,6 +740,12 @@ function SizeFields({ f, onChange }: { f: SizeForm; onChange: (p: Partial<SizeFo
           <span className="muted small">mm</span>
         </>
       )}
+      {f.mode === 'perhalf' && (
+        <>
+          <input className="uvfields__n" inputMode="numeric" placeholder="128" value={f.perHalf} onChange={e => onChange({ perHalf: e.target.value })} aria-label="每 0.5 公尺幾點" />
+          <span className="muted small">點 / 0.5 m</span>
+        </>
+      )}
       {f.mode === 'pixels' && (
         <>
           <input className="uvfields__n" inputMode="numeric" placeholder="寬" value={f.pw} onChange={e => onChange({ pw: e.target.value })} aria-label="總點數寬" />
@@ -800,6 +806,7 @@ function SizeTab({ plan, forms, bulk, setBulk, onBulk, setForm, scaleCorrection 
               {p.surface === 'arc' || distortionLevel(p.distortion) !== 'ok' ? <DistortionChip d={p.distortion} /> : null}
               <SizeFields f={f} onChange={patch => setForm(p.key, patch)} />
               <span className={'uvres small' + (res ? (res.ok ? ' is-ok' : ' is-bad') : ' is-wait')}>{res ? (res.ok ? res.line : res.error) : '還沒填點數'}</span>
+              {res?.ok && res.note && <span className="muted small" data-testid="uv-snap-note">{res.note}</span>}
               {res?.warnings.map((w, i) => <span key={i} className="uvlist__warn small"><Icon icon={TriangleAlert} size="xs" /> {w}</span>)}
             </li>
           );

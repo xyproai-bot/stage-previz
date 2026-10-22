@@ -8,7 +8,7 @@
 
 import type { Rotation } from '../ledTemplate';
 
-export type SizeMode = 'pitch' | 'pixels' | 'cabinets';
+export type SizeMode = 'pitch' | 'perhalf' | 'pixels' | 'cabinets';
 
 export interface CabinetSpec {
   /** 箱體實體大小（毫米） */
@@ -25,6 +25,8 @@ export interface CabinetSpec {
 export interface SizeSpec {
   mode: SizeMode;
   pitchMm?: number;
+  /** 每 0.5 m 幾點（mode = perhalf）；點距 = 500 / 這個數 */
+  perHalf?: number;
   pixels?: { w: number; h: number };
   cabinet?: CabinetSpec;
 }
@@ -39,12 +41,24 @@ export interface SizeResult {
   line: string;
   /** 黃色提醒（不擋） */
   warnings: string[];
+  /** 小字說明（例如「已對齊到箱體（原本 641）」）；沒有就不寫 */
+  note?: string;
 }
 
 /** 一邊最多幾個點（跟 LED 畫布一樣 32768） */
 export const MAX_SIDE_PX = 32768;
 export const WARN_SIDE_PX = 30000;
 export const PITCH_PRESETS = [1.2, 1.5, 1.9, 2.5, 2.6, 2.9, 3.0, 3.9, 4.8, 5.0, 6.0, 6.67, 8.0, 10.0] as const;
+/** 常見的名目點距 → 0.5 m 箱體的實際點數（點距實際值 = 500 / 點數）。只放確定的 */
+export const PITCH_PER_HALF_M: ReadonlyArray<readonly [number, number]> = [
+  [3.9, 128], [2.6, 192], [1.9, 256], [2.9, 168], [4.8, 104], [1.5, 320],
+];
+export const DEFAULT_PER_HALF = 128;
+const nominalPerHalf = (p: number): number | null => {
+  for (const [nom, n] of PITCH_PER_HALF_M) if (Math.abs(nom - p) < 1e-9) return n;
+  return null;
+};
+const fmtPitch = (mm: number): string => String(Number(mm.toFixed(5)));
 const MIN_PITCH_MM = 0.3;
 const MAX_PITCH_MM = 100;
 
@@ -73,14 +87,39 @@ export function resolveSize(spec: SizeSpec, measured: Measured): SizeResult {
   if (!(measured.w > 0) || !(measured.h > 0)) return fail('量不到這片螢幕的大小');
 
   let w = 0, h = 0, label = '';
-  if (spec.mode === 'pitch') {
-    const p = spec.pitchMm;
-    if (typeof p !== 'number' || !Number.isFinite(p) || p < MIN_PITCH_MM || p > MAX_PITCH_MM) {
-      return fail(`點距要在 ${MIN_PITCH_MM} ~ ${MAX_PITCH_MM} mm 之間（例如 3.9）`);
+  let note: string | undefined;
+  if (spec.mode === 'pitch' || spec.mode === 'perhalf') {
+    let p: number | undefined, unit: number | null = null;
+    if (spec.mode === 'perhalf') {
+      const n = spec.perHalf;
+      if (typeof n !== 'number' || !Number.isInteger(n) || n < 2 || n > 2000) return fail('每 0.5 m 的點數要填 2 ~ 2000 的整數（例如 128）');
+      unit = n; p = 500 / n;
+      label = `每 0.5 m ${n} 點（${fmtPitch(p)} mm）`;
+    } else {
+      p = spec.pitchMm;
+      if (typeof p !== 'number' || !Number.isFinite(p) || p < MIN_PITCH_MM || p > MAX_PITCH_MM) {
+        return fail(`點距要在 ${MIN_PITCH_MM} ~ ${MAX_PITCH_MM} mm 之間（例如 3.9）`);
+      }
+      unit = nominalPerHalf(p);
+      if (unit !== null) {
+        const nom = p;
+        p = 500 / unit;
+        label = `${pitchLabel(nom)}（0.5 m = ${unit} 點，實際 ${fmtPitch(p)} mm）`;
+      } else label = pitchLabel(p);
     }
     w = Math.max(1, Math.round((measured.w * 1000) / p));
     h = Math.max(1, Math.round((measured.h * 1000) / p));
-    label = pitchLabel(p);
+    if (unit !== null) {
+      const snap = (v: number): number => {
+        const k = Math.round(v / unit!);
+        const t = k * unit!;
+        return k >= 1 && t !== v && Math.abs(t - v) <= 2 ? t : v;
+      };
+      const w0 = w, h0 = h;
+      w = snap(w); h = snap(h);
+      const was = [w !== w0 ? w0 : null, h !== h0 ? h0 : null].filter(x => x !== null);
+      if (was.length) note = `已對齊到箱體（原本 ${w !== w0 && h !== h0 ? `${w0} × ${h0}` : String(was[0])}）`;
+    }
   } else if (spec.mode === 'pixels') {
     const px = spec.pixels;
     const pw = wholeNum(px?.w), ph = wholeNum(px?.h);
@@ -119,7 +158,7 @@ export function resolveSize(spec: SizeSpec, measured: Measured): SizeResult {
   if (spec.mode !== 'pitch' && Math.abs(stretch) > 0.01) {
     warnings.push(`這塊的點不是正方形，畫面會被拉${stretch > 0 ? '長' : '寬'}約 ${(Math.abs(stretch) * 100).toFixed(1)}%（點數的長寬比跟模型量到的不一樣）`);
   }
-  return { ok: true, w, h, line: `${label} → ${w} × ${h} 點（${physical}）`, warnings };
+  return { ok: true, w, h, line: `${label} → ${w} × ${h} 點（${physical}）`, warnings, ...(note ? { note } : {}) };
 }
 
 /** 兩個尺寸讀到的 90 度轉向（寬高對調） */
