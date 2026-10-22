@@ -689,9 +689,7 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOv
   // 由左到右（觀眾席看過去）
   const right = audienceRight(front);
   pieces.sort((a, b) => dot(a.center, right) - dot(b.center, right));
-  if (pieces.some(p => p.facing < -0.2)) {
-    warnings.push('有一片的正面朝向舞台後方（背對觀眾）：LED 只畫正面，觀眾席看不到這片的畫面');
-  }
+  // 朝舞台後方的 LED 是設計好的（例如升降台往外的側面），不提醒（用戶 10-22）
   if (mixedFacing) warnings.push('弧面的面有的朝外、有的朝內：貼出來的左右方向可能有一部分是反的，請在 3D 預覽檢查');
   return { kind: 'ok', pieces, warnings, bbox, screenTriangles: tris.count, override };
 }

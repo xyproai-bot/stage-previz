@@ -129,10 +129,10 @@ describe('方向：站在法線那一側（觀眾席）看，左右、上下都�
     readsLeftToRight(arcPieceOf(obj(mirroredX(arcPrim(8, 60, 3, 24, 150, true)))));
   });
 
-  it('旋轉 180 度背對觀眾的弧面：LED 只畫正面，方向仍是站在法線那一側看；有「背對觀眾」的提醒', () => {
+  it('旋轉 180 度背對觀眾的弧面：LED 只畫正面，方向仍是站在法線那一側看；不再提醒「背對觀眾」', () => {
     const a = analyzeObject(obj(moved(arcPrim(4, 90, 3, 24), Y, 180, [0, 0, 0])), FRONT);
     expect(a.kind).toBe('ok');
-    expect(a.warnings.some(w => w.includes('背對觀眾'))).toBe(true);
+    expect(a.warnings.some(w => w.includes('背對觀眾'))).toBe(false);
     // 站在法線（-Z 側）看過去，右邊 = -X
     const xs = [0, 0.5, 1].map(lx => arcPoint(a.pieces[0].arc!, lx, 0.5)[0]);
     expect(xs[2]).toBeLessThan(xs[0]);
