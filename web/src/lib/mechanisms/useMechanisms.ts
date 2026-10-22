@@ -35,6 +35,8 @@ export interface MechanismSceneProps {
 }
 
 type CueLike = MotionCue & { name?: string };
+/** Cue 庫預覽時，只存在畫面上的假 cue 的 id */
+export const PREVIEW_CUE_ID = '__library_preview__';
 
 /** 位置清單 + 定義 + cue → 每個 cue 的位置、目前 cue 的目標、影片時間軸 */
 function usePlayback(
@@ -210,8 +212,19 @@ export function useEditorMechanisms(o: {
    * mechanisms = 草稿裡目前的機關；set = 改一個（null = 回到預設）
    */
   libDraft?: { mechanisms: Record<string, DraftMech | null>; set: (entries: Record<string, DraftMech | null>) => void };
+  /**
+   * Cue 庫的「預覽」：舞台上看的是某個 Cue 庫的 cue，但這首歌沒有 cue 指到它。
+   * 給它的機關列 → 當成一個只存在畫面上的 cue（不寫後台）
+   */
+  previewLook?: { mechanisms: { mechanismId: string; value: number; delaySec: number | null; durationSec: number | null; carried: boolean }[] } | null;
 }) {
-  const { projectId, songId, selectedCueId } = o;
+  const { projectId, songId } = o;
+  const previewLook = o.previewLook ?? null;
+  const selectedCueId = previewLook ? PREVIEW_CUE_ID : o.selectedCueId;
+  const cues = useMemo<CueLike[]>(
+    () => (previewLook ? [...o.cues, { id: PREVIEW_CUE_ID, order: 1_000_000, status: 'master', name: '預覽', videoTimeSec: null } as CueLike] : o.cues),
+    [o.cues, previewLook],
+  );
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
   const [groups, setGroups] = useState<MechanismGroup[]>(EMPTY_GROUPS);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -261,7 +274,10 @@ export function useEditorMechanisms(o: {
   useEffect(() => { void refreshPositions(); }, [refreshPositions, o.cues]);
   useEffect(() => { setPreview({}); }, [selectedCueId, songId]);
 
-  const rawList = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
+  const rawSaved = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
+  const rawList = useMemo(() => (previewLook
+    ? [...rawSaved, ...previewLook.mechanisms.map(m => ({ cueId: PREVIEW_CUE_ID, mechanismId: m.mechanismId, value: m.value, delaySec: m.delaySec, durationSec: m.durationSec, updatedAt: '', carried: m.carried }))]
+    : rawSaved), [rawSaved, previewLook]);
   // Cue 庫專案：目前選的 cue 的機關列蓋上草稿（畫面、時間軸、速度檢查都看得到還沒存的改動）
   const draftMech = o.libDraft?.mechanisms;
   const libActive = !!o.libDraft && positions?.mode === 'library';
@@ -274,14 +290,14 @@ export function useEditorMechanisms(o: {
     return kept;
   }, [libActive, draftMech, selectedCueId, rawList]);
   posRef.current = positions ? { ...positions, list } : positions;
-  const pb = usePlayback(mechanisms, list, o.cues, selectedCueId, undefined, positions?.mode);
+  const pb = usePlayback(mechanisms, list, cues, selectedCueId, undefined, positions?.mode);
   const targets = useMemo(() => {
     const keys = Object.keys(preview);
     return keys.length ? { ...pb.targets, ...preview } : pb.targets;
   }, [pb.targets, preview]);
   const check = useMemo<SongCheck | null>(
-    () => (pb.axes && pb.axes.length ? checkSongMechanisms(pb.axes, o.cues, pb.resolved, pb.timings) : null),
-    [pb.axes, o.cues, pb.resolved, pb.timings],
+    () => (pb.axes && pb.axes.length ? checkSongMechanisms(pb.axes, cues, pb.resolved, pb.timings) : null),
+    [pb.axes, cues, pb.resolved, pb.timings],
   );
   // 吊掛（v2 第 4 階段）：每個 cue、每一組吊掛的傾斜和說明（到位時 + 走過來的路上四個吊點不在同一個平面上 / 兩點的高度差比距離大）
   const scale = o.scaleCorrection && o.scaleCorrection > 0 ? o.scaleCorrection : 1;
@@ -294,8 +310,8 @@ export function useEditorMechanisms(o: {
       if (!r || !c) return null;
       return { value: r.value, from: c.from, delay: c.delay, duration: c.status === 'move' ? c.available ?? 0 : 0 };
     };
-    return checkHoistRigs(hoistRigs, sortMasters(o.cues).map(c => c.id), itemOf, 1 / scale);
-  }, [hoistRigs, check, pb.resolved, o.cues, scale]);
+    return checkHoistRigs(hoistRigs, sortMasters(cues).map(c => c.id), itemOf, 1 / scale);
+  }, [hoistRigs, check, pb.resolved, cues, scale]);
 
   // ── 本地更新（存成功後先套到畫面上） ──
   /** value = null → 刪掉這一列（時間一起清掉）；timing 沒給 → 照舊 */
