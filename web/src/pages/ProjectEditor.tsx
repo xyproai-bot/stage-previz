@@ -561,6 +561,17 @@ export default function ProjectEditor() {
   // ── 歌曲影片（＋加影片）：上傳中切到別首歌也會繼續；好了歌單上的「影片 V3」跟著更新 ──
   const [addVideoSongId, setAddVideoSongId] = useState<string | null>(null);
   const addVideoSong = addVideoSongId ? songs.find(s => s.id === addVideoSongId) ?? null : null;
+  // 自動貼 UV 的 3D 預覽：選了「不放進畫布」的物件，套用以後類型會變成「其他」→ 預覽時 3D 畫面先照一般物件顯示（沒有測試圖、沒有影片）。只換給 3D 畫面看的那份，右邊的物件清單不動
+  const previewExcluded = uvOpen && uvPreview && uvPreview.excluded && uvPreview.excluded.length > 0 ? uvPreview.excluded : null;
+  const sceneStageObjects: StageObject[] = useMemo(
+    () => (previewExcluded ? stageObjects.map(o => (previewExcluded.includes(o.id) && o.category === 'led_panel' ? { ...o, category: 'other' as const } : o)) : stageObjects),
+    [stageObjects, previewExcluded],
+  );
+  const sceneStates: CueState[] = useMemo(
+    () => (previewExcluded ? viewportStates.map(s => (previewExcluded.includes(s.objectId) && s.category === 'led_panel' ? { ...s, category: 'other' as const } : s)) : viewportStates),
+    [viewportStates, previewExcluded],
+  );
+
   // 「影片版本」視窗（歌單上點「影片 V3」）：看每一版、刪除、到導演頁播放
   const [versionsSongId, setVersionsSongId] = useState<string | null>(null);
   const versionsSong = versionsSongId ? songs.find(s => s.id === versionsSongId) ?? null : null;
@@ -1325,8 +1336,8 @@ export default function ProjectEditor() {
             <LedTemplateHint hint={ledHint} />
             <StageScene
               onNdiFrameSize={setAeFrameSize}
-              states={viewportStates}
-              stageObjects={stageObjects}
+              states={sceneStates}
+              stageObjects={sceneStageObjects}
               selectedObjectIds={selectedObjectIds}
               onSelect={(id, mode) => {
                 if (mode === 'toggle' && id) toggleSelected(id);
@@ -1600,6 +1611,8 @@ export default function ProjectEditor() {
 
       {versionsSong && projectId && (
         <SongVideosDialog
+          // 「不放進畫布」的物件，後台把類型改成「其他」了：物件清單和 3D 畫面跟著重讀
+          if (r.excludedObjects && r.excludedObjects.length > 0) { void refreshStageObjects(); void refreshCueStates(); }
           open
           onClose={() => setVersionsSongId(null)}
           projectId={projectId}
@@ -1610,6 +1623,8 @@ export default function ProjectEditor() {
           onChanged={reloadSongsQuietly}
         />
       )}
+          // 自動貼 UV 時「不放進畫布」改成「其他」的物件，換版本時類型跟著改回來 / 再改掉
+          if (info?.objectTypesChanged) { void refreshStageObjects(); void refreshCueStates(); }
 
       {addVideoSong && projectId && (
         <AddVideoDialog

@@ -10,7 +10,7 @@ import { downloadBlob, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
 import { isPhoneLayout } from '../lib/viewportVars';
 import type { LedCanvas } from '../lib/ledCanvas';
-import { buildLegacy, buildPlan, pieceKey, pieceScreensOf, type ManualBox, type Plan, type PlanObjectIn } from '../lib/ledUv/plan';
+import { buildLegacy, buildPlan, excludedIdsOf, pieceKey, pieceScreensOf, type ManualBox, type Plan, type PlanObjectIn } from '../lib/ledUv/plan';
 import { previewLayout } from '../lib/ledUv/previewLayout';
 import type { Arrangement, ArrangeNative } from '../lib/ledUv/arrange';
 import type { PackResult } from '../lib/ledUv/pack';
@@ -20,7 +20,7 @@ import { createLatestRunner, type LatestRunner } from '../lib/ledUv/latestRunner
 import LedUvArrange from './LedUvArrange';
 import { PITCH_PRESETS, pitchLabel, type SizeSpec } from '../lib/ledUv/size';
 import { EMPTY_FORM, MODE_LABEL, formIsEmpty, formToSpec, type SizeForm } from '../lib/ledUv/sizeForm';
-import { FREE_CHOICE, MODE_TEXT, OVERRIDE_HINT, OVERRIDE_LABEL, SEAM_TEXT, UNSUPPORTED_TEXT, defaultSelected, distortionLevel, distortionText, freeformText, pieceKindText, type DistortionLevel } from '../lib/ledUv/text';
+import { EXCLUDE_TEXT, FREE_CHOICE, MODE_TEXT, OVERRIDE_HINT, OVERRIDE_LABEL, SEAM_TEXT, UNSUPPORTED_TEXT, defaultSelected, distortionLevel, distortionText, freeformText, pieceKindText, type DistortionLevel } from '../lib/ledUv/text';
 import type { AnalyzeOk, BuildPhase } from '../lib/ledUv/pipeline';
 import type { UvSession, UvPreview } from '../lib/ledUv/ledUvClient';
 import type { ObjectInfo } from '../lib/ledUv/objectInfo';
@@ -94,6 +94,8 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
   const [activeKey, setActiveKey] = useState<string | null>(null);
   const [impact, setImpact] = useState<UvImpact | null>(null);
   const [selected, setSelected] = useState<Record<string, boolean>>({});
+  /** 選了「不放進畫布」的物件（蓋過 selected；套用後類型改成「其他」） */
+  const [excluded, setExcluded] = useState<Record<string, boolean>>({});
   const [forms, setForms] = useState<Record<string, SizeForm>>({});
   const [bulk, setBulk] = useState<SizeForm>(EMPTY_FORM);
   const [gutter, setGutter] = useState('0');
@@ -179,6 +181,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
         sel[o.id] = can && (restored && o.id in restored.selected ? restored.selected[o.id] : !!info && defaultSelected(info.pieces));
       }
       setSelected(sel);
+      setExcluded(restored?.excluded ?? {});
       setForms(restored?.forms ?? {});
       setOverrides(restored?.overrides ?? {});
       setSeams(restored?.seams ?? {});
@@ -224,8 +227,8 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
     const info = ana?.infos[o.id] ?? null;
     const sizes: Record<number, SizeSpec | undefined> = {};
     if (info && info.kind === 'ok') info.pieces.forEach((_, i) => { sizes[i] = formToSpec(forms[pieceKey(o.id, info.pieces.length, i)] ?? EMPTY_FORM); });
-    return { id: o.id, name: o.name, order: o.order, info, selected: !!selected[o.id], sizes, manuals: manualsBy[o.id] ?? [], override: overrides[o.id] ?? 'auto', seamDeg: seams[o.id] ?? 0 };
-  }), [ledObjects, ana, forms, selected, manualsBy, overrides, seams]);
+    return { id: o.id, name: o.name, order: o.order, info, selected: !!selected[o.id], excluded: !!excluded[o.id], sizes, manuals: manualsBy[o.id] ?? [], override: overrides[o.id] ?? 'auto', seamDeg: seams[o.id] ?? 0 };
+  }), [ledObjects, ana, forms, selected, excluded, manualsBy, overrides, seams]);
 
   const gutterPx = Math.max(0, Math.min(64, Math.round(Number(gutter) || 0)));
   // 照舞台自動排的方案（沒套用自己排的排法）：螢幕清單、框裡的畫面、「自動排一次」都從它來
@@ -253,14 +256,17 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
   }, [pendingArr, autoPlan]);
 
   const autoPieces = useMemo(() => (plan ? plan.objects.flatMap(o => (o.mode === 'auto' ? o.pieces : [])) : []), [plan]);
+  // 套用好以後 LED 物件清單會少掉「不放進畫布」的、新切出來的螢幕也會讓雙片的物件變成「已手動切」：摘要的數字照套用當下的方案
+  const statsPlan = plan && run.state === 'done' ? run.plan : plan;
   const stats = useMemo(() => {
-    if (!plan) return null;
-    const keeps = plan.objects.filter(o => o.mode === 'keep');
+    if (!statsPlan) return null;
+    const pieces = statsPlan.objects.flatMap(o => (o.mode === 'auto' ? o.pieces : []));
+    const keeps = statsPlan.objects.filter(o => o.mode === 'keep');
     let dots = 0;
-    for (const p of autoPieces) if (p.size?.ok) dots += p.size.w * p.size.h;
+    for (const p of pieces) if (p.size?.ok) dots += p.size.w * p.size.h;
     for (const o of keeps) if (o.keep) dots += o.keep.rect.w * o.keep.rect.h;
-    return { autoCount: autoPieces.length, keepCount: keeps.length, dots };
-  }, [plan, autoPieces]);
+    return { autoCount: pieces.length, keepCount: keeps.length, excludedCount: statsPlan.objects.filter(o => o.mode === 'excluded').length, dots };
+  }, [statsPlan]);
 
   // 預測：原本的 UV 存得進模型第二組 UV 的物件（舊影片一個像素都不差）；實際存了多少以寫檔的結果為準（doApply）
   const exactIds = useMemo(() => new Set(Object.entries(ana?.uv1 ?? {}).filter(([, s]) => s === 'fresh').map(([id]) => id)), [ana]);
@@ -268,8 +274,8 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
 
   // ───────── 排到一半的東西：停手 1.5 秒自動存到後台（同一個模型版本，下次打開接著做）─────────
   const snapshot = useMemo<UvEditSnapshot>(
-    () => ({ v: 1, selected, forms, overrides, seams: Object.fromEntries(Object.entries(seams).filter(([, v]) => v !== 0)), gutter, arrangement: arrange.arrangement ?? pendingArr }),
-    [selected, forms, overrides, seams, gutter, arrange.arrangement, pendingArr],
+    () => ({ v: 1, selected, excluded: Object.fromEntries(Object.entries(excluded).filter(([, v]) => v)), forms, overrides, seams: Object.fromEntries(Object.entries(seams).filter(([, v]) => v !== 0)), gutter, arrangement: arrange.arrangement ?? pendingArr }),
+    [selected, excluded, forms, overrides, seams, gutter, arrange.arrangement, pendingArr],
   );
   const snapshotSig = useMemo(() => editSignature(snapshot), [snapshot]);
   const snapshotRef = useRef(snapshot);
@@ -383,7 +389,11 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
   const changeOverride = (id: string, value: SurfaceOverride) => reanalyzeOne(id, { ...overrides, [id]: value }, seams, 'override');
   const changeSeam = (id: string, deg: number) => reanalyzeOne(id, overrides, { ...seams, [id]: Math.max(-180, Math.min(180, Math.round(deg * 10) / 10)) }, 'seam');
 
-  const setSel = (id: string, v: boolean) => setSelected(s => ({ ...s, [id]: v }));
+  /** 每一列的三選一：自動貼 / 保留原本 UV / 不放進畫布 */
+  const setChoice = (id: string, c: 'auto' | 'keep' | 'exclude') => {
+    setExcluded(e => ({ ...e, [id]: c === 'exclude' }));
+    if (c !== 'exclude') setSelected(s => ({ ...s, [id]: c === 'auto' }));
+  };
   const setForm = (key: string, patch: Partial<SizeForm>) => setForms(f => ({ ...f, [key]: { ...(f[key] ?? EMPTY_FORM), ...patch } }));
 
   function applyBulk() {
@@ -424,6 +434,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       const fresh = new Set(Object.entries(outcome.uv1).filter(([, s]) => s === 'fresh').map(([id]) => id));
       const lg = buildLegacy(plan, inputs, oldCanvas, fresh);
       const autoCount = plan.objects.reduce((n, o) => n + (o.mode === 'auto' ? o.pieces.length : 0), 0);
+      const excludeIds = excludedIdsOf(plan);
       const result = await applyAutoUv(projectId, {
         key: held.key,
         ifActive: activeKey,
@@ -435,12 +446,18 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
           : null,
         pieceScreens: pieceScreensOf(plan),
         screenUpdates: plan.objects.flatMap(o => o.keep?.manualUpdates ?? []),
+        ...(excludeIds.length > 0 ? { excludeObjects: excludeIds } : {}),
       });
       heldKey = null;
       setPreviewOn(false);
       setRun({ state: 'done', result, plan });
       onApplied(result);
       toast.success(`已套用：新的模型版本，畫布 ${plan.canvas.width} × ${plan.canvas.height}。舊的版本還在，隨時可以在「模型版本」換回去。`);
+      if (excludeIds.length > 0) {
+        // 舊的後台不認識 excludeObjects，不會回 excludedObjects：模型和畫布換好了，但那幾個物件的類型沒有改
+        if (!result.excludedObjects) toast.warn(`後台還不支援「不放進畫布」，那 ${excludeIds.length} 個物件的類型沒有改成「其他」，請到「物件」分頁自己改。`);
+        else toast.success(`${result.excludedObjects.length} 個物件的類型已改成「其他」（不放進畫布）。`);
+      }
     } catch (e) {
       // 上傳了但沒換成功 → 把沒人用的新版刪掉
       if (heldKey) { try { await api.deleteModelVersion(projectId, heldKey); } catch { /* 刪不掉就留著，模型版本裡看得到 */ } }
@@ -452,10 +469,10 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
 
   const body = !ana || !plan
     ? null
-    : tab === 'pick' ? <PickTab plan={plan} ana={ana} inputs={inputs} selected={selected} onSel={setSel} overrides={overrides} busyId={reBusy} onOverride={(id, v) => void changeOverride(id, v)} onSeam={(id, deg) => void changeSeam(id, deg)} onAll={(v) => setSelected(Object.fromEntries(ledObjects.map(o => [o.id, v && ana.infos[o.id]?.kind === 'ok' && !(manualsBy[o.id]?.length)])))} />
+    : tab === 'pick' ? <PickTab plan={plan} ana={ana} inputs={inputs} selected={selected} excluded={excluded} onChoice={setChoice} overrides={overrides} busyId={reBusy} onOverride={(id, v) => void changeOverride(id, v)} onSeam={(id, deg) => void changeSeam(id, deg)} onAll={(v) => setSelected(Object.fromEntries(ledObjects.map(o => [o.id, v && ana.infos[o.id]?.kind === 'ok' && !(manualsBy[o.id]?.length)])))} />
       : tab === 'size' ? <SizeTab plan={plan} forms={forms} bulk={bulk} setBulk={setBulk} onBulk={applyBulk} setForm={setForm} scaleCorrection={scaleCorrection} />
         : tab === 'layout' ? <LedUvArrange projectId={projectId} autoPlan={autoPlan!} plan={plan} arrange={arrange} gutter={gutter} setGutter={setGutter} />
-          : <ApplyTab plan={plan} stats={stats!} legacy={legacy!} uv1={ana.uv1} impact={impact} list={list} oldCanvas={oldCanvas} hasProjectCanvas={!!ledCanvas} run={run} onApply={doApply} projectName={projectName} />;
+          : <ApplyTab plan={statsPlan ?? plan} stats={stats!} legacy={legacy!} uv1={ana.uv1} impact={impact} list={list} oldCanvas={oldCanvas} hasProjectCanvas={!!ledCanvas} run={run} onApply={doApply} projectName={projectName} />;
 
   return (
     <section className={'uvdock' + (tab === 'layout' ? ' uvdock--tall' : '')} aria-label="自動貼 UV">
@@ -467,7 +484,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
           ))}
         </nav>
         <span className="uvdock__spacer" />
-        {stats && <span className="uvdock__sum muted small">{stats.autoCount} 塊自動貼 · {stats.keepCount} 個保留 · 畫布 {plan!.canvas.width} × {plan!.canvas.height}</span>}
+        {stats && <span className="uvdock__sum muted small">{stats.autoCount} 塊自動貼 · {stats.keepCount} 個保留{stats.excludedCount > 0 ? ` · ${stats.excludedCount} 個不放進畫布` : ''} · 畫布 {plan!.canvas.width} × {plan!.canvas.height}</span>}
         <button
           className={'btn btn--sm uvdock__pv' + (previewOn ? ' is-on' : '')}
           onClick={() => setPreviewOn(v => !v)}
@@ -580,16 +597,16 @@ function DistortionChip({ d }: { d: DistortionStat }) {
 
 // ───────────────────────── 1 選螢幕 ─────────────────────────
 
-function PickTab({ plan, ana, inputs, selected, onSel, onAll, overrides, busyId, onOverride, onSeam }: {
-  plan: Plan; ana: AnalyzeOk; inputs: PlanObjectIn[]; selected: Record<string, boolean>;
-  onSel: (id: string, v: boolean) => void; onAll: (v: boolean) => void;
+function PickTab({ plan, ana, inputs, selected, excluded, onChoice, onAll, overrides, busyId, onOverride, onSeam }: {
+  plan: Plan; ana: AnalyzeOk; inputs: PlanObjectIn[]; selected: Record<string, boolean>; excluded: Record<string, boolean>;
+  onChoice: (id: string, c: 'auto' | 'keep' | 'exclude') => void; onAll: (v: boolean) => void;
   overrides: Record<string, SurfaceOverride>; busyId: string | null; onOverride: (id: string, v: SurfaceOverride) => void;
   onSeam: (id: string, deg: number) => void;
 }) {
   return (
     <div className="uvtab">
       <div className="uvtab__bar">
-        <span className="muted small">勾要自動貼的 LED 螢幕（平面、弧面、整圈圓柱、波浪、折角和其他曲面都能貼）。沒勾的、攤不平的，會保留原本的 UV，只搬到新位置。</span>
+        <span className="muted small">每塊 LED 螢幕選一種：「自動貼」（平面、弧面、整圈圓柱、波浪、折角和其他曲面都能貼）、「保留原本 UV」（只搬到新位置）、「不放進畫布」（完全不進畫布，例如提詞用的 LED）。攤不平的曲面預設保留原本的 UV。{EXCLUDE_TEXT.bulkNote}</span>
         <span className="uvdock__spacer" />
         <button className="btn btn--ghost btn--sm" onClick={() => onAll(true)}>全選能貼的</button>
         <button className="btn btn--ghost btn--sm" onClick={() => onAll(false)}>全不選</button>
@@ -602,52 +619,56 @@ function PickTab({ plan, ana, inputs, selected, onSel, onAll, overrides, busyId,
           const splits = inp.manuals.length > 0;
           const can = ok && !splits;
           const busy = busyId === o.id;
-          const worst = ok && info ? worstOf(info.pieces.map(p => p.distortion)) : null;
+          const ex = !!excluded[o.id];
+          const choice: 'auto' | 'keep' | 'exclude' = ex ? 'exclude' : selected[o.id] && can ? 'auto' : 'keep';
+          const curved = !!info && ok && !splits && info.pieces.some(p => p.kind === 'ext' || p.kind === 'free');
+          const worst = !ex && ok && info ? worstOf(info.pieces.map(p => p.distortion)) : null;
           return (
-            <li key={o.id} className={'uvlist__row' + (selected[o.id] && can ? ' is-on' : '')}>
-              <label className="uvlist__check">
-                <input type="checkbox" checked={!!selected[o.id] && can} disabled={!can} onChange={e => onSel(o.id, e.target.checked)} />
+            <li key={o.id} className={'uvlist__row' + (choice === 'auto' ? ' is-on' : '') + (ex ? ' is-excluded' : '')}>
+              <span className="uvlist__check">
                 <span className="uvlist__name">{o.name}</span>
-              </label>
+              </span>
               <span className={'uvbadge uvbadge--' + o.mode}>{MODE_TEXT[o.mode]}</span>
-              <label className="uvlist__type">
-                <span className="muted small">類型</span>
-                <select
-                  value={overrides[o.id] ?? 'auto'}
-                  onChange={e => onOverride(o.id, e.target.value as SurfaceOverride)}
-                  disabled={!info || splits || !!busyId}
-                  aria-label={`${o.name} 的類型`}
-                  title={OVERRIDE_HINT}
-                >
-                  {(['auto', 'flat', 'arc', 'free'] as const).map(k => <option key={k} value={k}>{OVERRIDE_LABEL[k]}</option>)}
-                </select>
-                {busy && <Icon icon={LoaderCircle} spin size="sm" />}
-              </label>
+              <span className="uvchoice" role="group" aria-label={`${o.name} 要怎麼處理`} title={EXCLUDE_TEXT.choiceHint} data-testid="uv-choice">
+                <button className={'uvchoice__btn' + (choice === 'auto' ? ' is-on' : '')} aria-pressed={choice === 'auto'} disabled={!can} onClick={() => onChoice(o.id, 'auto')} title={curved ? FREE_CHOICE.hint : undefined} data-testid="uv-choice-auto">{EXCLUDE_TEXT.choiceAuto}</button>
+                <button className={'uvchoice__btn' + (choice === 'keep' ? ' is-on' : '')} aria-pressed={choice === 'keep'} onClick={() => onChoice(o.id, 'keep')} data-testid="uv-choice-keep">{EXCLUDE_TEXT.choiceKeep}</button>
+                <button className={'uvchoice__btn uvchoice__btn--exclude' + (choice === 'exclude' ? ' is-on' : '')} aria-pressed={choice === 'exclude'} onClick={() => onChoice(o.id, 'exclude')} data-testid="uv-choice-exclude">{EXCLUDE_TEXT.choiceExclude}</button>
+              </span>
+              {!ex && (
+                <label className="uvlist__type">
+                  <span className="muted small">類型</span>
+                  <select
+                    value={overrides[o.id] ?? 'auto'}
+                    onChange={e => onOverride(o.id, e.target.value as SurfaceOverride)}
+                    disabled={!info || splits || !!busyId}
+                    aria-label={`${o.name} 的類型`}
+                    title={OVERRIDE_HINT}
+                  >
+                    {(['auto', 'flat', 'arc', 'free'] as const).map(k => <option key={k} value={k}>{OVERRIDE_LABEL[k]}</option>)}
+                  </select>
+                  {busy && <Icon icon={LoaderCircle} spin size="sm" />}
+                </label>
+              )}
               <span className="uvlist__meta muted small">
                 {!info ? '模型裡找不到' : ok ? surfaceSummary(info) : info.kind === 'unsupported' ? UNSUPPORTED_TEXT[info.unsupported ?? 'other'] : ''}
                 {splits ? ` · 已手動切成 ${inp.manuals.length} 塊` : ''}
                 {info?.oldRegion ? ` · 原本在畫布 ${info.oldRegion.rect.w} × ${info.oldRegion.rect.h}` : info ? ' · 原本沒有 UV' : ''}
               </span>
+              {ex && <span className="uvlist__warn small" data-testid="uv-exclude-note"><Icon icon={TriangleAlert} size="xs" /> {EXCLUDE_TEXT.rowNote}</span>}
               {worst && <DistortionChip d={worst} />}
-              {info && ok && info.override && info.override !== 'auto' && <span className="uvlist__why small">已手動指定成「{OVERRIDE_LABEL[info.override]}」。</span>}
-              {info && ok && !splits && info.pieces.some(p => p.kind === 'ext' || p.kind === 'free') && (
-                <span className="uvchoice" role="group" aria-label={`${o.name} 的曲面怎麼處理`} title={FREE_CHOICE.hint} data-testid="uv-free-choice">
-                  <button className={'uvchoice__btn' + (selected[o.id] ? ' is-on' : '')} aria-pressed={!!selected[o.id]} onClick={() => onSel(o.id, true)}>{FREE_CHOICE.unwrap}</button>
-                  <button className={'uvchoice__btn' + (!selected[o.id] ? ' is-on' : '')} aria-pressed={!selected[o.id]} onClick={() => onSel(o.id, false)}>{FREE_CHOICE.keep}</button>
-                </span>
-              )}
-              {info && ok && !splits && <SeamControl info={info} seamDeg={inputs.find(i => i.id === o.id)?.seamDeg ?? 0} busy={busy || !!busyId} name={o.name} onSeam={deg => onSeam(o.id, deg)} />}
+              {!ex && info && ok && info.override && info.override !== 'auto' && <span className="uvlist__why small">已手動指定成「{OVERRIDE_LABEL[info.override]}」。</span>}
+              {!ex && info && ok && !splits && <SeamControl info={info} seamDeg={inputs.find(i => i.id === o.id)?.seamDeg ?? 0} busy={busy || !!busyId} name={o.name} onSeam={deg => onSeam(o.id, deg)} />}
               {worst && distortionLevel(worst) !== 'ok' && (
                 <span className={'uvlist__' + (distortionLevel(worst) === 'bad' ? 'bad' : 'warn') + ' small'}>
                   <Icon icon={TriangleAlert} size="xs" /> {distortionText(worst)}
                 </span>
               )}
-              {info && info.kind === 'unsupported' && info.freeform && (
+              {!ex && info && info.kind === 'unsupported' && info.freeform && (
                 <span className={'uvlist__' + (distortionLevel(info.freeform.distortion) === 'bad' ? 'bad' : 'warn') + ' small'}>
                   <Icon icon={TriangleAlert} size="xs" /> {freeformText(info.freeform)}
                 </span>
               )}
-              {(o.reason && (!selected[o.id] || !can)) && <span className="uvlist__why small">{o.reason}</span>}
+              {(!ex && o.reason && choice !== 'auto') && <span className="uvlist__why small">{o.reason}</span>}
               {o.warnings.map((w, i) => <span key={i} className="uvlist__warn small"><Icon icon={TriangleAlert} size="xs" /> {w}</span>)}
             </li>
           );
@@ -744,7 +765,7 @@ function SizeTab({ plan, forms, bulk, setBulk, onBulk, setForm, scaleCorrection 
 // ───────────────────────── 4 套用 ─────────────────────────
 
 function ApplyTab({ plan, stats, legacy, uv1, impact, list, oldCanvas, hasProjectCanvas, run, onApply, projectName }: {
-  plan: Plan; stats: { autoCount: number; keepCount: number; dots: number }; legacy: ReturnType<typeof buildLegacy>; uv1: AnalyzeOk['uv1']; impact: UvImpact | null;
+  plan: Plan; stats: { autoCount: number; keepCount: number; excludedCount: number; dots: number }; legacy: ReturnType<typeof buildLegacy>; uv1: AnalyzeOk['uv1']; impact: UvImpact | null;
   list: LedTemplateList | null; oldCanvas: { width: number; height: number }; hasProjectCanvas: boolean; run: Run; onApply: () => void; projectName?: string;
 }) {
   const blocked = plan.blockers.length > 0;
@@ -759,6 +780,19 @@ function ApplyTab({ plan, stats, legacy, uv1, impact, list, oldCanvas, hasProjec
     }
     return out;
   }, [plan, list]);
+  // 套用好以後 LED 物件清單會少掉「不放進畫布」的那幾個（類型已經改成其他）：摘要照套用當下的方案
+  const shownPlan = run.state === 'done' ? run.plan : plan;
+  const excludedIds = useMemo(() => excludedIdsOf(shownPlan), [shownPlan]);
+  const excludedInTemplates = useMemo(() => {
+    const gone = new Set(excludedIds);
+    const out: { name: string; n: number }[] = [];
+    for (const t of list?.templates ?? []) {
+      if (t.kind !== 'custom' || t.name.startsWith('舊版面')) continue;
+      const n = t.screens.filter(s => gone.has(s.objectId)).length;
+      if (n > 0) out.push({ name: t.name, n });
+    }
+    return out;
+  }, [excludedIds, list]);
   const meta: LedMapMeta = { projectName: projectName || '', date: todayString(), canvas: plan.canvas, canvasSource: 'project' };
   const done = run.state === 'done';
   const layout = useMemo(() => previewLayout(plan), [plan]);
@@ -784,7 +818,15 @@ function ApplyTab({ plan, stats, legacy, uv1, impact, list, oldCanvas, hasProjec
           <Icon icon={ArrowRight} size="sm" /> 整張畫布會從 <strong>{oldCanvas.width} × {oldCanvas.height}</strong> 變成 <strong>{plan.canvas.width} × {plan.canvas.height}</strong>
           {hasProjectCanvas ? '' : '（專案原本沒有設定畫布）'}
         </div>
-        <div className="uvsum__line">共 <strong>{stats.autoCount}</strong> 塊自動貼、<strong>{stats.keepCount}</strong> 個保留原本的 UV · 約 {fmtDots(stats.dots)}</div>
+        <div className="uvsum__line">共 <strong>{stats.autoCount}</strong> 塊自動貼、<strong>{stats.keepCount}</strong> 個保留原本的 UV{excludedIds.length > 0 ? <>、<strong>{excludedIds.length}</strong> 個不放進畫布</> : ''} · 約 {fmtDots(stats.dots)}</div>
+        {excludedIds.length > 0 && (
+          <div className="uvsum__line uvlist__warn small" data-testid="uv-excluded-summary">
+            <Icon icon={TriangleAlert} size="xs" /> {EXCLUDE_TEXT.summary(excludedIds.length, nameList(shownPlan, excludedIds))}
+          </div>
+        )}
+        {excludedInTemplates.map(t => (
+          <div key={t.name} className="uvsum__line uvlist__warn small"><Icon icon={TriangleAlert} size="xs" /> {EXCLUDE_TEXT.template(t.name, t.n)}</div>
+        ))}
         <div className="uvsum__line muted small">舊的模型版本會保留，隨時可以在「模型版本」換回去（畫布和舊影片會一起換回來）。</div>
         {impact && impact.videoVersions > 0 && (
           <div className="uvsum__line">

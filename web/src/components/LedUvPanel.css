@@ -327,6 +327,24 @@
   background: var(--accent);
   color: #fff;
 }
+.uvchoice__btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+/* 不放進畫布：用警告色，跟「自動貼」「保留」分開 */
+.uvchoice__btn--exclude.is-on {
+  background: var(--warn);
+  color: #1b1b1b;
+}
+.uvlist__row.is-excluded {
+  border-style: dashed;
+  border-color: var(--warn);
+}
+.uvbadge--excluded {
+  color: var(--warn);
+  border-color: var(--warn);
+  border-style: dashed;
+}
 
 /* 整圈圓柱的接縫位置 */
 .uvseam {

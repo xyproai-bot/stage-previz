@@ -17,12 +17,31 @@ export const SPLITS_TEXT = '這塊已經手動切成幾塊螢幕，目前還不�
 export const NO_UV_TEXT = '這個物件原本沒有 UV，也不是平面，沒辦法保留';
 export const MISSING_TEXT = '模型裡找不到這個物件（物件名稱跟模型不一樣）';
 export const KEEP_TEXT = '保留原本的 UV，只搬到新位置（大小、方向、每個點的對應都不變）';
+export const EXCLUDED_REASON = '不放進畫布：不排版、不算進畫布大小，對位圖、AE 腳本、座標表都沒有它；套用後類型改成「其他」';
 
 export const MODE_TEXT = {
   auto: '自動貼',
   keep: '保留原本 UV',
+  excluded: '不放進畫布',
   none: '不處理',
   missing: '找不到',
+} as const;
+
+/** 不放進畫布：這塊螢幕完全不進這次的排版（畫布大小、對位圖、AE 腳本、座標表都沒有它），套用後它不再是 LED */
+export const EXCLUDE_TEXT = {
+  /** 每一列的三選一 */
+  choiceAuto: '自動貼',
+  choiceKeep: '保留原本 UV',
+  choiceExclude: '不放進畫布',
+  choiceHint: '自動貼：重新攤平，照點數排進新的畫布。保留原本 UV：不攤平，原本的 UV 整片搬到新位置。不放進畫布：這塊完全不進畫布（例如提詞用的 LED，動畫師不會做內容給它）。',
+  /** 選了「不放進畫布」的那一列下面的說明 */
+  rowNote: '套用後這塊不再是 LED（類型改成「其他」），要恢復就把類型改回 LED 面板再重新自動貼 UV',
+  /** 套用頁的摘要 */
+  summary: (n: number, names: string) => `有 ${n} 個物件（${names}）不放進畫布：套用後它們的類型會從「LED 面板」改成「其他」，照一般物件顯示，不會再有影片。要恢復就把類型改回 LED 面板再重新自動貼 UV；在「模型版本」換回舊版時，類型也會一起改回 LED 面板。`,
+  /** 版型裡用到不放進畫布的螢幕 */
+  template: (name: string, n: number) => `版型「${name}」裡有 ${n} 塊螢幕屬於不放進畫布的物件，套用後它們不再是 LED，請重新檢查版型。`,
+  /** 「全選」「全不選」旁邊的提醒 */
+  bulkNote: '「全選」「全不選」不會動已經選了「不放進畫布」的螢幕。',
 } as const;
 
 /** 類型下拉選單 */

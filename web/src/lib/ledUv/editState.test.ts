@@ -6,6 +6,7 @@ import { editSignature, parseEditSnapshot, pruneEditSnapshot, type UvEditSnapsho
 const SNAP: UvEditSnapshot = {
   v: 1,
   selected: { so_a: true, so_b: false },
+  excluded: { so_d: true },
   forms: { 'o:so_a': { ...EMPTY_FORM, pitch: '3.9' }, 'o:so_c#1': { ...EMPTY_FORM, mode: 'pixels', pw: '3077', ph: '1026' } },
   overrides: { so_a: 'arc', so_b: 'free' },
   seams: { so_a: 45, so_c: -90 },
@@ -43,15 +44,24 @@ describe('editState', () => {
     expect(dirty.overrides).toEqual({ b: 'arc', d: 'free' });
     expect(dirty.seams).toEqual({ a: 30, d: 180, e: -180 });      // 0 不存、壞的丟掉、超出範圍收進 -180~180
     expect(parseEditSnapshot({ v: 1 })!.seams).toEqual({});        // 舊版存的沒有 seams
+    expect(parseEditSnapshot({ v: 1 })!.excluded).toEqual({});     // 舊版存的沒有 excluded（都沒選「不放進畫布」）
     expect(dirty.gutter).toBe('0');
     expect(Object.keys(dirty.forms)).toEqual(['ok']);
     expect(dirty.forms.ok).toEqual({ ...EMPTY_FORM, pitch: '3.9' });
     expect(dirty.arrangement).toBeNull();
   });
 
+  it('「不放進畫布」：只存 true 的；壞的（不是 true）丟掉；多的欄位忽略', () => {
+    const e = parseEditSnapshot({ v: 1, excluded: { a: true, b: false, c: 'yes', d: 1, ['x'.repeat(200)]: true } })!;
+    expect(e.excluded).toEqual({ a: true });
+    expect(parseEditSnapshot({ v: 1, excluded: [true] })!.excluded).toEqual({});
+  });
+
   it('模型換過了、物件不見了：只留還在的物件和它的螢幕片', () => {
     const p = pruneEditSnapshot(SNAP, new Set(['so_a']));
     expect(p.selected).toEqual({ so_a: true });
+    expect(p.excluded).toEqual({});                               // 套用後被改成「其他」的物件不在 LED 清單裡了
+    expect(pruneEditSnapshot(SNAP, new Set(['so_d'])).excluded).toEqual({ so_d: true });
     expect(Object.keys(p.forms)).toEqual(['o:so_a']);
     expect(p.overrides).toEqual({ so_a: 'arc' });
     expect(p.seams).toEqual({ so_a: 45 });

@@ -8,7 +8,7 @@ import type { Document } from '@gltf-transform/core';
 import type { CanvasSize } from '../ledMap';
 import { readLedObjects } from './docRead';
 import { computePlanUvs, type WantedObject } from './pipeline';
-import type { Plan } from './plan';
+import { excludedIdsOf, type Plan } from './plan';
 
 export interface PrimPreview {
   /** 頂點數 */
@@ -25,6 +25,8 @@ export interface UvPreview {
   canvas: CanvasSize;
   /** 物件 id → 每個 primitive（照模型裡的順序，所有三角形的都有）的新 UV */
   objects: Record<string, PrimPreview[]>;
+  /** 選了「不放進畫布」的物件 id：套用以後它們不再是 LED，3D 畫面預覽時照一般物件顯示（沒有測試圖） */
+  excluded: string[];
 }
 
 export type UvPreviewResult = { ok: true; preview: UvPreview } | { ok: false; reason: string };
@@ -44,5 +46,5 @@ export function buildUvPreview(doc: Document, objects: readonly WantedObject[], 
       return { count: pos.getCount(), first: [v[0], v[1], v[2]] as [number, number, number], uv: show ? uv!.uv : null, ...(show && uv!.split ? { split: uv!.split } : {}) };
     });
   }
-  return { ok: true, preview: { canvas: { width: plan.canvas.width, height: plan.canvas.height }, objects: out } };
+  return { ok: true, preview: { canvas: { width: plan.canvas.width, height: plan.canvas.height }, objects: out, excluded: excludedIdsOf(plan) } };
 }

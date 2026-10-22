@@ -104,6 +104,8 @@ export interface ApplyBody {
   legacy: { canvas: CanvasSize; screens: Pick<LegacyScreen, 'key' | 'dest' | 'rotate' | 'flipH' | 'flipV'>[]; originalUv?: string[] } | null;
   pieceScreens: PieceScreen[];
   screenUpdates: { id: string; uv: UvBox }[];
+  /** 選了「不放進畫布」的 LED 物件 id：套用時後台把它們的類型從 LED 面板改成「其他」（跟模型、畫布一起，一個交易） */
+  excludeObjects?: string[];
 }
 
 export interface ApplyResult {
@@ -114,6 +116,8 @@ export interface ApplyResult {
   legacyTemplateName: string | null;
   stampedVideos: number;
   pieceScreens: { ref: string; id: string }[];
+  /** 這次類型被改成「其他」的物件 id（舊的後台沒有這一欄） */
+  excludedObjects?: string[];
 }
 
 export function applyAutoUv(projectId: string, body: ApplyBody): Promise<ApplyResult> {

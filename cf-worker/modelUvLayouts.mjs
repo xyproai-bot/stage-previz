@@ -36,6 +36,7 @@ export const LEGACY_TEMPLATE_NAME = '舊版面';
 export const MAX_RECIPE_BYTES = 256 * 1024;
 const NOTE_MAX = 80;
 const MAX_ORIGINAL_UV = 200;
+const MAX_EXCLUDED = 200;
 const MAX_CHAIN = 64;
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const REF_RE = /^[a-zA-Z0-9_#-]{1,100}$/;
@@ -68,6 +69,28 @@ async function layoutRow(env, projectId, key) {
   return env.DB.prepare(`SELECT * FROM model_uv_layouts WHERE project_id = ? AND model_key = ? LIMIT 1`).bind(projectId, key).first();
 }
 
+/**
+ * 這個版本「不放進畫布」而被改成類型「其他」的 LED 物件 id（存在 recipe.excludedObjects，後台套用時寫的，不信前端送的）。
+ * 是累計的：包含更早的版本改過、現在還是「其他」的。沒有 / 壞掉 = []
+ */
+export function excludedOf(row) {
+  if (!row || !row.recipe) return [];
+  try {
+    const r = JSON.parse(row.recipe);
+    const list = isObj(r) && Array.isArray(r.excludedObjects) ? r.excludedObjects : [];
+    return [...new Set(list.filter(x => typeof x === 'string' && ID_RE.test(x)))].slice(0, MAX_EXCLUDED * 4);
+  } catch { return []; }
+}
+
+const placeholders = (part) => part.map(() => '?').join(',');
+
+/** 把一串物件的類型改成 to（只改現在是 from 的）；一個陳述式最多綁 100 個參數，所以一段一段 */
+function categoryStatements(env, projectId, ids, from, to) {
+  return chunks(ids).map(part => env.DB.prepare(
+    `UPDATE stage_objects SET category = ? WHERE project_id = ? AND category = ? AND id IN (${placeholders(part)})`
+  ).bind(to, projectId, from, ...part));
+}
+
 // ─────────────────────────────────────────────
 // POST /led-uv/apply
 // ─────────────────────────────────────────────
@@ -94,11 +117,19 @@ export async function applyAutoUv(request, env, ctx, log) {
   const ledCanvas = normalizeLedCanvas(body.ledCanvas);
   if (!ledCanvas) return bad('LED 畫布大小不對（寬高要是 16 ~ 32768 的整數）');
   const note = typeof body.note === 'string' ? body.note.trim().slice(0, NOTE_MAX) : '';
-  let recipe = null;
+  let recipeObj = null;
   if (body.recipe !== undefined && body.recipe !== null) {
     if (!isObj(body.recipe)) return bad('recipe 格式不對');
-    recipe = JSON.stringify(body.recipe);
-    if (recipe.length > MAX_RECIPE_BYTES) return bad('recipe 太大（最多 256 KB）', 413);
+    if (JSON.stringify(body.recipe).length > MAX_RECIPE_BYTES) return bad('recipe 太大（最多 256 KB）', 413);
+    recipeObj = body.recipe;
+  }
+  // 「不放進畫布」：套用時這些 LED 物件的類型改成「其他」（沒有影片）；先檢查格式，物件在不在往下查資料庫
+  let excludeReq = [];
+  if (body.excludeObjects !== undefined && body.excludeObjects !== null) {
+    if (!Array.isArray(body.excludeObjects) || body.excludeObjects.length > MAX_EXCLUDED || body.excludeObjects.some(x => typeof x !== 'string')) {
+      return bad('「不放進畫布」的物件清單格式不對');
+    }
+    excludeReq = [...new Set(body.excludeObjects)];
   }
 
   const cur = await env.DB.prepare(`SELECT model_r2_key, led_canvas FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
@@ -111,8 +142,14 @@ export async function applyAutoUv(request, env, ctx, log) {
   if (!head) return bad('找不到剛上傳的模型檔，請再試一次', 404);
 
   // LED 物件、已經切好的螢幕
-  const objects = new Set(((await env.DB.prepare(`SELECT id FROM stage_objects WHERE project_id = ? AND category = 'led_panel'`).bind(projectId).all()).results || []).map(r => r.id));
+  const stageRows = (await env.DB.prepare(`SELECT id, category, display_name, mesh_name FROM stage_objects WHERE project_id = ?`).bind(projectId).all()).results || [];
+  const objects = new Set(stageRows.filter(r => r.category === 'led_panel').map(r => r.id));
   const existing = new Map(((await env.DB.prepare(`SELECT * FROM led_screens WHERE project_id = ?`).bind(projectId).all()).results || []).map(r => [r.id, r]));
+
+  // 不放進畫布的物件：一定要是這個專案現在的 LED 物件；而且它們不能同時出現在這次要寫的新螢幕 / 舊版面 / 平移裡
+  if (excludeReq.some(id => !objects.has(id))) return bad('「不放進畫布」的物件找不到，或不是 LED 面板（可能被別人改過了，請重新整理）', 404);
+  const excluded = excludeReq;
+  const excludedSet = new Set(excluded);
 
   // 新切出來的螢幕（一個物件有好幾片分開的平面：每片各一個）
   const pieces = Array.isArray(body.pieceScreens) ? body.pieceScreens : [];
@@ -124,6 +161,7 @@ export async function applyAutoUv(request, env, ctx, log) {
   for (const p of pieces) {
     if (!isObj(p) || typeof p.ref !== 'string' || !REF_RE.test(p.ref) || refToId.has(p.ref)) return bad('新切出來的螢幕格式不對');
     if (typeof p.objectId !== 'string' || !objects.has(p.objectId)) return bad('這個專案裡找不到這個 LED 物件（可能被刪掉了，請重新整理）', 404);
+    if (excludedSet.has(p.objectId)) return bad('不放進畫布的物件不能再切出新的螢幕');
     const parsed = normalizeManualScreenInput({ name: p.name, objectId: p.objectId, uv: p.uv }, { partial: false, fullCanvas: ledCanvas });
     if (!parsed.ok) return bad(parsed.error);
     const n = (perObject.get(p.objectId) || 0) + 1;
@@ -139,6 +177,7 @@ export async function applyAutoUv(request, env, ctx, log) {
   const updates = [];
   for (const u of Array.isArray(body.screenUpdates) ? body.screenUpdates : []) {
     if (!isObj(u) || typeof u.id !== 'string' || !existing.has(u.id)) return bad('這個專案裡找不到要更新的螢幕', 404);
+    if (excludedSet.has(existing.get(u.id).object_id)) return bad('不放進畫布的物件不能再平移它的螢幕');
     const parsed = normalizeManualScreenInput({ uv: u.uv }, { partial: true, fullCanvas: ledCanvas });
     if (!parsed.ok) return bad(parsed.error);
     updates.push({ id: u.id, uv: parsed.value.uv });
@@ -171,6 +210,7 @@ export async function applyAutoUv(request, env, ctx, log) {
       return bad('舊版面的「原本 UV」清單不對（物件找不到，可能被刪掉了，請重新整理）');
     }
     const originalUv = [...new Set(rawOriginal)];
+    if (originalUv.some(id => excludedSet.has(id))) return bad('不放進畫布的物件不用保存原本的 UV');
     const placed = normalizePlacementInputs(resolved);
     if (!placed.ok) return bad(placed.error);
     const screens = [];
@@ -178,14 +218,29 @@ export async function applyAutoUv(request, env, ctx, log) {
       const k = parseScreenKey(p.key);
       if (k.kind === 'object') {
         if (!objects.has(k.id)) return bad(`舊版面用到的 LED 物件找不到（${p.key}）`, 404);
+        if (excludedSet.has(k.id)) return bad(`不放進畫布的物件不能出現在舊版面（${p.key}）`);
         screens.push({ key: p.key, objectId: k.id, uv: null, dest: p.dest, rotate: p.rotate, flipH: p.flipH, flipV: p.flipV });
       } else {
         const sv = screenUv.get(k.id);
         if (!sv) return bad(`舊版面用到的螢幕找不到（${p.key}）`, 404);
+        if (excludedSet.has(sv.objectId)) return bad(`不放進畫布的物件不能出現在舊版面（${p.key}）`);
         screens.push({ key: p.key, objectId: sv.objectId, uv: sv.uv, dest: p.dest, rotate: p.rotate, flipH: p.flipH, flipV: p.flipV });
       }
     }
     if (screens.length > 0 || originalUv.length > 0) legacy = { canvas, screens, originalUv };
+  }
+
+  // 這個版本累計「不放進畫布」的物件：這次選的 + 上一版改過、現在還是非 LED 的（製作可能已經手動改回 LED 面板，那就不算）
+  // 換版本時看兩邊的差：離開的版本有、進去的版本沒有 → 改回 LED 面板；進去的有、離開的沒有 → 再改成其他（activateVersion）
+  const stageCat = new Map(stageRows.map(r => [r.id, r.category]));
+  const prevExcluded = excludedOf(await layoutRow(env, projectId, cur.model_r2_key));
+  const carried = prevExcluded.filter(id => stageCat.has(id) && stageCat.get(id) !== 'led_panel' && !excludedSet.has(id));
+  const cumulative = [...excluded, ...carried];
+  let recipe = null;
+  if (recipeObj || cumulative.length > 0) {
+    const { excludedObjects: _ignored, ...rest } = recipeObj || { v: 1 };   // 前端送的不算，只信後台算的
+    recipe = JSON.stringify(cumulative.length > 0 ? { ...rest, excludedObjects: cumulative } : rest);
+    if (recipe.length > MAX_RECIPE_BYTES) return bad('recipe 太大（最多 256 KB）', 413);
   }
 
   const curCanvasJson = cur.led_canvas ? JSON.stringify(normalizeLedCanvas(cur.led_canvas)) : null;
@@ -238,6 +293,9 @@ export async function applyAutoUv(request, env, ctx, log) {
     }
   }
 
+  // 不放進畫布的物件：類型從 LED 面板改成「其他」（跟模型、畫布一起，同一個交易）
+  stmts.push(...categoryStatements(env, projectId, excluded, 'led_panel', 'other'));
+
   // 模型 + 畫布 + 版本紀錄
   stmts.push(env.DB.prepare(`UPDATE projects SET model_r2_key = ?, led_canvas = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, JSON.stringify(ledCanvas), projectId));
   if (cur.model_r2_key) {
@@ -255,11 +313,17 @@ export async function applyAutoUv(request, env, ctx, log) {
   } catch (e) {
     return bad('套用沒有成功（資料庫拒絕了）：' + String(e?.message || e).slice(0, 160), 400);
   }
-  await log?.('upload', 'model', key, { note, ledCanvas, autoUv: true, legacyTemplate: legacyName, stampedVideos: stamped.length, originalUv: legacy ? legacy.originalUv.length : 0 });
+  await log?.('upload', 'model', key, { note, ledCanvas, autoUv: true, legacyTemplate: legacyName, stampedVideos: stamped.length, originalUv: legacy ? legacy.originalUv.length : 0, ...(excluded.length > 0 ? { excludedObjects: excluded.length } : {}) });
+  // 活動紀錄裡也看得到是哪幾個物件的類型被改了（跟手動改分類一樣的寫法）
+  for (const id of excluded) {
+    const r = stageRows.find(x => x.id === id);
+    await log?.('update', 'stage_object', id, { name: r?.display_name || r?.mesh_name, changes: { category: 'other' } });
+  }
   return ok({
     ok: true, key, url: `/r2/${key}`, ledCanvas,
     legacyTemplateId: legacyId, legacyTemplateName: legacyName, stampedVideos: stamped.length,
     pieceScreens: [...refToId].map(([ref, id]) => ({ ref, id })),
+    excludedObjects: excluded,
   });
 }
 
@@ -390,6 +454,7 @@ export async function activateVersion(env, projectId, key) {
   const stmts = [];
   let restored = false;
   let canvasJson = null;
+  let typesChanged = false;
   if (prevKey && prevKey !== key) {
     const all = (await env.DB.prepare(`SELECT * FROM model_uv_layouts WHERE project_id = ?`).bind(projectId).all()).results || [];
     const byKey = new Map(all.map(r => [r.model_key, r]));
@@ -424,6 +489,15 @@ export async function activateVersion(env, projectId, key) {
       restored = true;
       canvasJson = targetRow.led_canvas || null;
     }
+    // 「不放進畫布」改成「其他」的物件跟著版本走：離開的版本有、進去的版本沒有 → 改回 LED 面板；進去的有、離開的沒有 → 再改成其他。
+    // 只動現在的類型正好是預期的那種（製作之後手動改過的不碰）
+    const leavingEx = new Set(excludedOf(prevRow));
+    const enteringEx = new Set(excludedOf(targetRow));
+    const backToLed = [...leavingEx].filter(id => !enteringEx.has(id));
+    const toOther = [...enteringEx].filter(id => !leavingEx.has(id));
+    stmts.push(...categoryStatements(env, projectId, backToLed, 'other', 'led_panel'));
+    stmts.push(...categoryStatements(env, projectId, toOther, 'led_panel', 'other'));
+    typesChanged = backToLed.length > 0 || toOther.length > 0;
   }
   if (restored) {
     stmts.push(env.DB.prepare(`UPDATE projects SET model_r2_key = ?, led_canvas = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, canvasJson, projectId));
@@ -431,7 +505,7 @@ export async function activateVersion(env, projectId, key) {
     stmts.push(env.DB.prepare(`UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, projectId));
   }
   await env.DB.batch(stmts);
-  return { ledCanvas: restored && canvasJson ? normalizeLedCanvas(canvasJson) : null, restoredCanvas: restored };
+  return { ledCanvas: restored && canvasJson ? normalizeLedCanvas(canvasJson) : null, restoredCanvas: restored, objectTypesChanged: typesChanged };
 }
 
 /** 刪掉某個版本時，它的紀錄也刪掉 */

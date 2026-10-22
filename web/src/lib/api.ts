@@ -728,7 +728,7 @@ export async function listModelVersions(projectId: string): Promise<{ versions: 
   return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions`);
 }
 
-export async function activateModelVersion(projectId: string, key: string): Promise<{ key: string; url: string; restoredCanvas?: boolean; ledCanvas?: { width: number; height: number } | null }> {
+export async function activateModelVersion(projectId: string, key: string): Promise<{ key: string; url: string; restoredCanvas?: boolean; ledCanvas?: { width: number; height: number } | null; objectTypesChanged?: boolean }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions/activate`, {
     method: 'POST',
     body: JSON.stringify({ key }),

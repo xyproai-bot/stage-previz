@@ -14,7 +14,7 @@ interface Props {
   projectId: string;
   onClose: () => void;
   /** 切換版本 / 刪除版本後呼叫，讓父層 refresh 模型；切換時後台把 LED 畫布也換回那個版本的（restoredCanvas） */
-  onChanged: (info?: { restoredCanvas: boolean; ledCanvas: { width: number; height: number } | null }) => void;
+  onChanged: (info?: { restoredCanvas: boolean; ledCanvas: { width: number; height: number } | null; objectTypesChanged?: boolean }) => void;
 }
 
 function formatTime(iso: string | null) {
@@ -91,7 +91,7 @@ export default function ModelVersionsDialog({ open, projectId, onClose, onChange
     setBusyKey(v.key);
     try {
       const r = await api.activateModelVersion(projectId, v.key);
-      onChanged({ restoredCanvas: !!r.restoredCanvas, ledCanvas: r.ledCanvas ?? null });
+      onChanged({ restoredCanvas: !!r.restoredCanvas, ledCanvas: r.ledCanvas ?? null, objectTypesChanged: !!r.objectTypesChanged });
       await refresh();
     } catch (e) {
       toast.error('沒有換成：' + (e instanceof Error ? e.message : String(e)));

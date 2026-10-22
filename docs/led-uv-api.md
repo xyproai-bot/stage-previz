@@ -74,3 +74,14 @@
 - `DELETE /model/versions/:file`：紀錄一起刪，從它套用出來的版本改接到它的上一版。`PUT /model`（一般上傳）沿用上一版的紀錄時 `parent_key` 一起沿用。沒有 `parent_key` 的舊紀錄（第 4 階段以前套用的）行為跟以前一樣，只看自己這一筆。
 - `recipe` 多 `uv1`（物件 id → `fresh` / `carried` / `blocked` / `none`），`edit` 多 `seams`（物件 id → 整圈圓柱接縫位置，度）；舊版前端不認識也不影響。
 - 限制：套用中間那一版時才傳的影片，只在它的後代版本上有保護；換回更早的版本（例如 v0）時它沒有對得上的對應。
+
+## 「不放進畫布」（沒有新的 migration）
+
+第 1 步每一塊螢幕三選一：自動貼 / 保留原本 UV / 不放進畫布。選「不放進畫布」的 LED 物件完全不進排版（畫布大小、對位圖、AE 腳本、座標表、舊版面都沒有它），模型裡它的 UV 一個數字都不動；套用時它的**類型從 `led_panel` 改成 `other`**（之後照一般物件顯示，沒有影片）。
+
+- `POST /led-uv/apply` 多一個選填的 `excludeObjects: [物件 id…]`（<= 200）：每個都要是這個專案**現在**的 LED 面板，不然 404（「請重新整理」）；格式不對 400。這些物件不能同時出現在 `pieceScreens`、`screenUpdates`、`legacy`（螢幕或 `originalUv`），不然 400。類型改成 `other` 跟模型、畫布、舊版面在**同一個交易**（只改現在還是 `led_panel` 的）。活動紀錄多一筆「改分類」。
+- 回應多 `excludedObjects: [物件 id…]`（沒帶 = `[]`）。舊的後台沒有這個欄位，前端看到沒有就提醒製作自己去改類型。
+- `recipe.excludedObjects`：後台寫的（前端送的會被丟掉），是**累計**的——這次選的，加上上一版改過、現在還不是 LED 面板的。`recipe.edit.excluded`（物件 id → true）是製作在畫面上選的，排到一半也會存（`PUT /led-uv/layout`），下次打開接著做。
+- `POST /model/versions/activate`：類型跟著版本走。離開的版本有、進去的版本沒有 → 改回 `led_panel`（只改現在是 `other` 的）；進去的有、離開的沒有 → 再改成 `other`（只改現在是 `led_panel` 的）。製作之後手動改過的類型不碰。回應多 `objectTypesChanged`，前端據此重新讀物件清單。
+- `PUT /model`（一般上傳，例如壓縮）沿用上一版的紀錄時，`recipe.excludedObjects` 一起沿用，新舊版本來回換不會改類型。
+- 限制：手動切過的螢幕（`led_screens`）、版型裡用到這個物件的螢幕不會被刪（換回舊版還要用）；物件不再是 LED 面板以後它們只是不再被用到，跟製作手動把分類改成其他一樣。

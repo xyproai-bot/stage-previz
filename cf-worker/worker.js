@@ -2592,13 +2592,14 @@ async function activateModelVersion(request, env, projectId) {
     toKey: key,
     ...(swapped.restoredCanvas ? { ledCanvas: swapped.ledCanvas } : {}),
   });
-  return jsonResp({ ok: true, key, url: `/r2/${key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas });
+  return jsonResp({ ok: true, key, url: `/r2/${key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas, objectTypesChanged: !!swapped.objectTypesChanged });
 }
 
 // 刪除某舊版本（不能刪當前 active）
 async function deleteModelVersion(request, env, projectId, tsFile) {
   if (!isModelVersionFile(tsFile)) return jsonResp({ error: 'Invalid version' }, 400);
   const key = `models/${projectId}/${tsFile}`;
+    ...(swapped.objectTypesChanged ? { objectTypesChanged: true } : {}),
 
   const row = await env.DB.prepare(
     `SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`

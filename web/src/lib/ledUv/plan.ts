@@ -5,6 +5,8 @@
 //   保留（keep）    沒勾、或這個物件第 1 階段還不能處理（弧面、已經手動切過）→ 原本的 UV 整片平移到新位置，大小、方向不變
 //                   （畫布整張重排，所以沒處理的螢幕也要搬過去，不然會壓到別人）
 //   不處理（none）  沒有 UV 又不能自動貼 → 不動
+//   不放進畫布（excluded）  製作選了「不放進畫布」→ 完全不進排版（畫布大小、對位圖、AE 腳本、座標表、舊版面都沒有它），模型裡它的 UV 不動；
+//                           套用時後台把它的類型從 LED 面板改成「其他」（之後不再有影片）
 // 一個物件有好幾片分開的平面 → 每一片各自是一塊螢幕，分開排（每片各建一個手動螢幕，版型裡才能分開放）。
 
 import type { CanvasSize, PixelRect } from '../ledMap';
@@ -17,7 +19,7 @@ import { resolveSize, type Measured, type SizeResult, type SizeSpec } from './si
 import type { ObjectInfo } from './objectInfo';
 import { flatUvForPrim, keepUvForPrim, type KeepMap, type PrimUv } from './place';
 import { audienceRight, type DistortionStat, type ObjectGeom, type Piece, type SurfaceOverride } from './surfaces';
-import { BLOCKED_TEXT, KEEP_TEXT, MISSING_TEXT, NO_UV_TEXT, SPLITS_TEXT, UNSUPPORTED_TEXT, WARN_TEXT } from './text';
+import { BLOCKED_TEXT, EXCLUDED_REASON, KEEP_TEXT, MISSING_TEXT, NO_UV_TEXT, SPLITS_TEXT, UNSUPPORTED_TEXT, WARN_TEXT } from './text';
 
 export interface ManualBox { id: string; name: string; uv: UvBox }
 
@@ -29,6 +31,8 @@ export interface PlanObjectIn {
   info: ObjectInfo | null;
   /** 製作勾了要自動貼 */
   selected: boolean;
+  /** 製作選了「不放進畫布」：蓋過 selected（不排版、不算進畫布，套用後類型改成「其他」） */
+  excluded?: boolean;
   /** 每一片螢幕的點數（片的編號 → 輸入）；沒填 = 還沒填 */
   sizes: Record<number, SizeSpec | undefined>;
   /** 這個物件已經手動切出來的螢幕 */
@@ -39,7 +43,7 @@ export interface PlanObjectIn {
   seamDeg?: number;
 }
 
-export type ObjectMode = 'auto' | 'keep' | 'none' | 'missing';
+export type ObjectMode = 'auto' | 'keep' | 'excluded' | 'none' | 'missing';
 
 export interface PlanPiece {
   index: number;
@@ -173,6 +177,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
     const info = inp.info;
     const obj: PlanObject = { id: inp.id, name: inp.name, mode: 'none', reason: '', pieces: [], keep: null, warnings: [], override: inp.override ?? 'auto', seamDeg: inp.seamDeg ?? 0, freeform: info?.freeform };
     objects.push(obj);
+    if (inp.excluded) { obj.mode = 'excluded'; obj.reason = EXCLUDED_REASON; continue; }
     if (!info) { obj.mode = 'missing'; obj.reason = MISSING_TEXT; continue; }
     obj.warnings.push(...info.warnings);
 
@@ -264,6 +269,11 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
     }
   }
   return { objects, canvas, blockers, warnings, rows: pack.rows, pack, items: natives, arranged: !!resolved, problems: resolved ? resolved.problems : null, arrangeBlockers };
+}
+
+/** 套用時要把類型改成「其他」的物件 id（製作選了「不放進畫布」的） */
+export function excludedIdsOf(plan: Plan): string[] {
+  return plan.objects.filter(o => o.mode === 'excluded').map(o => o.id);
 }
 
 /** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null。整圈圓柱的接縫頂點會有 split */
