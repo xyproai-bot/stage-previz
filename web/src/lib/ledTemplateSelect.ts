@@ -55,6 +55,21 @@ export function pruneSelection(sel: Selection, exists: (key: string) => boolean)
 /** Ctrl+A：版型裡所有螢幕 */
 export const selectAllKeys = (items: readonly { key: string }[]): string[] => items.map(i => i.key);
 
+/** 工具列旁那一行：選了幾塊、外框多大（沒選 = 全部的外框） */
+export interface SelectionInfo { all: boolean; count: number; box: PixelRect }
+export function selectionInfo(items: readonly { key: string; dest: PixelRect }[], selected: Selection): SelectionInfo | null {
+  const set = new Set(selected);
+  const picked = items.filter(i => set.has(i.key));
+  const use = picked.length > 0 ? picked : items;
+  const box = boundsOf(use.map(i => i.dest));
+  return box ? { all: picked.length === 0, count: use.length, box } : null;
+}
+const fmtN = (n: number): string => Math.round(n).toLocaleString('en-US');
+export function selectionInfoText(info: SelectionInfo): string {
+  const size = `寬 ${fmtN(info.box.w)} × 高 ${fmtN(info.box.h)} 點`;
+  return info.all ? `全部 ${info.count} 塊：${size}` : `選了 ${info.count} 塊：${size} · 左上 ${fmtN(info.box.x)}, ${fmtN(info.box.y)}`;
+}
+
 // ───────────────────────── 框選 ─────────────────────────
 
 /** 兩個拖曳點 → 框（不管從哪個角拖起；保留小數，因為是滑鼠的位置） */

@@ -98,6 +98,28 @@ describe('大小鎖死：寬高是規格決定的', () => {
   });
 });
 
+describe('剛好包住模式：每次排版變動畫布都跟著最新排版', () => {
+  const fits = (d: ArrangeDoc) => {
+    const c = autoCanvasOf(d.items.map(i => i.dest));
+    return d.width === c.width && d.height === c.height;
+  };
+  it('拖、轉、全部靠左上、少一塊之後，寬高都剛好包住', () => {
+    let d = base();
+    expect(fits(d)).toBe(true);
+    d = patchDoc(d, x => patchDraftItems(x, [{ key: 'c', patch: { dest: { x: 2000, y: 700, w: 300, h: 500 } } }]), NATIVES);
+    expect(fits(d)).toBe(true);
+    expect({ w: d.width, h: d.height }).toEqual({ w: 2304, h: 1200 });
+    d = patchDoc(d, x => patchDraftItems(x, [{ key: 'c', patch: rotatePlacement90(item(x, 'c'), 1) }]), NATIVES);
+    expect(fits(d)).toBe(true);
+    d = patchDoc(d, x => patchDraftItems(x, [{ key: 'c', patch: { dest: { x: 100, y: 100, w: item(x, 'c').dest.w, h: item(x, 'c').dest.h } } }]), NATIVES);
+    expect(fits(d)).toBe(true);
+    expect(d.height).toBeLessThan(1200);
+    d = moveAllToTopLeft(d, NATIVES);
+    expect(fits(d)).toBe(true);
+    expect(fits(reconcileDoc(d, NATIVES.slice(0, 2), PACK))).toBe(true);
+  });
+});
+
 describe('畫布大小', () => {
   it('自動 = 剛好包住全部（進位到 8 的倍數、至少 16）；一塊都沒有 = 0', () => {
     expect(autoCanvasOf([{ x: 0, y: 0, w: 801, h: 203 }])).toEqual({ width: 808, height: 208 });

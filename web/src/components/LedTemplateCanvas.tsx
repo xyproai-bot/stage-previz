@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import { AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, FlipHorizontal2, FlipVertical2, Maximize, Redo2, RotateCw, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
+import { AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, FlipHorizontal2, BoxSelect, FlipVertical2, Maximize, Redo2, RotateCw, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
 import Icon from './Icon';
 import { useCanvasView } from '../lib/useCanvasView';
 import {
@@ -9,7 +9,7 @@ import {
 } from '../lib/ledTemplateEdit';
 import {
   applyMarquee, boundsOf, flipPatches, groupTargets, isAdditive, marqueeBox, marqueeHits, movePatches, nudgeRects, pressSelect, releaseSelect,
-  GROUP_HANDLES, isCornerHandle, rotatePatches, sameSelection, selectAllKeys, selectionTag, snapGroupMove, snapGroupScale,
+  GROUP_HANDLES, isCornerHandle, rotatePatches, sameSelection, selectAllKeys, selectionInfo, selectionInfoText, selectionTag, snapGroupMove, snapGroupScale,
   type GroupHandle, type PressPending, type Selection,
 } from '../lib/ledTemplateSelect';
 import type { ItemPatch, ItemPatchEntry } from '../lib/ledTemplateDraft';
@@ -140,6 +140,7 @@ export default function LedTemplateCanvas({
   const selItems = useMemo(() => placed.filter(i => selectedSet.has(i.key)), [placed, selectedSet]);
   const selKeys = useMemo(() => selItems.map(i => i.key), [selItems]);
   /** 剛好只選一塊：那一塊自己的四個角把手（選了好幾塊是整組外框的把手） */
+  const selInfo = useMemo(() => selectionInfo(placed, selKeys), [placed, selKeys]);
   const sel = selItems.length === 1 ? selItems[0] : null;
   const groupBox = useMemo(() => (selItems.length > 1 ? boundsOf(selItems.map(i => i.dest)) : null), [selItems]);
 
@@ -377,6 +378,7 @@ export default function LedTemplateCanvas({
         <button className="ltc__btn" onClick={() => api.zoomBy(1.25)} title="放大" aria-label="放大"><Icon icon={ZoomIn} /></button>
         <button className="ltc__btn" onClick={api.fit} title="符合畫面"><Icon icon={Maximize} /> <span className="ltc__btn-text">符合畫面</span></button>
         <span className="ltc__sep" />
+        <button className="ltc__btn" onClick={() => onSelect(selectAllKeys(placed))} disabled={placed.length === 0} title="全選（Ctrl+A）" data-testid="ltc-select-all"><Icon icon={BoxSelect} /> <span className="ltc__btn-text">全選</span></button>
         <button className="ltc__btn" onClick={onUndo} disabled={!canUndo} title="復原（Ctrl+Z）" aria-label="復原"><Icon icon={Undo2} /></button>
         <button className="ltc__btn" onClick={onRedo} disabled={!canRedo} title="重做（Ctrl+Shift+Z）" aria-label="重做"><Icon icon={Redo2} /></button>
         <span className="ltc__sep" />
@@ -390,7 +392,7 @@ export default function LedTemplateCanvas({
             <button className="ltc__btn" onClick={() => onCenter('y')} title="上下置中：選到的螢幕（沒選就全部）整組放到畫布上下正中間，彼此的位置不變"><Icon icon={AlignVerticalJustifyCenter} /> <span className="ltc__btn-text">上下置中</span></button>
           </>
         )}
-        {selItems.length > 1 && <span className="ltc__count" role="status">已選 {selItems.length} 塊</span>}
+        {selInfo && <span className="ltc__count" role="status" data-testid="ltc-sel-info" title="外框的大小，單位是點（畫布像素）">{selectionInfoText(selInfo)}</span>}
       </div>
       {layersBar}
 

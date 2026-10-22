@@ -549,3 +549,24 @@ describe('置中：整組放到畫布正中間', () => {
     expect(centerGroupOnCanvas([], { width: 10, height: 10 }, 'x')).toEqual([]);
   });
 });
+
+describe('selectionInfo：選取外框 / 全部外框', () => {
+  const items = [
+    { key: 'a', dest: { x: 10, y: 20, w: 100, h: 50 } },
+    { key: 'b', dest: { x: 200, y: 0, w: 40, h: 300 } },
+    { key: 'c', dest: { x: 0, y: 0, w: 8, h: 8 } },
+  ];
+  it('選了兩塊 = 兩塊的外框和左上角', async () => {
+    const m = await import('./ledTemplateSelect');
+    const i = m.selectionInfo(items, ['a', 'b'])!;
+    expect(i).toEqual({ all: false, count: 2, box: { x: 10, y: 0, w: 230, h: 300 } });
+    expect(m.selectionInfoText(i)).toBe('選了 2 塊：寬 230 × 高 300 點 · 左上 10, 0');
+  });
+  it('沒選 = 全部的外框；全選得到一樣的外框；沒有螢幕 = null', async () => {
+    const m = await import('./ledTemplateSelect');
+    const none = m.selectionInfo(items, [])!;
+    expect(m.selectionInfoText(none)).toBe('全部 3 塊：寬 240 × 高 300 點');
+    expect(m.selectionInfo(items, m.selectAllKeys(items))!.box).toEqual(none.box);
+    expect(m.selectionInfo([], [])).toBeNull();
+  });
+});
