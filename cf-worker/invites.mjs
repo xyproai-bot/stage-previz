@@ -3,14 +3,23 @@
 // 製作在用戶頁或專案頁幫某個人（已經有帳號的人，或新的名字）建一條邀請連結：
 //   https://<網站>/invite/<邀請碼>
 // 對方打開 → 按「進入」→ 登入（新的人這時才建帳號）、加進專案（用邀請時選的角色）→ 直接進專案
-//   動畫師 → /studio/<專案>，導演 → /preview/<專案>
+//   動畫師 → /studio/<專案>，導演 → /preview/<專案>，這個專案的製作 → /admin/projects/<專案>（專案編輯頁）
 //
 // 邀請碼：32 bytes 隨機（256 bits），資料庫只存 SHA-256（invites.token_hash），邀請碼本身只在建立時回傳一次。
 //   邀請碼夠長、猜不到 → 用快速的 SHA-256 就好（PBKDF2 是給人想的短密碼用的），也能直接用雜湊查。
 // 預設 7 天內有效、只能用一次；製作可以撤銷（revoked_at）。
-// 角色只開放動畫師 / 導演：製作（admin）能改所有東西，連結外流風險太大 → 製作帳號請在用戶頁建、用登入碼登入。
+//
+// 角色：動畫師 / 導演 / 這個專案的製作（0041 的 invites.project_role = 'admin'）。
+//   「專案的製作」只在這個專案有效（project_members.role = 'admin'），看不到別的專案、管不了用戶；邀請永遠不會給出「全站製作」
+//   —— invites.role 還是只有 animator / director（資料表的 CHECK），新的人的帳號預設角色就是它（製作邀請 = animator，最小權限）。
+//   製作能改整個專案，連結外流風險比較大 → 製作邀請一律只能用一次、最長 7 天。
 
+/** 資料表 invites.role 的值（新的人的帳號預設角色；0022 的 CHECK） */
 export const INVITE_ROLES = ['animator', 'director'];
+/** 邀請時可以選的「這個專案裡的角色」（admin = 這個專案的製作） */
+export const INVITE_PROJECT_ROLES = ['admin', 'director', 'animator'];
+/** 製作邀請最長幾天（連結外流的風險比較大） */
+export const INVITE_ADMIN_MAX_DAYS = 7;
 export const INVITE_DEFAULT_DAYS = 7;
 export const INVITE_MAX_DAYS = 30;
 /** 不勾「只能用一次」時最多可以用幾次（例如手機和電腦都要開） */
@@ -54,16 +63,31 @@ export function newInviteId(rand = randomBytes) {
 }
 
 /**
+ * 這條邀請用了之後，這個人在專案裡是什麼角色：project_role 有值（0041 之後建的）就用它，不然就是 role（舊的邀請）
+ * @param {{role?: string, project_role?: string|null}|null|undefined} row
+ */
+export function inviteProjectRole(row) {
+  if (row && INVITE_PROJECT_ROLES.includes(row.project_role)) return row.project_role;
+  return row?.role;
+}
+
+/**
  * 建立邀請時 body 的檢查
- * body: { role, userId?（已經有帳號的人）, name?（新的人）, expiresInDays?（預設 7，1～30）, singleUse?（預設 true） }
- * @returns {{ok: true, value: {role: string, userId: string|null, name: string|null, expiresAt: number, maxUses: number}}
+ * body: { role（animator / director / admin = 這個專案的製作）, userId?（已經有帳號的人）, name?（新的人）,
+ *         expiresInDays?（預設 7，1～30；製作邀請最長 7）, singleUse?（預設 true；製作邀請一律 true） }
+ * @returns {{ok: true, value: {role: string, projectRole: string, userId: string|null, name: string|null, expiresAt: number, maxUses: number}}
  *         | {ok: false, status: number, error: string}}
+ *   value.role = 存進 invites.role 的值（只有 animator / director，新的人的帳號預設角色）；
+ *   value.projectRole = 用了之後在這個專案的角色（存進 invites.project_role）
  */
 export function parseInviteCreate(body, now = Date.now()) {
   const b = body && typeof body === 'object' ? body : {};
-  if (!INVITE_ROLES.includes(b.role)) {
-    return { ok: false, status: 400, error: '請選擇角色：動畫師或導演（製作帳號請在用戶頁建立）' };
+  if (!INVITE_PROJECT_ROLES.includes(b.role)) {
+    return { ok: false, status: 400, error: '請選擇角色：製作、導演或動畫師' };
   }
+  const projectRole = b.role;
+  // 帳號預設角色永遠不是製作：製作邀請的新帳號是動畫師（只有在這個專案是製作）
+  const accountRole = projectRole === 'admin' ? 'animator' : projectRole;
   let userId = null, name = null;
   if (b.userId !== undefined && b.userId !== null && b.userId !== '') {
     if (typeof b.userId !== 'string' || !ID_RE.test(b.userId)) return { ok: false, status: 400, error: '選的用戶不正確' };
@@ -73,17 +97,19 @@ export function parseInviteCreate(body, now = Date.now()) {
     if (!name) return { ok: false, status: 400, error: '請輸入對方的名字' };
     if (name.length > INVITE_NAME_MAX) return { ok: false, status: 400, error: `名字太長（最多 ${INVITE_NAME_MAX} 個字）` };
   }
+  const maxDays = projectRole === 'admin' ? INVITE_ADMIN_MAX_DAYS : INVITE_MAX_DAYS;
   let days = INVITE_DEFAULT_DAYS;
   if (b.expiresInDays !== undefined && b.expiresInDays !== null && b.expiresInDays !== '') {
     days = Number(b.expiresInDays);
-    if (!Number.isInteger(days) || days < 1 || days > INVITE_MAX_DAYS) {
-      return { ok: false, status: 400, error: `有效天數要是 1 到 ${INVITE_MAX_DAYS} 天` };
+    if (!Number.isInteger(days) || days < 1 || days > maxDays) {
+      return { ok: false, status: 400, error: `有效天數要是 1 到 ${maxDays} 天${projectRole === 'admin' ? '（製作的邀請連結最長 7 天）' : ''}` };
     }
   }
-  const singleUse = b.singleUse === undefined ? true : b.singleUse !== false;
+  // 製作的邀請一律只能用一次（連結外流的話，只有第一個打開的人進得去）
+  const singleUse = projectRole === 'admin' ? true : (b.singleUse === undefined ? true : b.singleUse !== false);
   return {
     ok: true,
-    value: { role: b.role, userId, name, expiresAt: now + days * DAY_MS, maxUses: singleUse ? 1 : INVITE_MULTI_USE_MAX },
+    value: { role: accountRole, projectRole, userId, name, expiresAt: now + days * DAY_MS, maxUses: singleUse ? 1 : INVITE_MULTI_USE_MAX },
   };
 }
 
@@ -143,9 +169,9 @@ export function inviteProblem(state) {
   return { status, reason: state, error: INVITE_MESSAGES[state] || INVITE_MESSAGES.not_found };
 }
 
-/** 用了邀請之後要去的頁面 */
+/** 用了邀請之後要去的頁面（role = 在這個專案的角色；這個專案的製作 → 專案編輯頁） */
 export function inviteLandingPath(role, projectId) {
-  const base = role === 'director' ? '/preview' : '/studio';
+  const base = role === 'admin' ? '/admin/projects' : role === 'director' ? '/preview' : '/studio';
   return `${base}/${encodeURIComponent(projectId)}`;
 }
 
@@ -159,7 +185,8 @@ export function inviteToApi(row) {
     id: row.id,
     projectId: row.project_id,
     projectName: row.project_name ?? null,
-    role: row.role,
+    // 在這個專案的角色（製作邀請 = 'admin'；舊版前端用 ROLE_LABEL 顯示，'admin' 會寫成「製作」）
+    role: inviteProjectRole(row),
     userId: row.user_id || null,
     personName: row.user_name || row.new_user_name || '',
     isNewPerson: !row.user_id,

@@ -3,8 +3,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   generateInviteToken, isInviteTokenShape, hashInviteToken, newInviteId,
-  parseInviteCreate, inviteUserDecision, inviteState, inviteProblem, inviteLandingPath, inviteToApi,
+  parseInviteCreate, inviteUserDecision, inviteState, inviteProblem, inviteLandingPath, inviteToApi, inviteProjectRole,
   INVITE_DEFAULT_DAYS, INVITE_MAX_DAYS, INVITE_MULTI_USE_MAX, INVITE_TOKEN_BYTES, INVITE_MESSAGES,
+  INVITE_ROLES, INVITE_PROJECT_ROLES, INVITE_ADMIN_MAX_DAYS,
 } from './invites.mjs';
 
 const DAY = 86400_000;
@@ -47,17 +48,17 @@ test('邀請的 id 跟邀請碼不一樣、符合一般 id 格式', () => {
 test('建立邀請：預設 7 天、只能用一次', () => {
   const r = parseInviteCreate({ role: 'director', name: '  王  小明 ' }, NOW);
   assert.equal(r.ok, true);
-  assert.deepEqual(r.value, { role: 'director', userId: null, name: '王 小明', expiresAt: NOW + INVITE_DEFAULT_DAYS * DAY, maxUses: 1 });
+  assert.deepEqual(r.value, { role: 'director', projectRole: 'director', userId: null, name: '王 小明', expiresAt: NOW + INVITE_DEFAULT_DAYS * DAY, maxUses: 1 });
   assert.equal(INVITE_DEFAULT_DAYS, 7);
 });
 
 test('建立邀請：已經有帳號的人、自訂天數、可以用好幾次', () => {
   const r = parseInviteCreate({ role: 'animator', userId: 'u_abc', expiresInDays: 3, singleUse: false }, NOW);
-  assert.deepEqual(r.value, { role: 'animator', userId: 'u_abc', name: null, expiresAt: NOW + 3 * DAY, maxUses: INVITE_MULTI_USE_MAX });
+  assert.deepEqual(r.value, { role: 'animator', projectRole: 'animator', userId: 'u_abc', name: null, expiresAt: NOW + 3 * DAY, maxUses: INVITE_MULTI_USE_MAX });
 });
 
-test('建立邀請：角色只能動畫師 / 導演，名字 / 天數不對就擋', () => {
-  for (const role of ['admin', 'viewer', '', undefined]) {
+test('建立邀請：角色只能製作（只在這個專案）/ 導演 / 動畫師，名字 / 天數不對就擋', () => {
+  for (const role of ['viewer', 'owner', '', undefined, null, 'ADMIN']) {
     const r = parseInviteCreate({ role, name: 'A' }, NOW);
     assert.equal(r.ok, false, String(role));
     assert.equal(r.status, 400);
@@ -136,4 +137,55 @@ test('管理頁清單：沒有邀請碼、時間是 ISO、剩幾次', () => {
   assert.equal(existing.personName, '小華');
   assert.equal(existing.isNewPerson, false);
   assert.equal(existing.usesLeft, 7);
+});
+
+test('邀請製作：只在這個專案是製作，帳號的預設角色是動畫師（永遠不是全站製作）、只能用一次、最長 7 天', () => {
+  assert.deepEqual(INVITE_PROJECT_ROLES.slice().sort(), ['admin', 'animator', 'director']);
+  // 資料表 invites.role 的值永遠不會是 admin（CHECK 只收 animator / director）
+  assert.deepEqual(INVITE_ROLES, ['animator', 'director']);
+  const r = parseInviteCreate({ role: 'admin', name: '小陳' }, NOW);
+  assert.equal(r.ok, true);
+  assert.equal(r.value.projectRole, 'admin');
+  assert.equal(r.value.role, 'animator');
+  assert.ok(INVITE_ROLES.includes(r.value.role));
+  assert.equal(r.value.maxUses, 1);
+  assert.equal(r.value.expiresAt, NOW + INVITE_DEFAULT_DAYS * DAY);
+  // 想勾「可以用好幾次」也一律只能用一次
+  assert.equal(parseInviteCreate({ role: 'admin', name: '小陳', singleUse: false }, NOW).value.maxUses, 1);
+  // 已經有帳號的人
+  const e = parseInviteCreate({ role: 'admin', userId: 'u_x' }, NOW);
+  assert.equal(e.value.projectRole, 'admin');
+  assert.equal(e.value.role, 'animator');
+  // 天數最長 7 天（導演 / 動畫師最長 30 天照舊）
+  assert.equal(INVITE_ADMIN_MAX_DAYS, 7);
+  assert.equal(parseInviteCreate({ role: 'admin', name: 'A', expiresInDays: 7 }, NOW).ok, true);
+  const long = parseInviteCreate({ role: 'admin', name: 'A', expiresInDays: 8 }, NOW);
+  assert.equal(long.ok, false);
+  assert.equal(long.status, 400);
+  assert.match(long.error, /最長 7 天/);
+  assert.equal(parseInviteCreate({ role: 'director', name: 'A', expiresInDays: 30 }, NOW).ok, true);
+});
+
+test('用了邀請之後的專案角色：project_role 有值用它，舊的邀請（沒有）就是 role', () => {
+  assert.equal(inviteProjectRole({ role: 'animator', project_role: 'admin' }), 'admin');
+  assert.equal(inviteProjectRole({ role: 'director', project_role: null }), 'director');
+  assert.equal(inviteProjectRole({ role: 'animator' }), 'animator');
+  // 看不懂的值不當真（不會因此變成別的角色）
+  assert.equal(inviteProjectRole({ role: 'animator', project_role: 'superuser' }), 'animator');
+  assert.equal(inviteProjectRole(null), undefined);
+});
+
+test('用了邀請去哪：這個專案的製作進專案編輯頁', () => {
+  assert.equal(inviteLandingPath('admin', 'p_1'), '/admin/projects/p_1');
+  assert.equal(inviteLandingPath('admin', 'p 2'), '/admin/projects/p%202');
+});
+
+test('管理頁清單：製作邀請的角色寫「製作」（舊版前端用 ROLE_LABEL 也看得懂）', () => {
+  const api = inviteToApi({
+    id: 'inv_a', project_id: 'p_1', role: 'animator', project_role: 'admin', user_id: null, new_user_name: '小陳',
+    created_at: NOW, expires_at: NOW + DAY, max_uses: 1, use_count: 0,
+  });
+  assert.equal(api.role, 'admin');
+  // 舊的邀請（0041 之前）照舊
+  assert.equal(inviteToApi({ id: 'inv_b', project_id: 'p_1', role: 'director', user_id: 'u_1', created_at: NOW, expires_at: NOW, max_uses: 1, use_count: 0 }).role, 'director');
 });

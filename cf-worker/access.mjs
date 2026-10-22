@@ -40,8 +40,13 @@
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
 //   歌曲影片：最近刪除、救回來（30 天內）                                      admin（這個專案的 admin）
+//   專案成員（0041，members.mjs）：看成員、加進專案 / 改角色 / 移出專案、找現有用戶、邀請連結（建立 / 清單 / 撤銷，
+//                   可以邀製作 / 導演 / 動畫師）                                  admin（全站製作，或「這個專案」的製作；memberManager）
+//                   只動 project_members 和這個專案的邀請，不碰 users.role（專案的製作不能讓任何人變成全站製作）、
+//                   也碰不到別的專案（路由本來就只看網址上的專案）
 //   只有全站 admin：建立 / 匯入 / 複製 / 封存 / 還原專案、專案結束清影片、Drive 帳號和資料夾綁定、
-//                   3D 檢視設定、專案狀態、Show 管理、用戶管理、邀請連結（建立 / 清單 / 撤銷）
+//                   3D 檢視設定（校準 / 現場設定 / 材質 / 重置視角 / LED 畫布大小）、專案狀態、Show 管理、用戶管理、
+//                   所有專案的邀請清單（GET /api/invites）、共用模型庫的修改
 //   共用模型庫（/api/assets）：看清單 = 全站 admin 或某個專案的 admin（canBrowseSharedAssets）；改 = 全站 admin
 
 // 比例尺的樂手和器材：誰能改的規則跟前端共用同一個檔（純判斷）
@@ -196,6 +201,7 @@ export function songStatusDecision({ role, userId, song, to, expected, hasReadyV
  *   'globalAdmin'  只有全站 admin
  *   'shareManager' admin 或導演（canManageShareLinks）
  *   'stageProps'   admin 或導演（canEditStageProps）：改比例尺的樂手和器材
+ *   'memberManager' 全站 admin 或這個專案的 admin（role === 'admin'）：管這個專案的成員和邀請連結
  *   'cameraBookmarks' admin 或導演（canEditCameraBookmarks）：存 / 改名 / 刪 / 排視角書籤
  *   'songPatch'    改歌：只改狀態看 songStatusDecision，改其他欄位要 editor（handler 裡判斷）
  *   'projectPatch' 改專案：一般欄位 editor，Drive / 狀態 / 3D 檢視設定要全站 admin（handler 裡判斷）
@@ -206,7 +212,7 @@ export function songStatusDecision({ role, userId, song, to, expected, hasReadyV
  *
  * @param {string} method
  * @param {string[]} segs  url.pathname.split('/').filter(Boolean)
- * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, videoId?: string, partNumber?: string, mechId?: string, tplId?: string, screenId?: string, allowArchived?: boolean} | null}
+ * @returns {{kind: string, need: string, songId?: string, cueId?: string, objId?: string, videoId?: string, partNumber?: string, mechId?: string, tplId?: string, screenId?: string, memberUserId?: string, allowArchived?: boolean} | null}
  *          null = 沒有這個路徑（404）或方法不對（405，見 methodNotAllowed）
  */
 export function describeProjectRoute(method, segs) {
@@ -271,14 +277,26 @@ export function describeProjectRoute(method, segs) {
       return null;
 
     case 'invites':
-      // 邀請連結（invites.mjs）：等於幫專案加人 → 跟用戶管理一樣只有全站 admin
+      // 邀請連結（invites.mjs）：等於幫專案加人 → 管這個專案成員的人（全站製作、這個專案的製作）；
+      // 別的專案的邀請碰不到（網址上的專案就是範圍），所有專案的清單（GET /api/invites）仍然只有全站製作
       if (!a) {
-        if (read) return r('invites.list', 'globalAdmin');
-        if (m === 'POST') return r('invites.create', 'globalAdmin');
+        if (read) return r('invites.list', 'memberManager');
+        if (m === 'POST') return r('invites.create', 'memberManager');
         return bad('invites');
       }
-      if (!b && m === 'DELETE') return r('invites.revoke', 'globalAdmin', { inviteId: a });
+      if (!b && m === 'DELETE') return r('invites.revoke', 'memberManager', { inviteId: a });
       return b ? null : bad('invites.item');
+
+    // 專案成員（members.mjs）：看、加進專案 / 改角色（PUT）、移出專案（DELETE）
+    case 'members':
+      if (!a) return read ? r('members.list', 'memberManager') : bad('members');
+      if (b) return null;
+      if (m === 'PUT' || m === 'DELETE') return r('members.item', 'memberManager', { memberUserId: a });
+      return bad('members.item');
+    // 用名字找現有的用戶（加進專案、邀請已經有帳號的人）
+    case 'member-candidates':
+      if (a) return null;
+      return read ? r('members.candidates', 'memberManager') : bad('members.candidates');
 
     case 'activity':
       return read ? r('activity', 'member') : bad('activity');
@@ -484,6 +502,8 @@ export function roleMeetsNeed(need, { role, globalRole }) {
       return canEditProjectContent(role);
     case 'shareManager':
       return canManageShareLinks(role);
+    case 'memberManager':
+      return role === 'admin';
     case 'stageProps':
       return canEditStageProps(role);
     case 'cameraBookmarks':
@@ -516,6 +536,8 @@ export function needDeniedMessage(need) {
       return '只有製作可以修改專案內容';
     case 'shareManager':
       return '只有製作或導演可以管理分享連結';
+    case 'memberManager':
+      return '只有這個專案的製作可以管理成員';
     case 'stageProps':
       return STAGE_PROPS_DENIED_MESSAGE;
     case 'cameraBookmarks':

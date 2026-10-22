@@ -73,14 +73,18 @@ import {
 } from './videos.mjs';
 // 登入碼（產生、雜湊、明文 / 雜湊兩種存法）
 import {
-  generateLoginCode, normalizeLoginCode, hashLoginCode, legacyCustomCodeDecision, loginCodeStorageMode,
-  userLoginCodeView, LOGIN_CODE_STORAGE_KEY, CUSTOM_CODE_NOT_ALLOWED,
+  generateLoginCode, normalizeLoginCode, hashLoginCode, loginCodeStorageMode,
+  userLoginCodeView, LOGIN_CODE_STORAGE_KEY,
+  loginCodeRequest, currentCodeMatches, hasLoginCode, codeProbeKey,
+  CODE_IN_USE_MESSAGE, CURRENT_CODE_WRONG_MESSAGE, SAME_AS_CURRENT_MESSAGE,
 } from './loginCodes.mjs';
 // 邀請連結（邀請碼、狀態、檢查）
 import {
   generateInviteToken, isInviteTokenShape, hashInviteToken, newInviteId, parseInviteCreate,
-  inviteUserDecision, inviteState, inviteProblem, inviteLandingPath, inviteToApi,
+  inviteUserDecision, inviteState, inviteProblem, inviteLandingPath, inviteToApi, inviteProjectRole,
 } from './invites.mjs';
+// 專案成員（「成員」面板：加進專案 / 改角色 / 移出專案 / 找現有用戶）
+import * as members from './members.mjs';
 // 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
 import * as mech from './mechanisms.mjs';
 import * as ledTpl from './ledTemplates.mjs';
@@ -235,6 +239,7 @@ async function routeRequest(request, env) {
   if (url.pathname === '/api/auth/login'  && request.method === 'POST')  return authLogin(request, env);
   if (url.pathname === '/api/auth/logout' && request.method === 'POST')  return authLogout();
   if (url.pathname === '/api/auth/me'     && request.method === 'GET')   return authMe(request, env);
+  if (url.pathname === '/api/auth/change-code' && request.method === 'POST') return changeMyLoginCode(request, env);
 
   // 公開分享連結（read-only，無需登入）
   //   /api/share/<連結碼>/...   舊式網址（/share/<連結碼>）只拿來查連結碼
@@ -357,7 +362,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.groupId, route.deletedVideoId, route.tplId, route.screenId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.groupId, route.deletedVideoId, route.tplId, route.screenId, route.memberUserId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -485,7 +490,15 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
 
     case 'invites.list':          return listOpenInvites(env, { projectId });
     case 'invites.create':        return createInvite(request, env, ctx);
-    case 'invites.revoke':        return revokeInvite(env, ctx, route.inviteId);
+    case 'invites.revoke':        return revokeInvite(request, env, ctx, route.inviteId);
+
+    // 專案成員（members.mjs）：全站製作或這個專案的製作
+    case 'members.list':          return mechResp(members.listMembers(env, ctx));
+    case 'members.candidates':    return mechResp(members.listCandidates(env, ctx, url));
+    case 'members.item':
+      return mechResp(request.method === 'PUT'
+        ? members.putMember(request, env, ctx, route.memberUserId, mechLog(request, env, projectId))
+        : members.deleteMember(env, ctx, route.memberUserId, mechLog(request, env, projectId)));
 
     case 'activity':              return listActivity(env, projectId, url.searchParams.get('limit') || '50');
     case 'comments.summary':      return commentsSummary(env, ctx);
@@ -3567,17 +3580,49 @@ async function listUsers(env) {
 }
 
 /**
- * 建立 / 重設時要用的登入碼：
- *   自訂（body.accessCode 有填）→ 只有明文存法收（舊版前端的「自訂」），雜湊存法擋掉
- *   沒填 → 系統產生 10 個字（loginCodes.mjs）
- * @returns {{ok: true, custom: string|null} | {ok: false, status: number, error: string}}
+ * 登入碼有沒有人在用：跟登入查人的同一招（登入碼只憑自己找人，所以不能重複）。
+ *   雜湊存法：算一次雜湊（固定的鹽，約 5ms）→ 查有唯一索引的 access_code_hash；還沒換成雜湊的舊明文（access_code）一起查
+ *   明文存法：直接查 access_code
+ * 不用一個一個驗證別人的雜湊 → 不會因為用戶變多而變慢，撞到 / 沒撞到花的時間也一樣。
+ * exceptUserId = 這組是要給這個人的（他自己現在的登入碼不算重複）
  */
-function loginCodeRequest(body, mode) {
-  const raw = (body?.accessCode ?? '').toString().trim();
-  if (!raw) return { ok: true, custom: null };
-  if (mode === 'hashed') return { ok: false, status: 400, error: CUSTOM_CODE_NOT_ALLOWED };
-  const d = legacyCustomCodeDecision(raw);
-  return d.ok ? { ok: true, custom: d.code } : { ok: false, status: 400, error: d.error };
+async function loginCodeTaken(env, mode, code, exceptUserId) {
+  const except = exceptUserId || '';
+  if (mode === 'hashed') {
+    const h = await hashLoginCode(code);
+    const r = await env.DB.prepare(
+      `SELECT id FROM users WHERE (access_code_hash = ? OR access_code = ?) AND id != ? LIMIT 1`
+    ).bind(h, code, except).first();
+    return !!r;
+  }
+  const r = await env.DB.prepare(`SELECT id FROM users WHERE access_code = ? AND id != ? LIMIT 1`).bind(code, except).first();
+  return !!r;
+}
+
+// 設定登入碼時「撞到別人的」「現在的登入碼打錯」都算猜錯：同一個人同一個來源 15 分鐘 10 次就鎖 15 分鐘（跟登入同一套規則）
+function codeProbeIpKey(request, actorId) {
+  const ip = loginClientKey(request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for'));
+  return codeProbeKey(actorId || 'unknown', ip);
+}
+
+/** 被鎖的話回 429 的 Response；沒鎖回 null */
+async function codeProbeLocked(env, key) {
+  const now = Date.now();
+  const [, recent] = await env.DB.batch([
+    env.DB.prepare(`DELETE FROM login_attempts WHERE attempted_at < ?`).bind(now - LOGIN_ATTEMPT_KEEP_MS),
+    env.DB.prepare(`SELECT attempted_at FROM login_attempts WHERE ip = ? AND attempted_at > ?`).bind(key, now - LOGIN_LOOKBACK_MS),
+  ]);
+  const gate = loginThrottleDecision((recent.results || []).map(r => r.attempted_at), now);
+  if (gate.allowed) return null;
+  const retryAfterSec = Math.ceil(gate.retryAfterMs / 1000);
+  return new Response(JSON.stringify({ error: loginLockedMessage(gate.retryAfterMs), retryAfterSec }), {
+    status: 429,
+    headers: { ...corsHeaders(), 'Content-Type': 'application/json', 'Retry-After': String(retryAfterSec) },
+  });
+}
+
+async function codeProbeFailed(env, key) {
+  await env.DB.prepare(`INSERT INTO login_attempts (ip, attempted_at) VALUES (?, ?)`).bind(key, Date.now()).run();
 }
 
 /** 要寫進資料庫的兩個欄位：明文存法 → access_code；雜湊存法 → access_code_hash（明文清掉） */
@@ -3594,13 +3639,18 @@ async function createUser(request, env) {
   const avatarColor = (body?.avatarColor || '#10c78a').toString().slice(0, 8);
   if (!name) return jsonResp({ error: 'name 必填' }, 400);
   const mode = await getLoginCodeMode(env);
-  const req = loginCodeRequest(body, mode);
+  const req = loginCodeRequest(body?.accessCode);
   if (!req.ok) return jsonResp({ error: req.error }, req.status);
 
-  // 自訂的（只有明文存法）：先檢查重複
+  // 自己設定的：先檢查有沒有人在用（兩種存法都一樣，存法照系統目前的：雜湊的不存明文）
   if (req.custom) {
-    const exists = await env.DB.prepare(`SELECT id FROM users WHERE access_code = ? LIMIT 1`).bind(req.custom).first();
-    if (exists) return jsonResp({ error: '這個登入碼已被使用，請改一個' }, 409);
+    const probeKey = codeProbeIpKey(request, (await getCurrentUser(request, env))?.id);
+    const locked = await codeProbeLocked(env, probeKey);
+    if (locked) return locked;
+    if (await loginCodeTaken(env, mode, req.custom, null)) {
+      await codeProbeFailed(env, probeKey);
+      return jsonResp({ error: CODE_IN_USE_MESSAGE }, 409);
+    }
   }
 
   const id = 'u_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
@@ -3619,7 +3669,7 @@ async function createUser(request, env) {
       break;
     } catch (e) {
       if (!isUniqueError(e)) throw e;
-      if (req.custom) return jsonResp({ error: '這個登入碼已被使用，請改一個' }, 409);
+      if (req.custom) return jsonResp({ error: CODE_IN_USE_MESSAGE }, 409);
       if (attempt >= 3) throw e;  // 系統產生的剛好跟別人一樣 → 換一組再試
     }
   }
@@ -3669,14 +3719,17 @@ async function setAccessCode(request, env, userId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   const mode = await getLoginCodeMode(env);
-  const req = loginCodeRequest(body, mode);
+  const req = loginCodeRequest(body?.accessCode);
   if (!req.ok) return jsonResp({ error: req.error }, req.status);
 
   if (req.custom) {
-    const exists = await env.DB.prepare(
-      `SELECT id FROM users WHERE access_code = ? AND id != ? LIMIT 1`
-    ).bind(req.custom, userId).first();
-    if (exists) return jsonResp({ error: '這個登入碼已被別人使用' }, 409);
+    const probeKey = codeProbeIpKey(request, (await getCurrentUser(request, env))?.id);
+    const locked = await codeProbeLocked(env, probeKey);
+    if (locked) return locked;
+    if (await loginCodeTaken(env, mode, req.custom, userId)) {
+      await codeProbeFailed(env, probeKey);
+      return jsonResp({ error: CODE_IN_USE_MESSAGE }, 409);
+    }
   }
 
   // 舊的登入碼不能用了 → 那個人其他裝置的登入也一起失效（製作重設自己的 → 留下自己現在這一個；sessions.mjs）
@@ -3697,7 +3750,66 @@ async function setAccessCode(request, env, userId) {
       return jsonResp({ ok: true, accessCode: code, shownOnce: mode === 'hashed' });
     } catch (e) {
       if (!isUniqueError(e)) throw e;
-      if (req.custom) return jsonResp({ error: '這個登入碼已被別人使用' }, 409);
+      if (req.custom) return jsonResp({ error: CODE_IN_USE_MESSAGE }, 409);
+      if (attempt >= 3) throw e;
+    }
+  }
+}
+
+// 修改自己的登入碼（每個登入的人都可以改自己的；改別人的要走 /api/users/:id/access-code，只有全站製作）
+//   POST /api/auth/change-code  body { currentCode?, newCode? }
+//   - 有登入碼的人要先輸入「現在的」（偷到登入狀態的人不能直接換掉）；用邀請連結進來、還沒有登入碼的人不用
+//   - newCode 沒填 = 系統產生；有填 = 自己設定（規則見 web/src/lib/loginCodeRules.ts）
+//   - 新的登入碼只回這一次；其他裝置的登入會失效，這一台留著
+async function changeMyLoginCode(request, env) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+
+  const mode = await getLoginCodeMode(env);
+  const req = loginCodeRequest(body?.newCode);
+  if (!req.ok) return jsonResp({ error: req.error }, req.status);
+
+  // 猜「現在的登入碼」和試「別人的登入碼」共用一個防猜紀錄
+  const probeKey = codeProbeIpKey(request, me.id);
+  const locked = await codeProbeLocked(env, probeKey);
+  if (locked) return locked;
+
+  const row = await env.DB.prepare(`SELECT id, access_code, access_code_hash FROM users WHERE id = ? LIMIT 1`).bind(me.id).first();
+  if (!row) return jsonResp({ error: '未登入' }, 401);
+  if (hasLoginCode(row)) {
+    if (!(await currentCodeMatches(row, body?.currentCode))) {
+      await codeProbeFailed(env, probeKey);
+      return jsonResp({ error: CURRENT_CODE_WRONG_MESSAGE }, 403);
+    }
+    if (req.custom && (await currentCodeMatches(row, req.custom))) {
+      return jsonResp({ error: SAME_AS_CURRENT_MESSAGE }, 400);
+    }
+  }
+  if (req.custom && (await loginCodeTaken(env, mode, req.custom, me.id))) {
+    await codeProbeFailed(env, probeKey);
+    return jsonResp({ error: CODE_IN_USE_MESSAGE }, 409);
+  }
+
+  // 舊的登入碼不能用了 → 其他裝置的登入一起失效，這一台留著（sessions.mjs）
+  const rv = await sessionRevokeColumns(request, me, me.id);
+  for (let attempt = 0; ; attempt++) {
+    const code = req.custom || generateLoginCode();
+    const cols = await loginCodeColumns(code, mode);
+    try {
+      await env.DB.prepare(
+        `UPDATE users SET
+            sessions_revoked_at = CASE WHEN access_code IS NOT NULL OR access_code_hash IS NOT NULL THEN ? ELSE sessions_revoked_at END,
+            session_keep_hash   = CASE WHEN access_code IS NOT NULL OR access_code_hash IS NOT NULL THEN ? ELSE session_keep_hash END,
+            access_code = ?, access_code_hash = ?
+          WHERE id = ?`
+      ).bind(rv.revokedAt, rv.keepHash, cols.access_code, cols.access_code_hash, me.id).run();
+      return jsonResp({ ok: true, accessCode: code, shownOnce: mode === 'hashed' });
+    } catch (e) {
+      if (!isUniqueError(e)) throw e;
+      if (req.custom) return jsonResp({ error: CODE_IN_USE_MESSAGE }, 409);
       if (attempt >= 3) throw e;
     }
   }
@@ -3763,10 +3875,10 @@ async function removeUserFromProject(request, env, userId) {
 
 // ─────────────────────────────────────────────
 // 邀請連結（規則在 invites.mjs；表在 migrations/0022）
-//   GET    /api/projects/:id/invites              這個專案還能用的邀請         全站 admin（access.mjs）
-//   POST   /api/projects/:id/invites              建立 → 回 { invite, token }  全站 admin；token 只回這一次
-//   DELETE /api/projects/:id/invites/:inviteId    撤銷                         全站 admin
-//   GET    /api/invites                           所有專案還能用的邀請（用戶頁） 全站 admin
+//   GET    /api/projects/:id/invites              這個專案還能用的邀請         全站製作、這個專案的製作（access.mjs memberManager）
+//   POST   /api/projects/:id/invites              建立 → 回 { invite, token }  同上；token 只回這一次；角色可以選製作（只在這個專案）/ 導演 / 動畫師
+//   DELETE /api/projects/:id/invites/:inviteId    撤銷                         同上
+//   GET    /api/invites                           所有專案還能用的邀請（用戶頁） 只有全站製作
 //   POST   /api/invites/peek    { token }         打開前先看是誰、哪個專案（不會用掉）  不用登入
 //   POST   /api/invites/redeem  { token }         用掉：登入（新的人這時建帳號）+ 加進專案  不用登入
 // 邀請碼放在 body，不放在後台的網址上（不會出現在請求紀錄裡）
@@ -3800,7 +3912,7 @@ async function handleInvitesRouter(request, env, url) {
 }
 
 const INVITE_LIST_SELECT = `
-  SELECT i.id, i.project_id, i.role, i.user_id, i.new_user_name, i.created_at, i.expires_at,
+  SELECT i.id, i.project_id, i.role, i.project_role, i.user_id, i.new_user_name, i.created_at, i.expires_at,
          i.max_uses, i.use_count, i.last_used_at,
          p.name AS project_name, u.name AS user_name, c.name AS created_by_name
     FROM invites i
@@ -3826,7 +3938,7 @@ async function createInvite(request, env, ctx) {
   const now = Date.now();
   const p = parseInviteCreate(body, now);
   if (!p.ok) return jsonResp({ error: p.error }, p.status);
-  const { role, userId, name, expiresAt, maxUses } = p.value;
+  const { role, projectRole, userId, name, expiresAt, maxUses } = p.value;
   if (userId) {
     const u = await env.DB.prepare(`SELECT id, name, role, deactivated FROM users WHERE id = ? LIMIT 1`).bind(userId).first();
     const d = inviteUserDecision(u, 'create');
@@ -3834,20 +3946,23 @@ async function createInvite(request, env, ctx) {
   }
   const token = generateInviteToken();
   const id = newInviteId();
+  // role = 新的人的帳號預設角色（只有動畫師 / 導演，永遠不是全站製作）；project_role = 在這個專案的角色（0041，可以是製作）
   await env.DB.prepare(
-    `INSERT INTO invites (id, token_hash, project_id, role, user_id, new_user_name, created_by_user_id, created_at, expires_at, max_uses, use_count)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
-  ).bind(id, await hashInviteToken(token), ctx.projectId, role, userId, userId ? null : name, ctx.me.id, now, expiresAt, maxUses).run();
+    `INSERT INTO invites (id, token_hash, project_id, role, project_role, user_id, new_user_name, created_by_user_id, created_at, expires_at, max_uses, use_count)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`
+  ).bind(id, await hashInviteToken(token), ctx.projectId, role, projectRole, userId, userId ? null : name, ctx.me.id, now, expiresAt, maxUses).run();
   const row = await env.DB.prepare(`${INVITE_LIST_SELECT} WHERE i.id = ? LIMIT 1`).bind(id).first();
+  await logActivity(request, env, ctx.projectId, 'create', 'invite', id, { name: row?.user_name || row?.new_user_name || name || '', role: projectRole });
   // token 只有這一次拿得到（資料庫只存雜湊）→ 前端組成 https://<網站>/invite/<token>
   return jsonResp({ invite: inviteToApi(row), token }, 201);
 }
 
-async function revokeInvite(env, ctx, inviteId) {
+async function revokeInvite(request, env, ctx, inviteId) {
   const r = await env.DB.prepare(
     `UPDATE invites SET revoked_at = ?, revoked_by_user_id = ? WHERE id = ? AND project_id = ? AND revoked_at IS NULL`
   ).bind(Date.now(), ctx.me.id, inviteId, ctx.projectId).run();
   if (!r.meta.changes) return jsonResp({ error: '找不到這個邀請（可能已經撤銷了）' }, 404);
+  await logActivity(request, env, ctx.projectId, 'delete', 'invite', inviteId, {});
   return jsonResp({ ok: true });
 }
 
@@ -3886,7 +4001,7 @@ async function peekInvite(env, token) {
   return jsonResp({
     invite: {
       projectName: inv.project_name,
-      role: inv.role,
+      role: inviteProjectRole(inv),
       personName: inv.user_name || inv.new_user_name || '',
       expiresAt: new Date(Number(inv.expires_at)).toISOString(),
     },
@@ -3937,11 +4052,13 @@ async function redeemInvite(env, token) {
   const d = inviteUserDecision(u, 'redeem');
   if (!d.ok) return jsonResp({ error: d.error, reason: d.reason }, d.status);
 
+  // 在這個專案的角色：project_role（0041；可以是製作，只在這個專案有效）；舊的邀請沒有 → 跟 role 一樣
+  const projectRole = inviteProjectRole(inv);
   await env.DB.batch([
     env.DB.prepare(
       `INSERT INTO project_members (project_id, user_id, role) VALUES (?, ?, ?)
        ON CONFLICT (project_id, user_id) DO UPDATE SET role = excluded.role`
-    ).bind(inv.project_id, u.id, inv.role),
+    ).bind(inv.project_id, u.id, projectRole),
     env.DB.prepare(`UPDATE users SET last_seen_at = datetime('now') WHERE id = ?`).bind(u.id),
     env.DB.prepare(`UPDATE invites SET used_by_user_id = ? WHERE id = ?`).bind(u.id, inv.id),
   ]);
@@ -3952,8 +4069,8 @@ async function redeemInvite(env, token) {
     user: { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color },
     token: sessionToken,
     projectId: inv.project_id,
-    projectRole: inv.role,
-    landingPath: inviteLandingPath(inv.role, inv.project_id),
+    projectRole,
+    landingPath: inviteLandingPath(projectRole, inv.project_id),
   }, setSessionCookie(sessionToken));
 }
 

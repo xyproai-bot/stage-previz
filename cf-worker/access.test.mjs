@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   projectRoleOf, canEditProjectContent, canManageShareLinks,
-  songStatusDecision, describeProjectRoute, roleMeetsNeed,
+  songStatusDecision, describeProjectRoute, roleMeetsNeed, needDeniedMessage,
   commentSessionFor, parseCommentSession, commentAuthorRole, canModifyComment,
   scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow, canBrowseSharedAssets,
 } from './access.mjs';
@@ -178,16 +178,35 @@ test('路由：只有全站 admin 的', () => {
   assert.deepEqual(route('POST', '/api/projects/p1/restore'), { kind: 'restore', need: 'globalAdmin', allowArchived: true });
 });
 
-test('路由：邀請連結只有全站 admin（等於幫專案加人）', () => {
-  assert.deepEqual(route('GET', '/api/projects/p1/invites'), { kind: 'invites.list', need: 'globalAdmin' });
-  assert.deepEqual(route('POST', '/api/projects/p1/invites'), { kind: 'invites.create', need: 'globalAdmin' });
-  assert.deepEqual(route('DELETE', '/api/projects/p1/invites/inv_1'), { kind: 'invites.revoke', need: 'globalAdmin', inviteId: 'inv_1' });
+test('路由：邀請連結和成員只有「管成員的人」（全站製作，或這個專案的製作）', () => {
+  assert.deepEqual(route('GET', '/api/projects/p1/invites'), { kind: 'invites.list', need: 'memberManager' });
+  assert.deepEqual(route('POST', '/api/projects/p1/invites'), { kind: 'invites.create', need: 'memberManager' });
+  assert.deepEqual(route('DELETE', '/api/projects/p1/invites/inv_1'), { kind: 'invites.revoke', need: 'memberManager', inviteId: 'inv_1' });
   assert.equal(route('PATCH', '/api/projects/p1/invites').methodNotAllowed, true);
   assert.equal(route('GET', '/api/projects/p1/invites/inv_1').methodNotAllowed, true);
   assert.equal(route('DELETE', '/api/projects/p1/invites/inv_1/x'), null);
-  // 專案的 admin（不是全站 admin）、導演都不行
+  // 專案的製作（帳號是導演 / 動畫師）可以；導演、動畫師、不是成員都不行
+  assert.equal(roleMeetsNeed('memberManager', { role: 'admin', globalRole: 'director' }), true);
+  assert.equal(roleMeetsNeed('memberManager', { role: 'admin', globalRole: 'admin' }), true);
+  assert.equal(roleMeetsNeed('memberManager', { role: 'director', globalRole: 'director' }), false);
+  assert.equal(roleMeetsNeed('memberManager', { role: 'animator', globalRole: 'animator' }), false);
+  assert.equal(roleMeetsNeed('memberManager', { role: null, globalRole: 'animator' }), false);
+  // 用戶管理本身還是只有全站製作
   assert.equal(roleMeetsNeed('globalAdmin', { role: 'admin', globalRole: 'director' }), false);
-  assert.equal(roleMeetsNeed('globalAdmin', { role: 'director', globalRole: 'director' }), false);
+});
+
+test('路由：成員（看 / 加進專案或改角色 / 移出專案）和找現有用戶', () => {
+  assert.deepEqual(route('GET', '/api/projects/p1/members'), { kind: 'members.list', need: 'memberManager' });
+  assert.deepEqual(route('PUT', '/api/projects/p1/members/u_1'), { kind: 'members.item', need: 'memberManager', memberUserId: 'u_1' });
+  assert.deepEqual(route('DELETE', '/api/projects/p1/members/u_1'), { kind: 'members.item', need: 'memberManager', memberUserId: 'u_1' });
+  assert.equal(route('POST', '/api/projects/p1/members').methodNotAllowed, true);
+  assert.equal(route('PATCH', '/api/projects/p1/members/u_1').methodNotAllowed, true);
+  assert.equal(route('GET', '/api/projects/p1/members/u_1').methodNotAllowed, true);
+  assert.equal(route('PUT', '/api/projects/p1/members/u_1/x'), null);
+  assert.deepEqual(route('GET', '/api/projects/p1/member-candidates'), { kind: 'members.candidates', need: 'memberManager' });
+  assert.equal(route('POST', '/api/projects/p1/member-candidates').methodNotAllowed, true);
+  assert.equal(route('GET', '/api/projects/p1/member-candidates/x'), null);
+  assert.equal(needDeniedMessage('memberManager'), '只有這個專案的製作可以管理成員');
 });
 
 test('共用模型庫清單：全站 admin 或某個專案的 admin 才看得到', () => {
