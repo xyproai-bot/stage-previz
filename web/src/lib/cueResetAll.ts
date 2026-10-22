@@ -35,11 +35,12 @@ export const RESET_ALL_MENU_LABEL = '所有 cue 的物件回到預設位置';
 export const RESET_ALL_NOTHING = '這首歌所有 cue 的物件本來就都在預設位置，沒有東西要清。';
 
 /** 確認視窗：寫清楚影響幾個 cue、幾筆設定，什麼不會動，怎麼復原 */
-export function resetAllDialog(s: ResetAllSummary): { title: string; message: string; confirmLabel: string; destructive: true } {
+export function resetAllDialog(s: ResetAllSummary, sharedLibraryCues = 0): { title: string; message: string; confirmLabel: string; destructive: true } {
   return {
     title: '把這首歌所有 cue 的物件回到預設位置？',
     message: [
       `這首歌共 ${s.totalCues} 個 cue，其中 ${s.cuesWithOverrides} 個 cue 調整過物件：共 ${s.overrides} 筆物件設定（${s.objects} 個物件）會被清掉。清掉以後，每個 cue 裡所有物件都回到預設的位置、角度、大小和顯示（設成「預設隱藏」的物件會是隱藏的）。`,
+      ...(sharedLibraryCues > 0 ? [`其中 ${sharedLibraryCues} 個 cue 也被別的歌使用，那些歌也會一起回到預設。`] : []),
       'cue 的名稱、時間、轉場，還有機關時間軸上的位置都不會動，只清物件的設定。',
       '清掉以後可以按復原（Ctrl+Z）一次全部還原；重新整理頁面以後就不能復原了。',
     ].join('\n'),

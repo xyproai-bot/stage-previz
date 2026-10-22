@@ -9,6 +9,7 @@ import {
   LINEAR_DIRECTIONS, ROTARY_AXES, matchLinearDirection, matchRotaryAxis, presetAt, splitConsoleLabel, splitSideGeometry, splitSideName, unitOf, valueAxes,
   type CueMechanismPosition, type Mechanism, type MechanismSide, type MechVec3,
 } from './model';
+import { compareLabels } from '../cueLibraryList';
 import { FLIP_HINGES, flipSetupOf } from './flip';
 import { hoistsOfRig } from './hoist';
 import { resolvePositions, type PositionsMode } from './track';
@@ -19,7 +20,11 @@ export interface SheetSong {
   name: string;
   code: string | null;
   order: number;
-  cues: { id: string; name: string; order: number; videoTimeSec: number | null; crossfadeSeconds: number }[];
+  cues: {
+    id: string; name: string; order: number; videoTimeSec: number | null; crossfadeSeconds: number;
+    /** Cue 庫專案才有：這個 cue 指到的 Cue 庫的 cue（編號是用戶打的文字） */
+    libraryCue?: { id: string; label: string; name: string } | null;
+  }[];
 }
 
 export interface SheetInput {
@@ -40,6 +45,16 @@ export const SHEET_HEADER = [
   '歌曲 Song', 'Cue #', 'Cue 名稱 Cue name', 'GO 時間 GO', '到位時間 Arrive', '轉場(秒) Move s', '機關 Axis', '控台編號 Console',
   '起點 From', '目標 Target', '單位 Unit', '常用位置 Preset', '行程 Distance', '延遲(秒) Delay s', '開始時間 Start', '走幾秒 Axis s', '備註 Note',
 ];
+
+/** Cue 庫專案才多的「Cue 編號」欄（接在 Cue # 後面）；舊模式專案的總表欄位不變 */
+export const LIB_NUMBER_HEADER = 'Cue 編號';
+
+export function sheetHeader(mode?: PositionsMode): string[] {
+  if (mode !== 'library') return SHEET_HEADER;
+  const h = [...SHEET_HEADER];
+  h.splice(2, 0, LIB_NUMBER_HEADER);
+  return h;
+}
 
 /** 影片時間 m:ss.s（0:00.0、1:05.0） */
 export function sheetTime(sec: number): string {
@@ -69,7 +84,7 @@ export function sheetRows(input: SheetInput): Cell[][] {
   const mechs = valueAxes([...input.mechanisms]).sort((a, b) => a.order - b.order);
   const rows: Cell[][] = [];
   for (const song of [...input.songs].sort((a, b) => a.order - b.order)) {
-    const cues: (MotionCue & { name: string })[] = [...song.cues]
+    const cues: (MotionCue & { name: string; libraryCue?: { id: string; label: string; name: string } | null })[] = [...song.cues]
       .sort((a, b) => a.order - b.order)
       .map(c => ({ ...c, status: 'master' }));
     if (!cues.length) continue;
@@ -89,6 +104,7 @@ export function sheetRows(input: SheetInput): Cell[][] {
         for (const side of m.variant === 'split' ? (['a', 'b'] as const) : [null]) rows.push([
           text(songLabel),
           numCell(String(i + 1)),
+          ...(input.mode === 'library' ? [text(cue.libraryCue?.label)] : []),
           text(cue.name),
           text(times ? sheetTime(times.go) : null),
           text(times ? sheetTime(times.arrive) : null),
@@ -172,10 +188,66 @@ export function csvCell(c: Cell): string {
   return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
 }
 
+export const LIB_SECTION_TITLE = '# Cue 庫 Cue library（每個 Cue 庫的 cue × 每個機關，給控台寫程式用）';
+export const LIB_SECTION_HEADER = [
+  'Cue 編號', 'Cue 名稱 Cue name', '機關 Axis', '控台編號 Console', '位置 Position', '單位 Unit',
+  '延遲(秒) Delay s', '走幾秒 Axis s', '自己設 / 沿用 Own', '用在哪些歌 Used in',
+];
+
+/**
+ * 「Cue 庫」段落（只有 Cue 庫專案）：沒有任何歌在用的 Cue 庫 cue 總表拿不到它的位置，所以只列有歌在用的。
+ * 位置、延遲、走幾秒是 Cue 庫這個 cue 自己的（歌裡每個 cue 都是它的快照）；延遲 / 走幾秒沒設 = 空白（跟著 cue 的轉場）。
+ */
+export function libraryRows(input: SheetInput): Cell[][] {
+  if (input.mode !== 'library') return [];
+  const mechs = valueAxes([...input.mechanisms]).sort((a, b) => a.order - b.order);
+  const libs = new Map<string, { label: string; name: string; songs: string[] }>();
+  for (const song of [...input.songs].sort((a, b) => a.order - b.order)) {
+    const songLabel = song.code ? `${song.code} ${song.name}` : song.name;
+    for (const c of song.cues) {
+      const lc = c.libraryCue;
+      if (!lc) continue;
+      const e = libs.get(lc.id) ?? { label: lc.label, name: lc.name, songs: [] };
+      if (!e.songs.includes(songLabel)) e.songs.push(songLabel);
+      libs.set(lc.id, e);
+    }
+  }
+  const byKey = new Map<string, CueMechanismPosition>();
+  for (const p of input.positions) if (p.libraryCueId) byKey.set(`${p.libraryCueId}\u0000${p.mechanismId}`, p);
+  const rows: Cell[][] = [];
+  const ordered = [...libs.entries()].sort((a, b) => compareLabels(a[1].label, b[1].label));
+  for (const [id, lc] of ordered) {
+    for (const m of mechs) {
+      const p = byKey.get(`${id}\u0000${m.id}`);
+      if (!p) continue;
+      for (const side of m.variant === 'split' ? (['a', 'b'] as const) : [null]) rows.push([
+        text(lc.label),
+        text(lc.name),
+        text(side ? splitSideName(m.name, side) : m.name),
+        text(side ? splitConsoleLabel(m, side) : m.consoleLabel),
+        numCell(valueText(p.value, m.kind)),
+        text(unitOf(m.kind)),
+        numCell(p.delaySec == null ? null : fixed(p.delaySec, 1)),
+        numCell(p.durationSec == null ? null : fixed(p.durationSec, 1)),
+        text(p.carried ? '沿用' : '自己設'),
+        text(lc.songs.join('、')),
+      ]);
+    }
+  }
+  return rows;
+}
+
 export function buildMechanismSheetCsv(input: SheetInput): string {
+  const lib = libraryRows(input);
   const lines = [
-    SHEET_HEADER.map(h => csvCell(text(h))).join(','),
+    sheetHeader(input.mode).map(h => csvCell(text(h))).join(','),
     ...sheetRows(input).map(r => r.map(csvCell).join(',')),
+    ...(input.mode === 'library' ? [
+      '',
+      csvCell(text(LIB_SECTION_TITLE)),
+      LIB_SECTION_HEADER.map(h => csvCell(text(h))).join(','),
+      ...lib.map(r => r.map(csvCell).join(',')),
+    ] : []),
     '',
     ...sheetLegend(input.mechanisms, input.front).map(l => csvCell(text(l))),
   ];

@@ -6,6 +6,7 @@
 
 import type { Cue } from './api';
 import { crossfadeLabel } from './cueTiming';
+import { cueNumLabel } from './cueBadge';
 
 interface ExportOptions {
   projectName: string;
@@ -28,7 +29,7 @@ export function exportSongStoryboardAsPdf({ projectName, songName, cues, thumbs 
     const thumb = thumbs.get(c.id);
     return `
       <div class="cue">
-        <div class="cue__num">#${i + 1}</div>
+        <div class="cue__num">#${i + 1}${cueNumLabel(c) ? ` · Cue ${escapeHtml(cueNumLabel(c)!)}` : ""}</div>
         ${thumb
           ? `<img class="cue__thumb" src="${thumb}" alt="${escapeHtml(c.name)}" />`
           : `<div class="cue__placeholder">還沒有縮圖</div>`}

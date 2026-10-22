@@ -10,6 +10,7 @@ import {
   MAX_SWITCHES, checkTimeline, formatSwitchTime, parseSwitchTime, switchSentence, switchTime, unresolvedSwitchText,
   type CueTimes, type SwitchInput, type TimelineSwitch, type TimelineTemplateInfo,
 } from '../lib/ledTemplateTimeline';
+import { cueNumName } from '../lib/cueBadge';
 import './LedTimelineDialog.css';
 
 /** 畫面上的一列：換版型的點（用 Cue 或直接寫時間）+ 換成哪個版型 */
@@ -77,7 +78,7 @@ export default function LedTimelineDialog({ open, projectId, song, templates, on
   }, [open, song.id]);
 
   const cueTimes: CueTimes = useMemo(
-    () => new Map((cues ?? []).map(c => [c.id, { name: c.name, timeSec: c.videoTimeSec }])),
+    () => new Map((cues ?? []).map(c => [c.id, { name: cueNumName(c), timeSec: c.videoTimeSec }])),
     [cues],
   );
   const infoMap = useMemo(() => new Map<string, TimelineTemplateInfo>(
@@ -216,7 +217,7 @@ export default function LedTimelineDialog({ open, projectId, song, templates, on
                           <option value="">選一個 Cue…</option>
                           {(cues ?? []).map(c => (
                             <option key={c.id} value={c.id} disabled={c.videoTimeSec === null}>
-                              {c.name}（{c.videoTimeSec === null ? '還沒有影片時間' : formatSwitchTime(c.videoTimeSec)}）
+                              {cueNumName(c)}（{c.videoTimeSec === null ? '還沒有影片時間' : formatSwitchTime(c.videoTimeSec)}）
                             </option>
                           ))}
                           {r.cueId && !cueTimes.has(r.cueId) && <option value={r.cueId}>（這個 Cue 不見了）</option>}

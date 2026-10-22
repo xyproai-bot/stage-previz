@@ -40,6 +40,7 @@ import { canEditCameraBookmarks } from '../lib/cameraBookmarks';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueTransitionSeconds, crossfadeLabel, NEW_CUE_CROSSFADE_SECONDS, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
 import { EditHistory, historyScope } from '../lib/editHistory';
+import { deleteSongMessage, sharedLibraryCueCount } from '../lib/cueBadge';
 import { RESET_ALL_MENU_LABEL, RESET_ALL_NOTHING, resetAllDialog, resetAllHistoryScopes, runResetAll, summarizeOverrides } from '../lib/cueResetAll';
 import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
@@ -713,7 +714,7 @@ export default function ProjectEditor() {
   }
   async function handleDeleteSong(songId: string, name: string) {
     if (!projectId) return;
-    if (!(await confirmDialog({ title: `刪除歌曲「${name}」？`, message: '它的所有 cue 會一起刪掉，刪了就救不回來。', confirmLabel: '刪除', destructive: true }))) return;
+    if (!(await confirmDialog({ title: `刪除歌曲「${name}」？`, message: deleteSongMessage(libMode), confirmLabel: '刪除', destructive: true }))) return;
     try {
       await api.deleteSong(projectId, songId);
       if (selectedSongId === songId) setSelectedSongId(null);
@@ -927,7 +928,8 @@ export default function ProjectEditor() {
       catch (e) { toast.error('讀不到這首歌的 cue 設定：' + msg(e)); return; }
       const summary = summarizeOverrides(info.cueCount, info.states);
       if (summary.overrides === 0) { toast.info(RESET_ALL_NOTHING); return; }
-      if (!(await confirmDialog(resetAllDialog(summary)))) return;
+      const shared = libMode ? sharedLibraryCueCount(songId, cues, libCuesRef.current) : 0;
+      if (!(await confirmDialog(resetAllDialog(summary, shared)))) return;
       const scopes = resetAllHistoryScopes(historyScopeRef.current, cues.map(c => c.id));
       const removed = await runEdit(() => runResetAll({
         clear: () => api.clearSongCueOverrides(pid, songId),

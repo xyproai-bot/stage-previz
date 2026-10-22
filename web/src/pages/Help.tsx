@@ -76,6 +76,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
         id: A.prodCues, label: 'cue：位置和轉場', children: [
           { id: A.prodCueTiming, label: 'cue 跟著影片時間走' },
           { id: A.prodTemplates, label: '常用擺位' },
+          { id: A.prodCueLibrary, label: 'Cue 庫（cue 的編號和另存）' },
           { id: A.prodUndo, label: '復原、重做、快捷鍵' },
         ],
       },
@@ -1225,6 +1226,22 @@ function ProducerChapter() {
           <ul className="help-list">
             <li>存的是每個物件的位置（照物件名稱對，所以別的專案物件名稱一樣也套得上）和機關位置（照機關名稱對）。</li>
             <li>刪除：在選擇視窗按垃圾桶。已經用它建好的 cue 不受影響。</li>
+          </ul>
+        </Section>
+
+        <Section id={A.prodCueLibrary} level={3} title="Cue 庫（cue 的編號和另存）">
+          <p>Cue 庫是這個專案所有「舞台畫面」的總清單。每個 cue 有自己的編號和名稱，每首歌只是從 Cue 庫裡選 cue、設時間。只有開了 Cue 庫的專案才有，沒有開的專案照原本的方式用。</p>
+          <ul className="help-list">
+            <li><strong>編號自己打</strong>：編號是文字，可以寫「12」「3-1」「301」「2.5」，最多 16 個字，同一個專案不能重複。清單照編號的數字大小排：1、2、2.5、3、3-1、12、301。</li>
+            <li><strong>每個 cue 是獨立的一份</strong>：改一個 cue 不會偷偷改到別的 cue。想要「差不多但有一點不一樣」，就另存成新的 cue。</li>
+            <li><strong>這首歌的 cue 從 Cue 庫選</strong>：右邊「這首歌的 cue」按「<Ui>從 Cue 庫加 cue</Ui>」，搜尋編號或名稱，設時間和轉場。同一個 cue 可以用在好幾首歌，順序可以不照編號（例如 Cue 17 在 0:00、Cue 1 在 1:00）。每列「<Ui>⋯</Ui>」可以改時間、換成別的 cue、複製成新的 cue（只改這首歌）、拿掉。拿掉只是從這首歌拿掉，Cue 庫裡還在。</li>
+            <li><strong>還沒存的改動</strong>：在 3D 上移動物件、調機關，改動會先放在「還沒存的改動」，上面的長條會問你要「<Ui>另存成新的 cue</Ui>」、「<Ui>更新 Cue X</Ui>」還是「<Ui>放棄改動</Ui>」。更新一個很多首歌都在用的 cue，會先告訴你會影響哪幾首歌。</li>
+            <li><strong>離開前會提醒</strong>：還有沒存的改動時，換 cue、換歌或離開編輯頁，都會先問「這個 cue 動到了，要另存成新的 cue 嗎？」。</li>
+            <li><strong>加到這首歌</strong>：右邊「Cue 庫」分頁每個 cue 的「<Ui>⋯</Ui>」有「加到這首歌」，不用回「這首歌的 cue」再找。</li>
+            <li><strong>刪除被擋</strong>：還有歌在用的 cue 刪不掉，會告訴你是哪幾首歌在用，要先從那些歌拿掉才能刪。沒有歌在用的才能刪，刪了沒辦法復原。刪除歌也不會刪掉 Cue 庫的 cue。</li>
+            <li><strong>全部回到預設</strong>：整首歌「所有 cue 的物件回到預設位置」時，如果有 cue 也被別的歌用到，確認視窗會寫出有幾個，那些歌也會一起回到預設。</li>
+            <li><strong>各個地方都看得到編號</strong>：導演頁、工作站、分享頁的 cue 清單，After Effects 的標記（「Cue 12 副歌全開」），機關總表（多一欄「Cue 編號」，還有一段「Cue 庫」列出每個 cue 的每個機關位置），分鏡 PDF 都會帶 Cue 編號。</li>
+            <li><strong>預設隱藏的物件</strong>：Cue 庫的 cue 沒設定顯示的話，這個物件不會出現；要它出現，就在那個 cue 裡把它設成顯示。</li>
           </ul>
         </Section>
 

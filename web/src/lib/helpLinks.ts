@@ -28,6 +28,7 @@ export const HELP_ANCHORS = {
   prodCues: 'prod-cues',
   prodCueTiming: 'prod-cue-timing',
   prodTemplates: 'prod-templates',
+  prodCueLibrary: 'prod-cue-library',
   prodUndo: 'prod-undo',
   prodMechanisms: 'prod-mechanisms',
   prodMechSetup: 'prod-mech-setup',

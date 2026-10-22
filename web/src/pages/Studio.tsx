@@ -1,3 +1,4 @@
+import { CueNumBadge } from '../components/CueNumBadge';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import * as api from '../lib/api';
@@ -1329,7 +1330,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                         title={c.videoTimeSec != null ? `${c.name}（影片 ${formatClock(c.videoTimeSec)}）` : c.name}
                       >
                         <span className="studio-cuebar__num">{i + 1}</span>
-                        <span className="studio-cuebar__name">{c.name}</span>
+                        <CueNumBadge cue={c} /><span className="studio-cuebar__name">{c.name}</span>
                       </button>
                     ))}
                   </div>
@@ -1518,7 +1519,7 @@ function CuesTab({
             onClick={() => onSelectCue(c.id)}
           >
             <span className="studio-cues__num">#{idx + 1}</span>
-            <span className="studio-cues__name">{c.name}</span>
+            <CueNumBadge cue={c} /><span className="studio-cues__name">{c.name}</span>
             {c.crossfadeSeconds > 0 && (
               <span className="studio-cues__cross">{crossfadeLabel(c.crossfadeSeconds)}</span>
             )}

@@ -1,3 +1,4 @@
+import { CueNumBadge } from './CueNumBadge';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api';
 import type { Cue, CueState, StageObject } from '../lib/api';
@@ -246,7 +247,7 @@ export default function CueStoryboard({
                 <span className="storyboard__drag-hint" title="拖拉重新排序"><Icon icon={GripVertical} /></span>
               </button>
               <div className="storyboard__meta">
-                <span className="storyboard__name">{c.name}</span>
+                <CueNumBadge cue={c} /><span className="storyboard__name">{c.name}</span>
                 <button
                   className="link-btn"
                   onClick={() => regenerate(c)}

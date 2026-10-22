@@ -1,3 +1,4 @@
+import { CueNumBadge } from '../components/CueNumBadge';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import * as api from '../lib/api';
@@ -712,7 +713,7 @@ export default function Share() {
                   title={c.videoTimeSec != null ? `影片 ${formatClock(c.videoTimeSec)}` : undefined}
                 >
                   <span className="share-cuebar__num">{i + 1}</span>
-                  <span className="share-cuebar__name">{c.name}</span>
+                  <CueNumBadge cue={c} /><span className="share-cuebar__name">{c.name}</span>
                 </button>
               ))}
             </div>

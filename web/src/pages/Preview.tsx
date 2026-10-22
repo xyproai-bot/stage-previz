@@ -1,3 +1,4 @@
+import { CueNumBadge } from '../components/CueNumBadge';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import * as api from '../lib/api';
@@ -1215,7 +1216,7 @@ function SongDetail({
                       title={c.videoTimeSec != null ? `${c.name}（影片 ${formatTimeMS(c.videoTimeSec)}）` : c.name}
                     >
                       <span className="cuebar-cue__num">{i + 1}</span>
-                      <span className="cuebar-cue__name">{c.name}</span>
+                      <CueNumBadge cue={c} /><span className="cuebar-cue__name">{c.name}</span>
                     </button>
                   ))}
                 </div>

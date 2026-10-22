@@ -3,13 +3,14 @@
 import { useMemo } from 'react';
 import type { Cue } from './api';
 import type { LedTemplateList } from './ledTemplateApi';
+import { cueNumName } from './cueBadge';
 import { songTimelineOf } from './ledLiveTemplate';
 import { parseSwitches, switchTime, type CueTimes, type LedTimeline, type TimelineSwitch } from './ledTemplateTimeline';
 
 /** 這首歌的 Cue（只算正式的）→ 換版型的點要的 Cue 時間 */
 export function cueTimesOf(cues: readonly Cue[] | null | undefined): CueTimes | undefined {
   if (!cues) return undefined;
-  return new Map(cues.filter(c => c.status === 'master').map(c => [c.id, { name: c.name, timeSec: c.videoTimeSec }]));
+  return new Map(cues.filter(c => c.status === 'master').map(c => [c.id, { name: cueNumName(c), timeSec: c.videoTimeSec }]));
 }
 
 export interface SongTimelineState {

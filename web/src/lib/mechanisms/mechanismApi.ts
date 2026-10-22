@@ -11,6 +11,7 @@ import type {
 } from './model';
 import type { BulkPositionItem } from './group';
 import type { PositionsMode } from './track';
+import type { SheetSong } from './cueSheet';
 
 /** 後台回的錯誤：message 是中文、可以直接顯示；data 是整個錯誤內容 */
 export interface MechanismApiError extends Error {
@@ -28,7 +29,7 @@ export interface MechanismApiError extends Error {
 export interface MechanismConflict { objectId: string; objectName: string; mechanismId: string; mechanismName: string }
 
 export interface MechanismSheetData {
-  songs: { id: string; name: string; code: string | null; order: number; cues: { id: string; name: string; order: number; videoTimeSec: number | null; crossfadeSeconds: number }[] }[];
+  songs: SheetSong[];
   positions: CueMechanismPosition[];
   mechanisms: Mechanism[];
   /** 後台說的模式；舊後台沒回 = legacy */
