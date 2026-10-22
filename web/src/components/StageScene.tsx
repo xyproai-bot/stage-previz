@@ -524,6 +524,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // 本地影片 / 圖片 → LED 貼圖（ledVideo / ledImage prop 變了就重建）
   const ledMediaTextureRef = useRef<THREE.Texture | null>(null);
   const [ndiPopoverOpen, setNdiPopoverOpen] = useState(false);
+  // 暫停 AE 即時：連線留著，但 LED 不顯示 AE 送來的畫面（回到對位圖 / 其他來源）；這個分頁記得
+  const [ndiPaused, setNdiPaused] = useState<boolean>(() => {
+    try { return sessionStorage.getItem('sp_ndi_paused') === '1'; } catch { return false; }
+  });
+  const toggleNdiPaused = () => setNdiPaused(v => {
+    const next = !v;
+    try { sessionStorage.setItem('sp_ndi_paused', next ? '1' : '0'); } catch { /* 存不了就只在這次有效 */ }
+    return next;
+  });
   // 「校正 AE 即時顏色」對話框
   const [ndiColorOpen, setNdiColorOpen] = useState(false);
   // AE 即時：小程序縮成幾分之一、專案的 LED 畫布（像素格密度用）、現在的顏色校正曲線（燈色取樣用）
@@ -2119,7 +2128,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const ndiGuideState = ndi.guide;
   ndiDownscaleRef.current = ndiGuideState.helperDownscale;
   // LED 用 AE 畫面：這條連線收過畫面就用（AE 停住時留在最後一格）
-  const ndiActive = enableNdi && ndiGuideState.hasFrame;
+  const ndiActive = enableNdi && ndiGuideState.hasFrame && !ndiPaused;
   // AE 即時的顏色校正：新版小程序送原始像素 → 預設曲線 / 這台電腦的校正；舊版照以前
   const ndiCalibration = useNdiCalibration();
   const ndiColor = useMemo(
@@ -3688,7 +3697,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           title={ndiGuideState.step === 'live' ? `AE 即時：${ndiStepMessage(ndiGuideState, ndi.env.browser).title}` : '點擊看 AE 即時連線狀態'}
           aria-expanded={ndiPopoverOpen}
         >
-          {ndiPillIcon(ndiGuideState)} {ndiShortLabel(ndiGuideState)}
+          {ndiPillIcon(ndiGuideState)} {ndiPaused ? 'AE 已暫停' : ndiShortLabel(ndiGuideState)}
         </button>
       ),
       menu: null,
@@ -3850,6 +3859,14 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
               <button className="ndi-popover__close" onClick={() => setNdiPopoverOpen(false)} title="關閉" aria-label="關閉"><Icon icon={X} /></button>
             </div>
             <div className="ndi-popover__body">
+              <button
+                type="button"
+                className={'btn btn--sm ' + (ndiPaused ? 'btn--primary' : 'btn--ghost')}
+                onClick={toggleNdiPaused}
+                title={ndiPaused ? '恢復顯示 AE 送來的畫面' : '先不顯示 AE 的畫面，LED 回到對位圖（連線不會斷，按一下就恢復）'}
+              >
+                {ndiPaused ? '恢復 AE 即時' : '暫停 AE 即時（LED 顯示對位圖）'}
+              </button>
               {ndiGuideState.step === 'live' && (
                 <div className="ndi-popover__live"><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiStepMessage(ndiGuideState, ndi.env.browser).title}</div>
               )}
