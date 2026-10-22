@@ -2,12 +2,12 @@
 // 前端和後台共用同一份（cf-worker 直接 import 這個檔，跟 stageProps.ts 一樣），預設值和權限不會兩邊各寫一套。
 //
 //   分享連結：「浮水印」「禁止下載」各一個開關
-//     新建立的連結：兩個都預設開
+//     新建立的連結：浮水印預設關（2026-10-22 用戶覺得干擾）、禁止下載預設開
 //     0038 以前建的舊連結：兩個都關（上線後行為不變，製作自己去打開）
 //   專案：「成員看片也加浮水印」，預設關，只有製作可以改
 
 /** 新建立的分享連結，兩個開關的預設 */
-export const NEW_LINK_PROTECTION = Object.freeze({ watermark: true, noDownload: true });
+export const NEW_LINK_PROTECTION = Object.freeze({ watermark: false, noDownload: true });
 /** 0038 以前建的舊連結（migration 補的預設值） */
 export const LEGACY_LINK_PROTECTION = Object.freeze({ watermark: false, noDownload: false });
 /** 專案「成員看片也加浮水印」的預設 */
@@ -33,7 +33,7 @@ export type ProtectionFields = { watermark: 0 | 1; no_download: 0 | 1 };
 
 export const PROTECTION_FLAG_ERROR = '浮水印、禁止下載要用 true 或 false';
 
-/** 建立連結：body 沒給的開關用預設（兩個都開）。舊版前端不會送這兩個欄位 → 新連結照樣是「兩個都開」 */
+/** 建立連結：body 沒給的開關用預設（浮水印關、禁止下載開）。舊版前端不會送這兩個欄位 → 新連結照樣用這個預設 */
 export function resolveNewLinkProtection(body: unknown): { ok: true; fields: ProtectionFields } | { ok: false; error: string } {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const w = readFlag(b.watermark);

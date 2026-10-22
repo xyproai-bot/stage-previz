@@ -215,8 +215,11 @@ test('分享連結「允許看的人留言」：只有製作能打開；導演�
   // 分享頁看得到有沒有開（看不到連結名稱）
   r = await call(null, 'GET', `/api/share/${adminLink}/data`);
   assert.equal(r.data.allowComments, true);
-  // 連結名稱是團隊內部用的：新連結預設開了浮水印，名稱只出現在浮水印的字（protection.linkName，0038），資料裡別的地方都沒有；
-  // 關掉浮水印就哪裡都看不到
+  // 連結名稱是團隊內部用的：新連結預設浮水印關（2026-10-22）→ 哪裡都看不到；
+  // 打開浮水印後，名稱只出現在浮水印的字（protection.linkName，0038），資料裡別的地方都沒有；再關掉又看不到
+  assert.equal(JSON.stringify(r.data).includes('給客戶 B'), false);
+  await call('u_dir', 'PATCH', `/api/projects/p1/share-links/${adminLink}`, { watermark: true });
+  r = await call(null, 'GET', `/api/share/${adminLink}/data`);
   assert.equal(r.data.protection.linkName, '給客戶 B');
   assert.equal(JSON.stringify({ ...r.data, protection: undefined }).includes('給客戶 B'), false);
   await call('u_dir', 'PATCH', `/api/projects/p1/share-links/${adminLink}`, { watermark: false });

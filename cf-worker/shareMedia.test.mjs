@@ -121,8 +121,8 @@ test('連結編號：6 個大寫英數字，同一個連結碼永遠同一組，
 
 // ── 預設值和權限 ──
 
-test('預設值：新連結兩個都開；舊連結兩個都關；成員看片浮水印預設關', () => {
-  assert.deepEqual({ ...NEW_LINK_PROTECTION }, { watermark: true, noDownload: true });
+test('預設值：新連結浮水印關、禁止下載開；舊連結兩個都關；成員看片浮水印預設關', () => {
+  assert.deepEqual({ ...NEW_LINK_PROTECTION }, { watermark: false, noDownload: true });
   assert.deepEqual({ ...LEGACY_LINK_PROTECTION }, { watermark: false, noDownload: false });
   assert.equal(MEMBER_WATERMARK_DEFAULT, false);
   assert.deepEqual(protectionOfRow({}), { watermark: false, noDownload: false });
@@ -131,9 +131,9 @@ test('預設值：新連結兩個都開；舊連結兩個都關；成員看片�
   assert.deepEqual(protectionOfRow({ watermark: 1, no_download: 0 }), { watermark: true, noDownload: false });
 });
 
-test('建立連結：沒給（舊版前端）= 兩個都開；有給就照給的；不合法 400', () => {
-  assert.deepEqual(resolveNewLinkProtection({}), { ok: true, fields: { watermark: 1, no_download: 1 } });
-  assert.deepEqual(resolveNewLinkProtection(undefined), { ok: true, fields: { watermark: 1, no_download: 1 } });
+test('建立連結：沒給（舊版前端）= 浮水印關、禁止下載開；有給就照給的；不合法 400', () => {
+  assert.deepEqual(resolveNewLinkProtection({}), { ok: true, fields: { watermark: 0, no_download: 1 } });
+  assert.deepEqual(resolveNewLinkProtection(undefined), { ok: true, fields: { watermark: 0, no_download: 1 } });
   assert.deepEqual(resolveNewLinkProtection({ watermark: false }), { ok: true, fields: { watermark: 0, no_download: 1 } });
   assert.deepEqual(resolveNewLinkProtection({ noDownload: false, watermark: true }), { ok: true, fields: { watermark: 1, no_download: 0 } });
   assert.deepEqual(resolveNewLinkProtection({ watermark: 0, noDownload: 0 }), { ok: true, fields: { watermark: 0, no_download: 0 } });

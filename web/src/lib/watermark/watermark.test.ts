@@ -217,12 +217,12 @@ describe('禁止下載：哪裡不給右鍵另存', () => {
 // ── 預設值和權限 ──
 
 describe('浮水印 / 禁止下載的預設值和權限', () => {
-  it('新連結兩個都開；舊連結兩個都關；成員看片預設關', () => {
-    expect({ ...NEW_LINK_PROTECTION }).toEqual({ watermark: true, noDownload: true });
+  it('新連結浮水印關、禁止下載開；舊連結兩個都關；成員看片預設關', () => {
+    expect({ ...NEW_LINK_PROTECTION }).toEqual({ watermark: false, noDownload: true });
     expect({ ...LEGACY_LINK_PROTECTION }).toEqual({ watermark: false, noDownload: false });
     expect(MEMBER_WATERMARK_DEFAULT).toBe(false);
     expect(protectionOfRow({ watermark: 0, no_download: 0 })).toEqual({ watermark: false, noDownload: false });
-    expect(resolveNewLinkProtection({}).ok && (resolveNewLinkProtection({}) as { fields: unknown }).fields).toEqual({ watermark: 1, no_download: 1 });
+    expect(resolveNewLinkProtection({}).ok && (resolveNewLinkProtection({}) as { fields: unknown }).fields).toEqual({ watermark: 0, no_download: 1 });
     expect(resolveLinkProtectionPatch({ noDownload: false })).toEqual({ ok: true, fields: { no_download: 0 } });
   });
   it('成員看片浮水印：只有製作能改；專案開了就加（不分角色）', () => {

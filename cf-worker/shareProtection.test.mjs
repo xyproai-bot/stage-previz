@@ -79,11 +79,11 @@ test('migration 0038：舊連結兩個都是關、舊專案成員浮水印是關
   assert.deepEqual({ ...n }, { watermark: 0, no_download: 0 });
 });
 
-test('建連結：舊版前端（沒送這兩個欄位）建的新連結 = 兩個都開；新版前端送什麼就是什麼；清單帶連結編號', async () => {
+test('建連結：舊版前端（沒送這兩個欄位）建的新連結 = 浮水印關、禁止下載開；新版前端送什麼就是什麼；清單帶連結編號', async () => {
   const { call } = await setup();
   let r = await call('u_dir', 'POST', '/api/projects/p1/share-links', {});
   assert.equal(r.status, 201, r.data?.error);
-  assert.equal(r.data.watermark, true);
+  assert.equal(r.data.watermark, false);
   assert.equal(r.data.noDownload, true);
   assert.match(r.data.shortId, /^[0-9A-HJ-NP-Z]{6}$/);
   assert.equal(r.data.shortId, await shortLinkId(r.data.token));
@@ -100,7 +100,7 @@ test('建連結：舊版前端（沒送這兩個欄位）建的新連結 = 兩�
 
   r = await call('u_dir', 'GET', '/api/projects/p1/share-links');
   const byToken = Object.fromEntries(r.data.links.map(l => [l.token, l]));
-  assert.equal(byToken[defaultToken].watermark, true);
+  assert.equal(byToken[defaultToken].watermark, false);
   assert.equal(byToken[defaultToken].noDownload, true);
   assert.equal(byToken[offToken].watermark, false);
   assert.equal(byToken[offToken].noDownload, false);

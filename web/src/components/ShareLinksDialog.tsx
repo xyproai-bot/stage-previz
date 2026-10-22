@@ -63,7 +63,7 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
   // 0026：連結名稱（團隊看訪客留言時顯示）、允許看的人留言（預設關）
   const [label, setLabel] = useState('');
   const [allowComments, setAllowComments] = useState(false);
-  // 0038：浮水印、禁止下載（新連結預設兩個都開）
+  // 0038：浮水印、禁止下載（新連結：浮水印預設關、禁止下載預設開）
   const [watermark, setWatermark] = useState<boolean>(NEW_LINK_PROTECTION.watermark);
   const [noDownload, setNoDownload] = useState<boolean>(NEW_LINK_PROTECTION.noDownload);
   const [creating, setCreating] = useState(false);
