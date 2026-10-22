@@ -23,6 +23,8 @@ export interface ObjectInfo extends ObjectAnalysis {
   oldRegion: UvRegion | null;
   /** 每一片的原本範圍（只有平面物件有） */
   oldPieces: (PieceOld | null)[];
+  /** 物件裡有好幾塊 LED mesh 時：每一塊（PrimGeom.group 的編號）原本的 UV 範圍（「保留原本 UV」只保留其中一塊用）；沒有分塊 = 沒有這欄 */
+  groupRegions?: Record<number, UvRegion | null>;
 }
 
 const SAMPLE_CAP = 600;
@@ -82,5 +84,11 @@ function describePieces(geom: ObjectGeom, a: ObjectAnalysis, oldCanvas: CanvasSi
 export function describeObject(geom: ObjectGeom, front: Vec3, oldCanvas: CanvasSize, override: SurfaceOverride = 'auto', seamDeg = 0): ObjectInfo {
   const a = analyzeObject(geom, front, override, seamDeg);
   const oldRegion = uvRegion(oldUvTriangles(geom.prims), oldCanvas);
-  return { ...a, oldRegion, oldPieces: a.kind === 'ok' ? describePieces(geom, a, oldCanvas) : [] };
+  const groups = new Set<number>();
+  for (const p of geom.prims) if (p.screen && p.group !== undefined) groups.add(p.group);
+  const groupRegions: Record<number, UvRegion | null> = {};
+  if (groups.size >= 2) {
+    for (const g of groups) groupRegions[g] = uvRegion(oldUvTriangles(geom.prims, pi => geom.prims[pi].screen && geom.prims[pi].group === g), oldCanvas);
+  }
+  return { ...a, oldRegion, oldPieces: a.kind === 'ok' ? describePieces(geom, a, oldCanvas) : [], ...(groups.size >= 2 ? { groupRegions } : {}) };
 }

@@ -42,7 +42,12 @@ export interface PlanObjectIn {
   override?: SurfaceOverride;
   /** 封閉圓柱的接縫：從背面往觀眾右手邊轉幾度（沒指定 = 0）。info 要是照同一個設定分析出來的 */
   seamDeg?: number;
+  /** 物件裡有好幾塊 LED mesh 時，個別塊的選擇（mesh 名稱 → 保留原本 UV / 不放進畫布）；沒列 = 跟著整個物件（自動貼）。只有整個物件是「自動貼」才看這個 */
+  pieceChoices?: Record<string, PieceChoice>;
 }
+
+/** 物件裡某一塊 LED mesh 不跟著自動貼：保留原本 UV（搬到新位置）、或不放進畫布（它的 UV 不動，也沒有螢幕） */
+export type PieceChoice = 'keep' | 'exclude';
 
 export type ObjectMode = 'auto' | 'keep' | 'excluded' | 'none' | 'missing';
 
@@ -65,6 +70,14 @@ export interface PlanPiece {
   measured: Measured;
   size: SizeResult | null;
   placed: Placed | null;
+  /** 物件裡有好幾塊 LED mesh 時：這一片的 mesh 名稱和編號（PrimGeom.group） */
+  label?: string;
+  group?: number;
+  /** 這一塊自己選了保留 / 不放進畫布（沒有 = 自動貼）。exclude 沒有位置；keep 的位置是原本的大小 */
+  choice?: PieceChoice;
+  /** choice = 'keep'：原本的範圍和搬動的量 */
+  keepRect?: PixelRect;
+  keepMap?: KeepMap;
 }
 
 export interface PlanKeep {
@@ -190,14 +203,27 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
       const count = info.pieces.length;
       // 物件裡有好幾塊 LED mesh：每一片用 mesh 名稱；沒有（或有的片沒有名稱）= 照舊「物件名 1、2…」
       const labels = count > 1 && info.pieces.every(p => !!p.label) ? partNames(info.pieces.map(p => p.label), inp.name) : null;
+      // 個別塊的選擇要每一塊都有不重複的 mesh 名稱和編號才能用
+      const grouped = !!labels && new Set(info.pieces.map(p => p.label)).size === count && info.pieces.every(p => p.group !== undefined && !!p.label);
       info.pieces.forEach((piece, i) => {
         const measured = { w: piece.widthU * ctx.metersPerUnit, h: piece.heightU * ctx.metersPerUnit };
         const spec = inp.sizes[i];
         const key = pieceKey(inp.id, count, i);
         const name = labels ? labels[i] : pieceName(inp.name, count, i);
         const size = spec ? resolveSize(spec, measured) : null;
-        const pp: PlanPiece = { index: i, key, name, surface: piece.kind, ...(piece.arc ? { convex: piece.arc.convex, spanDeg: (piece.arc.span * 180) / Math.PI, ...(piece.arc.closed ? { closed: true, seamDeg: piece.arc.seamDeg } : {}) } : {}), distortion: piece.distortion, measured, size, placed: null };
+        let choice: PieceChoice | undefined = grouped ? inp.pieceChoices?.[piece.label!] : undefined;
+        const groupRegion = choice === 'keep' ? info.groupRegions?.[piece.group!] ?? null : null;
+        if (choice === 'keep' && !groupRegion) { obj.warnings.push(`${name}：原本沒有 UV，沒辦法保留，這一塊不放進畫布`); choice = 'exclude'; }
+        const pp: PlanPiece = { index: i, key: choice === 'keep' ? `o:${inp.id}~${piece.label}` : key, name, ...(grouped ? { label: piece.label, group: piece.group } : {}), ...(choice ? { choice } : {}), surface: piece.kind, ...(piece.arc ? { convex: piece.arc.convex, spanDeg: (piece.arc.span * 180) / Math.PI, ...(piece.arc.closed ? { closed: true, seamDeg: piece.arc.seamDeg } : {}) } : {}), distortion: piece.distortion, measured, size, placed: null };
         obj.pieces.push(pp);
+        if (choice === 'exclude') return;
+        if (choice === 'keep' && groupRegion) {
+          pp.keepRect = groupRegion.rect;
+          const kbox = stageBox(cornersOf(piece), ctx.front, right);
+          items.push({ key: pp.key, name, w: Math.max(1, groupRegion.rect.w), h: Math.max(1, groupRegion.rect.h), ...kbox, floor: Math.abs(dot(piece.frame.normal, WORLD_UP)) >= 0.9 });
+          natives.push({ key: pp.key, name, w: Math.max(1, groupRegion.rect.w), h: Math.max(1, groupRegion.rect.h), fixed: true });
+          return;
+        }
         if (!size) { blockers.push(BLOCKED_TEXT.size(name, '還沒填點數')); return; }
         if (!size.ok) { blockers.push(BLOCKED_TEXT.size(name, size.error || '點數不能用')); return; }
         for (const w of size.warnings) obj.warnings.push(`${name}：${w}`);
@@ -238,7 +264,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
   const placedMap = resolved ? resolved.placed : pack.placed;
   const canvas = resolved ? resolved.canvas : pack.canvas;
   if (canvas.width > MAX_CANVAS_SIDE || canvas.height > MAX_CANVAS_SIDE) blockers.push(BLOCKED_TEXT.canvasTooBig(canvas.width, canvas.height));
-  if (!objects.some(o => o.mode === 'auto')) blockers.unshift(BLOCKED_TEXT.noSelection);
+  if (!objects.some(o => o.mode === 'auto' && o.pieces.some(p => p.choice !== 'exclude'))) blockers.unshift(BLOCKED_TEXT.noSelection);
   if (resolved) {
     const nameOf = new Map(natives.map(n => [n.key, n.name]));
     if (resolved.problems.outside.length > 0) {
@@ -255,7 +281,13 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
   // 位置填回各物件
   for (const o of objects) {
     if (o.mode === 'auto') {
-      for (const p of o.pieces) p.placed = placedMap.get(p.key) ?? null;
+      for (const p of o.pieces) {
+        p.placed = placedMap.get(p.key) ?? null;
+        if (p.choice === 'keep' && p.placed && p.keepRect) {
+          const g = inputs.find(i => i.id === o.id)!.info!.groupRegions![p.group!]!;
+          p.keepMap = { span: g.span, oldCanvas: ctx.oldCanvas, shiftX: p.placed.x - p.keepRect.x, shiftY: p.placed.y - p.keepRect.y };
+        }
+      }
     } else if (o.mode === 'keep') {
       const inp = inputs.find(i => i.id === o.id)!;
       const region = inp.info!.oldRegion!;
@@ -274,6 +306,11 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
   return { objects, canvas, blockers, warnings, rows: pack.rows, pack, items: natives, arranged: !!resolved, problems: resolved ? resolved.problems : null, arrangeBlockers };
 }
 
+/** 這個物件裡選了「不放進畫布」的那幾塊 LED mesh 的編號（PrimGeom.group） */
+export function excludedGroupsOf(obj: PlanObject): Set<number> {
+  return new Set(obj.pieces.filter(p => p.choice === 'exclude' && p.group !== undefined).map(p => p.group!));
+}
+
 /** 套用時要把類型改成「其他」的物件 id（製作選了「不放進畫布」的） */
 export function excludedIdsOf(plan: Plan): string[] {
   return plan.objects.filter(o => o.mode === 'excluded').map(o => o.id);
@@ -281,6 +318,23 @@ export function excludedIdsOf(plan: Plan): string[] {
 
 /** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null。整圈圓柱的接縫頂點會有 split */
 export function objectUvs(geom: ObjectGeom, obj: PlanObject, info: ObjectInfo, canvas: CanvasSize): (PrimUv | null)[] {
+  if (obj.mode === 'auto' && obj.pieces.some(p => p.choice) && obj.pieces.every(p => p.choice === 'exclude' || p.placed)) {
+    // 有幾塊自己選了保留 / 不放進畫布：不放進畫布的塊 UV 不動，保留的塊整塊搬，其他照自動貼
+    const alive = obj.pieces.map((_, i) => i).filter(i => obj.pieces[i].choice !== 'exclude');
+    return geom.prims.map((p): PrimUv | null => {
+      const owner = p.screen && p.group !== undefined ? obj.pieces.find(x => x.group === p.group) : undefined;
+      if (owner?.choice === 'exclude') return null;
+      if (owner?.choice === 'keep') {
+        const uv = owner.keepMap ? keepUvForPrim(p, owner.keepMap, canvas) : null;
+        return uv ? { uv } : null;
+      }
+      // 自動貼的塊：只在同一塊裡找；不屬於任何一塊的（外框、背板）只在還在畫布上的塊裡找
+      const use = owner ? obj.pieces.map((_, i) => i) : alive;
+      if (use.length === 0) return null;
+      const r = flatUvForPrim(p, use.map(i => info.pieces[i]), j => obj.pieces[use[j]].placed ?? obj.pieces[alive[0] ?? 0].placed!, canvas);
+      return r.split ? { uv: r.uv, split: r.split } : { uv: r.uv };
+    });
+  }
   if (obj.mode === 'auto' && obj.pieces.every(p => p.placed)) {
     const placed = obj.pieces.map(p => p.placed!);
     return geom.prims.map((p): PrimUv => {
@@ -355,6 +409,14 @@ export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanv
       }
     } else if (o.mode === 'auto') {
       o.pieces.forEach((p, i) => {
+        if (p.choice === 'exclude') return;   // 不放進畫布的塊：舊版面也沒有它
+        if (p.choice === 'keep') {
+          const reg = p.group !== undefined ? info.groupRegions?.[p.group] : null;
+          if (!reg) return;
+          if (reg.wraps) { if (!exact) unprotected.push(p.name); return; }
+          screens.push({ key: `s:@${o.id}#${i}`, objectId: o.id, name: p.name, dest: reg.rect, rotate: 0, flipH: false, flipV: false });
+          return;
+        }
         const old = info.oldPieces[i];
         if (!old) return;  // 原本就沒有 UV：舊影片本來就沒有畫面可以保護
         if (old.region.wraps) { if (!exact) unprotected.push(p.name); return; }

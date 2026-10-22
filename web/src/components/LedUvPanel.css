@@ -601,3 +601,24 @@
     height: auto;
   }
 }
+
+/* 一個物件裡好幾塊 LED：每一塊各自選 */
+.uvparts {
+  flex-basis: 100%;
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0 0 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.uvparts__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.uvparts__name {
+  min-width: 96px;
+  font-size: 13px;
+}

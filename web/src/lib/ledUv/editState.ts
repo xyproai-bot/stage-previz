@@ -17,6 +17,9 @@ export interface UvEditSnapshot {
   selected: Record<string, boolean>;
   /** 物件 id → 選了「不放進畫布」（只存 true 的；舊版存的沒有這一欄 = 都沒選） */
   excluded: Record<string, boolean>;
+  /** 物件裡有好幾塊 LED mesh 時，個別塊的選擇：「物件id~mesh 名稱」→ true。excludedPieces = 不放進畫布、keepPieces = 保留原本 UV（只存 true 的；舊版存的沒有這兩欄 = 都沒選，各塊跟著整個物件） */
+  excludedPieces?: Record<string, boolean>;
+  keepPieces?: Record<string, boolean>;
   /** 螢幕片的代號（pieceKey）→ 點數表單 */
   forms: Record<string, SizeForm>;
   /** 物件 id → 手動指定的類型（只存不是「自動辨識」的） */
@@ -34,6 +37,15 @@ const MODES = new Set(['pitch', 'pixels', 'cabinets']);
 const FORM_FIELDS = ['pitch', 'pw', 'ph', 'cmmW', 'cmmH', 'cpxW', 'cpxH', 'cols', 'rows'] as const;
 const MAX_ENTRIES = 600;
 const MAX_KEY = 160;
+
+/** 「物件id~mesh 名稱」的物件 id（物件 id 不會有「~」） */
+export const pieceOwner = (key: string): string => key.split('~')[0];
+
+function parseFlags(raw: unknown): Record<string, boolean> {
+  const out: Record<string, boolean> = {};
+  if (isObj(raw)) for (const [k, v] of Object.entries(raw).slice(0, MAX_ENTRIES)) if (k.length <= MAX_KEY && k.includes('~') && v === true) out[k] = true;
+  return out;
+}
 
 function parseForm(raw: unknown): SizeForm | null {
   if (!isObj(raw) || typeof raw.mode !== 'string' || !MODES.has(raw.mode)) return null;
@@ -77,7 +89,14 @@ export function parseEditSnapshot(raw: unknown): UvEditSnapshot | null {
   const gutter = typeof raw.gutter === 'string' && /^\d{1,2}$/.test(raw.gutter) ? raw.gutter : '0';
   const arrangement = raw.arrangement === null || raw.arrangement === undefined ? null : parseArrangement(raw.arrangement);
   if (raw.arrangement !== null && raw.arrangement !== undefined && !arrangement) return null;
-  return { v: 1, selected, excluded, forms, overrides, seams, gutter, arrangement };
+  const excludedPieces = parseFlags(raw.excludedPieces), keepPieces = parseFlags(raw.keepPieces);
+  // 同一塊不會同時是兩種：兩邊都有 = 不放進畫布
+  for (const k of Object.keys(excludedPieces)) delete keepPieces[k];
+  return {
+    v: 1, selected, excluded,
+    ...(Object.keys(excludedPieces).length > 0 ? { excludedPieces } : {}),
+    ...(Object.keys(keepPieces).length > 0 ? { keepPieces } : {}),
+    forms, overrides, seams, gutter, arrangement };
 }
 
 /** 只留還在的物件 / 螢幕片（模型換過了、物件刪掉了） */
@@ -87,6 +106,8 @@ export function pruneEditSnapshot(s: UvEditSnapshot, objectIds: ReadonlySet<stri
     ...s,
     selected: Object.fromEntries(Object.entries(s.selected).filter(([k]) => objectIds.has(k))),
     excluded: Object.fromEntries(Object.entries(s.excluded).filter(([k]) => objectIds.has(k))),
+    ...(s.excludedPieces ? { excludedPieces: Object.fromEntries(Object.entries(s.excludedPieces).filter(([k]) => objectIds.has(pieceOwner(k)))) } : {}),
+    ...(s.keepPieces ? { keepPieces: Object.fromEntries(Object.entries(s.keepPieces).filter(([k]) => objectIds.has(pieceOwner(k)))) } : {}),
     forms: Object.fromEntries(Object.entries(s.forms).filter(([k]) => objectIds.has(ownerOf(k)))),
     overrides: Object.fromEntries(Object.entries(s.overrides).filter(([k]) => objectIds.has(k))),
     seams: Object.fromEntries(Object.entries(s.seams).filter(([k]) => objectIds.has(k))),

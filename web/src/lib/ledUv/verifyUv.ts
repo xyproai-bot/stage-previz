@@ -12,7 +12,7 @@ import type { Accessor, Document, Node, Primitive, Property } from '@gltf-transf
 import type { CanvasSize, PixelRect } from '../ledMap';
 import { uvRegion } from './region';
 import { readLedObjects } from './docRead';
-import { objectUvs, type Plan, type PlanObject } from './plan';
+import { excludedGroupsOf, objectUvs, type Plan, type PlanObject } from './plan';
 import type { ObjectInfo } from './objectInfo';
 import { assignVertices, type PrimGeom } from './surfaces';
 
@@ -158,12 +158,13 @@ export function expectedRect(obj: PlanObject, canvas: CanvasSize): UvRegionLike 
   if (obj.mode === 'auto') {
     const tris: number[] = [];
     for (const p of obj.pieces) {
+      if (p.choice === 'exclude') continue;
       if (!p.placed) return null;
       const { x, y, w, h } = p.placed;
       const [u0, v0, u1, v1] = [x / canvas.width, y / canvas.height, (x + w) / canvas.width, (y + h) / canvas.height];
       tris.push(u0, v0, u1, v0, u1, v1, u0, v0, u1, v1, u0, v1);
     }
-    return uvRegion(tris, canvas);
+    return tris.length > 0 ? uvRegion(tris, canvas) : null;
   }
   if (obj.mode === 'keep' && obj.keep) {
     const { placed } = obj.keep;
@@ -198,7 +199,10 @@ export function verifyOutputUv(
     if (o.mode !== 'auto' && o.mode !== 'keep') continue;
     const so = read.objects.get(o.id);
     if (!so) { add(`輸出檔裡找不到物件「${o.name}」`); continue; }
-    const actual = uvRegion(trisOf(so.geom.prims), plan.canvas);
+    // 選了「不放進畫布」的塊 UV 沒動，不算在這個物件的範圍裡；全部都不放進畫布 = 這個物件沒有東西可量
+    const exGroups = excludedGroupsOf(o);
+    if (exGroups.size > 0 && o.pieces.every(p => p.choice === 'exclude')) { rects[o.id] = null; continue; }
+    const actual = uvRegion(trisOf(so.geom.prims.filter(p => !(p.screen && p.group !== undefined && exGroups.has(p.group)))), plan.canvas);
     rects[o.id] = actual?.rect ?? null;
     const want = expectedRect(o, plan.canvas);
     if (!actual || !want) { add(`「${o.name}」的 UV 讀不出來`); continue; }
@@ -211,7 +215,7 @@ export function verifyOutputUv(
       // 每一片各自量：這一片的三角形（三個頂點都屬於它）的外框 == 排好的長方形
       const assigns = so.geom.prims.map(p => assignVertices(p, info.pieces));
       o.pieces.forEach((pp, i) => {
-        if (!pp.placed) return;
+        if (!pp.placed || pp.choice) return;
         const tris: number[] = [];
         so.geom.prims.forEach((p, pi) => {
           if (!p.uv) return;
@@ -231,6 +235,9 @@ export function verifyOutputUv(
       const expected = objectUvs(so.geom, o, info, plan.canvas);
       so.geom.prims.forEach((p, pi) => {
         const pu = expected[pi];
+        if (p.screen && p.group !== undefined && exGroups.has(p.group)) return;   // 不放進畫布的塊：UV 沒動
+        // 保留原本 UV 的塊：輸出檔的 UV 已經是搬過的，不能再從它重算一次（位置對不對由上面的範圍檢查負責）
+        if (p.screen && p.group !== undefined && o.pieces.some(x => x.choice === 'keep' && x.group === p.group)) return;
         if (!pu || !p.uv) { add(`「${o.name}」第 ${pi + 1} 組沒有 UV`); return; }
         // 輸出檔的接縫頂點已經拆好了（每個頂點只有一邊用它），重算出來不會再拆
         if (pu.split || pu.uv.length !== p.uv.length) { add(`「${o.name}」第 ${pi + 1} 組的接縫頂點跟重新算的不一樣`); return; }

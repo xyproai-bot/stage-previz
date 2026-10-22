@@ -10,6 +10,8 @@ import { compareSnapshots, disposeGltf, snapshotScene } from '../modelCompress/v
 import { DRACO_EXTENSION, readGltfJson } from '../modelCompress/glbJson';
 import type { PixelRect } from '../ledMap';
 import { expectedRect } from './verifyUv';
+import { ledScreenParts } from '../ledScreen';
+import type * as THREE from 'three';
 import { uvRegion } from './region';
 import type { Plan } from './plan';
 
@@ -51,7 +53,17 @@ export async function verifyUvScene(
     if (o.mode !== 'auto' && o.mode !== 'keep') continue;
     const child = scope.children.find(c => (c.name || '').trim() === (nameOf.get(o.id) ?? '\u0000'));
     if (!child) { issues.push(`輸出檔載入後找不到物件「${o.name}」`); rects[o.id] = null; continue; }
-    const region = uvRegion(collectUvTriangles(child), plan.canvas);
+    // 選了「不放進畫布」的塊 UV 沒動：不算在範圍裡；全部都不放進畫布 = 沒有東西可量
+    const exNames = new Set(o.pieces.filter(p => p.choice === 'exclude' && p.label).map(p => p.label!));
+    if (exNames.size > 0 && o.pieces.every(p => p.choice === 'exclude')) { rects[o.id] = null; continue; }
+    let only: Set<THREE.Mesh> | undefined;
+    if (exNames.size > 0) {
+      const gone = new Set<THREE.Mesh>();
+      for (const part of ledScreenParts(child, child.name || 'LED')) if (exNames.has(part.name)) for (const m of part.meshes) gone.add(m);
+      only = new Set<THREE.Mesh>();
+      child.traverse((x) => { const m = x as THREE.Mesh; if (m.isMesh && !gone.has(m)) only!.add(m); });
+    }
+    const region = uvRegion(collectUvTriangles(child, only), plan.canvas);
     rects[o.id] = region?.rect ?? null;
     const want = expectedRect(o, plan.canvas);
     if (!region || !want) { issues.push(`「${o.name}」載入後量不到 UV 範圍`); continue; }

@@ -44,6 +44,12 @@ export const EXCLUDE_TEXT = {
   bulkNote: '「全選」「全不選」不會動已經選了「不放進畫布」的螢幕。',
 } as const;
 
+/** 物件裡有好幾塊 LED 時，個別塊的說明 */
+export const PIECE_TEXT = {
+  excludeNote: '這一塊不進畫布（它的 UV 不動、不會有影片），物件其他塊照常貼',
+  summary: (names: string[]) => `${names.slice(0, 3).join('、')}${names.length > 3 ? ` 等 ${names.length} 塊` : ''} 不放進畫布：這幾塊的 UV 不動，物件的類型不變、其他塊照常；它們不會有螢幕，所以不會有影片。`,
+} as const;
+
 /** 類型下拉選單 */
 export const OVERRIDE_LABEL: Record<SurfaceOverride, string> = {
   auto: '自動辨識',
