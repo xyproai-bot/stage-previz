@@ -355,8 +355,8 @@ function classifyNonFlat(tris: ScreenTris, ids: readonly number[]): UnsupportedK
 }
 
 
-/** 畫面上變形的門檻：<= 0.5 % 綠（看不出來）、<= 5 % 黃（輕微拉伸）、超過 = 紅（會變形） */
-export const DISTORTION_OK = 0.005;
+/** 畫面上變形的門檻：<= 1 % 綠（看不出來）、<= 5 % 黃（輕微拉伸）、超過 = 紅（會變形） */
+export const DISTORTION_OK = 0.01; // 1% 以下看不出來，寫「沒有變形」（用戶 10-22：0.5% 放寬到 1%）
 export const DISTORTION_WARN = 0.05;
 
 /** 辨識「這個頂點在這片螢幕上」的最小容差（文件單位 = 這片長寬和的百萬分之一） */

@@ -275,7 +275,7 @@ describe('手動指定：平面 / 弧面', () => {
     expect(forced.kind).toBe('ok');
     expect(forced.pieces[0].kind).toBe('arc');
     expect(forced.pieces[0].forced).toBe(true);
-    expect(forced.pieces[0].distortion.max).toBeGreaterThan(DISTORTION_OK);
+    expect(forced.pieces[0].distortion.max).toBeGreaterThan(0.001); // 有變形（照實算；小於 1% 時畫面寫「沒有變形」）
   });
 
   it('describeObject 帶著指定走：同一個物件，自動 = 弧面、指定平面 = 平面', () => {
