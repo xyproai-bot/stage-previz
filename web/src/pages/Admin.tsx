@@ -202,6 +202,33 @@ function ProjectsTab() {
     }
   }
 
+  async function handleRename(p: Project) {
+    const name = await promptDialog({
+      title: '改專案名稱',
+      label: '專案名稱',
+      defaultValue: p.name,
+      confirmLabel: '下一步',
+      maxLength: 100,
+    });
+    if (name == null || !name.trim()) return;
+    const description = await promptDialog({
+      title: `「${name.trim()}」的說明`,
+      label: '說明（顯示在專案卡片上，可以留空）',
+      defaultValue: p.description || '',
+      confirmLabel: '儲存',
+      required: false,
+      maxLength: 500,
+    });
+    if (description == null) return;
+    try {
+      await api.updateProject(p.id, { name: name.trim(), description: description.trim() });
+      await refresh();
+      toast.success('已改好專案名稱');
+    } catch (e) {
+      toast.error('名稱沒有存到：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   async function handleEditTags(p: Project) {
     const current = (p.tags || []).join(', ');
     const input = await promptDialog({
@@ -392,6 +419,7 @@ function ProjectsTab() {
                   onArchive={handleArchive}
                   onExport={handleExport}
                   onEditTags={handleEditTags}
+                  onRename={handleRename}
                   showViewAs
                   selected={selectedIds.has(p.id)}
                   onToggleSelect={toggleSelect}

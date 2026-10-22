@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Project, SongStatus, SongStatusCounts } from '../lib/mockData';
 import { formatRelativeTime } from '../lib/serverTime';
-import { Archive, Copy, Download, Ellipsis, Tag, Ticket } from 'lucide-react';
+import { Archive, Copy, Download, Ellipsis, Pencil, Tag, Ticket } from 'lucide-react';
 import Icon from './Icon';
 import { useViewAsMenu, VIEW_AS_MENU_LABEL } from './ViewAsMenu';
 import { editorPath } from '../lib/viewAs';
@@ -36,7 +36,7 @@ const SONG_STATUS_LABEL: Record<SongStatus, string> = {
 };
 
 export default function ProjectCard({
-  project, showName, onDuplicate, onArchive, onExport, onEditTags,
+  project, showName, onDuplicate, onArchive, onExport, onEditTags, onRename,
   selected, onToggleSelect, showViewAs,
 }: {
   project: Project;
@@ -45,6 +45,8 @@ export default function ProjectCard({
   onArchive?: (project: Project) => void;
   onExport?: (project: Project) => void;
   onEditTags?: (project: Project) => void;
+  /** 改專案名稱和說明 */
+  onRename?: (project: Project) => void;
   selected?: boolean;
   onToggleSelect?: (project: Project) => void;
   /** 選單裡加「用其他身分看」：導演畫面 / 動畫師畫面 / 客戶畫面（管理頁給製作用） */
@@ -142,7 +144,7 @@ export default function ProjectCard({
           <div className="project-card__thumb-placeholder">16:9</div>
         )}
         <span className={`project-card__status ${status.cls}`}>{status.label}</span>
-        {(onDuplicate || onArchive || onExport || showViewAs) && (
+        {(onDuplicate || onArchive || onExport || onRename || showViewAs) && (
           // 鍵盤（Enter / 空白鍵）按選單不要變成「進入專案」
           <div className={'project-card__menu' + (menuOpen ? ' is-open' : '')} ref={menuRef} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <button
@@ -163,6 +165,12 @@ export default function ProjectCard({
                 onClick={(e) => e.stopPropagation()}
                 onKeyDown={(e) => e.stopPropagation()}
               >
+                {onRename && (
+                  <button
+                    className="project-card__menu-item"
+                    onClick={() => { setMenuOpen(false); onRename(project); }}
+                  ><Icon icon={Pencil} /> 改名稱和說明</button>
+                )}
                 {onDuplicate && (
                   <button
                     className="project-card__menu-item"
