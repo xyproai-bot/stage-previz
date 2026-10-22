@@ -1844,6 +1844,7 @@ export default function ProjectEditor() {
               onHomeViewChange={view.canEdit ? view.setHomeView : undefined}
               projectName={projectMeta?.name}
               ledCanvas={view.ledCanvas}
+              ledOffPieces={view.ledOffPieces}
               onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
               ledUvPreview={uvOpen ? uvPreview : null}
               ledTemplate={ledChoice.plan}
@@ -2098,6 +2099,7 @@ export default function ProjectEditor() {
           setUvPreview(null);
           // 新模型、新畫布（後台已經一起換好）、新的「舊版面」版型
           view.setLedCanvas(r.ledCanvas);
+          view.setLedOffPieces(r.ledOffPieces ?? []);   // 不放進畫布的 LED：3D 上變黑
           refreshModel();
           void ledTpls.reload();
           // 「不放進畫布」的物件，後台把類型改成「其他」了：物件清單和 3D 畫面跟著重讀
@@ -2112,6 +2114,7 @@ export default function ProjectEditor() {
         onChanged={(info) => {
           // 換回舊版時，後台把畫布也換回來了（沒有這個版本的紀錄 = 畫布不動）
           if (info?.restoredCanvas) view.setLedCanvas(info.ledCanvas);
+          if (info?.ledOffPieces) view.setLedOffPieces(info.ledOffPieces);   // 黑色的 LED 跟著版本走
           // 自動貼 UV 時「不放進畫布」改成「其他」的物件，換版本時類型跟著改回來 / 再改掉
           if (info?.objectTypesChanged) { void refreshStageObjects(); void refreshCueStates(); }
           refreshModel();

@@ -10,7 +10,7 @@ import { downloadBlob, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
 import { isPhoneLayout } from '../lib/viewportVars';
 import type { LedCanvas } from '../lib/ledCanvas';
-import { buildLegacy, buildPlan, excludedIdsOf, pieceKey, pieceScreensOf, pieceScreenUpdatesOf, splitManuals, type ManualBox, type PieceChoice, type Plan, type PlanObjectIn } from '../lib/ledUv/plan';
+import { buildLegacy, buildPlan, excludedIdsOf, offPiecesOf, pieceKey, pieceScreensOf, pieceScreenUpdatesOf, splitManuals, type ManualBox, type PieceChoice, type Plan, type PlanObjectIn } from '../lib/ledUv/plan';
 import { previewLayout } from '../lib/ledUv/previewLayout';
 import type { Arrangement, ArrangeNative } from '../lib/ledUv/arrange';
 import type { PackResult } from '../lib/ledUv/pack';
@@ -461,7 +461,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
         ifActive: activeKey,
         ledCanvas: { width: plan.canvas.width, height: plan.canvas.height },
         note: `自動貼 UV · ${autoCount} 塊螢幕 · ${plan.canvas.width}×${plan.canvas.height}`,
-        recipe: { ...recipeOf(plan, oldCanvas, metersPerUnit, snapshotRef.current), uv1: outcome.uv1 },
+        recipe: { ...recipeOf(plan, oldCanvas, metersPerUnit, snapshotRef.current), uv1: outcome.uv1, ...(offPiecesOf(plan).length > 0 ? { offPieces: offPiecesOf(plan) } : {}) },
         legacy: lg.screens.length > 0 || lg.originalUv.length > 0
           ? { canvas: { width: lg.canvas.width, height: lg.canvas.height }, screens: lg.screens.map(s => ({ key: s.key, dest: s.dest, rotate: s.rotate, flipH: s.flipH, flipV: s.flipV })), originalUv: lg.originalUv }
           : null,

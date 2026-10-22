@@ -20,6 +20,7 @@ import { normalizeStageProps } from '../lib/stageProps';
 import { normalizeCameraBookmarks } from '../lib/cameraBookmarks';
 import { songTitle } from '../lib/songCode';
 import { normalizeLedCanvas } from '../lib/ledCanvas';
+import { normalizeOffPieces } from '../lib/ledOffPieces';
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { toast } from '../lib/toast';
@@ -348,6 +349,7 @@ export default function Share() {
   // 視角書籤（導演 / 製作存的；訪客點了飛過去，不能改）
   const cameraBookmarks = useMemo(() => normalizeCameraBookmarks(data?.cameraBookmarks), [data]);
   const ledCanvas = useMemo(() => normalizeLedCanvas(data?.ledCanvas ?? null), [data]);
+  const ledOffPieces = useMemo(() => normalizeOffPieces(data?.ledOffPieces), [data]);
 
   // ── 浮水印 / 禁止下載（0038；舊連結和舊版後台都是關）──
   // 浮水印：3D 畫面和小播放器（還有全螢幕預演）印上「誰在看 + 現在的時間」；訪客寫過留言的名字就印名字，沒有就印連結名稱 + 編號
@@ -623,6 +625,7 @@ export default function Share() {
                 poseAtFrame={poseAtFrame}
                 projectName={data.project.name}
                 ledCanvas={ledCanvas}
+                ledOffPieces={ledOffPieces}
                 helpHref={helpUrl(HELP_ANCHORS.client)}
                 viewApiRef={viewApiRef}
                 transportKeys

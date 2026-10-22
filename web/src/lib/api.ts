@@ -6,6 +6,7 @@ import { normalizeLookSettings, type LookSettings } from './stageLook/lookSettin
 import { normalizeMaterialOverrides, type MaterialOverrides } from './stageLook/materialOverrides';
 import { normalizeHomeView, type HomeView } from './homeView';
 import { normalizeLedCanvas, type LedCanvas } from './ledCanvas';
+import { normalizeOffPieces } from './ledOffPieces';
 import { normalizeStageProps, type StagePropItem } from './stageProps';
 import { normalizeCameraBookmarks, type CameraBookmark } from './cameraBookmarks';
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
@@ -290,12 +291,14 @@ export interface ProjectViewSettings {
   homeView: HomeView | null;
   /** AE 畫布尺寸（NDI Webcam 預覽要把 16:9 畫面放回 LED UV 用）；null = 還沒填 */
   ledCanvas: LedCanvas | null;
+  /** 自動貼 UV「不放進畫布」的 LED（3D 上顯示黑色；後台 0045，舊的後台沒有 = 空） */
+  ledOffPieces: string[];
 }
 
 export async function getProjectViewSettings(projectId: string): Promise<ProjectViewSettings> {
   const data = await http<{ project: {
     scale_correction?: number; look_settings?: string; material_overrides?: string; home_view?: string | null;
-    led_canvas?: string | null;
+    led_canvas?: string | null; led_off_pieces?: string | null;
   } }>(
     `/api/projects/${encodeURIComponent(projectId)}`
   );
@@ -310,6 +313,7 @@ export async function getProjectViewSettings(projectId: string): Promise<Project
     materialOverrides: normalizeMaterialOverrides(materials),
     homeView: normalizeHomeView(data.project?.home_view ?? null),
     ledCanvas: normalizeLedCanvas(data.project?.led_canvas ?? null),
+    ledOffPieces: (() => { try { return normalizeOffPieces(JSON.parse(data.project?.led_off_pieces || '[]')); } catch { return []; } })(),
   };
 }
 
@@ -760,7 +764,7 @@ export async function listModelVersions(projectId: string): Promise<{ versions: 
   return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions`);
 }
 
-export async function activateModelVersion(projectId: string, key: string): Promise<{ key: string; url: string; restoredCanvas?: boolean; ledCanvas?: { width: number; height: number } | null; objectTypesChanged?: boolean }> {
+export async function activateModelVersion(projectId: string, key: string): Promise<{ key: string; url: string; restoredCanvas?: boolean; ledCanvas?: { width: number; height: number } | null; objectTypesChanged?: boolean; ledOffPieces?: string[] }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/model/versions/activate`, {
     method: 'POST',
     body: JSON.stringify({ key }),
@@ -1455,6 +1459,8 @@ export interface SharePublicData {
   homeView?: unknown;
   /** AE 畫布尺寸 { width, height }；null = 還沒填；舊版 worker 沒有 → undefined（用 normalizeLedCanvas 讀） */
   ledCanvas?: unknown;
+  /** 自動貼 UV「不放進畫布」的 LED（3D 上顯示黑色；0045）；舊版 worker 沒有 → undefined（用 normalizeOffPieces 讀） */
+  ledOffPieces?: unknown;
   /** 比例尺的樂手和器材（0033，只看；用 normalizeStageProps 讀）；舊版 worker 沒有 → undefined */
   stageProps?: unknown;
   /** 視角書籤（0035，只看；用 normalizeCameraBookmarks 讀）；舊版 worker 沒有 → undefined */

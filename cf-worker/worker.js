@@ -2791,7 +2791,7 @@ async function useSharedAssetForProject(request, env, projectId) {
   await logActivity(request, env, projectId, 'activate', 'model', a.r2_key, {
     fromAsset: assetId, assetName: a.name, key: a.r2_key,
   });
-  return jsonResp({ ok: true, key: a.r2_key, url: `/r2/${a.r2_key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas });
+  return jsonResp({ ok: true, key: a.r2_key, url: `/r2/${a.r2_key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas, ledOffPieces: swapped.ledOffPieces });
 }
 
 // 列某 project 的所有 model 版本（依時間倒序）
@@ -2855,7 +2855,7 @@ async function activateModelVersion(request, env, projectId) {
     ...(swapped.restoredCanvas ? { ledCanvas: swapped.ledCanvas } : {}),
     ...(swapped.objectTypesChanged ? { objectTypesChanged: true } : {}),
   });
-  return jsonResp({ ok: true, key, url: `/r2/${key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas, objectTypesChanged: !!swapped.objectTypesChanged });
+  return jsonResp({ ok: true, key, url: `/r2/${key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas, objectTypesChanged: !!swapped.objectTypesChanged, ledOffPieces: swapped.ledOffPieces });
 }
 
 // 刪除某舊版本（不能刪當前 active）
@@ -6480,7 +6480,7 @@ async function handleShareRouter(request, env, url, ref) {
   if (sub === 'data' && request.method === 'GET') {
     // bundle 給 share viewer：project meta + songs + stage_objects + model
     const proj = await env.DB.prepare(
-      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view, led_canvas, stage_props, camera_bookmarks FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+      `SELECT id, name, description, model_r2_key, scale_correction, mechanism_offsets, look_settings, material_overrides, home_view, led_canvas, led_off_pieces, stage_props, camera_bookmarks FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
     ).bind(link.project_id).first();
     if (!proj) return jsonResp({ error: 'Project not found' }, 404);
 
@@ -6535,6 +6535,8 @@ async function handleShareRouter(request, env, url, ref) {
       materialOverrides: safeJsonObj(proj.material_overrides, {}),
       homeView: proj.home_view ? safeJsonObj(proj.home_view, null) : null,
       ledCanvas: proj.led_canvas ? sanitizeLedCanvas(proj.led_canvas) : null,
+      // 0045：自動貼 UV「不放進畫布」的 LED（3D 上顯示黑色）
+      ledOffPieces: uvLayouts.parseOffList(proj.led_off_pieces),
       // 比例尺的樂手和器材（0033；訪客只看）
       stageProps: parseStoredStageProps(proj.stage_props),
       // 視角書籤（0035；訪客只看，點了飛過去）

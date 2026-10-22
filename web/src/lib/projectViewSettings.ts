@@ -42,6 +42,8 @@ function clearLegacyScale(projectId: string) {
   try { localStorage.removeItem(legacyScaleKey(projectId)); } catch { /* ignore */ }
 }
 
+const NO_OFF: string[] = [];
+
 export interface ProjectViewSettingsState {
   scaleCorrection: number;
   lookSettings: LookSettings;
@@ -50,6 +52,8 @@ export interface ProjectViewSettingsState {
   homeView: HomeView | null;
   /** AE 畫布尺寸（NDI Webcam 預覽用；null = 還沒填） */
   ledCanvas: LedCanvas | null;
+  /** 自動貼 UV「不放進畫布」的 LED：3D 上顯示黑色（只讀；套用自動貼 UV / 換模型版本後由頁面更新） */
+  ledOffPieces: string[];
   canEdit: boolean;
   /** 專案設定讀完了沒（讀失敗也算完，用預設值）；還沒讀完時校準倍率還是預設的 1 */
   loaded: boolean;
@@ -61,6 +65,8 @@ export interface ProjectViewSettingsState {
   setHomeView: (view: HomeView | null) => void;
   /** null → 清掉（還沒填）；不合法的值會被當成 null */
   setLedCanvas: (v: LedCanvas | null) => void;
+  /** 只改畫面上的清單（後台套用 / 換版本時已經存好了） */
+  setLedOffPieces: (v: string[]) => void;
 }
 
 export function useProjectViewSettings(projectId: string | undefined, canEdit: boolean): ProjectViewSettingsState {
@@ -69,6 +75,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   const [materialOverrides, setMaterials] = useState<MaterialOverrides>({});
   const [homeView, setHomeViewState] = useState<HomeView | null>(null);
   const [ledCanvas, setLedCanvasState] = useState<LedCanvas | null>(null);
+  const [ledOffPieces, setLedOffPieces] = useState<string[]>(NO_OFF);
   const [loaded, setLoaded] = useState(false);
   // ref 跟 state 同步：存檔 / 失敗回滾要拿「目前值」，不想把 callback 綁在 state 上
   const scaleRef = useRef(1);
@@ -106,6 +113,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
     applyMaterials({});
     setHomeViewState(null);
     setLedCanvasState(null);
+    setLedOffPieces(NO_OFF);
     setLoaded(false);
     // 舊版在這台電腦留的材質 / 重置視角暫存：不再讀、不再補存回專案（會蓋掉別台電腦的修改），清掉
     try { clearLegacyViewCaches(localStorage); } catch { /* 無痕模式 / 讀不到 storage → 不用清 */ }
@@ -140,6 +148,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
       applyScale(settings.scaleCorrection);
       applyLook(settings.lookSettings);
       setLedCanvasState(settings.ledCanvas);
+      setLedOffPieces(settings.ledOffPieces.length > 0 ? settings.ledOffPieces : NO_OFF);
       applyMaterials(settings.materialOverrides);
       setHomeViewState(settings.homeView);
       setLoaded(true);
@@ -213,7 +222,7 @@ export function useProjectViewSettings(projectId: string | undefined, canEdit: b
   }, [canEdit, scheduleSave, flushPending]);
 
   return {
-    scaleCorrection, lookSettings, materialOverrides, homeView, ledCanvas, canEdit, loaded,
-    setScaleCorrection, setLookSettings, setMaterialOverride, setHomeView, setLedCanvas,
+    scaleCorrection, lookSettings, materialOverrides, homeView, ledCanvas, ledOffPieces, canEdit, loaded,
+    setScaleCorrection, setLookSettings, setMaterialOverride, setHomeView, setLedCanvas, setLedOffPieces,
   };
 }

@@ -1151,6 +1151,7 @@ function SongDetail({
                 onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                 projectName={projectName}
                 ledCanvas={view.ledCanvas}
+                ledOffPieces={view.ledOffPieces}
                 onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
                 onAddAnchoredComment={va.guard((anchor) => {
                   // 上層存暫存的 anchor，留言區會接著用

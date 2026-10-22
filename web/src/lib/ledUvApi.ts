@@ -118,6 +118,8 @@ export interface ApplyResult {
   pieceScreens: { ref: string; id: string }[];
   /** 這次類型被改成「其他」的物件 id（舊的後台沒有這一欄） */
   excludedObjects?: string[];
+  /** 現在在 3D 上要顯示黑色的 LED（整個物件 id、或「物件id~mesh 名稱」；舊的後台沒有這一欄） */
+  ledOffPieces?: string[];
 }
 
 export function applyAutoUv(projectId: string, body: ApplyBody): Promise<ApplyResult> {

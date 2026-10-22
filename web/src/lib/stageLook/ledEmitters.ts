@@ -22,6 +22,8 @@ export interface LedEmitter {
 export interface EmitterOptions {
   maxAngleDeg?: number;
   maxPerObject?: number;
+  /** 這些 mesh 不發光（自動貼 UV 不放進畫布的 LED：顯示成黑色，也不該打光） */
+  exclude?: ReadonlySet<THREE.Mesh>;
 }
 
 interface Tri {
@@ -41,14 +43,14 @@ const WORLD_Z = new THREE.Vector3(0, 0, 1);
 export function buildLedEmitters(root: THREE.Object3D, opts: EmitterOptions = {}): LedEmitter[] {
   const cosThreshold = Math.cos(THREE.MathUtils.degToRad(opts.maxAngleDeg ?? 35));
   const maxPerObject = Math.max(1, opts.maxPerObject ?? 4);
-  const tris = collectTriangles(root);
+  const tris = collectTriangles(root, opts.exclude);
   if (tris.length === 0) return [];
   const clusters = clusterByNormal(tris, cosThreshold);
   mergeSmallest(clusters, maxPerObject);
   return clusters.map(toEmitter).filter((e): e is LedEmitter => e !== null);
 }
 
-function collectTriangles(root: THREE.Object3D): Tri[] {
+function collectTriangles(root: THREE.Object3D, exclude?: ReadonlySet<THREE.Mesh>): Tri[] {
   root.updateMatrixWorld(true);
   const toRoot = root.matrixWorld.clone().invert();
   const m = new THREE.Matrix4();
@@ -56,7 +58,7 @@ function collectTriangles(root: THREE.Object3D): Tri[] {
   const screens = ledScreenMeshes(root);
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || !mesh.geometry || !screens.has(mesh)) return;   // 只有螢幕發光（框架、台體不算）
+    if (!mesh.isMesh || !mesh.geometry || !screens.has(mesh) || exclude?.has(mesh)) return;   // 只有螢幕發光（框架、台體不算）
     const geo = mesh.geometry as THREE.BufferGeometry;
     const pos = geo.getAttribute('position');
     if (!pos) return;

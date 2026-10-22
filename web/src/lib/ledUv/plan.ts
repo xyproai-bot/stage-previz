@@ -321,6 +321,11 @@ export function excludedIdsOf(plan: Plan): string[] {
   return plan.objects.filter(o => o.mode === 'excluded').map(o => o.id);
 }
 
+/** 物件裡選了「不放進畫布」的那幾塊 LED 的記號（物件id~mesh 名稱，跟 3D 的塊名稱同一條規則）：套用後 3D 上顯示黑色 */
+export function offPiecesOf(plan: Plan): string[] {
+  return plan.objects.flatMap(o => (o.mode === 'auto' ? o.pieces.filter(p => p.choice === 'exclude' && !!p.label).map(p => `${o.id}~${p.label}`) : []));
+}
+
 /** 一個物件所有 primitive 的新 UV（null = 這個 primitive 不動）。auto 沒排好 / none / missing = 全部 null。整圈圓柱的接縫頂點會有 split */
 export function objectUvs(geom: ObjectGeom, obj: PlanObject, info: ObjectInfo, canvas: CanvasSize): (PrimUv | null)[] {
   if (obj.mode === 'auto' && obj.pieces.some(p => p.choice) && obj.pieces.every(p => p.choice === 'exclude' || p.placed)) {

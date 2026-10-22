@@ -9,7 +9,7 @@ import { gridPrim } from './testing';
 import type { PrimGeom } from './surfaces';
 import type { Vec3 } from './geometry';
 import { analyzeModelBytes, buildModelBytes, type AnalyzeOk } from './pipeline';
-import { buildLegacy, buildPlan, excludedIdsOf, pieceScreensOf, type PieceChoice, type PlanObjectIn } from './plan';
+import { buildLegacy, buildPlan, excludedIdsOf, offPiecesOf, pieceScreensOf, type PieceChoice, type PlanObjectIn } from './plan';
 import { readLedObjects } from './docRead';
 import { parseEditSnapshot, pieceOwner, pruneEditSnapshot } from './editState';
 
@@ -86,6 +86,8 @@ describe('各塊自己選：不放進畫布', () => {
     expect(plan.blockers).toEqual([]);
     expect(pieceScreensOf(plan).map(s => s.name).sort()).toEqual([FRONT, LEFT].sort());
     expect(excludedIdsOf(plan)).toEqual([]);   // 整個物件沒有被排除 = 後台不會把類型改成「其他」
+    expect(offPiecesOf(plan)).toEqual(['so_lift~' + RIGHT]);   // 3D 上黑色的塊（物件id~mesh 名稱）
+    expect(offPiecesOf(planOf(a, inputs(a)))).toEqual([]);     // 沒排除 = 沒有
     const all = planOf(a, inputs(a));
     expect(plan.canvas.width * plan.canvas.height).toBeLessThan(all.canvas.width * all.canvas.height);
   });

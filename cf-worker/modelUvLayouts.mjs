@@ -82,6 +82,38 @@ export function excludedOf(row) {
   } catch { return []; }
 }
 
+const PIECE_RE = /^[a-zA-Z0-9_-]{1,64}~[^\u0000-\u001f]{1,200}$/;
+
+/** 前端送的「不放進畫布的 LED 塊」（物件id~mesh 名稱）：只留格式對的，去重、限量 */
+export function cleanOffPieces(list) {
+  if (!Array.isArray(list)) return [];
+  return [...new Set(list.filter(x => typeof x === 'string' && PIECE_RE.test(x)))].slice(0, MAX_EXCLUDED * 4);
+}
+
+/**
+ * 這個版本在 3D 上要顯示成黑色（沒通電）的 LED：整個物件（物件 id，recipe.excludedObjects）+ 物件裡的某一塊（物件id~mesh，recipe.offPieces）。
+ * 沒有 = []（欄位存 NULL，舊專案完全不變）
+ */
+export function offListOf(row) {
+  const list = [...excludedOf(row)];
+  if (row && row.recipe) {
+    try {
+      const r = JSON.parse(row.recipe);
+      if (isObj(r)) list.push(...cleanOffPieces(r.offPieces));
+    } catch { /* 壞掉的 recipe 當沒有 */ }
+  }
+  return list;
+}
+/** 欄位裡存的字串 → 清單（整個物件的 id 或 物件id~mesh；壞掉 = []） */
+export function parseOffList(text) {
+  if (!text) return [];
+  try {
+    const v = JSON.parse(text);
+    return Array.isArray(v) ? [...new Set(v.filter(x => typeof x === 'string' && (ID_RE.test(x) || PIECE_RE.test(x))))].slice(0, MAX_EXCLUDED * 4) : [];
+  } catch { return []; }
+}
+const offJson = (list) => (list.length > 0 ? JSON.stringify(list) : null);
+
 const placeholders = (part) => part.map(() => '?').join(',');
 
 /** 把一串物件的類型改成 to（只改現在是 from 的）；一個陳述式最多綁 100 個參數，所以一段一段 */
@@ -237,9 +269,12 @@ export async function applyAutoUv(request, env, ctx, log) {
   const carried = prevExcluded.filter(id => stageCat.has(id) && stageCat.get(id) !== 'led_panel' && !excludedSet.has(id));
   const cumulative = [...excluded, ...carried];
   let recipe = null;
+  let offPieces = [];
   if (recipeObj || cumulative.length > 0) {
-    const { excludedObjects: _ignored, ...rest } = recipeObj || { v: 1 };   // 前端送的不算，只信後台算的
-    recipe = JSON.stringify(cumulative.length > 0 ? { ...rest, excludedObjects: cumulative } : rest);
+    const { excludedObjects: _ignored, offPieces: sentPieces, ...rest } = recipeObj || { v: 1 };
+    const stageIds = new Set(stageRows.map(r => r.id));
+    offPieces = cleanOffPieces(sentPieces).filter(k => stageIds.has(k.split("~")[0]) && !cumulative.includes(k.split("~")[0]));   // 前端送的不算，只信後台算的
+    recipe = JSON.stringify({ ...rest, ...(cumulative.length > 0 ? { excludedObjects: cumulative } : {}), ...(offPieces.length > 0 ? { offPieces } : {}) });
     if (recipe.length > MAX_RECIPE_BYTES) return bad('recipe 太大（最多 256 KB）', 413);
   }
 
@@ -297,7 +332,7 @@ export async function applyAutoUv(request, env, ctx, log) {
   stmts.push(...categoryStatements(env, projectId, excluded, 'led_panel', 'other'));
 
   // 模型 + 畫布 + 版本紀錄
-  stmts.push(env.DB.prepare(`UPDATE projects SET model_r2_key = ?, led_canvas = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, JSON.stringify(ledCanvas), projectId));
+  stmts.push(env.DB.prepare(`UPDATE projects SET model_r2_key = ?, led_canvas = ?, led_off_pieces = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, JSON.stringify(ledCanvas), offJson([...cumulative, ...offPieces]), projectId));
   if (cur.model_r2_key) {
     stmts.push(env.DB.prepare(
       `INSERT OR IGNORE INTO model_uv_layouts (project_id, model_key, led_canvas, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)`
@@ -324,6 +359,7 @@ export async function applyAutoUv(request, env, ctx, log) {
     legacyTemplateId: legacyId, legacyTemplateName: legacyName, stampedVideos: stamped.length,
     pieceScreens: [...refToId].map(([ref, id]) => ({ ref, id })),
     excludedObjects: excluded,
+    ledOffPieces: [...cumulative, ...offPieces],
   });
 }
 
@@ -455,6 +491,7 @@ export async function activateVersion(env, projectId, key) {
   let restored = false;
   let canvasJson = null;
   let typesChanged = false;
+  let offList = null;   // null = 沒換版本，不動
   if (prevKey && prevKey !== key) {
     const all = (await env.DB.prepare(`SELECT * FROM model_uv_layouts WHERE project_id = ?`).bind(projectId).all()).results || [];
     const byKey = new Map(all.map(r => [r.model_key, r]));
@@ -498,14 +535,16 @@ export async function activateVersion(env, projectId, key) {
     stmts.push(...categoryStatements(env, projectId, backToLed, 'other', 'led_panel'));
     stmts.push(...categoryStatements(env, projectId, toOther, 'led_panel', 'other'));
     typesChanged = backToLed.length > 0 || toOther.length > 0;
+    offList = offListOf(targetRow);   // 3D 上顯示黑色的 LED 也跟著版本走
   }
   if (restored) {
     stmts.push(env.DB.prepare(`UPDATE projects SET model_r2_key = ?, led_canvas = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, canvasJson, projectId));
   } else {
     stmts.push(env.DB.prepare(`UPDATE projects SET model_r2_key = ?, updated_at = datetime('now') WHERE id = ?`).bind(key, projectId));
   }
+  if (offList !== null) stmts.push(env.DB.prepare(`UPDATE projects SET led_off_pieces = ? WHERE id = ?`).bind(offJson(offList), projectId));
   await env.DB.batch(stmts);
-  return { ledCanvas: restored && canvasJson ? normalizeLedCanvas(canvasJson) : null, restoredCanvas: restored, objectTypesChanged: typesChanged };
+  return { ledOffPieces: offList || undefined, ledCanvas: restored && canvasJson ? normalizeLedCanvas(canvasJson) : null, restoredCanvas: restored, objectTypesChanged: typesChanged };
 }
 
 /** 刪掉某個版本時，它的紀錄也刪掉 */

@@ -1208,6 +1208,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   onMaterialOverrideChange={view.canEdit ? view.setMaterialOverride : undefined}
                   projectName={projectName}
                   ledCanvas={view.ledCanvas}
+                  ledOffPieces={view.ledOffPieces}
                   onLedCanvasChange={view.canEdit ? view.setLedCanvas : undefined}
                   viewApiRef={viewApiRef}
                   transportKeys
