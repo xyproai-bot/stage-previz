@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
-import { AlignHorizontalJustifyCenter, AlignVerticalJustifyCenter, FlipHorizontal2, BoxSelect, FlipVertical2, Maximize, Redo2, RotateCw, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
+import { AlignHorizontalJustifyCenter, FoldHorizontal, FoldVertical, Minimize2, AlignVerticalJustifyCenter, FlipHorizontal2, BoxSelect, FlipVertical2, Maximize, Redo2, RotateCw, Undo2, ZoomIn, ZoomOut } from 'lucide-react';
 import Icon from './Icon';
 import { useCanvasView } from '../lib/useCanvasView';
 import {
@@ -57,6 +57,8 @@ interface Props {
   onRedo: () => void;
   /** 有給 → 工具列多「左右置中」「上下置中」：選到的整組（沒選就全部）放到畫布正中間 */
   onCenter?: (axis: 'x' | 'y') => void;
+  /** 移除縫隙：選到的螢幕（沒選 = 全部）左右 / 上下靠緊 */
+  onCloseGaps?: (mode: 'x' | 'y' | 'both') => void;
   /** 整張畫布的測試圖（畫好留著的那張）；還沒有 = null */
   fullMap?: FullMap | null;
   /** 每塊自己畫測試圖（照框現在的位置，拖了就即時更新）；有給就不用 fullMap */
@@ -117,7 +119,7 @@ const DEFAULT_HINT = '空白處拖曳框選（Shift / Ctrl 加選，Ctrl+A 全�
 const DEFAULT_EMPTY = '版型裡還沒有螢幕。在右邊的清單按「加入版型」，就會放在畫布上，再用滑鼠拖到想要的位置。';
 
 export default function LedTemplateCanvas({
-  canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo, onCenter,
+  canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo, onCenter, onCloseGaps,
   fullMap = null, tileContent = null, showContent = false, contentOpacity = 1, backdrop = null, layersBar = null,
   lockSize = false, allowRemove = true, transformPatches, canTransform, canvasName = '版型畫布', sizeLabel = screenSizeLabel, emptyText = DEFAULT_EMPTY, hint = DEFAULT_HINT,
 }: Props) {
@@ -393,6 +395,14 @@ export default function LedTemplateCanvas({
             <span className="ltc__sep" />
             <button className="ltc__btn" onClick={() => onCenter('x')} title="左右置中：選到的螢幕（沒選就全部）整組放到畫布左右正中間，彼此的位置不變"><Icon icon={AlignHorizontalJustifyCenter} /> <span className="ltc__btn-text">左右置中</span></button>
             <button className="ltc__btn" onClick={() => onCenter('y')} title="上下置中：選到的螢幕（沒選就全部）整組放到畫布上下正中間，彼此的位置不變"><Icon icon={AlignVerticalJustifyCenter} /> <span className="ltc__btn-text">上下置中</span></button>
+          </>
+        )}
+        {onCloseGaps && (
+          <>
+            <span className="ltc__sep" />
+            <button className="ltc__btn" onClick={() => onCloseGaps('both')} title="移除縫隙：選到的螢幕（沒選就全部）先左右、再上下靠緊，中間的空隙都消掉（一次復原就回來）" data-testid="ltc-close-gaps"><Icon icon={Minimize2} /> <span className="ltc__btn-text">移除縫隙</span></button>
+            <button className="ltc__btn" onClick={() => onCloseGaps('x')} title="左右靠緊：同一排的螢幕往左貼在一起，只動左右" data-testid="ltc-close-gaps-x"><Icon icon={FoldHorizontal} /> <span className="ltc__btn-text">左右靠緊</span></button>
+            <button className="ltc__btn" onClick={() => onCloseGaps('y')} title="上下靠緊：每一排往上貼在上一排下面，只動上下" data-testid="ltc-close-gaps-y"><Icon icon={FoldVertical} /> <span className="ltc__btn-text">上下靠緊</span></button>
           </>
         )}
         {selInfo && <span className="ltc__count" role="status" data-testid="ltc-sel-info" title="外框的大小，單位是點（畫布像素）">{selectionInfoText(selInfo)}</span>}

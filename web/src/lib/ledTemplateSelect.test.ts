@@ -570,3 +570,39 @@ describe('selectionInfo：選取外框 / 全部外框', () => {
     expect(m.selectionInfo([], [])).toBeNull();
   });
 });
+
+describe('移除縫隙', () => {
+  const R = (x: number, y: number, w: number, h: number) => ({ x, y, w, h });
+  it('分排：垂直有重疊的算同一排', async () => {
+    const { groupIntoRows } = await import('./ledTemplateSelect');
+    const rows = groupIntoRows([R(0, 0, 10, 100), R(50, 50, 10, 100), R(0, 300, 100, 20), R(200, 310, 50, 20)]);
+    expect(rows).toEqual([[0, 1], [2, 3]]);
+  });
+  it('左右靠緊：每排第一塊不動，後面貼前一塊右邊，y 不變', async () => {
+    const { closeGaps } = await import('./ledTemplateSelect');
+    const out = closeGaps([R(300, 0, 50, 100), R(10, 5, 40, 100), R(100, 0, 30, 100)], 'x');
+    expect(out).toEqual([R(80, 0, 50, 100), R(10, 5, 40, 100), R(50, 0, 30, 100)]);
+  });
+  it('上下靠緊：第一排不動，後面整排往上貼，排內相對位置不變', async () => {
+    const { closeGaps } = await import('./ledTemplateSelect');
+    const out = closeGaps([R(0, 10, 50, 100), R(60, 20, 50, 80), R(0, 300, 200, 20), R(0, 500, 200, 20)], 'y');
+    expect(out).toEqual([R(0, 10, 50, 100), R(60, 20, 50, 80), R(0, 110, 200, 20), R(0, 130, 200, 20)]);
+  });
+  it('移除縫隙 = 先左右再上下', async () => {
+    const { closeGaps } = await import('./ledTemplateSelect');
+    const out = closeGaps([R(0, 0, 100, 200), R(150, 0, 100, 200), R(0, 260, 250, 50)], 'both');
+    expect(out).toEqual([R(0, 0, 100, 200), R(100, 0, 100, 200), R(0, 200, 250, 50)]);
+  });
+  it('轉 90 度的塊用畫布上的外框（寬高已對調）算', async () => {
+    const { closeGaps } = await import('./ledTemplateSelect');
+    // 原本 100x50 轉 90 度後在畫布上是 50x100
+    const out = closeGaps([R(0, 0, 50, 100), R(80, 0, 100, 50)], 'x');
+    expect(out[1]).toEqual(R(50, 0, 100, 50));
+  });
+  it('沒東西 = 空；已經貼好 = 不變', async () => {
+    const { closeGaps } = await import('./ledTemplateSelect');
+    expect(closeGaps([])).toEqual([]);
+    const tight = [R(0, 0, 10, 10), R(10, 0, 10, 10), R(0, 10, 20, 5)];
+    expect(closeGaps(tight)).toEqual(tight);
+  });
+});

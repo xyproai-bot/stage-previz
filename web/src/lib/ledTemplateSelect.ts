@@ -140,6 +140,49 @@ export function centerGroupOnCanvas(rects: readonly PixelRect[], canvas: { width
     : moveGroupTo(rects, { y: Math.round((canvas.height - box.h) / 2) });
 }
 
+export type GapMode = 'x' | 'y' | 'both';
+
+/** 把垂直方向有重疊的塊分成「排」（照目前位置）；回傳每排的塊序號，排由上到下 */
+export function groupIntoRows(rects: readonly PixelRect[]): number[][] {
+  const order = rects.map((_, i) => i).sort((a, b) => rects[a].y - rects[b].y || rects[a].x - rects[b].x);
+  const rows: number[][] = [];
+  let bottom = -Infinity;
+  for (const i of order) {
+    if (rows.length > 0 && rects[i].y < bottom) {
+      rows[rows.length - 1].push(i);
+      bottom = Math.max(bottom, rects[i].y + rects[i].h);
+    } else {
+      rows.push([i]);
+      bottom = rects[i].y + rects[i].h;
+    }
+  }
+  return rows;
+}
+
+/** 移除縫隙：左右靠緊（每排第一塊不動、後面的緊貼前一塊右邊）、上下靠緊（第一排不動、後面整排往上貼）；'both' = 先左右再上下 */
+export function closeGaps(rects: readonly PixelRect[], mode: GapMode = 'both'): PixelRect[] {
+  const out = rects.map(r => ({ ...r }));
+  if (out.length === 0) return out;
+  if (mode !== 'y') {
+    for (const row of groupIntoRows(out)) {
+      const byX = [...row].sort((a, b) => out[a].x - out[b].x);
+      for (let k = 1; k < byX.length; k++) out[byX[k]].x = out[byX[k - 1]].x + out[byX[k - 1]].w;
+    }
+  }
+  if (mode !== 'x') {
+    const rows = groupIntoRows(out);
+    let prevBottom: number | null = null;
+    for (const row of rows) {
+      const top = Math.min(...row.map(i => out[i].y));
+      const bottom = Math.max(...row.map(i => out[i].y + out[i].h));
+      const dy: number = prevBottom === null ? 0 : prevBottom - top;
+      for (const i of row) out[i].y += dy;
+      prevBottom = bottom + dy;
+    }
+  }
+  return out;
+}
+
 /** 數字欄位改整組外框的左 / 上：整組平移到那裡（只給一個就只動那個方向） */
 export function moveGroupTo(rects: readonly PixelRect[], target: { x?: number; y?: number }): PixelRect[] {
   const box = boundsOf(rects);

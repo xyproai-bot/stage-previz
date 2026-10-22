@@ -9,7 +9,7 @@ import { panelColor } from '../lib/ledMap';
 import { ROTATIONS, type PlacementInput, type Rotation, type ScreenDef } from '../lib/ledTemplate';
 import { patchDraftItems, type ItemPatchEntry } from '../lib/ledTemplateDraft';
 import { setRotation } from '../lib/ledTemplateEdit';
-import { boundsOf, centerGroupOnCanvas, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection } from '../lib/ledTemplateSelect';
+import { boundsOf, centerGroupOnCanvas, closeGaps, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection } from '../lib/ledTemplateSelect';
 import { useTemplateBackdrop } from '../lib/useTemplateBackdrop';
 import type { LayerBackdrop } from '../lib/ledTemplateContentDraw';
 import {
@@ -183,6 +183,10 @@ export default function LedUvArrange({ projectId, autoPlan, plan, arrange, gutte
             return patchDraftItems(d, movePatches(pick, centerGroupOnCanvas(pick.map(c => c.dest), { width: d.width, height: d.height }, axis)));
           }, { tag: `center:${axis}:${Date.now()}` })}
           tileContent={tileContent}
+          onCloseGaps={mode => arrange.apply(d => {
+            const pick = d.items.filter(i => selSet.size === 0 || selSet.has(i.key));
+            return patchDraftItems(d, movePatches(pick, closeGaps(pick.map(c => c.dest), mode)));
+          }, { tag: `gaps:${mode}:${Date.now()}` })}
           showContent={contentOn}
           contentOpacity={contentOpacity}
           backdrop={backdropLayer}
