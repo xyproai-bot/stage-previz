@@ -350,10 +350,13 @@ test('複製專案帶著版型、手動切的螢幕、每首歌選的版型（�
     screens: [{ key: `s:${sid}`, dest: { x: 0, y: 0, w: 1100, h: 506 }, rotate: 90, flipH: true }, { key: 'o:ob', dest: { x: 1100, y: 0, w: 100, h: 100 } }],
   })).data.template;
   await call('u_admin', 'PATCH', `${P}/songs/s1`, { template_id: t.id });
+  await db.prepare(`UPDATE projects SET led_canvas = '{"width":2200,"height":506}' WHERE id = 'p1'`).run();
 
   const dup = await call('u_admin', 'POST', `${P}/duplicate`, { newName: '複本' });
   assert.equal(dup.status, 201);
   const np = dup.data.id;
+  // LED 畫布大小也帶過去（以前漏掉，副本的版型會顯示「還沒填畫布大小」）
+  assert.equal((await db.prepare(`SELECT led_canvas FROM projects WHERE id = ?`).bind(np).first()).led_canvas, '{"width":2200,"height":506}');
   const list = (await call('u_admin', 'GET', `/api/projects/${np}/led-templates`)).data;
   assert.equal(list.templates.length, 2);
   const copy = list.templates.find(x => x.kind === 'custom');

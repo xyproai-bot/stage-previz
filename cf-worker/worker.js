@@ -1070,6 +1070,13 @@ async function duplicateProject(request, env, projectId) {
     `INSERT INTO projects (id, name, description, model_r2_key, show_id, created_by_user_id, scale_correction)
      VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).bind(newId, newName, src.description || '', src.model_r2_key, showId, me.id, src.scale_correction ?? 1).run();
+  // 1b. 3D 檢視設定也一起帶過去（LED 畫布大小、現場感、材質、首頁視角、舞台道具、共用鏡頭、標籤）；
+  //     以前漏了 LED 畫布大小，副本的版型 / 自動貼 UV 會變成「還沒填畫布大小」
+  await env.DB.prepare(
+    `UPDATE projects SET (led_canvas, look_settings, material_overrides, home_view, stage_props, camera_bookmarks, tags) =
+       (SELECT led_canvas, look_settings, material_overrides, home_view, stage_props, camera_bookmarks, tags FROM projects WHERE id = ?)
+     WHERE id = ?`
+  ).bind(projectId, newId).run();
 
   // 2. 加 admin 進 project_members
   await env.DB.prepare(
