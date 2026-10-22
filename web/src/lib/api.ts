@@ -598,6 +598,11 @@ export interface StageObject {
   locked: boolean;
   materialProps: MaterialProps | null;
   ledProps: LedProps | null;
+  /**
+   * 預設隱藏（0040）：一首歌裡到某個 cue 為止都沒有人設過顯示 / 隱藏，這個物件就是隱藏的；cue 裡明確設成顯示的照樣顯示。
+   * 舊的後台沒有這個欄位（= undefined = 不隱藏）；舊的前端看不懂這個欄位，只會照後台算好的 effective.visible 顯示。
+   */
+  defaultHidden?: boolean;
 }
 
 export async function listStageObjects(projectId: string): Promise<StageObject[]> {
@@ -613,6 +618,7 @@ export async function createStageObject(projectId: string, input: {
   category?: StageObjectCategory;
   defaultPosition?: Vec3;
   defaultRotation?: Euler;
+  defaultHidden?: boolean;
 }): Promise<{ id: string }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/stage-objects`, {
     method: 'POST',
@@ -629,6 +635,7 @@ export async function updateStageObject(projectId: string, objId: string, patch:
   defaultScale: Vec3;
   metadata: Record<string, unknown> | null;
   locked: boolean;
+  defaultHidden: boolean;
   materialProps: MaterialProps | null;
   ledProps: LedProps | null;
 }>): Promise<void> {
@@ -902,6 +909,8 @@ export interface CueState {
   order: number;
   locked: boolean;
   default: { position: Vec3; rotation: Euler; scale: Vec3 };
+  /** 這個物件設成「預設隱藏」（0040）；effective.visible 後台已經算進去了（舊的後台沒有這個欄位） */
+  defaultHidden?: boolean;
   override: {
     position: Vec3 | null;
     rotation: Euler | null;
@@ -939,15 +948,6 @@ export async function resetCueState(
   );
 }
 
-// ─── Comments (legacy KV /api/comments — re-used per song) ─────
-//
-// session id 必須 ^[a-zA-Z0-9_-]{1,64}$ — project/song id 已合規。為了長度安全
-// 取 12 + 12 字元 + 一個分隔線：`p_<12>-s_<12>`。
-//
-// 一首歌一個 thread；admin / director / animator 共用同一 thread。
-
-export type CommentAnchor =
-  | { type: 'screen' }
 /**
  * 一個 cue 裡一個物件自己設的內容（跟 PUT …/states/:objId 寫進去的是同一份）。沒設的欄位是 null（= 沿用前面的 cue / 預設）。
  * 「所有 cue 的物件回到預設位置」用：一首歌所有 cue 一次看、一次清、一次寫回（cf-worker/cueStatesBatch.mjs，只有製作）。
@@ -981,6 +981,15 @@ export async function restoreSongCueOverrides(projectId: string, songId: string,
   return http(`${songStatesBatchPath(projectId, songId)}/restore`, { method: 'POST', body: JSON.stringify({ states }) });
 }
 
+// ─── Comments (legacy KV /api/comments — re-used per song) ─────
+//
+// session id 必須 ^[a-zA-Z0-9_-]{1,64}$ — project/song id 已合規。為了長度安全
+// 取 12 + 12 字元 + 一個分隔線：`p_<12>-s_<12>`。
+//
+// 一首歌一個 thread；admin / director / animator 共用同一 thread。
+
+export type CommentAnchor =
+  | { type: 'screen' }
   | { type: 'world'; world: { x: number; y: number; z: number } }
   | { type: 'mesh'; meshName: string; offset?: { x: number; y: number; z: number } | null };
 

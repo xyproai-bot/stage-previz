@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
+import { defaultVisible, isDefaultHidden } from '../lib/defaultHidden';
 import type { ProjectMember, ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
@@ -466,8 +467,9 @@ function StudioInner({ projectId }: { projectId: string }) {
       order: o.order,
       locked: o.locked,
       default: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale },
+      defaultHidden: isDefaultHidden(o),
       override: null,
-      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: true },
+      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: defaultVisible(o) },
     }));
   }, [selectedCueId, cueStates, stageObjects]);
 

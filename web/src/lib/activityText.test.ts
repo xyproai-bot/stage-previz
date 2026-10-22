@@ -17,6 +17,16 @@ describe('describeActivity（最近活動的一句話）', () => {
     expect(describeActivity(e('update', 'mechanism_group', { name: 'LED 升降', dissolved: true, mechanisms: 8 }))).toBe('解散一排機關「LED 升降」（8 個機關留著）');
     expect(describeActivity(e('delete', 'mechanism_group', { name: 'LED 升降', mechanisms: 8 }))).toBe('刪除一排機關「LED 升降」（連同 8 個機關）');
   });
+  it('一首歌所有 cue 的物件回到預設位置 / 復原：寫歌名和筆數，沒有歌名也不會出現 undefined', () => {
+    expect(describeActivity(e('reset', 'song_cue_states', { songName: '開場', removed: 12, cues: 5 }))).toBe('把歌曲「開場」所有 cue 的物件重置回預設位置（清掉 12 筆）');
+    expect(describeActivity(e('restore', 'song_cue_states', { songName: '開場', restored: 12 }))).toBe('復原歌曲「開場」所有 cue 的物件位置（寫回 12 筆）');
+    expect(describeActivity(e('reset', 'song_cue_states', {}))).toBe('把歌曲所有 cue 的物件重置回預設位置');
+  });
+  it('物件預設隱藏：設定 / 取消都是白話', () => {
+    expect(describeActivity(e('update', 'stage_object', { name: '瞬掉緞帶', changes: { defaultHidden: true } }))).toBe('把物件「瞬掉緞帶」設成預設隱藏');
+    expect(describeActivity(e('update', 'stage_object', { name: '瞬掉緞帶', changes: { defaultHidden: false } }))).toBe('取消物件「瞬掉緞帶」的預設隱藏');
+    expect(describeActivity(e('update', 'stage_object', { name: '主牆', changes: { locked: true } }))).toBe('修改物件「主牆」');
+  });
   it('交新版後自動回到審查中：沒有歌名也不會出現 undefined', () => {
     const s = describeActivity(e('update', 'song', { statusFrom: 'needs_changes', statusTo: 'in_review', auto: true, label: 'V2' }));
     expect(s).toBe('把歌曲從「需修改」改成「審查中」（交了新版 V2，自動改的）');

@@ -9,7 +9,7 @@ const SONG_STATUS_LABEL: Record<string, string> = {
 };
 
 const TARGET_LABEL: Record<string, string> = {
-  project: '專案', song: '歌曲', cue: 'cue', cue_state: '物件位置', stage_object: '物件', model: '模型',
+  project: '專案', song: '歌曲', cue: 'cue', cue_state: '物件位置', song_cue_states: '物件位置', stage_object: '物件', model: '模型',
   song_video: '影片', mechanism: '機關', mechanism_group: '一排機關', drive_file: 'Drive 檔案', cue_template: '常用擺位', invite: '邀請連結',
   share_link: '分享連結', comment: '留言',
 };
@@ -98,6 +98,21 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
   if (action === 'seed') {
     const inserted = num(p.inserted);
     return `加入${inserted != null ? ` ${inserted} 個` : ''}範例物件`;
+  }
+  // 物件「預設隱藏」開關
+  if (type === 'stage_object' && action === 'update' && p.changes && typeof p.changes === 'object' && 'defaultHidden' in (p.changes as Record<string, unknown>)) {
+    const on = !!(p.changes as Record<string, unknown>).defaultHidden;
+    return `${on ? '把' : '取消'}物件${quoted(name)}${on ? '設成預設隱藏' : '的預設隱藏'}`;
+  }
+  // 一首歌所有 cue 的物件一次回到預設位置 / 復原
+  if (type === 'song_cue_states') {
+    const songName = str(p.songName);
+    if (action === 'reset') {
+      const removed = num(p.removed);
+      return `把歌曲${quoted(songName)}所有 cue 的物件重置回預設位置${removed != null ? `（清掉 ${removed} 筆）` : ''}`;
+    }
+    const restored = num(p.restored);
+    return `復原歌曲${quoted(songName)}所有 cue 的物件位置${restored != null ? `（寫回 ${restored} 筆）` : ''}`;
   }
   if (type === 'cue_state' && action === 'reset') {
     const cueName = str(p.cueName);

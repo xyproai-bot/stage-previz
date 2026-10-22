@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
+import { defaultVisible, isDefaultHidden } from '../lib/defaultHidden';
 import type { ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
@@ -372,8 +373,9 @@ function PreviewInner({ projectId }: { projectId: string }) {
       order: o.order,
       locked: o.locked,
       default: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale },
+      defaultHidden: isDefaultHidden(o),
       override: null,
-      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: true },
+      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: defaultVisible(o) },
     }));
   }, [selectedCueId, cueStates, stageObjects]);
 

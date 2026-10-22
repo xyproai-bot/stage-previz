@@ -1476,6 +1476,25 @@
 .object-row__cat { display: inline-flex; color: var(--text-dim); }
 .status-menu__check { display: inline-flex; }
 .lock-tag { display: inline-flex; align-items: center; vertical-align: middle; color: var(--warn); }
+/* 物件「預設隱藏」：物件清單和物件狀態旁邊的小標記 */
+.object-mgr-flags { margin-top: 3px; }
+.default-hidden-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 6px;
+  padding: 0 6px;
+  vertical-align: middle;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 500;
+  color: var(--text-dim);
+  border: 1px dashed var(--border-strong);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.object-mgr-flags .default-hidden-tag { margin-left: 0; }
+.object-mgr-actions button.is-default-hidden-btn { color: var(--accent); border-color: var(--accent); }
 .object-mgr-actions button {
   display: inline-flex;
   align-items: center;

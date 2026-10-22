@@ -69,3 +69,58 @@ test('壞掉的 JSON → 用預設，不會整個掛掉', () => {
   assert.deepEqual(lift.default.position, { x: 0, y: 0, z: 0 });
   assert.deepEqual(lift.effective.position, { x: 0, y: 0, z: 0 });
 });
+
+// ── 物件「預設隱藏」（0040）──
+const hiddenRow = (overrides = {}) => objectRow({ default_hidden: 1, ...overrides });
+const earlierRow = (visible, cueOrder, position = null) => ({ stage_object_id: 'o_lift', position, rotation: null, scale: null, visible, cue_order: cueOrder });
+
+test('預設隱藏：整首歌都沒有人設過顯示 / 隱藏 → 隱藏；沒有預設隱藏的物件照舊顯示', () => {
+  const [hidden] = buildCueStates([hiddenRow()], []);
+  assert.equal(hidden.effective.visible, false);
+  assert.equal(hidden.defaultHidden, true);
+  assert.equal(hidden.override, null);
+  // 前面的 cue 有設位置、沒碰顯示 → 還是預設隱藏
+  const [moved] = buildCueStates([hiddenRow()], [earlierRow(null, 0, J({ x: 0, y: 3, z: 0 }))]);
+  assert.equal(moved.effective.visible, false);
+  assert.deepEqual(moved.effective.position, { x: 0, y: 3, z: 0 });
+  // 沒有預設隱藏（含舊資料沒有這個欄位）：跟以前一樣顯示
+  assert.equal(buildCueStates([objectRow()], [])[0].effective.visible, true);
+  assert.equal(buildCueStates([objectRow({ default_hidden: 0 })], [])[0].effective.visible, true);
+  assert.equal(buildCueStates([objectRow()], [])[0].defaultHidden, false);
+});
+
+test('預設隱藏：cue 自己明確設成顯示 → 顯示（明確設定優先）；自己設成隱藏 → 隱藏', () => {
+  const show = hiddenRow({ state_visible: 1, state_updated_at: '2026-10-20 00:00:00' });
+  assert.equal(buildCueStates([show], [])[0].effective.visible, true);
+  assert.equal(buildCueStates([show], [])[0].override.visible, true);
+  // 前面 cue 說隱藏、這個 cue 自己說顯示 → 顯示
+  assert.equal(buildCueStates([show], [earlierRow(0, 0)])[0].effective.visible, true);
+  const hide = hiddenRow({ state_visible: 0, state_updated_at: '2026-10-20 00:00:00' });
+  assert.equal(buildCueStates([hide], [earlierRow(1, 0)])[0].effective.visible, false);
+});
+
+test('預設隱藏：前面 cue 設成顯示 → 後面沒設的 cue 沿用顯示（第 1 首歌的 cue 照樣顯示）', () => {
+  const [after] = buildCueStates([hiddenRow()], [earlierRow(1, 1)]);
+  assert.equal(after.effective.visible, true);
+  assert.equal(after.tracked, true);
+  // 前面最近一筆只調了位置（顯示沒設）、更前面的 cue 明確設過顯示 → 還是顯示
+  const [carried] = buildCueStates([hiddenRow()], [earlierRow(1, 0), earlierRow(null, 1, J({ x: 1, y: 0, z: 0 }))]);
+  assert.equal(carried.effective.visible, true);
+  assert.deepEqual(carried.effective.position, { x: 1, y: 0, z: 0 });
+  // 顯示又被隱藏 → 之後隱藏；再被顯示 → 之後顯示（最近一次明確設定為準）
+  assert.equal(buildCueStates([hiddenRow()], [earlierRow(1, 0), earlierRow(0, 1), earlierRow(null, 2)])[0].effective.visible, false);
+  assert.equal(buildCueStates([hiddenRow()], [earlierRow(1, 0), earlierRow(0, 1), earlierRow(1, 2)])[0].effective.visible, true);
+});
+
+test('預設隱藏：別的物件的顯示設定不影響這個物件', () => {
+  const other = { ...earlierRow(1, 0), stage_object_id: 'o_led' };
+  assert.equal(buildCueStates([hiddenRow()], [other])[0].effective.visible, false);
+});
+
+test('沒有預設隱藏的物件：前面最近一筆沒碰顯示 → 還是顯示（舊的行為完全不變）', () => {
+  // 前面 cue 0 隱藏、cue 1 只調位置：舊行為是「整筆沿用最近那一筆」→ 顯示
+  const [lift] = buildCueStates([objectRow()], [earlierRow(0, 0), earlierRow(null, 1, J({ x: 0, y: 2, z: 0 }))]);
+  assert.equal(lift.effective.visible, true);
+  // 最近一筆有設就用它
+  assert.equal(buildCueStates([objectRow()], [earlierRow(1, 0), earlierRow(0, 1)])[0].effective.visible, false);
+});

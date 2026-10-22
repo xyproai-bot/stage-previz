@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, MaterialProps, LedProps } from '../lib/api';
+import { DEFAULT_HIDDEN_LABEL, defaultHiddenToast, defaultHiddenToggleText, defaultVisible, isDefaultHidden, visibilityNote } from '../lib/defaultHidden';
 import { useAuth } from '../lib/auth';
 import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
 import { memberWatermarkOn } from '../lib/watermark/policy';
@@ -39,8 +40,8 @@ import { canEditCameraBookmarks } from '../lib/cameraBookmarks';
 import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueTransitionSeconds, crossfadeLabel, NEW_CUE_CROSSFADE_SECONDS, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
 import { EditHistory, historyScope } from '../lib/editHistory';
-import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { RESET_ALL_MENU_LABEL, RESET_ALL_NOTHING, resetAllDialog, resetAllHistoryScopes, runResetAll, summarizeOverrides } from '../lib/cueResetAll';
+import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
 import { useLiveRefresh } from '../lib/liveRefresh';
@@ -554,14 +555,12 @@ export default function ProjectEditor() {
       order: o.order,
       locked: o.locked,
       default: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale },
+      defaultHidden: isDefaultHidden(o),
       override: null,
-      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: true },
+      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: defaultVisible(o) },
     }));
   }, [selectedCueId, cueStates, stageObjects]);
 
-  // ── 歌曲影片（＋加影片）：上傳中切到別首歌也會繼續；好了歌單上的「影片 V3」跟著更新 ──
-  const [addVideoSongId, setAddVideoSongId] = useState<string | null>(null);
-  const addVideoSong = addVideoSongId ? songs.find(s => s.id === addVideoSongId) ?? null : null;
   // 自動貼 UV 的 3D 預覽：選了「不放進畫布」的物件，套用以後類型會變成「其他」→ 預覽時 3D 畫面先照一般物件顯示（沒有測試圖、沒有影片）。只換給 3D 畫面看的那份，右邊的物件清單不動
   const previewExcluded = uvOpen && uvPreview && uvPreview.excluded && uvPreview.excluded.length > 0 ? uvPreview.excluded : null;
   const sceneStageObjects: StageObject[] = useMemo(
@@ -573,6 +572,9 @@ export default function ProjectEditor() {
     [viewportStates, previewExcluded],
   );
 
+  // ── 歌曲影片（＋加影片）：上傳中切到別首歌也會繼續；好了歌單上的「影片 V3」跟著更新 ──
+  const [addVideoSongId, setAddVideoSongId] = useState<string | null>(null);
+  const addVideoSong = addVideoSongId ? songs.find(s => s.id === addVideoSongId) ?? null : null;
   // 「影片版本」視窗（歌單上點「影片 V3」）：看每一版、刪除、到導演頁播放
   const [versionsSongId, setVersionsSongId] = useState<string | null>(null);
   const versionsSong = versionsSongId ? songs.find(s => s.id === versionsSongId) ?? null : null;
@@ -818,8 +820,6 @@ export default function ProjectEditor() {
       await mech.refreshPositions();
     } catch (e) { toast.error('重置失敗：' + msg(e)); }
   }
-  async function handleRenameCue(cueId: string, currentName: string) {
-    if (!projectId || !selectedSongId) return;
   // 「所有 cue 的物件回到預設位置」（Cue 分頁的「⋯」）：先數給製作看會清掉多少，確認以後一次清掉，記成復原紀錄的一步（lib/cueResetAll.ts）
   const resetAllBusyRef = useRef(false);
   async function handleResetAllCueObjects() {
@@ -849,6 +849,8 @@ export default function ProjectEditor() {
       resetAllBusyRef.current = false;
     }
   }
+  async function handleRenameCue(cueId: string, currentName: string) {
+    if (!projectId || !selectedSongId) return;
     const name = (await promptDialog({ title: '改 cue 名稱', label: 'cue 名稱', defaultValue: currentName, confirmLabel: '改名', maxLength: 100 }))?.trim();
     if (!name || name === currentName) return;
     try {
@@ -916,7 +918,7 @@ export default function ProjectEditor() {
       return runEdit(async () => {
         const obj = stageObjectsRef.current.find(o => o.id === objId);
         if (!obj) return;
-        const patch = resolvePatch({ position: obj.defaultPosition, rotation: obj.defaultRotation, scale: obj.defaultScale, visible: true });
+        const patch = resolvePatch({ position: obj.defaultPosition, rotation: obj.defaultRotation, scale: obj.defaultScale, visible: defaultVisible(obj) });
         const after: Partial<StageObject> = {};
         const before: Partial<StageObject> = {};
         if (patch.position) { after.defaultPosition = patch.position; before.defaultPosition = obj.defaultPosition; }
@@ -1055,6 +1057,17 @@ export default function ProjectEditor() {
       await refreshStageObjects();
       await refreshCueStates();
     } catch (e) { toast.error((obj.locked ? '沒有解鎖：' : '沒有鎖住：') + msg(e)); }
+  }
+  /** 物件「預設隱藏」開關（只有製作）：改完物件清單和 3D 畫面（每個 cue 的顯示都可能跟著變）重新讀 */
+  async function handleToggleDefaultHidden(obj: StageObject) {
+    if (!projectId) return;
+    const next = !isDefaultHidden(obj);
+    try {
+      await api.updateStageObject(projectId, obj.id, { defaultHidden: next });
+      await refreshStageObjects();
+      await refreshCueStates();
+      toast.success(defaultHiddenToast(obj.displayName, next));
+    } catch (e) { toast.error(`沒有存到「${DEFAULT_HIDDEN_LABEL}」：` + msg(e)); }
   }
   async function handleDeleteObject(obj: StageObject) {
     if (!projectId) return;
@@ -1455,6 +1468,7 @@ export default function ProjectEditor() {
                 onRename={handleRenameObject}
                 onChangeCategory={handleChangeCategory}
                 onToggleLock={handleToggleLock}
+                onToggleDefaultHidden={handleToggleDefaultHidden}
                 onDelete={handleDeleteObject}
               />
             ) : rightTab === 'mechanisms' && (selectedSongId || !songsLoading) ? (
@@ -1502,6 +1516,7 @@ export default function ProjectEditor() {
                 onDelete={handleDeleteCue}
                 onMove={moveCue}
                 onSaveTemplate={handleSaveCueAsTemplate}
+                onResetAllObjects={handleResetAllCueObjects}
               />
             ) : rightTab === 'state' ? (
               <ObjectStateEditor
@@ -1516,7 +1531,6 @@ export default function ProjectEditor() {
                 onToggleSelected={toggleSelected}
                 scaleCorrection={view.scaleCorrection}
                 unitsReady={view.loaded}
-                onResetAllObjects={handleResetAllCueObjects}
                 onSet={handleSetState}
                 onToggleVisible={handleToggleVisible}
                 onReset={handleResetState}
@@ -1597,6 +1611,8 @@ export default function ProjectEditor() {
           view.setLedCanvas(r.ledCanvas);
           refreshModel();
           void ledTpls.reload();
+          // 「不放進畫布」的物件，後台把類型改成「其他」了：物件清單和 3D 畫面跟著重讀
+          if (r.excludedObjects && r.excludedObjects.length > 0) { void refreshStageObjects(); void refreshCueStates(); }
         }}
       />
 
@@ -1607,6 +1623,8 @@ export default function ProjectEditor() {
         onChanged={(info) => {
           // 換回舊版時，後台把畫布也換回來了（沒有這個版本的紀錄 = 畫布不動）
           if (info?.restoredCanvas) view.setLedCanvas(info.ledCanvas);
+          // 自動貼 UV 時「不放進畫布」改成「其他」的物件，換版本時類型跟著改回來 / 再改掉
+          if (info?.objectTypesChanged) { void refreshStageObjects(); void refreshCueStates(); }
           refreshModel();
           void ledTpls.reload();
         }}
@@ -1642,8 +1660,6 @@ export default function ProjectEditor() {
 
       {versionsSong && projectId && (
         <SongVideosDialog
-          // 「不放進畫布」的物件，後台把類型改成「其他」了：物件清單和 3D 畫面跟著重讀
-          if (r.excludedObjects && r.excludedObjects.length > 0) { void refreshStageObjects(); void refreshCueStates(); }
           open
           onClose={() => setVersionsSongId(null)}
           projectId={projectId}
@@ -1654,8 +1670,6 @@ export default function ProjectEditor() {
           onChanged={reloadSongsQuietly}
         />
       )}
-          // 自動貼 UV 時「不放進畫布」改成「其他」的物件，換版本時類型跟著改回來 / 再改掉
-          if (info?.objectTypesChanged) { void refreshStageObjects(); void refreshCueStates(); }
 
       {addVideoSong && projectId && (
         <AddVideoDialog
@@ -1858,6 +1872,8 @@ function CueList({
   onDelete: (id: string, name: string) => void;
   onMove?: (cueId: string, direction: -1 | 1) => void;
   onSaveTemplate?: (cueId: string, name: string) => void;
+  /** 這首歌所有 cue 的物件一次回到預設位置（Cue 分頁的「⋯」；提案那一頁沒有） */
+  onResetAllObjects?: () => void;
   emptyText?: string;
 }) {
   if (loading) return <div className="editor-empty muted">載入中…</div>;
@@ -1872,8 +1888,6 @@ function CueList({
         <ul className="cue-list">
           {cues.map((c, i) => (
             <li
-  /** 這首歌所有 cue 的物件一次回到預設位置（Cue 分頁的「⋯」；提案那一頁沒有） */
-  onResetAllObjects?: () => void;
               key={c.id}
               className={'cue-item' + (selectedId === c.id ? ' is-active' : '') + (c.status === 'proposal' ? ' is-proposal' : '')}
               onClick={() => onSelect(c.id)}
@@ -2120,6 +2134,7 @@ function ObjectStateEditor({
                   <span className="attribute-panel__obj-cat" title={cat.label}><Icon icon={cat.icon} /></span>
                   <span className="attribute-panel__obj-name">{s.displayName}</span>
                   {s.locked && <span className="lock-tag" title="已鎖定"><Icon icon={Lock} size="xs" /></span>}
+                  {isDefaultHidden(s) && <span className="default-hidden-tag" title={visibilityNote(s) ?? ''} data-testid="state-default-hidden">{DEFAULT_HIDDEN_LABEL}</span>}
                   {s.override && <span className="override-dot" title="此 cue 已自訂" />}
                 </label>
                 {/* 這個 cue 裡顯示 / 隱藏（前面的 cue 不受影響；後面沒另外設定的 cue 會跟著，跟位置一樣） */}
@@ -2130,7 +2145,7 @@ function ObjectStateEditor({
                   disabled={s.locked}
                   aria-pressed={!visible}
                   aria-label={(visible ? '在這個 cue 隱藏「' : '在這個 cue 顯示「') + s.displayName + '」'}
-                  title={s.locked ? '已鎖定，不能改' : visible ? '在這個 cue 隱藏（後面沒另外設定的 cue 也會跟著隱藏）' : '這個 cue 裡隱藏中 — 點一下顯示'}
+                  title={s.locked ? '已鎖定，不能改' : visible ? '在這個 cue 隱藏（後面沒另外設定的 cue 也會跟著隱藏）' : (visibilityNote(s) ? visibilityNote(s) + ' — 點一下在這個 cue 顯示（後面沒另外設定的 cue 會跟著顯示）' : '這個 cue 裡隱藏中 — 點一下顯示')}
                 >
                   <Icon icon={visible ? Eye : EyeOff} size="md" />
                 </button>
@@ -2778,7 +2793,7 @@ function LedSection({ obj, onUpdate }: { obj: StageObject; onUpdate: (p: LedProp
 
 function ObjectsManager({
   objects, status, onSeed, onAdd, onUpload, onShowVersions, onPickFromLibrary, hasModel,
-  onRename, onChangeCategory, onToggleLock, onDelete,
+  onRename, onChangeCategory, onToggleLock, onToggleDefaultHidden, onDelete,
 }: {
   objects: StageObject[];
   status: LoadStatus;
@@ -2791,6 +2806,8 @@ function ObjectsManager({
   onRename: (obj: StageObject) => void;
   onChangeCategory: (obj: StageObject, cat: StageObjectCategory) => void;
   onToggleLock: (obj: StageObject) => void;
+  /** 預設隱藏開關：沒有 cue 設定過顯示的歌，這個物件預設隱藏 */
+  onToggleDefaultHidden: (obj: StageObject) => void;
   onDelete: (obj: StageObject) => void;
 }) {
   return (
@@ -2824,7 +2841,9 @@ function ObjectsManager({
         </div>
       ) : (
         <ul className="object-mgr-list">
-          {objects.map(o => (
+          {objects.map(o => {
+            const hiddenText = defaultHiddenToggleText(o);
+            return (
             <li key={o.id} className={'object-mgr-row' + (o.locked ? ' is-locked' : '')}>
               <span className="object-row__cat" title={CATEGORY_INFO[o.category].label}><Icon icon={CATEGORY_INFO[o.category].icon} /></span>
               <div className="object-mgr-main">
@@ -2833,6 +2852,11 @@ function ObjectsManager({
                   {o.locked && <span className="lock-tag" title="已鎖定"><Icon icon={Lock} size="xs" /></span>}
                 </div>
                 <div className="muted small object-mgr-mesh">{o.meshName}</div>
+                {isDefaultHidden(o) && (
+                  <div className="object-mgr-flags">
+                    <span className="default-hidden-tag" title={hiddenText.title} data-testid="default-hidden-badge"><Icon icon={EyeOff} size="xs" /> {DEFAULT_HIDDEN_LABEL}</span>
+                  </div>
+                )}
               </div>
               <select
                 className="object-mgr-cat"
@@ -2847,6 +2871,17 @@ function ObjectsManager({
               </select>
               <div className="object-mgr-actions">
                 <button
+                  onClick={() => onToggleDefaultHidden(o)}
+                  title={o.locked ? '已鎖定，不能改' : hiddenText.title}
+                  aria-label={hiddenText.label}
+                  aria-pressed={isDefaultHidden(o)}
+                  className={isDefaultHidden(o) ? 'is-default-hidden-btn' : ''}
+                  disabled={o.locked}
+                  data-testid="default-hidden-toggle"
+                >
+                  <Icon icon={isDefaultHidden(o) ? EyeOff : Eye} />
+                </button>
+                <button
                   onClick={() => onToggleLock(o)}
                   title={o.locked ? '解鎖（可編輯）' : '鎖定（3D 不可選、屬性不可改）'}
                   aria-label={o.locked ? '解鎖' : '鎖定'}
@@ -2858,7 +2893,8 @@ function ObjectsManager({
                 <button onClick={() => onDelete(o)} title="刪除" aria-label="刪除"><Icon icon={Trash2} /></button>
               </div>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>

@@ -1049,11 +1049,11 @@ async function duplicateProject(request, env, projectId) {
     objIdMap.set(o.id, newObjId);
     objStmts.push(env.DB.prepare(`
       INSERT INTO stage_objects (id, project_id, mesh_name, display_name, category, "order",
-        default_position, default_rotation, default_scale, metadata, locked, material_props, led_props)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        default_position, default_rotation, default_scale, metadata, locked, material_props, led_props, default_hidden)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(newObjId, newId, o.mesh_name, o.display_name, o.category, o.order,
             o.default_position, o.default_rotation, o.default_scale, o.metadata,
-            o.locked, o.material_props, o.led_props));
+            o.locked, o.material_props, o.led_props, o.default_hidden ?? 0));
   }
   if (objStmts.length > 0) await env.DB.batch(objStmts);
 
@@ -1375,11 +1375,11 @@ async function importProject(request, env) {
     objIdMap.set(o.id, newObjId);
     objStmts.push(env.DB.prepare(`
       INSERT INTO stage_objects (id, project_id, mesh_name, display_name, category, "order",
-        default_position, default_rotation, default_scale, metadata, locked, material_props, led_props)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        default_position, default_rotation, default_scale, metadata, locked, material_props, led_props, default_hidden)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(newObjId, newId, o.mesh_name, o.display_name, o.category, o.order,
             o.default_position, o.default_rotation, o.default_scale, o.metadata,
-            o.locked ?? 0, o.material_props, o.led_props));
+            o.locked ?? 0, o.material_props, o.led_props, o.default_hidden ? 1 : 0));
   }
   if (objStmts.length > 0) await env.DB.batch(objStmts);
 
@@ -2289,7 +2289,7 @@ async function listStageObjects(env, projectId) {
   const r = await env.DB.prepare(`
     SELECT id, mesh_name, display_name, category, "order",
            default_position, default_rotation, default_scale, metadata, created_at,
-           locked, material_props, led_props
+           locked, material_props, led_props, default_hidden
     FROM stage_objects
     WHERE project_id = ?
     ORDER BY "order" ASC, created_at ASC
@@ -2314,6 +2314,8 @@ function parseStageObjectRow(o) {
     locked: !!o.locked,
     materialProps: o.material_props ? safe(o.material_props, null) : null,
     ledProps: o.led_props ? safe(o.led_props, null) : null,
+    // 預設隱藏（0040）：沒有 cue 設定顯示 / 隱藏的歌，這個物件預設是隱藏的
+    defaultHidden: !!o.default_hidden,
   };
 }
 
@@ -2341,10 +2343,10 @@ async function createStageObject(request, env, projectId) {
   try {
     await env.DB.prepare(`
       INSERT INTO stage_objects (id, project_id, mesh_name, display_name, category, "order",
-        default_position, default_rotation, default_scale, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        default_position, default_rotation, default_scale, metadata, default_hidden)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(id, projectId, meshName, displayName, category, order,
-            defaultPosition, defaultRotation, defaultScale, metadata).run();
+            defaultPosition, defaultRotation, defaultScale, metadata, body?.defaultHidden ? 1 : 0).run();
   } catch (e) {
     if (/UNIQUE/.test(e.message)) {
       return jsonResp({ error: `mesh "${meshName}" 已存在` }, 409);
@@ -2371,6 +2373,7 @@ async function updateStageObject(request, env, projectId, objId) {
   if ('defaultScale' in body) { sets.push('default_scale = ?'); values.push(JSON.stringify(body.defaultScale)); }
   if ('metadata' in body) { sets.push('metadata = ?'); values.push(body.metadata ? JSON.stringify(body.metadata) : null); }
   if ('locked' in body) { sets.push('locked = ?'); values.push(body.locked ? 1 : 0); }
+  if ('defaultHidden' in body) { sets.push('default_hidden = ?'); values.push(body.defaultHidden ? 1 : 0); }
   if ('materialProps' in body) {
     sets.push('material_props = ?');
     values.push(body.materialProps ? JSON.stringify(body.materialProps) : null);
@@ -2394,7 +2397,7 @@ async function updateStageObject(request, env, projectId, objId) {
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
 
   // 只有有意義的 meta 變更才寫 activity，避免 transform 拖動 spam
-  const META_KEYS = ['displayName', 'category', 'locked', 'materialProps', 'ledProps'];
+  const META_KEYS = ['displayName', 'category', 'locked', 'defaultHidden', 'materialProps', 'ledProps'];
   const hasMeta = META_KEYS.some(k => k in body);
   if (hasMeta) {
     const meta = {};
@@ -2596,6 +2599,7 @@ async function activateModelVersion(request, env, projectId) {
     fromKey: beforeRow?.model_r2_key,
     toKey: key,
     ...(swapped.restoredCanvas ? { ledCanvas: swapped.ledCanvas } : {}),
+    ...(swapped.objectTypesChanged ? { objectTypesChanged: true } : {}),
   });
   return jsonResp({ ok: true, key, url: `/r2/${key}`, restoredCanvas: swapped.restoredCanvas, ledCanvas: swapped.ledCanvas, objectTypesChanged: !!swapped.objectTypesChanged });
 }
@@ -2604,7 +2608,6 @@ async function activateModelVersion(request, env, projectId) {
 async function deleteModelVersion(request, env, projectId, tsFile) {
   if (!isModelVersionFile(tsFile)) return jsonResp({ error: 'Invalid version' }, 400);
   const key = `models/${projectId}/${tsFile}`;
-    ...(swapped.objectTypesChanged ? { objectTypesChanged: true } : {}),
 
   const row = await env.DB.prepare(
     `SELECT model_r2_key FROM projects WHERE id = ? LIMIT 1`
@@ -2785,6 +2788,7 @@ async function loadCueStates(env, projectId, cueId) {
         o.default_rotation,
         o.default_scale,
         o.locked        AS object_locked,
+        o.default_hidden AS default_hidden,
         cos.position    AS state_position,
         cos.rotation    AS state_rotation,
         cos.scale       AS state_scale,
@@ -6137,6 +6141,7 @@ async function handleShareRouter(request, env, url, ref) {
       locked: !!o.locked,
       materialProps: safeJsonObj(o.material_props, null),
       ledProps: safeJsonObj(o.led_props, null),
+      defaultHidden: !!o.default_hidden,
     }));
 
     const shareSongs = await Promise.all((songsR.results || []).map(async s => {

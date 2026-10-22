@@ -6,6 +6,14 @@
 //   1. 這個 cue 自己有設 → 用自己的
 //   2. 沒設 → 用同一首歌裡「前面的 cue」最近一次設的（整筆一起繼承）
 //   3. 前面都沒設 → 用物件的預設位置
+//
+// 顯示 / 隱藏 還多一層「物件預設隱藏」（stage_objects.default_hidden，0040）：
+//   - 這個 cue 自己設了顯示 / 隱藏 → 用自己的（明確設定永遠優先）
+//   - 沒設 → 前面的 cue 最近一次設的（跟位置一樣整筆沿用）
+//   - 前面都沒設過顯示 / 隱藏 → 物件預設：預設隱藏的是隱藏、其他是顯示（跟以前一模一樣）
+//   預設隱藏的物件另外多一條：前面只要有任何一個 cue 明確設過顯示 / 隱藏，就沿用最近那一次
+//   （前面最近那一筆設定只調了位置、沒有碰顯示 / 隱藏，物件也不會突然又變回預設隱藏）。
+//   沒有預設隱藏的物件照舊，只看前面最近那一筆。
 
 const DEFAULT_POSITION = { x: 0, y: 0, z: 0 };
 const DEFAULT_ROTATION = { pitch: 0, yaw: 0, roll: 0 };
@@ -33,11 +41,14 @@ export function buildCueStates(objectRows, earlierRows) {
     .map((row, i) => ({ row, i }))
     .sort((a, b) => (Number(a.row.cue_order) - Number(b.row.cue_order)) || (a.i - b.i));
   const tracking = new Map();
+  /** 物件 id → 前面最近一次「明確設過顯示 / 隱藏」的值（預設隱藏的物件才用得到） */
+  const lastVisible = new Map();
   for (const { row } of earlier) {
     tracking.set(row.stage_object_id, {
       position: row.position, rotation: row.rotation, scale: row.scale, visible: row.visible,
       fromCueOrder: row.cue_order,
     });
+    if (row.visible != null) lastVisible.set(row.stage_object_id, row.visible);
   }
 
   return (objectRows || []).map(row => {
@@ -54,9 +65,11 @@ export function buildCueStates(objectRows, earlierRows) {
         : inherited ? parseJson(inherited, fallback)
         : fallback;
 
+    const defaultHidden = !!row.default_hidden;
     const effVisible = hasOverride && row.state_visible != null ? !!row.state_visible
       : tr?.visible != null ? !!tr.visible
-      : true;
+      : defaultHidden && lastVisible.has(row.object_id) ? !!lastVisible.get(row.object_id)
+      : !defaultHidden;
 
     return {
       objectId: row.object_id,
@@ -66,6 +79,8 @@ export function buildCueStates(objectRows, earlierRows) {
       order: row.object_order,
       locked: !!row.object_locked,
       default: def,
+      // 物件預設隱藏（0040）：畫面上寫「預設隱藏」用；effective.visible 已經算進去了
+      defaultHidden,
       override: hasOverride ? {
         position: parseJson(row.state_position, null),
         rotation: parseJson(row.state_rotation, null),

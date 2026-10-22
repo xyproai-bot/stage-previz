@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Cue, CueState, SharePublicData, ShareRef, SongComment } from '../lib/api';
+import { defaultVisible, isDefaultHidden } from '../lib/defaultHidden';
 import StageScene, { type StageViewApi } from '../components/StageScene';
 import AnnotationLayer from '../components/AnnotationLayer';
 import GuestCommentsPanel from '../components/GuestCommentsPanel';
@@ -329,8 +330,9 @@ export default function Share() {
       order: o.order,
       locked: o.locked,
       default: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale },
+      defaultHidden: isDefaultHidden(o),
       override: null,
-      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: true },
+      effective: { position: o.defaultPosition, rotation: o.defaultRotation, scale: o.defaultScale, visible: defaultVisible(o) },
     }));
   }, [selectedCueId, cueStates, data]);
 
