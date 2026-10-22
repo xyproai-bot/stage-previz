@@ -68,6 +68,8 @@ import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
 import LedTemplatesDialog from '../components/LedTemplatesDialog';
 import LedUvPanel from '../components/LedUvPanel';
+import { getUvLayoutEdit } from '../lib/ledUvApi';
+import { editIsApplied, parseEditSnapshot } from '../lib/ledUv/editState';
 import type { UvPreview } from '../lib/ledUv/previewUv';
 import { useLedTemplates } from '../lib/useLedTemplates';
 import { useLedPatternCanvas, type LedPatternSource } from '../lib/useLedPatternCanvas';
@@ -261,6 +263,21 @@ export default function ProjectEditor() {
   );
   // 自動貼 UV（和版型面板都是貼在頁面下方，一次只開一個）
   const [uvOpen, setUvOpen] = useState(false);
+  /** 自動貼 UV 怎麼打開的（'adjust' = 「調整排版」，直接到排版那一步）；n 每按一次加一 */
+  const [uvEntry, setUvEntry] = useState<{ mode: 'full' | 'adjust'; n: number }>({ mode: 'full', n: 0 });
+  /** 目前的模型版本是自動貼 UV 套用出來的（有「調整排版」可以按） */
+  const [uvApplied, setUvApplied] = useState(false);
+  useEffect(() => {
+    if (!projectId || editorRole !== 'admin' || !modelUrl) { setUvApplied(false); return; }
+    let alive = true;
+    void (async () => {
+      try {
+        const saved = await getUvLayoutEdit(projectId);
+        if (alive) setUvApplied(editIsApplied(saved ? parseEditSnapshot(saved.edit) : null));
+      } catch { if (alive) setUvApplied(false); }
+    })();
+    return () => { alive = false; };
+  }, [projectId, editorRole, modelUrl]);
   /** 自動貼 UV 的 3D 預覽（面板算好的新 UV）；null = 3D 畫面照模型現在的 UV */
   const [uvPreview, setUvPreview] = useState<UvPreview | null>(null);
   const uvObjects = useMemo(
@@ -1511,7 +1528,8 @@ export default function ProjectEditor() {
     { key: 'import', label: '匯入 Cue', menuLabel: '從別首歌匯入 cue', title: '從別首歌匯入 cue（巡迴複製、跨專案沿用）', icon: Import, onSelect: () => setImportCuesOpen(true), disabled: !selectedSong, secondary: true },
     { key: 'search', label: '搜留言', menuLabel: '搜尋留言', title: '搜尋專案內所有歌的留言', icon: Search, onSelect: () => setCommentSearchOpen(true), secondary: true },
     ...(editorRole !== 'admin' || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => { setUvOpen(false); setLedTplOpen(true); }, secondary: true }]),
-    ...(editorRole !== 'admin' || !modelUrl || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUv', label: '自動貼 UV', menuLabel: '自動貼 UV（LED 的 UV 和對位圖）', title: '自動貼 UV：選 LED 螢幕、填點距或總點數，系統展開 UV、排好畫布、存成新的模型版本', icon: Ruler, onSelect: () => { setLedTplOpen(false); setUvOpen(true); }, secondary: true }]),
+    ...(editorRole !== 'admin' || !modelUrl || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUv', label: '自動貼 UV', menuLabel: '自動貼 UV（LED 的 UV 和對位圖）', title: '自動貼 UV：選 LED 螢幕、填點距或總點數，系統展開 UV、排好畫布、存成新的模型版本', icon: Ruler, onSelect: () => { setLedTplOpen(false); setUvEntry(e => ({ mode: 'full', n: e.n })); setUvOpen(true); }, secondary: true }]),
+    ...(editorRole !== 'admin' || !modelUrl || !uvApplied || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUvAdjust', label: '調整排版', menuLabel: '調整排版（自動貼 UV 套用過的）', title: '調整排版：自動貼 UV 套用過了，直接到「排版」那一步，位置是上次套用時的樣子；拖完按「套用」就好，不用重走一遍', icon: LayoutPanelLeft, onSelect: () => { setLedTplOpen(false); setUvEntry(e => ({ mode: 'adjust', n: e.n + 1 })); setUvOpen(true); }, secondary: true }]),
     { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
     // 成員：這個專案有誰（製作 / 導演 / 動畫師）、加人、改角色、移出、邀請連結；全站製作和這個專案的製作都能用
     ...(editorRole !== 'admin' ? [] : [{ key: 'members', label: '成員', menuLabel: '成員', title: '成員：這個專案有誰、加人、改角色、移出專案、邀請連結（傳給對方，點開就加進這個專案）', icon: Users, onSelect: () => setMembersOpen(true) }]),
@@ -2095,6 +2113,7 @@ export default function ProjectEditor() {
         scaleCorrection={view.scaleCorrection}
         onClose={() => { setUvOpen(false); setUvPreview(null); }}
         onPreview={setUvPreview}
+        entry={uvEntry}
         onApplied={(r) => {
           setUvPreview(null);
           // 新模型、新畫布（後台已經一起換好）、新的「舊版面」版型

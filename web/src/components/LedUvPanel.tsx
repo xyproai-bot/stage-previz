@@ -15,7 +15,7 @@ import { previewLayout } from '../lib/ledUv/previewLayout';
 import type { Arrangement, ArrangeNative } from '../lib/ledUv/arrange';
 import type { PackResult } from '../lib/ledUv/pack';
 import { useArrangeState } from '../lib/ledUv/useArrange';
-import { editSignature, parseEditSnapshot, pieceOwner, pruneEditSnapshot, type UvEditSnapshot } from '../lib/ledUv/editState';
+import { editIsApplied, editIsPristine, editSignature, parseEditSnapshot, pieceOwner, pruneEditSnapshot, withAppliedSig, type UvEditSnapshot } from '../lib/ledUv/editState';
 import { createLatestRunner, type LatestRunner } from '../lib/ledUv/latestRunner';
 import LedUvArrange from './LedUvArrange';
 import { PITCH_PRESETS, pitchLabel, type SizeSpec } from '../lib/ledUv/size';
@@ -57,6 +57,8 @@ interface Props {
   onApplied: (r: ApplyResult) => void;
   /** 3D 預覽：給 3D 畫面暫時換上的新 UV（null = 關掉預覽，3D 畫面放回模型原本的 UV） */
   onPreview: (p: UvPreview | null) => void;
+  /** 怎麼打開的：'adjust' = 「調整排版」（套用過一次以後直接到第 3 步排版）；每按一次 n 加一（面板已經開著也會跳過去） */
+  entry?: { mode: 'full' | 'adjust'; n: number };
 }
 
 type Tab = 'pick' | 'size' | 'layout' | 'apply';
@@ -86,7 +88,7 @@ async function sha256(buf: ArrayBuffer): Promise<string> {
   return [...new Uint8Array(d)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-export default function LedUvPanel({ open, projectId, projectName, ledObjects, list, ledCanvas, scaleCorrection, onClose, onApplied, onPreview }: Props) {
+export default function LedUvPanel({ open, projectId, projectName, ledObjects, list, ledCanvas, scaleCorrection, onClose, onApplied, onPreview, entry }: Props) {
   const phone = isPhoneLayout();
   const [tab, setTab] = useState<Tab>('pick');
   const [load, setLoad] = useState<Load>({ state: 'idle' });
@@ -110,6 +112,19 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
   const [pv, setPv] = useState<{ state: 'idle' | 'wait' | 'loading' | 'ready' | 'error'; message?: string }>({ state: 'idle' });
   /** 上次存的排法還沒還原（螢幕清單要等點數填好才有，還原要等到那時候） */
   const [pendingArr, setPendingArr] = useState<Arrangement | null>(null);
+  /** 載入時的進度說明（分析大模型要一陣子，不要讓人以為卡住） */
+  const [loadStep, setLoadStep] = useState('下載模型、分析每個 LED 螢幕…');
+  /** 這個模型版本是套用出來的：套用當下的內容指紋（自動存時一直帶著）；沒有 = 只是草稿或從沒套用過 */
+  const [appliedSig, setAppliedSig] = useState<string | null>(null);
+  /** 「調整排版」打開時剛讀進來的樣子；排版跟它一樣 = 還沒改（「套用」是灰的）。null = 沒有基準（不是剛套用完的樣子） */
+  const [baseKey, setBaseKey] = useState<string | null>(null);
+  const wantBaseRef = useRef(false);
+  /** 想直接調排版但這個模型沒套用過 */
+  const [notApplied, setNotApplied] = useState(false);
+  /** 第 3 步的「套用」按下去以後的一次確認 */
+  const [confirmApply, setConfirmApply] = useState(false);
+  const entryRef = useRef(entry);
+  entryRef.current = entry;
   const bufRef = useRef<ArrayBuffer | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sessionRef = useRef<UvSession | null>(null);
@@ -145,6 +160,12 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
     setSeams({});
     setPreviewOn(false);
     setPendingArr(null);
+    setAppliedSig(null);
+    setBaseKey(null);
+    wantBaseRef.current = false;
+    setNotApplied(false);
+    setConfirmApply(false);
+    setLoadStep(entryRef.current?.mode === 'adjust' ? '讀取上次套用的排版…' : '讀取上次排到哪裡…');
     restoreArrRef.current(null);
     lastSigRef.current = null;
     saveBlockedRef.current = false;
@@ -163,9 +184,11 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
         const snap = saved && saved.key === model.key ? parseEditSnapshot(saved.edit) : null;
         if (snap) restored = pruneEditSnapshot(snap, new Set(ledObjects.map(o => o.id)));
       } catch { /* 讀不到就從頭開始 */ }
+      setLoadStep('下載模型…');
       const resp = await fetch(api.modelDownloadUrl(model.key), { signal: ac.signal });
       if (!resp.ok) throw new Error(`下載模型失敗（HTTP ${resp.status}）`);
       const buf = await resp.arrayBuffer();
+      setLoadStep('分析每個 LED 螢幕（模型大的話要等一下）…');
       const client = await import('../lib/ledUv/ledUvClient');
       const session = client.openUvSession();
       sessionRef.current = session;
@@ -193,8 +216,14 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       setSeams(restored?.seams ?? {});
       setGutter(restored?.gutter ?? '0');
       setPendingArr(restored?.arrangement ?? null);
+      const applied = editIsApplied(restored);
+      setAppliedSig(restored?.appliedSig ?? null);
+      // 剛套用完、之後沒動過的樣子 = 「調整排版」的基準（等排法還原完再記）
+      wantBaseRef.current = editIsPristine(restored);
+      const adjust = entryRef.current?.mode === 'adjust';
+      setNotApplied(adjust && !applied);
       setLoad({ state: 'ready' });
-      setTab(restored?.arrangement ? 'layout' : 'pick');
+      setTab(adjust && applied ? 'layout' : restored?.arrangement ? 'layout' : 'pick');
     } catch (e) {
       if (ac.signal.aborted) return;
       setLoad({ state: 'error', message: e instanceof Error ? e.message : String(e) });
@@ -285,8 +314,8 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
 
   // ───────── 排到一半的東西：停手 1.5 秒自動存到後台（同一個模型版本，下次打開接著做）─────────
   const snapshot = useMemo<UvEditSnapshot>(
-    () => ({ v: 1, selected, excluded: Object.fromEntries(Object.entries(excluded).filter(([, v]) => v)), ...pieceFlagsSnapshot(pieceFlags), forms, overrides, seams: Object.fromEntries(Object.entries(seams).filter(([, v]) => v !== 0)), gutter, arrangement: arrange.arrangement ?? pendingArr }),
-    [selected, excluded, pieceFlags, forms, overrides, seams, gutter, arrange.arrangement, pendingArr],
+    () => ({ v: 1, selected, excluded: Object.fromEntries(Object.entries(excluded).filter(([, v]) => v)), ...pieceFlagsSnapshot(pieceFlags), forms, overrides, seams: Object.fromEntries(Object.entries(seams).filter(([, v]) => v !== 0)), gutter, arrangement: arrange.arrangement ?? pendingArr, ...(appliedSig ? { appliedSig } : {}) }),
+    [selected, excluded, pieceFlags, forms, overrides, seams, gutter, arrange.arrangement, pendingArr, appliedSig],
   );
   const snapshotSig = useMemo(() => editSignature(snapshot), [snapshot]);
   const snapshotRef = useRef(snapshot);
@@ -360,6 +389,25 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
     previewRunnerRef.current?.trigger();
   }, [open, previewOn, planKey, load.state]);
 
+  // 「調整排版」的基準：剛套用完的樣子（排法還原完、方案算好了才記）。排版和設定跟它一樣 = 還沒改
+  const dirtyKey = useMemo(() => (plan ? JSON.stringify([snapshotSig, planKey]) : ''), [plan, snapshotSig, planKey]);
+  useEffect(() => {
+    if (!wantBaseRef.current || load.state !== 'ready' || pendingArr || !plan || !autoPlan || autoPlan.items.length === 0) return;
+    wantBaseRef.current = false;
+    setBaseKey(dirtyKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load.state, pendingArr, plan, autoPlan, dirtyKey]);
+  const unchanged = baseKey !== null && baseKey === dirtyKey;
+  // 面板已經開著，又按了「調整排版」：直接跳到排版
+  const entryN = entry?.mode === 'adjust' ? entry.n : 0;
+  const entrySeen = useRef(entryN);
+  useEffect(() => {
+    if (entryN === entrySeen.current) return;
+    entrySeen.current = entryN;
+    if (load.state !== 'ready') return;
+    if (appliedSig) { setNotApplied(false); setTab('layout'); } else setNotApplied(true);
+  }, [entryN, load.state, appliedSig]);
+
   if (!open) return null;
 
   const close = () => { if (!running) onClose(); };
@@ -426,8 +474,8 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
     });
   }
 
-  async function doApply() {
-    if (!plan || !ana || !bufRef.current || plan.blockers.length > 0 || running) return;
+  async function doApply(): Promise<boolean> {
+    if (!plan || !ana || !bufRef.current || plan.blockers.length > 0 || running) return false;
     const objects = ledObjects.map(o => ({ id: o.id, meshName: o.meshName }));
     setRun({ state: 'running', step: '準備工具…', pct: null });
     let heldKey: string | null = null;
@@ -436,7 +484,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       const outcome = await client.buildLedModel(bufRef.current.slice(0), objects, plan, oldCanvas, {
         onPhase: (p: BuildPhase | 'verifyScene') => setRun({ state: 'running', step: client.BUILD_PHASE_TEXT[p], pct: null }),
       });
-      if (!outcome.ok) { setRun({ state: 'error', message: `沒有套用：${outcome.reason}。模型沒有改。`, issues: outcome.issues }); return; }
+      if (!outcome.ok) { setRun({ state: 'error', message: `沒有套用：${outcome.reason}。模型沒有改。`, issues: outcome.issues }); return false; }
 
       setRun({ state: 'running', step: '上傳新模型…', pct: 0 });
       const held = await uploadModelHeld(projectId, outcome.blob, (loaded, total) => {
@@ -461,7 +509,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
         ifActive: activeKey,
         ledCanvas: { width: plan.canvas.width, height: plan.canvas.height },
         note: `自動貼 UV · ${autoCount} 塊螢幕 · ${plan.canvas.width}×${plan.canvas.height}`,
-        recipe: { ...recipeOf(plan, oldCanvas, metersPerUnit, snapshotRef.current), uv1: outcome.uv1, ...(offPiecesOf(plan).length > 0 ? { offPieces: offPiecesOf(plan) } : {}) },
+        recipe: { ...recipeOf(plan, oldCanvas, metersPerUnit, withAppliedSig(snapshotRef.current)), uv1: outcome.uv1, ...(offPiecesOf(plan).length > 0 ? { offPieces: offPiecesOf(plan) } : {}) },
         legacy: lg.screens.length > 0 || lg.originalUv.length > 0
           ? { canvas: { width: lg.canvas.width, height: lg.canvas.height }, screens: lg.screens.map(s => ({ key: s.key, dest: s.dest, rotate: s.rotate, flipH: s.flipH, flipV: s.flipV })), originalUv: lg.originalUv }
           : null,
@@ -479,13 +527,21 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
         if (!result.excludedObjects) toast.warn(`後台還不支援「不放進畫布」，那 ${excludeIds.length} 個物件的類型沒有改成「其他」，請到「物件」分頁自己改。`);
         else toast.success(`${result.excludedObjects.length} 個物件的類型已改成「其他」（不放進畫布）。`);
       }
+      return true;
     } catch (e) {
       // 上傳了但沒換成功 → 把沒人用的新版刪掉
       if (heldKey) { try { await api.deleteModelVersion(projectId, heldKey); } catch { /* 刪不掉就留著，模型版本裡看得到 */ } }
       const err = e as LedUvApiError;
       const msg = err.status === 409 ? (err.data?.conflict ? '模型已經被別人換過了，請關掉重新分析。' : err.message) : (e instanceof Error ? e.message : String(e));
       setRun({ state: 'error', message: `沒有套用：${msg}。模型沒有改。` });
+      return false;
     }
+  }
+
+  /** 第 3 步的「套用」：確認過就跟第 4 步一模一樣地套用（同一個 doApply），成功以後跳到第 4 步看結果和下載 */
+  async function quickApply() {
+    setConfirmApply(false);
+    if (await doApply()) setTab('apply');
   }
 
   const body = !ana || !plan
@@ -525,16 +581,61 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
             {pv.state === 'ready' && <><Icon icon={Eye} size="sm" /> 3D 畫面現在顯示套用以後的樣子（畫布 {plan!.canvas.width} × {plan!.canvas.height}）：每塊有名字、格線、黃色的「上」「右」箭頭。字要正的、箭頭要朝上和朝右；方向不對就回「1 選螢幕」改類型。</>}
           </div>
         )}
-        {load.state === 'loading' && <div className="uvdock__empty"><Icon icon={LoaderCircle} spin /> 下載模型、分析每個 LED 螢幕…</div>}
+        {load.state === 'loading' && <div className="uvdock__empty" role="status" data-testid="uv-loading"><Icon icon={LoaderCircle} spin /> {loadStep}</div>}
         {load.state === 'error' && (
           <div className="uvdock__empty">
             <div className="uvdock__err"><Icon icon={TriangleAlert} /> {load.message}</div>
             <button className="btn btn--ghost btn--sm" onClick={() => void analyze()}>重試</button>
           </div>
         )}
+        {notApplied && load.state === 'ready' && tab !== 'layout' && (
+          <div className="uvrun" role="status" data-testid="uv-not-applied"><Icon icon={TriangleAlert} size="sm" /> 這個模型還沒套用過自動貼 UV，請照 1 到 4 步做一次。</div>
+        )}
         {body}
       </div>
+      {tab === 'layout' && load.state === 'ready' && plan && run.state !== 'done' && (
+        <LayoutApplyBar
+          plan={plan} unchanged={unchanged} run={run} confirm={confirmApply} oldCanvas={oldCanvas}
+          onAsk={() => setConfirmApply(true)} onCancel={() => setConfirmApply(false)} onConfirm={() => void quickApply()}
+          onDetail={() => { setConfirmApply(false); setTab('apply'); }}
+        />
+      )}
     </section>
+  );
+}
+
+/** 第 3 步底下的「套用」：不用去第 4 步；按下去先一行確認，確認了才做（做的事跟第 4 步的按鈕一模一樣） */
+function LayoutApplyBar({ plan, unchanged, run, confirm, oldCanvas, onAsk, onCancel, onConfirm, onDetail }: {
+  plan: Plan; unchanged: boolean; run: Run; confirm: boolean; oldCanvas: { width: number; height: number };
+  onAsk: () => void; onCancel: () => void; onConfirm: () => void; onDetail: () => void;
+}) {
+  const blocked = plan.blockers.length > 0;
+  const running = run.state === 'running';
+  return (
+    <div className="uvapplybar" data-testid="uv-apply-bar">
+      {running && <span className="uvapplybar__msg" role="status"><Icon icon={LoaderCircle} spin size="sm" /> {run.step}{run.pct !== null ? ` ${run.pct}%` : ''}</span>}
+      {run.state === 'error' && <span className="uvapplybar__msg uvapplybar__msg--bad" role="alert"><Icon icon={TriangleAlert} size="sm" /> {run.message}</span>}
+      {!running && confirm && (
+        <span className="uvapplybar__msg" role="alertdialog" aria-label="確認套用" data-testid="uv-apply-confirm">
+          會產生新的模型版本，舊影片照樣能播（舊版本還在，隨時可以在「模型版本」換回去）。畫布 {oldCanvas.width} × {oldCanvas.height} → {plan.canvas.width} × {plan.canvas.height}。
+        </span>
+      )}
+      {!running && !confirm && run.state !== 'error' && (blocked
+        ? <span className="uvapplybar__msg uvapplybar__msg--bad"><Icon icon={TriangleAlert} size="sm" /> {plan.blockers[0]}</span>
+        : unchanged ? <span className="uvapplybar__msg muted" data-testid="uv-apply-unchanged">還沒改排版</span> : null)}
+      <span className="uvdock__spacer" />
+      <button className="btn btn--ghost btn--sm" onClick={onDetail} disabled={running}>看細節（第 4 步）</button>
+      {confirm && !running ? (
+        <>
+          <button className="btn btn--ghost btn--sm" onClick={onCancel}>取消</button>
+          <button className="btn btn--primary btn--sm" onClick={onConfirm} data-testid="uv-apply-confirm-go">確定套用</button>
+        </>
+      ) : (
+        <button className="btn btn--primary btn--sm" onClick={onAsk} disabled={blocked || running || unchanged} data-testid="uv-apply-quick" title={unchanged ? '還沒改排版' : '套用成新的模型版本'}>
+          {running ? <><Icon icon={LoaderCircle} spin size="sm" /> 處理中…</> : '套用'}
+        </button>
+      )}
+    </div>
   );
 }
 

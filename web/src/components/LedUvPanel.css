@@ -622,3 +622,23 @@
   min-width: 96px;
   font-size: 13px;
 }
+/* 第 3 步底下的「套用」（調整排版：不用去第 4 步） */
+.uvapplybar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 13px;
+}
+.uvapplybar__msg {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.uvapplybar__msg--bad {
+  color: var(--danger);
+}

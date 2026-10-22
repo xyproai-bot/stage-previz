@@ -30,6 +30,12 @@ export interface UvEditSnapshot {
   gutter: string;
   /** 自己排的排法；沒動過 = null（照舞台自動排） */
   arrangement: Arrangement | null;
+  /**
+   * 這個模型版本是「套用」出來的（不是只有自動存的草稿）：套用當下這份內容的指紋（appliedFingerprint）。
+   * 有它 = 「調整排版」可以直接用；存的內容跟它對得上 = 上次套用之後沒再動過（「套用」是灰的：還沒改排版）。
+   * 自動存草稿時一直帶著；editSignature 不算它。
+   */
+  appliedSig?: string;
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -92,11 +98,13 @@ export function parseEditSnapshot(raw: unknown): UvEditSnapshot | null {
   const excludedPieces = parseFlags(raw.excludedPieces), keepPieces = parseFlags(raw.keepPieces);
   // 同一塊不會同時是兩種：兩邊都有 = 不放進畫布
   for (const k of Object.keys(excludedPieces)) delete keepPieces[k];
+  const appliedSig = typeof raw.appliedSig === 'string' && /^[0-9a-f]{8,32}$/.test(raw.appliedSig) ? raw.appliedSig : undefined;
   return {
     v: 1, selected, excluded,
     ...(Object.keys(excludedPieces).length > 0 ? { excludedPieces } : {}),
     ...(Object.keys(keepPieces).length > 0 ? { keepPieces } : {}),
-    forms, overrides, seams, gutter, arrangement };
+    forms, overrides, seams, gutter, arrangement,
+    ...(appliedSig ? { appliedSig } : {}) };
 }
 
 /** 只留還在的物件 / 螢幕片（模型換過了、物件刪掉了） */
@@ -115,4 +123,28 @@ export function pruneEditSnapshot(s: UvEditSnapshot, objectIds: ReadonlySet<stri
 }
 
 /** 內容指紋：跟上次存的比，沒變就不用再存 */
-export const editSignature = (s: UvEditSnapshot): string => JSON.stringify(s);
+export const editSignature = (s: UvEditSnapshot): string => JSON.stringify({ ...s, appliedSig: undefined });
+
+/** 內容指紋的短版（套用當下存進 appliedSig；cyrb53，只用來比「有沒有變」） */
+export function appliedFingerprint(s: UvEditSnapshot): string {
+  const str = editSignature(s);
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (h2 >>> 0).toString(16).padStart(8, '0') + (h1 >>> 0).toString(16).padStart(8, '0');
+}
+
+/** 套用時要存進 recipe.edit 的內容：照讀回來的樣子（parse）算指紋，下次讀回來才對得上 */
+export function withAppliedSig(s: UvEditSnapshot): UvEditSnapshot {
+  const norm = parseEditSnapshot(JSON.parse(JSON.stringify(s))) ?? s;
+  return { ...s, appliedSig: appliedFingerprint(norm) };
+}
+
+/** 讀回來的 edit 是不是套用出來的、而且套用之後沒再動過 */
+export const editIsApplied = (s: UvEditSnapshot | null): boolean => !!s && !!s.appliedSig;
+export const editIsPristine = (s: UvEditSnapshot | null): boolean => !!s && !!s.appliedSig && s.appliedSig === appliedFingerprint(s);
