@@ -53,9 +53,10 @@ export function ownValuesByCue(positions: Pick<CueMechanismPosition, 'cueId' | '
 }
 
 /** API 回的位置 → cueId → { mechanismId: 延遲 / 走幾秒 }（只放有設時間的；時間不沿用） */
-export function ownTimingsByCue(positions: Pick<CueMechanismPosition, 'cueId' | 'mechanismId' | 'delaySec' | 'durationSec'>[]): Map<string, MechanismTimings> {
+export function ownTimingsByCue(positions: Pick<CueMechanismPosition, 'cueId' | 'mechanismId' | 'delaySec' | 'durationSec' | 'carried'>[]): Map<string, MechanismTimings> {
   const out = new Map<string, MechanismTimings>();
   for (const p of positions) {
+    if (p.carried) continue;  // Cue 庫：沿用來的列時間不算自己的
     const delaySec = p.delaySec ?? null, durationSec = p.durationSec ?? null;
     if (delaySec === null && durationSec === null) continue;
     let row = out.get(p.cueId);
@@ -123,4 +124,49 @@ export function valuesOf(row: ResolvedRow | null | undefined): MechanismValues {
   if (!row) return out;
   for (const id in row) out[id] = row[id].value;
   return out;
+}
+
+/** 後台說的資料模式：legacy = 舊模式（自己設的 + 往前沿用）；library = Cue 庫（每個 cue 是獨立快照） */
+export type PositionsMode = 'legacy' | 'library';
+
+/**
+ * Cue 庫模式：每個 cue 一份快照，不往前沿用（跟後台 cf-worker/cueLibrary.mjs 的 resolveSlotMechanisms 一樣）：
+ *   沒有這一列 → 預設；carried → 沿用（值照列、fromCueId = null）；其他 → 自己設的
+ */
+export function resolveLibrarySongMechanisms(
+  mechs: TrackMechanism[], cues: TrackCue[], positions: Pick<CueMechanismPosition, 'cueId' | 'mechanismId' | 'value' | 'carried'>[],
+): Map<string, ResolvedRow> {
+  const byCue = new Map<string, Map<string, { value: number; carried: boolean }>>();
+  for (const p of positions) {
+    let m = byCue.get(p.cueId);
+    if (!m) { m = new Map(); byCue.set(p.cueId, m); }
+    m.set(p.mechanismId, { value: p.value, carried: !!p.carried });
+  }
+  const out = new Map<string, ResolvedRow>();
+  for (const c of cues) {
+    const mine = byCue.get(c.id);
+    const row: ResolvedRow = {};
+    for (const m of mechs) {
+      const p = mine?.get(m.id);
+      if (!p) row[m.id] = resolvedOf(m, m.defaultValue, 'default', null);
+      else if (p.carried) row[m.id] = resolvedOf(m, p.value, 'inherited', null);
+      else row[m.id] = resolvedOf(m, p.value, 'own', c.id);
+    }
+    out.set(c.id, row);
+  }
+  return out;
+}
+
+/**
+ * 單一入口：一首歌每個 cue 的機關位置 + 自己設的時間。
+ * 管理頁、導演頁、工作站、分享頁、機關總表都從這裡算（legacy 走原本算法，library 走快照規則）
+ */
+export function resolvePositions(
+  mode: PositionsMode | undefined, mechs: TrackMechanism[], cues: TrackCue[], positions: CueMechanismPosition[],
+): { resolved: Map<string, ResolvedRow>; timings: Map<string, MechanismTimings> } {
+  const timings = ownTimingsByCue(positions);
+  const resolved = mode === 'library'
+    ? resolveLibrarySongMechanisms(mechs, cues, positions)
+    : resolveSongMechanisms(mechs, cues, ownValuesByCue(positions));
+  return { resolved, timings };
 }

@@ -14,7 +14,7 @@ import { toast } from '../toast';
 import { clampValue, valueAxes, type CueMechanismPosition, type Mechanism, type MechanismGroup, type MechanismTimings, type MechanismValues } from './model';
 import { buildHoistRigs, checkHoistRigs, type HoistCueItem } from './hoist';
 import type { BulkPositionItem } from './group';
-import { defaultRow, ownTimingsByCue, ownValuesByCue, resolveSongMechanisms, valuesOf, type ResolvedRow } from './track';
+import { defaultRow, resolvePositions, valuesOf, type PositionsMode, type ResolvedRow } from './track';
 import { buildMechanismTimeline, checkSongMechanisms, ownMoveFor, sortMasters, type MechanismMotion, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
 import * as mapi from './mechanismApi';
 import type { StageSceneQuery } from '../../components/StageScene';
@@ -42,20 +42,22 @@ function usePlayback(
   cues: CueLike[],
   selectedCueId: string | null,
   video?: HTMLVideoElement | null,
+  mode?: PositionsMode,
 ) {
   // 有自己位置的機關（吊掛的整組沒有，只有它的每個吊點有）
   const axes = useMemo(() => (mechanisms ? valueAxes(mechanisms) : null), [mechanisms]);
-  const resolved = useMemo(
-    () => (axes ? resolveSongMechanisms(axes, cues, ownValuesByCue(positions)) : new Map<string, ResolvedRow>()),
-    [axes, cues, positions],
+  const solved = useMemo(
+    () => (axes ? resolvePositions(mode, axes, cues, positions) : null),
+    [axes, cues, positions, mode],
   );
+  const resolved = useMemo(() => solved?.resolved ?? new Map<string, ResolvedRow>(), [solved]);
   const selectedRow = useMemo<ResolvedRow>(() => {
     if (!axes) return {};
     return (selectedCueId && resolved.get(selectedCueId)) || defaultRow(axes);
   }, [axes, resolved, selectedCueId]);
   const targets = useMemo(() => valuesOf(selectedRow), [selectedRow]);
   // 每個 cue 自己設的延遲 / 走幾秒（不沿用）
-  const timings = useMemo(() => ownTimingsByCue(positions), [positions]);
+  const timings = useMemo(() => solved?.timings ?? new Map<string, MechanismTimings>(), [solved]);
   const selectedTimings = useMemo<MechanismTimings>(
     () => (selectedCueId && timings.get(selectedCueId)) || EMPTY_TIMINGS, [timings, selectedCueId],
   );
@@ -99,7 +101,7 @@ export function useStageMechanisms(o: {
 }) {
   const { projectId, songId, live = true } = o;
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
-  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[] } | null>(null);
+  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[]; mode: PositionsMode } | null>(null);
   const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
   /** 回 true = 專案看不到了（404 / 403），自動更新可以停了 */
@@ -117,8 +119,8 @@ export function useStageMechanisms(o: {
   const loadPositions = useCallback(async () => {
     if (!projectId || !songId) return;
     try {
-      const list = await mapi.listSongPositions(projectId, songId);
-      setPositions(prev => (prev && prev.songId === songId && sameJson(prev.list, list) ? prev : { songId, list }));
+      const { positions: list, mode } = await mapi.listSongPositionsWithMode(projectId, songId);
+      setPositions(prev => (prev && prev.songId === songId && prev.mode === mode && sameJson(prev.list, list) ? prev : { songId, list, mode }));
     } catch { /* 下次自動更新再試 */ }
   }, [projectId, songId]);
 
@@ -132,7 +134,7 @@ export function useStageMechanisms(o: {
   }, { enabled: live });
 
   const list = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
-  const pb = usePlayback(mechanisms, list, o.cues, o.selectedCueId, o.video);
+  const pb = usePlayback(mechanisms, list, o.cues, o.selectedCueId, o.video, positions?.mode);
   const sceneProps: MechanismSceneProps = useMemo(() => ({
     mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame, mechanismTimings: pb.selectedTimings,
   }), [mechanisms, pb.targets, pb.mechanismAtFrame, pb.selectedTimings]);
@@ -159,20 +161,20 @@ export function useShareMechanisms(o: {
 }) {
   const { shareRef, songId, accessToken } = o;
   const mechanisms = useMemo(() => (o.mechanisms === undefined ? null : mapi.parseMechanisms(o.mechanisms)), [o.mechanisms]);
-  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[] } | null>(null);
+  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[]; mode: PositionsMode } | null>(null);
   useEffect(() => {
     if (!shareRef || !songId || !mechanisms || mechanisms.length === 0) return;
     let cancelled = false;
-    mapi.getShareSongPositions(shareRef, songId, accessToken ?? undefined)
-      .then(list => {
+    mapi.getShareSongPositionsWithMode(shareRef, songId, accessToken ?? undefined)
+      .then(({ positions: list, mode }) => {
         if (cancelled) return;
-        setPositions(prev => (prev && prev.songId === songId && JSON.stringify(prev.list) === JSON.stringify(list) ? prev : { songId, list }));
+        setPositions(prev => (prev && prev.songId === songId && prev.mode === mode && JSON.stringify(prev.list) === JSON.stringify(list) ? prev : { songId, list, mode }));
       })
       .catch(() => { /* 舊後台 / 網路：機關停在預設位置 */ });
     return () => { cancelled = true; };
   }, [shareRef, songId, accessToken, mechanisms, o.refreshKey]);
   const list = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
-  const pb = usePlayback(mechanisms, list, o.cues, o.selectedCueId, o.video);
+  const pb = usePlayback(mechanisms, list, o.cues, o.selectedCueId, o.video, positions?.mode);
   const sceneProps: MechanismSceneProps = useMemo(() => ({
     mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame, mechanismTimings: pb.selectedTimings,
   }), [mechanisms, pb.targets, pb.mechanismAtFrame, pb.selectedTimings]);
@@ -207,7 +209,7 @@ export function useEditorMechanisms(o: {
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
   const [groups, setGroups] = useState<MechanismGroup[]>(EMPTY_GROUPS);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
-  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[] } | null>(null);
+  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[]; mode: PositionsMode } | null>(null);
   // 拖滑桿時的預覽（還沒存）：mechId → value
   const [preview, setPreview] = useState<MechanismValues>({});
   const [focusedId, setFocusedId] = useState<string | null>(null);
@@ -240,8 +242,8 @@ export function useEditorMechanisms(o: {
   const refreshPositions = useCallback(async () => {
     if (!projectId || !songId) return;
     try {
-      const list = await mapi.listSongPositions(projectId, songId);
-      setPositions({ songId, list });
+      const { positions: list, mode } = await mapi.listSongPositionsWithMode(projectId, songId);
+      setPositions({ songId, list, mode });
     } catch (e) {
       console.warn('[mechanisms] positions failed', e);
     }
@@ -253,7 +255,7 @@ export function useEditorMechanisms(o: {
   useEffect(() => { setPreview({}); }, [selectedCueId, songId]);
 
   const list = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
-  const pb = usePlayback(mechanisms, list, o.cues, selectedCueId);
+  const pb = usePlayback(mechanisms, list, o.cues, selectedCueId, undefined, positions?.mode);
   const targets = useMemo(() => {
     const keys = Object.keys(preview);
     return keys.length ? { ...pb.targets, ...preview } : pb.targets;
@@ -283,9 +285,10 @@ export function useEditorMechanisms(o: {
       const base = prev && prev.songId === sid ? prev.list : [];
       const old = base.find(p => p.cueId === cueId && p.mechanismId === mechId);
       const rest = base.filter(p => p !== old);
-      if (value === null) return { songId: sid, list: rest };
+      const mode = prev?.mode ?? 'legacy';
+      if (value === null) return { songId: sid, list: rest, mode };
       const t = timing ?? { delaySec: old?.delaySec ?? null, durationSec: old?.durationSec ?? null };
-      return { songId: sid, list: [...rest, { cueId, mechanismId: mechId, value, ...t, updatedAt: '' }] };
+      return { songId: sid, list: [...rest, { cueId, mechanismId: mechId, value, ...t, updatedAt: '' }], mode };
     });
   };
   const ownEntry = (cueId: string, mechId: string) => posRef.current?.list.find(x => x.cueId === cueId && x.mechanismId === mechId) ?? null;

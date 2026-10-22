@@ -99,7 +99,7 @@ describe('呼叫後台', () => {
     vi.stubGlobal('fetch', f);
     expect((await getShareSongPositions({ kind: 'slug', key: 'show-k7p2' }, 's1', 'acc'))[0].value).toBe(2);
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe('https://proxy.haimiaan.com/api/s/show-k7p2/songs/s1/mechanism-positions?mech=3');
+    expect(url).toBe('https://proxy.haimiaan.com/api/s/show-k7p2/songs/s1/mechanism-positions?mech=3&cuelib=1');
     expect((init.headers as Record<string, string>)['x-share-access']).toBe('acc');
   });
 

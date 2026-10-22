@@ -10,6 +10,7 @@ import type {
   MechanismPreset, MechanismSide, MechanismValues, MechVec3,
 } from './model';
 import type { BulkPositionItem } from './group';
+import type { PositionsMode } from './track';
 
 /** 後台回的錯誤：message 是中文、可以直接顯示；data 是整個錯誤內容 */
 export interface MechanismApiError extends Error {
@@ -30,6 +31,8 @@ export interface MechanismSheetData {
   songs: { id: string; name: string; code: string | null; order: number; cues: { id: string; name: string; order: number; videoTimeSec: number | null; crossfadeSeconds: number }[] }[];
   positions: CueMechanismPosition[];
   mechanisms: Mechanism[];
+  /** 後台說的模式；舊後台沒回 = legacy */
+  mode?: PositionsMode;
 }
 
 export interface ConvertResult {
@@ -51,6 +54,8 @@ const base = (projectId: string) => `/api/projects/${enc(projectId)}`;
  *   ?mech=3（第 4 階段：看得懂吊掛）→ 全部。吊掛的零件在舊畫面是靜止的，不會往錯的方向動
  */
 export const MECH_V2 = 'mech=3';
+/** 告訴後台「我看得懂 Cue 庫模式」；沒帶的舊前端後台照舊給它看得懂的資料 */
+export const CUE_LIB = 'cuelib=1';
 
 async function toError(resp: Response): Promise<MechanismApiError> {
   let data: MechanismApiError['data'] = {};
@@ -191,6 +196,8 @@ export function parsePositions(raw: unknown): CueMechanismPosition[] {
       cueId: p.cueId!, mechanismId: p.mechanismId!, value: p.value!,
       delaySec: secOrNull(p.delaySec), durationSec: secOrNull(p.durationSec),
       updatedAt: typeof p.updatedAt === 'string' ? p.updatedAt : '',
+      ...(p.carried === true ? { carried: true } : {}),
+      ...(typeof p.libraryCueId === 'string' ? { libraryCueId: p.libraryCueId } : {}),
     }));
 }
 
@@ -304,9 +311,15 @@ export async function setCuePositionsBulk(projectId: string, songId: string, cue
 
 // ─── 每個 cue 的位置 ───
 
+const parseMode = (m: unknown): PositionsMode => (m === 'library' ? 'library' : 'legacy');
+export interface SongPositions { mode: PositionsMode; positions: CueMechanismPosition[] }
+
+export async function listSongPositionsWithMode(projectId: string, songId: string): Promise<SongPositions> {
+  const d = await call<{ mode?: unknown; positions: unknown }>(`${base(projectId)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}&${CUE_LIB}`);
+  return { mode: parseMode(d.mode), positions: parsePositions(d.positions) };
+}
 export async function listSongPositions(projectId: string, songId: string): Promise<CueMechanismPosition[]> {
-  const d = await call<{ positions: unknown }>(`${base(projectId)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}`);
-  return parsePositions(d.positions);
+  return (await listSongPositionsWithMode(projectId, songId)).positions;
 }
 
 /** 存這個 cue 的位置；後台夾進行程，回傳存的值 */
@@ -349,8 +362,9 @@ export function withMechanismSnapshot<T extends object>(input: T, values: Mechan
 // ─── 機關總表 / 轉換 ───
 
 export async function getMechanismSheet(projectId: string): Promise<MechanismSheetData> {
-  const d = await call<{ songs?: MechanismSheetData['songs']; positions?: unknown; mechanisms?: unknown }>(`${base(projectId)}/mechanism-sheet?${MECH_V2}`);
+  const d = await call<{ mode?: unknown; songs?: MechanismSheetData['songs']; positions?: unknown; mechanisms?: unknown }>(`${base(projectId)}/mechanism-sheet?${MECH_V2}&${CUE_LIB}`);
   return {
+    mode: parseMode(d.mode),
     songs: Array.isArray(d.songs) ? d.songs : [],
     positions: parsePositions(d.positions),
     mechanisms: parseMechanisms(d.mechanisms),
@@ -369,10 +383,13 @@ function shareApiPath(ref: ShareRef): string {
 }
 
 export async function getShareSongPositions(ref: ShareRef, songId: string, access?: string): Promise<CueMechanismPosition[]> {
-  const resp = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}`, {
+  return (await getShareSongPositionsWithMode(ref, songId, access)).positions;
+}
+export async function getShareSongPositionsWithMode(ref: ShareRef, songId: string, access?: string): Promise<SongPositions> {
+  const resp = await fetch(`${apiBase()}${shareApiPath(ref)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}&${CUE_LIB}`, {
     headers: access ? { 'x-share-access': access } : {},
   });
   if (!resp.ok) throw await toError(resp);
-  const d = await resp.json() as { positions?: unknown };
-  return parsePositions(d.positions);
+  const d = await resp.json() as { mode?: unknown; positions?: unknown };
+  return { mode: parseMode(d.mode), positions: parsePositions(d.positions) };
 }

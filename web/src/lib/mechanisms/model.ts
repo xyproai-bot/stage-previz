@@ -107,6 +107,10 @@ export interface CueMechanismPosition {
   delaySec?: number | null;
   durationSec?: number | null;
   updatedAt: string;
+  /** Cue 庫模式才有：沿用來的值（不是這個 cue 自己設的） */
+  carried?: boolean;
+  /** Cue 庫模式才有：這個 cue 指到的 Cue 庫 cue */
+  libraryCueId?: string | null;
 }
 
 /** 這個 cue 這個機關的時間（null = 跟著 cue） */

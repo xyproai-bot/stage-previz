@@ -11,7 +11,7 @@ import {
 } from './model';
 import { FLIP_HINGES, flipSetupOf } from './flip';
 import { hoistsOfRig } from './hoist';
-import { ownTimingsByCue, ownValuesByCue, resolveSongMechanisms } from './track';
+import { resolvePositions, type PositionsMode } from './track';
 import { checkSongMechanisms, cueGoTimes, formatSeconds, type MechCheck, type MotionCue } from './motion';
 
 export interface SheetSong {
@@ -28,6 +28,8 @@ export interface SheetInput {
   mechanisms: Mechanism[];
   /** 舞台正面（說明裡的「往左 / 往觀眾」）；沒有 → +Z */
   front?: MechVec3 | null;
+  /** 後台說的模式（Cue 庫 / 舊）；沒給 = 舊 */
+  mode?: PositionsMode;
 }
 
 type Cell = { t: 'text'; v: string } | { t: 'num'; v: string } | null;
@@ -65,15 +67,13 @@ function noteText(c: MechCheck, cueNo: (id: string) => number, kind: Mechanism['
 export function sheetRows(input: SheetInput): Cell[][] {
   // 整組吊掛沒有自己的位置：不排進總表（每個吊點一行）
   const mechs = valueAxes([...input.mechanisms]).sort((a, b) => a.order - b.order);
-  const own = ownValuesByCue(input.positions);
-  const timings = ownTimingsByCue(input.positions);
   const rows: Cell[][] = [];
   for (const song of [...input.songs].sort((a, b) => a.order - b.order)) {
     const cues: (MotionCue & { name: string })[] = [...song.cues]
       .sort((a, b) => a.order - b.order)
       .map(c => ({ ...c, status: 'master' }));
     if (!cues.length) continue;
-    const resolved = resolveSongMechanisms(mechs, cues, own);
+    const { resolved, timings } = resolvePositions(input.mode, mechs, cues, input.positions);
     const check = checkSongMechanisms(mechs, cues, resolved, timings);
     const cueNo = (id: string) => cues.findIndex(c => c.id === id) + 1;
     const go = cueGoTimes(cues);
