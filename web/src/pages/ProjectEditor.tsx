@@ -354,8 +354,8 @@ export default function ProjectEditor() {
         const nextIdx = k === 'j'
           ? (curIdx < 0 ? 0 : Math.min(curIdx + 1, cs.length - 1))
           : (curIdx <= 0 ? 0 : curIdx - 1);
+        // 換 cue 不換分頁：用戶常常只是想一個一個 cue 看舞台長怎樣（要改再自己點「物件狀態」）
         setSelectedCueId(cs[nextIdx].id);
-        setRightTab(t => (t === 'mechanisms' ? t : 'state'));
       } else {
         if (ss.length === 0) return;
         const curIdx = ss.findIndex(s => s.id === sid);
@@ -1450,7 +1450,7 @@ export default function ProjectEditor() {
                 cues={masterCues}
                 loading={cuesLoading}
                 selectedId={selectedCueId}
-                onSelect={(id) => { setSelectedCueId(id); setRightTab('state'); }}
+                onSelect={(id) => { setSelectedCueId(id); }}
                 onAddBlank={handleAddBlankCue}
                 onClone={handleCloneCue}
                 onSnapshot={handleSnapshotCue}
@@ -1493,7 +1493,7 @@ export default function ProjectEditor() {
                   cues={proposalCues}
                   loading={cuesLoading}
                   selectedId={selectedCueId}
-                  onSelect={(id) => { setSelectedCueId(id); setRightTab('state'); }}
+                  onSelect={(id) => { setSelectedCueId(id); }}
                   onDelete={handleDeleteCue}
                   emptyText="這首歌沒有提案"
                 />
