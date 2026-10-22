@@ -71,6 +71,14 @@ export function buildCueStates(objectRows, earlierRows) {
       : defaultHidden && lastVisible.has(row.object_id) ? !!lastVisible.get(row.object_id)
       : !defaultHidden;
 
+    // 每個欄位的值從哪來（Cue 庫搬家用，只是多一個欄位，不影響原本的輸出）：
+    //   own = 這個 cue 自己設的、tracked = 從前面的 cue 繼承（含預設隱藏的「最近一次明確設過」）、default = 預設
+    const srcOf = (own, inherited) => (hasOverride && own ? 'own' : inherited ? 'tracked' : 'default');
+    const visSource = hasOverride && row.state_visible != null ? 'own'
+      : tr?.visible != null ? 'tracked'
+      : defaultHidden && lastVisible.has(row.object_id) ? 'tracked'
+      : 'default';
+
     return {
       objectId: row.object_id,
       meshName: row.mesh_name,
@@ -96,6 +104,12 @@ export function buildCueStates(objectRows, earlierRows) {
         rotation: pick(row.state_rotation, tr?.rotation, def.rotation),
         scale: pick(row.state_scale, tr?.scale, def.scale),
         visible: effVisible,
+      },
+      sources: {
+        position: srcOf(row.state_position, tr?.position),
+        rotation: srcOf(row.state_rotation, tr?.rotation),
+        scale: srcOf(row.state_scale, tr?.scale),
+        visible: visSource,
       },
     };
   });
