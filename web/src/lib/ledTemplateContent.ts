@@ -122,7 +122,7 @@ export function layoutFromSpans(objects: readonly SpanObject[], spans: Readonly<
 }
 
 /**
- * 一個物件裡有好幾塊 LED（螢幕代號 o:物件id~mesh名稱）時，整張畫布的測試圖也要一塊一塊各自畫：
+ * 一個物件裡有好幾塊 LED（螢幕代號 o:物件id~mesh名稱）或手動切成好幾塊（s:螢幕id）時，整張畫布的測試圖也要一塊一塊各自畫：
  * 把這個物件那一個整體的格子，換成每塊 LED 各自一格（自己的外框顏色、名稱、x y w h、角落座標），
  * 這樣每塊取出來的圖是完整的一張，不是物件那張圖被切開。沒有被拆的物件原封不動；沒有任何物件被拆 = 原樣回傳。
  * 顏色照換完以後的順序重新分。
@@ -131,9 +131,11 @@ export function splitLayoutByScreens(layout: LedLayout, defs: readonly ScreenDef
   const partsOf = new Map<string, ScreenDef[]>();
   for (const d of defs) {
     const k = parseScreenKey(d.key);
-    if (!k || k.kind !== 'object' || k.part === undefined) continue;
-    const list = partsOf.get(k.id);
-    if (list) list.push(d); else partsOf.set(k.id, [d]);
+    // 物件裡的一塊 LED mesh（o:物件id~mesh名稱），或手動切的螢幕（s:螢幕id，自動貼 UV 套用後切出來的也是這種）
+    if (!k || (k.kind === 'object' && k.part === undefined)) continue;
+    const id = k.kind === 'object' ? k.id : d.objectId;
+    const list = partsOf.get(id);
+    if (list) list.push(d); else partsOf.set(id, [d]);
   }
   if (partsOf.size === 0) return layout;
   let changed = false;
