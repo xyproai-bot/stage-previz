@@ -1042,20 +1042,49 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // 只處理左鍵
       if (e.button !== 0) return;
 
+      // Alt + 左鍵 = 純轉鏡頭（C4D / Maya 的習慣）：不選取、不拖把手，原本選的物件留著
+      if (e.altKey) {
+        altCameraDrag = true;
+        transform.enabled = false;
+        return;
+      }
+
       // 用 transform.axis 判斷是否點在 gizmo handle 上（hover 時會被設成 'X'/'Y'/'Z'/'XY' 等）
       // 比 raycast gizmoHelper 可靠 — 後者會把隱形 drag plane 也 hit 中、擋住所有 click
       if (transform.axis !== null) return;
 
+      // 選取改成「放開時、而且滑鼠幾乎沒動」才算點擊：按下去拖曳是在轉鏡頭，不該換掉選到的物件
+      pendingClick = { x: e.clientX, y: e.clientY, shift: e.shiftKey, pointerId: e.pointerId };
+    }
+
+    // 放開滑鼠：Alt 轉鏡頭結束 → 把手恢復；按下到放開幾乎沒移動 → 才當成點擊做選取
+    let pendingClick: { x: number; y: number; shift: boolean; pointerId: number } | null = null;
+    let altCameraDrag = false;
+    const CLICK_MOVE_TOLERANCE_PX = 5;
+    function onPointerUpSelect(e: PointerEvent) {
+      if (altCameraDrag) {
+        altCameraDrag = false;
+        transform.enabled = true;
+      }
+      const p = pendingClick;
+      pendingClick = null;
+      if (!p || e.button !== 0 || e.pointerId !== p.pointerId) return;
+      if (Math.hypot(e.clientX - p.x, e.clientY - p.y) > CLICK_MOVE_TOLERANCE_PX) return;
+      if (readOnlyRef.current || transform.dragging) return;
+      selectAt(p.x, p.y, p.shift);
+    }
+
+    function selectAt(clientX: number, clientY: number, shift: boolean) {
       const rect = renderer.domElement.getBoundingClientRect();
-      ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-      ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
       raycaster.setFromCamera(ndc, camera);
 
       // 鎖定的物件不參與 raycast
       const objs = Array.from(meshesRef.current.values()).filter(o => !o.userData.locked);
       // recursive: GLB 物件可能有子 mesh
       const hit = raycaster.intersectObjects(objs, true);
-      const mode: SelectMode = e.shiftKey ? 'toggle' : 'replace';
+      const mode: SelectMode = shift ? 'toggle' : 'replace';
       if (hit.length > 0) {
         let target: THREE.Object3D | null = hit[0].object;
         let id: string | undefined;
@@ -1069,6 +1098,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       }
     }
     renderer.domElement.addEventListener('pointerdown', onPointerDown);
+    renderer.domElement.addEventListener('pointerup', onPointerUpSelect);
 
     // 套目前的畫質檔：解析度 / bloom / 地板倒影 / 燈數（resize 和自動調畫質都走這裡；不用重載模型）
     const applyQuality = () => {
@@ -1396,6 +1426,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       fadeWarmupRef.current = null;
       try { renderer.setAnimationLoop(null); } catch {}
       renderer.domElement.removeEventListener('pointerdown', onPointerDown);
+      renderer.domElement.removeEventListener('pointerup', onPointerUpSelect);
       try { scene.remove(transformHelper); } catch {}
       try { transform.detach(); } catch {}
       try { transform.dispose(); } catch (e) { console.warn('TransformControls dispose:', e); }
