@@ -6495,3 +6495,6 @@ async function upgradeLegacySharePassword(env, link, password) {
   const now = await env.DB.prepare(`SELECT password, password_hash FROM share_links WHERE token = ? LIMIT 1`).bind(link.token).first();
   return now ? await shareCredential(now) : hashed.hash;
 }
+
+// 搬家腳本（scripts/migrate-cue-library.mjs）要用跟後台一模一樣的舊算法
+export { loadCueStates };
