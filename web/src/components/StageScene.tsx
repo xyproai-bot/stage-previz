@@ -4126,7 +4126,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       )}
       {/* 選到哪個物件：名字寫在左下角（只有手把看不出選到誰） */}
       {!readOnly && selectedObjectIds.length > 0 && (
-        <div className="stage-scene__selected" aria-live="polite">
+        <div className={'stage-scene__selected' + (qualityLevel !== 'high' ? ' stage-scene__selected--raised' : '')} aria-live="polite">
           已選：{selectedObjectIds.length === 1
             ? (() => { const o = (stageObjects || []).find(x => x.id === selectedObjectIds[0]); return o ? (o.displayName || o.meshName) : '1 個物件'; })()
             : `${selectedObjectIds.length} 個物件`}

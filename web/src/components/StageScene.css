@@ -661,6 +661,11 @@
   pointer-events: none;
   z-index: 3;
 }
+/* 「畫質自動調低」那行字出現時往上讓一格，不疊在一起 */
+.stage-scene__selected--raised { bottom: 56px; }
+@container stage-scene (max-width: 480px) {
+  .stage-scene__selected--raised { bottom: 34px; }
+}
 .stage-scene__selected-hint {
   margin-left: 8px;
   color: var(--text-muted);
