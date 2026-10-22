@@ -396,10 +396,19 @@ export async function getLayoutEdit(env, ctx) {
   const key = cur.model_r2_key || null;
   const row = await layoutRow(env, projectId, key);
   let edit = null;
+  // applied：這個模型版本是自動貼 UV 套用出來的（套用時 recipe 會存 surfaces；只有排到一半的草稿沒有）。
+  // 舊的套用沒有前端的「套用過」記號，靠這個也能顯示「調整排版」
+  let applied = false;
   if (row && row.recipe) {
-    try { const r = JSON.parse(row.recipe); if (isObj(r) && isObj(r.edit)) edit = r.edit; } catch { /* 壞掉的 recipe 當沒有 */ }
+    try {
+      const r = JSON.parse(row.recipe);
+      if (isObj(r) && isObj(r.edit)) edit = r.edit;
+      if (isObj(r) && Array.isArray(r.surfaces) && r.surfaces.length > 0) applied = true;
+    } catch { /* 壞掉的 recipe 當沒有 */ }
   }
-  return ok({ key, edit });
+  // 套用時的備註一律是「自動貼 UV…」（沿用上一版的也是）；只有草稿的紀錄沒有備註或是「套用自動貼 UV 前」
+  if (row && typeof row.note === 'string' && row.note.startsWith('自動貼 UV')) applied = true;
+  return ok({ key, edit, applied });
 }
 
 export async function putLayoutEdit(request, env, ctx) {

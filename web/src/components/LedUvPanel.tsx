@@ -179,10 +179,13 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       if (ledObjects.length === 0) throw new Error('這個專案還沒有 LED 物件（物件分類要是 LED 螢幕）');
       // 上次排到哪裡（勾的螢幕、點數、類型、排法）：同一個模型版本接著做；讀不到就從頭開始
       let restored: UvEditSnapshot | null = null;
+      // 後台說這個版本是套用出來的（舊的套用沒有前端的「套用過」記號）
+      let serverApplied = false;
       try {
         const saved = await getUvLayoutEdit(projectId);
         const snap = saved && saved.key === model.key ? parseEditSnapshot(saved.edit) : null;
         if (snap) restored = pruneEditSnapshot(snap, new Set(ledObjects.map(o => o.id)));
+        serverApplied = !!saved && saved.key === model.key && saved.applied === true;
       } catch { /* 讀不到就從頭開始 */ }
       setLoadStep('下載模型…');
       const resp = await fetch(api.modelDownloadUrl(model.key), { signal: ac.signal });
@@ -216,7 +219,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       setSeams(restored?.seams ?? {});
       setGutter(restored?.gutter ?? '0');
       setPendingArr(restored?.arrangement ?? null);
-      const applied = editIsApplied(restored);
+      const applied = editIsApplied(restored) || serverApplied;
       setAppliedSig(restored?.appliedSig ?? null);
       // 剛套用完、之後沒動過的樣子 = 「調整排版」的基準（等排法還原完再記）
       wantBaseRef.current = editIsPristine(restored);

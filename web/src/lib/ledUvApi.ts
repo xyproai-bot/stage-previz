@@ -130,9 +130,9 @@ export function applyAutoUv(projectId: string, body: ApplyBody): Promise<ApplyRe
  * 目前使用的模型版本上次存的「製作填的東西」（勾的螢幕、點數、排法…，格式見 ledUv/editState.ts）。
  * 舊的後台沒有這個網址（404）→ null（照常用，只是不會記住上次排的）。key = 目前使用的模型版本。
  */
-export async function getUvLayoutEdit(projectId: string): Promise<{ key: string | null; edit: unknown } | null> {
+export async function getUvLayoutEdit(projectId: string): Promise<{ key: string | null; edit: unknown; applied?: boolean } | null> {
   try {
-    return await call<{ key: string | null; edit: unknown }>(`${base(projectId)}/led-uv/layout`);
+    return await call<{ key: string | null; edit: unknown; applied?: boolean }>(`${base(projectId)}/led-uv/layout`);
   } catch (e) {
     if ((e as LedUvApiError).status === 404) return null;
     throw e;

@@ -400,7 +400,7 @@ test('排到一半的東西：只有製作能看 / 存；導演、動畫師 403�
   assert.equal((await call(null, 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: EDIT })).status, 401);
   const none = await call('u_admin', 'GET', `${P}/led-uv/layout`);
   assert.equal(none.status, 200);
-  assert.deepEqual(none.data, { key: OLD_KEY, edit: null });
+  assert.deepEqual(none.data, { key: OLD_KEY, edit: null, applied: false });
   assert.ok((await call('u_admin', 'DELETE', `${P}/led-uv/layout`)).status >= 400);
 });
 
@@ -410,7 +410,7 @@ test('存了就讀得回來；這個版本原本沒有紀錄就建一筆（畫�
   assert.equal(put.status, 200, JSON.stringify(put.data));
   assert.deepEqual(put.data, { ok: true, key: OLD_KEY });
   const got = await call('u_admin', 'GET', `${P}/led-uv/layout`);
-  assert.deepEqual(got.data, { key: OLD_KEY, edit: EDIT });
+  assert.deepEqual(got.data, { key: OLD_KEY, edit: EDIT, applied: false });
   const row = await db.prepare(`SELECT * FROM model_uv_layouts WHERE model_key = ?`).bind(OLD_KEY).first();
   assert.deepEqual(JSON.parse(row.led_canvas), OLD_CANVAS);
   assert.equal(row.legacy_template_id, null);
@@ -452,7 +452,7 @@ test('套用時 recipe 裡的 edit 跟著新版本存；打開讀到的是新版
   const applied = { ...EDIT, gutter: '16' };
   const r = await call('u_admin', 'POST', `${P}/led-uv/apply`, applyBody(key, { recipe: { v: 1, surfaces: [], edit: applied } }));
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key, edit: applied });
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key, edit: applied, applied: true });
   // 在新版上再存一次（停手自動存）：edit 換掉、surfaces 留著
   const later = { ...EDIT, gutter: '24' };
   assert.equal((await call('u_admin', 'PUT', `${P}/led-uv/layout`, { ifActive: key, edit: later })).status, 200);
@@ -463,7 +463,7 @@ test('套用時 recipe 裡的 edit 跟著新版本存；打開讀到的是新版
   assert.equal(back.status, 200);
   assert.equal(back.data.restoredCanvas, true);
   assert.deepEqual(back.data.ledCanvas, OLD_CANVAS);
-  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key: OLD_KEY, edit: EDIT });
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key: OLD_KEY, edit: EDIT, applied: false });
   assert.equal((await db.prepare(`SELECT COUNT(*) AS n FROM song_videos WHERE template_id IS NOT NULL AND template_id != 'lt_mine'`).first()).n, 0);
   // 再換回新版：舊影片重新套上，草稿還在
   await call('u_admin', 'POST', `${P}/model/versions/activate`, { key });
@@ -476,9 +476,9 @@ test('一般上傳（壓縮）沿用草稿；沒帶 edit 的舊版前端套用�
   assert.equal((await call('u_admin', 'PUT', `${P}/led-uv/layout`, { ifActive: OLD_KEY, edit: EDIT })).status, 200);
   const comp = await call('u_admin', 'PUT', `${P}/model`, undefined, new Uint8Array([3, 3, 3]));
   assert.equal(comp.status, 200);
-  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key: comp.data.key, edit: EDIT });
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key: comp.data.key, edit: EDIT, applied: false });
   const key = await holdUpload(call);
   const r = await call('u_admin', 'POST', `${P}/led-uv/apply`, { ...applyBody(key), ifActive: comp.data.key });
   assert.equal(r.status, 200, JSON.stringify(r.data));
-  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key, edit: null });
+  assert.deepEqual((await call('u_admin', 'GET', `${P}/led-uv/layout`)).data, { key, edit: null, applied: true });
 });

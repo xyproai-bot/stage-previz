@@ -273,7 +273,8 @@ export default function ProjectEditor() {
     void (async () => {
       try {
         const saved = await getUvLayoutEdit(projectId);
-        if (alive) setUvApplied(editIsApplied(saved ? parseEditSnapshot(saved.edit) : null));
+        // 有「套用過」記號，或後台說這個版本是套用出來的（舊的套用沒有記號）
+        if (alive) setUvApplied(editIsApplied(saved ? parseEditSnapshot(saved.edit) : null) || saved?.applied === true);
       } catch { if (alive) setUvApplied(false); }
     })();
     return () => { alive = false; };
