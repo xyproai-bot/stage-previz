@@ -248,7 +248,7 @@ function composeMatrix(b: Matrix6, m: Matrix6): Matrix6 {
 
 /**
  * 畫一塊螢幕：網站上這塊 LED 顯示的測試圖（外框顏色、格線、圓和十字、color bar、灰階、名稱、x/y/w/h、角落座標），
- * 照這塊在版型裡的轉動、翻轉擺進 dest，再疊一支指著「這塊螢幕的上方」的箭頭。
+ * 照這塊在版型裡的轉動、翻轉擺進 dest。
  * base = 版型畫布像素 → 輸出像素的矩陣（整張模板圖 = 單純縮放；單塊的圖 = 再平移到這塊的左上角）；px = 輸出像素 / 版型像素
  */
 export function drawScreenTile(ctx: CanvasRenderingContext2D, it: PatternItem, span: SrcSpan, layout: LedLayout, base: Matrix6, px: number) {
@@ -271,10 +271,7 @@ export function drawScreenTile(ctx: CanvasRenderingContext2D, it: PatternItem, s
     drawTestPattern(ctx, layout, k > 0 ? k : px, { matrix: m });
     ctx.restore();
   }
-  ctx.setTransform(...base);
-  const g = guideLayout(it.dest);
-  const len = g.arrow.len * 0.7;
-  drawArrow(ctx, g.arrow.cx, g.arrow.cy, len, it.up.dx, it.up.dy, '#ffffff', 'rgba(0,0,0,0.8)', Math.max(len * 0.04, 1.5 / Math.max(px, 1e-6)));
+  // 不疊「上方」箭頭：下載的圖要跟網站上的測試圖一樣（用戶 10-22）
   ctx.restore();
 }
 
