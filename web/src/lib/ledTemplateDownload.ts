@@ -17,7 +17,7 @@ import { splitLayoutByScreens } from './ledTemplateContent';
 import { applyCabinets } from './ledCabinet';
 import { guideFileName } from './ledTemplatePattern';
 import { templateTableFileName, templateTableToCsv, templateTableToJson, timelineTableFileName, timelineTableToCsv, timelineTableToJson } from './ledTemplateTable';
-import { aeTimelineScriptFileName, buildAeTimelineScript } from './aeTimelineScript';
+import { buildAeTimelineScript, timelineTilePath, timelineTilePlans, timelineTilesToCsv, timelineZipFileName } from './aeTimelineScript';
 import { timelineCanvas, type LedTimeline } from './ledTemplateTimeline';
 
 export interface TemplateDownloadMeta {
@@ -185,38 +185,50 @@ export function downloadTimelineTable(kind: 'csv' | 'json', tl: LedTimeline, def
   return fileName;
 }
 
-/** 下載 AE 合成腳本（時間線）：每個版型一張模板圖夾在腳本裡（畫不出來的那張只放外框） */
-export async function downloadTimelineAeScript(
-  tl: LedTimeline, defs: readonly ScreenDef[], meta: TemplateDownloadMeta & { songName?: string },
-): Promise<{ withGuide: boolean; fileName: string }> {
+/**
+ * 下載版型時間線的 zip：tiles 資料夾裡每個版型一個資料夾（每塊 LED 一張 PNG）、座標表（每個版型一段）、
+ * AE 腳本（每個版型的每塊 LED 一個合成 + 一個整張畫布大小的總合成，每一段只放那個版型的合成，換版型的時間有標記）
+ */
+export async function downloadTimelineTilesZip(
+  tl: LedTimeline, defs: readonly ScreenDef[], meta: TemplateDownloadMeta & { songName?: string }, onProgress?: (done: number, total: number) => void,
+): Promise<{ fileName: string; count: number; plans: number; shrunk: boolean }> {
   const canvas = timelineCanvas(tl);
   if (canvas.width > AE_MAX_COMP_SIDE || canvas.height > AE_MAX_COMP_SIDE) {
     throw new AeCanvasTooBigError(`版型畫布 ${canvas.width} × ${canvas.height} 超過 AE 合成的上限 ${AE_MAX_COMP_SIDE} px`);
   }
-  const guides: Record<string, AeMapImage | null> = {};
-  let withGuide = false;
-  for (const { id, plan } of distinctPlans(tl)) {
-    try {
-      const png = await renderTemplateGuidePng(plan, defs, { maxSide: AE_MAP_MAX_SIDE });
-      guides[id] = {
-        fileName: aeTemplateGuideFileName(meta.projectName, plan.name, plan.canvas),
-        width: png.width, height: png.height, base64: await blobToBase64(png.blob),
-      };
-      withGuide = true;
-    } catch (e) {
-      guides[id] = null;
-      console.warn('[aeTimelineScript] 模板圖沒畫出來，這個版型只放外框', plan.name, e);
+  const plans = timelineTilePlans(tl, defs);
+  const entries: ZipEntry[] = [];
+  let shrunk = false, done = 0;
+  const total = plans.reduce((n, p) => n + p.tiles.length, 0);
+  for (const p of plans) {
+    const plan = tl.segments.find(s => s.templateId === p.id)!.plan;
+    const content = guideContentFor(defs, meta, plan);
+    if (!content) throw new Error('還沒填這個專案的 LED 畫布大小');
+    const { items } = tilesOf(plan, defs);
+    for (let i = 0; i < items.length; i++) {
+      const span = content.spanOf(items[i].key);
+      if (span) {
+        const png = await renderTilePng(items[i], span, content.layout);
+        if (png.scale < 1) shrunk = true;
+        entries.push({ path: timelineTilePath(p, p.tiles[i]), data: new Uint8Array(await png.blob.arrayBuffer()) });
+      }
+      onProgress?.(++done, total);
     }
   }
-  const js = buildAeTimelineScript({ timeline: tl, defs, projectName: meta.projectName, songName: meta.songName, date: meta.date, guides });
-  const fileName = aeTimelineScriptFileName(meta.projectName, meta.songName, canvas);
-  downloadBlob(new Blob([js], { type: 'application/javascript;charset=utf-8' }), fileName);
-  return { withGuide, fileName };
+  const enc = new TextEncoder();
+  const script = buildAeTimelineScript({ timeline: tl, defs, projectName: meta.projectName, songName: meta.songName, date: meta.date });
+  entries.unshift(
+    { path: 'AE建合成腳本.jsx', data: enc.encode(script) },
+    { path: '座標表.csv', data: enc.encode(timelineTilesToCsv(tl, plans)) },
+  );
+  const fileName = timelineZipFileName(meta.projectName, meta.songName, canvas);
+  downloadBlob(buildZip(entries), fileName);
+  return { fileName, count: total, plans: plans.length, shrunk };
 }
 
 /**
  * 3D 工具列「⋯」→ LED 對位圖：這首歌有中途換版型時，四個下載照整條時間線出
- *   模板圖 = 每個版型各一張（一次下載好幾個檔案）、AE 合成腳本 = 一個合成、每一段各有一組圖層、座標表 = 每個版型一個區段
+ *   模板圖 = 每個版型各一張（一次下載好幾個檔案）、AE 合成腳本 = zip（每個版型一個資料夾的每塊 LED 圖 + 座標表 + 腳本）、座標表 = 每個版型一個區段
  */
 export async function downloadSongTimelineFile(
   kind: LedDownloadKind, timeline: LedTimeline, defs: readonly ScreenDef[], meta: TemplateDownloadMeta & { songName?: string },
@@ -240,10 +252,19 @@ export async function downloadSongTimelineFile(
         : { level: 'success', text: `版型時間線的模板圖下載好了（${plans.length} 個版型，每個一張）；瀏覽器問「下載多個檔案」請按允許` };
     }
     if (kind === 'jsx') {
-      const r = await downloadTimelineAeScript(shown, defs, meta);
+      // 整條時間線只有一個版型：跟單一版型的 zip 一樣
+      const only = distinctPlans(shown);
+      if (only.length === 1) {
+        const r = await downloadTemplateTilesZip(only[0].plan, defs, meta);
+        return {
+          level: r.shrunk ? 'warn' : 'success', duration: 9000,
+          text: `版型「${only[0].plan.name}」每塊 LED 的圖（${r.count} 塊）和 AE 腳本下載好了：解壓縮後，在 AE 按「File > Scripts > Run Script File…」選裡面的 AE建合成腳本.jsx`,
+        };
+      }
+      const r = await downloadTimelineTilesZip(shown, defs, meta);
       return {
-        level: 'success', duration: 8000,
-        text: `AE 合成腳本（版型時間線）下載好了：在 AE 按「File > Scripts > Run Script File…」選它${r.withGuide ? '' : '（這次沒有夾模板圖，外框都有）'}`,
+        level: r.shrunk ? 'warn' : 'success', duration: 9000,
+        text: `版型時間線每塊 LED 的圖（${r.plans} 個版型、共 ${r.count} 塊）和 AE 腳本下載好了：解壓縮後，在 AE 按「File > Scripts > Run Script File…」選裡面的 AE建合成腳本.jsx`,
       };
     }
     downloadTimelineTable(kind, shown, defs, meta);

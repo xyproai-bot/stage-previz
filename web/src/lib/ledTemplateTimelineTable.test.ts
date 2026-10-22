@@ -82,13 +82,13 @@ describe('版型時間線的座標表', () => {
 });
 
 describe('下載選單的文字：版型時間線', () => {
-  it('模板圖一次好幾個檔、腳本是一個合成每段一組圖層、座標表每個版型一個區段；單一版型的說明沒變', () => {
+  it('模板圖一次好幾個檔、腳本是 zip（每塊 LED 一個合成 + 總合成）、座標表每個版型一個區段；單一版型的說明沒變', () => {
     const scope = { template: '版型時間線', timeline: true };
     expect(ledMapMenuLabel('jsx', scope)).toBe('下載 AE 合成腳本（版型時間線）');
     expect(ledMapMenuLabel('csv', scope)).toBe('下載位置表 CSV（版型時間線）');
     expect(ledMapMenuHint('png', scope)).toContain('每個版型各一張');
-    expect(ledMapMenuHint('jsx', scope)).toContain('只在那一段的時間顯示');
+    expect(ledMapMenuHint('jsx', scope)).toContain('只在那一段時間出現');
     expect(ledMapMenuHint('csv', scope)).toContain('每個版型一個區段');
-    expect(ledMapMenuHint('jsx', { template: '版型 1' })).toContain('版型「版型 1」大小的合成');
+    expect(ledMapMenuHint('jsx', { template: '版型 1' })).toContain('版型「版型 1」大小的總合成');
   });
 });
