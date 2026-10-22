@@ -13,8 +13,8 @@ import {
   type GroupHandle, type PressPending, type Selection,
 } from '../lib/ledTemplateSelect';
 import type { ItemPatch, ItemPatchEntry } from '../lib/ledTemplateDraft';
-import { panelHue, type CanvasSize, type PixelRect } from '../lib/ledMap';
-import { defaultDestSize, screenSizeLabel, type PlacementInput, type ScreenDef } from '../lib/ledTemplate';
+import { panelHue, type CanvasSize, type LedLayout, type PixelRect } from '../lib/ledMap';
+import { defaultDestSize, screenSizeLabel, type PlacementInput, type ScreenDef, type SrcSpan } from '../lib/ledTemplate';
 import { upDirection, upText } from '../lib/ledTemplatePattern';
 import { drawLayers, type FullMap, type LayerBackdrop } from '../lib/ledTemplateContentDraw';
 import './LedTemplateCanvas.css';
@@ -59,6 +59,8 @@ interface Props {
   onCenter?: (axis: 'x' | 'y') => void;
   /** 整張畫布的測試圖（畫好留著的那張）；還沒有 = null */
   fullMap?: FullMap | null;
+  /** 每塊自己畫測試圖（照框現在的位置，拖了就即時更新）；有給就不用 fullMap */
+  tileContent?: ((key: string) => { layout: LedLayout; span: SrcSpan } | null) | null;
   /** 框裡畫對位圖內容 */
   showContent?: boolean;
   /** 框裡對位圖內容的不透明度（0～1，預設 1）；調低可以透出底圖 */
@@ -116,7 +118,7 @@ const DEFAULT_EMPTY = '版型裡還沒有螢幕。在右邊的清單按「加入
 
 export default function LedTemplateCanvas({
   canvas, scalePct, defs, items, selected, resetKey, canUndo, canRedo, onSelect, onPatch, onGesture, onRemove, onUndo, onRedo, onCenter,
-  fullMap = null, showContent = false, contentOpacity = 1, backdrop = null, layersBar = null,
+  fullMap = null, tileContent = null, showContent = false, contentOpacity = 1, backdrop = null, layersBar = null,
   lockSize = false, allowRemove = true, transformPatches, canTransform, canvasName = '版型畫布', sizeLabel = screenSizeLabel, emptyText = DEFAULT_EMPTY, hint = DEFAULT_HINT,
 }: Props) {
   const api = useCanvasView(canvas, resetKey);
@@ -350,7 +352,7 @@ export default function LedTemplateCanvas({
   const ordered = useMemo(() => [...placed].sort((a, b) => (selectedSet.has(a.key) ? 1 : 0) - (selectedSet.has(b.key) ? 1 : 0)), [placed, selectedSet]);
 
   // 底圖 + 框裡的對位圖內容：畫在一張 canvas 上（整張畫布的測試圖是畫好留著的，這裡只是剪一塊貼進框裡）
-  const contentShown = showContent && !!fullMap && fullMap.canvas.width > 0;
+  const contentShown = showContent && (tileContent ? true : !!fullMap && fullMap.canvas.width > 0);
   const dpr = typeof window === 'undefined' ? 1 : Math.min(2, window.devicePixelRatio || 1);
   useLayoutEffect(() => {
     const el = pixRef.current;
@@ -362,13 +364,14 @@ export default function LedTemplateCanvas({
     try {
       drawLayers(ctx, {
         canvas, view, size, dpr, backdrop,
-        content: contentShown && fullMap ? { map: fullMap, spanOf: (k: string) => defByKey.get(k)?.src ?? null, opacity: contentOpacity } : null,
+        tiles: contentShown && tileContent ? { of: tileContent, opacity: contentOpacity } : null,
+        content: contentShown && !tileContent && fullMap ? { map: fullMap, spanOf: (k: string) => defByKey.get(k)?.src ?? null, opacity: contentOpacity } : null,
         items: ordered.map(i => ({ key: i.key, dest: i.dest, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV })),
       });
     } catch (e) {
       console.warn('[ledTemplate] canvas layers draw failed:', e);
     }
-  }, [canvas, view, size, dpr, backdrop, contentShown, contentOpacity, fullMap, defByKey, ordered]);
+  }, [canvas, view, size, dpr, backdrop, contentShown, contentOpacity, fullMap, tileContent, defByKey, ordered]);
 
   return (
     <div className="ltc">

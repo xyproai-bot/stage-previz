@@ -5,6 +5,7 @@
 
 import { buildLedLayout, testPatternSize, type CanvasSize, type LedLayout, type PixelRect } from './ledMap';
 import { drawTestPattern } from './ledMapDraw';
+import type { Matrix6 } from './ledTemplatePattern';
 import type { Rotation, SrcSpan } from './ledTemplate';
 import { backdropRect, type BackdropPrefs } from './ledTemplateBackdrop';
 import { contentPieces, intersectsView, worthDrawing } from './ledTemplateContent';
@@ -67,8 +68,21 @@ export interface LayerDraw {
   backdrop: LayerBackdrop | null;
   /** 對位圖內容；null = 不畫 */
   content: { map: FullMap; spanOf: (key: string) => SrcSpan | null; /** 0～1，預設 1（不透明）；調低可以透出下面的底圖 */ opacity?: number } | null;
+  /**
+   * 每塊自己畫測試圖（自動貼 UV 的排版用）：給每塊「只有它自己的排法」（名字、x y w h、角落座標、箱體格線都是它現在的位置），
+   * 拖、轉、翻之後下一格就是新的數字，不用重畫整張。有給的話不再用 content 那張整張畫布的圖。
+   */
+  tiles?: { of: (key: string) => { layout: LedLayout; span: SrcSpan } | null; opacity?: number } | null;
   /** 由下往上的順序 */
   items: readonly LayerItem[];
+}
+
+function composeMatrix(b: Matrix6, m: Matrix6): Matrix6 {
+  return [
+    b[0] * m[0] + b[2] * m[1], b[1] * m[0] + b[3] * m[1],
+    b[0] * m[2] + b[2] * m[3], b[1] * m[2] + b[3] * m[3],
+    b[0] * m[4] + b[2] * m[5] + b[4], b[1] * m[4] + b[3] * m[5] + b[5],
+  ];
 }
 
 /** 畫底圖和每塊螢幕框裡的內容（canvas 事先設成 host 的大小 × dpr） */
@@ -112,6 +126,36 @@ export function drawLayers(ctx: CanvasRenderingContext2D, p: LayerDraw) {
         ctx.save();
         ctx.transform(...piece.matrix);
         ctx.drawImage(map.canvas, s.x * kx, s.y * ky, s.w * kx, s.h * ky, s.x, s.y, s.w, s.h);
+        ctx.restore();
+      }
+      ctx.restore();
+    }
+  }
+
+  // 每塊自己的測試圖（照現在的位置畫；向量直接畫，只畫看得到的框）
+  const tileAlpha = Math.min(1, Math.max(0, p.tiles?.opacity ?? 1));
+  if (p.tiles && tileAlpha > 0) {
+    const base: Matrix6 = [dpr * view.zoom, 0, 0, dpr * view.zoom, dpr * view.panX, dpr * view.panY];
+    for (const it of p.items) {
+      if (!worthDrawing(it.dest, view.zoom) || !intersectsView(it.dest, view, p.size)) continue;
+      const tile = p.tiles.of(it.key);
+      if (!tile) continue;
+      ctx.save();
+      ctx.globalAlpha = tileAlpha;
+      ctx.beginPath();
+      ctx.rect(it.dest.x, it.dest.y, it.dest.w, it.dest.h);
+      ctx.clip();
+      ctx.fillStyle = '#000';
+      ctx.fillRect(it.dest.x, it.dest.y, it.dest.w, it.dest.h);
+      for (const piece of contentPieces(tile.span, tile.layout.canvas, it)) {
+        const m = composeMatrix(base, piece.matrix);
+        ctx.save();
+        ctx.setTransform(...m);
+        ctx.beginPath();
+        ctx.rect(piece.src.x, piece.src.y, piece.src.w, piece.src.h);
+        ctx.clip();
+        const k = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2]));
+        drawTestPattern(ctx, tile.layout, k > 0 ? k : 1, { matrix: m });
         ctx.restore();
       }
       ctx.restore();

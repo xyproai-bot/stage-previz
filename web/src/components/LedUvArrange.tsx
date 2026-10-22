@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { ArrowUpLeft, LayoutGrid, Link2, Lock, TriangleAlert, Unlink2 } from 'lucide-react';
 import Icon from './Icon';
 import NumField from './NumField';
@@ -10,7 +10,6 @@ import { ROTATIONS, type PlacementInput, type Rotation, type ScreenDef } from '.
 import { patchDraftItems, type ItemPatchEntry } from '../lib/ledTemplateDraft';
 import { setRotation } from '../lib/ledTemplateEdit';
 import { boundsOf, centerGroupOnCanvas, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection } from '../lib/ledTemplateSelect';
-import { useLedFullMap } from '../lib/useLedFullMap';
 import { useTemplateBackdrop } from '../lib/useTemplateBackdrop';
 import type { LayerBackdrop } from '../lib/ledTemplateContentDraw';
 import {
@@ -19,7 +18,7 @@ import {
 } from '../lib/ledUv/arrange';
 import type { ArrangeState } from '../lib/ledUv/useArrange';
 import type { Plan } from '../lib/ledUv/plan';
-import { previewLayout } from '../lib/ledUv/previewLayout';
+import { makeTileContentCache } from '../lib/ledUv/tileContent';
 import { ARRANGE_TEXT } from '../lib/ledUv/text';
 
 /**
@@ -71,10 +70,18 @@ export default function LedUvArrange({ projectId, autoPlan, plan, arrange, gutte
   }), [natives, autoPlan]);
   const defByKey = useMemo(() => new Map(defs.map(d => [d.key, d])), [defs]);
 
-  // 框裡的對位圖內容：自動排出來的那張（每塊螢幕的測試圖，名字、大小、格線），拖曳時一直用同一張，只是剪一塊貼進框裡
-  const layout = useMemo(() => (contentOn && autoPlan.canvas.width > 0 && natives.length > 0 ? previewLayout(autoPlan) : null), [autoPlan, contentOn, natives]);
-  const fullMap = useLedFullMap(layout);
-  const contentNote = fullMap.error ? `對位圖內容畫不出來：${fullMap.error}` : fullMap.busy ? '畫圖中…' : '';
+  // 框裡的對位圖內容：每塊照「現在排在哪裡」自己畫（名字、x y w h、角落座標、箱體格線都是新位置），拖、轉、翻之後下一格就更新
+  const tileCache = useRef(makeTileContentCache()).current;
+  const itemsRef = useRef(doc.items);
+  itemsRef.current = doc.items;
+  const tileContent = useMemo(() => (contentOn && natives.length > 0
+    ? (key: string) => {
+      const n = nativeByKey.get(key);
+      const it = itemsRef.current.find(i => i.key === key);
+      if (!n || !it) return null;
+      return tileCache(key, n.name, n.w, n.h, it.dest.x, it.dest.y, natives.indexOf(n));
+    }
+    : null), [contentOn, natives, nativeByKey, tileCache, doc.items]);
   const backdrop = useTemplateBackdrop(projectId, 'autouv');
   const backdropLayer = useMemo<LayerBackdrop | null>(
     () => (backdrop.picture ? { image: backdrop.picture.image, width: backdrop.picture.width, height: backdrop.picture.height, prefs: backdrop.prefs } : null),
@@ -175,7 +182,7 @@ export default function LedUvArrange({ projectId, autoPlan, plan, arrange, gutte
             const pick = d.items.filter(i => selSet.size === 0 || selSet.has(i.key));
             return patchDraftItems(d, movePatches(pick, centerGroupOnCanvas(pick.map(c => c.dest), { width: d.width, height: d.height }, axis)));
           }, { tag: `center:${axis}:${Date.now()}` })}
-          fullMap={fullMap.map}
+          tileContent={tileContent}
           showContent={contentOn}
           contentOpacity={contentOpacity}
           backdrop={backdropLayer}
@@ -185,7 +192,7 @@ export default function LedUvArrange({ projectId, autoPlan, plan, arrange, gutte
               onContentOn={setContentOn}
               contentOpacity={contentOpacity}
               onContentOpacity={setContentOpacity}
-              contentNote={contentNote}
+              contentNote=""
               backdrop={backdrop}
               canvas={{ width: doc.width, height: doc.height }}
             />
