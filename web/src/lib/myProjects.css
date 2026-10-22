@@ -90,6 +90,26 @@
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 14px;
 }
+/* 一張卡片 + 這個專案的製作才有的「編輯專案」連結 */
+.my-projects__item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.my-projects__item > .my-projects__card {
+  flex: 1;
+}
+.my-projects__edit {
+  align-self: flex-start;
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 2px 4px;
+}
+.my-projects__edit:hover {
+  text-decoration: underline;
+}
 .my-projects__card {
   display: flex;
   flex-direction: column;

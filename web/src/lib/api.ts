@@ -171,11 +171,20 @@ export async function updateUserAdmin(id: string, patch: Partial<{
   await http(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
+/** 重設別人的登入碼（只有全站製作）；accessCode 沒填 = 系統產生，有填 = 自己設定（規則 lib/loginCodeRules.ts） */
 export async function setAccessCode(id: string, accessCode?: string): Promise<{ ok: true; accessCode: string; shownOnce?: boolean }> {
   return http(`/api/users/${encodeURIComponent(id)}/access-code`, {
     method: 'POST',
     body: JSON.stringify({ accessCode: accessCode ?? '' }),
   });
+}
+
+/**
+ * 修改我自己的登入碼：有登入碼的人要先輸入現在的（用邀請連結進來、還沒有登入碼的人不用）；
+ * newCode 沒填 = 系統產生。改好之後其他裝置的登入會失效，這一台留著。
+ */
+export async function changeMyLoginCode(input: { currentCode?: string; newCode?: string }): Promise<{ ok: true; accessCode: string; shownOnce?: boolean }> {
+  return http('/api/auth/change-code', { method: 'POST', body: JSON.stringify(input) });
 }
 
 export async function deleteUserAdmin(id: string): Promise<void> {
@@ -1533,7 +1542,8 @@ export async function getProjectFull(projectId: string): Promise<ProjectFull | n
 // 後台：cf-worker/worker.js handleInvitesRouter / createInvite；規則在 cf-worker/invites.mjs
 // 建立、清單、撤銷只有製作；打開（peek / redeem）不用登入
 
-export type InviteRole = 'animator' | 'director';
+/** 邀請的角色 = 用了之後在「這個專案」的角色（admin = 這個專案的製作，不是全站製作） */
+export type InviteRole = 'admin' | 'animator' | 'director';
 
 export interface Invite {
   id: string;
@@ -1584,6 +1594,55 @@ export async function createInvite(projectId: string, input: CreateInviteInput):
 
 export async function revokeInvite(projectId: string, inviteId: string): Promise<void> {
   await http(`/api/projects/${encodeURIComponent(projectId)}/invites/${encodeURIComponent(inviteId)}`, { method: 'DELETE' });
+}
+
+// ─── 專案成員（「成員」面板）────────────────────
+// 後台：cf-worker/members.mjs；全站製作、這個專案的製作才用得到
+
+export interface ProjectMemberRow {
+  id: string;
+  name: string;
+  avatarColor: string;
+  /** 在這個專案的角色 */
+  role: UserRole;
+  /** 全站製作：本來就看得到所有專案，不能從這裡改 */
+  globalAdmin: boolean;
+  deactivated: boolean;
+  lastSeenAt: string | null;
+  isMe: boolean;
+}
+
+export interface MemberCandidate {
+  id: string;
+  name: string;
+  avatarColor: string;
+  /** 帳號的預設角色 */
+  role: UserRole;
+  /** 已經在這個專案的話是什麼角色 */
+  projectRole: UserRole | null;
+}
+
+export async function listProjectMembers(projectId: string): Promise<ProjectMemberRow[]> {
+  const data = await http<{ members: ProjectMemberRow[] }>(`/api/projects/${encodeURIComponent(projectId)}/members`);
+  return data.members;
+}
+
+/** 加進專案 / 改角色（同一個動作） */
+export async function setProjectMember(projectId: string, userId: string, role: UserRole): Promise<{ kind: 'add' | 'change' | 'noop'; role: UserRole }> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, {
+    method: 'PUT',
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function removeProjectMember(projectId: string, userId: string): Promise<void> {
+  await http(`/api/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+}
+
+/** 用名字找現有的用戶（一定要輸入名字；最多 20 個；不列停用的和全站製作） */
+export async function searchMemberCandidates(projectId: string, q: string): Promise<MemberCandidate[]> {
+  const data = await http<{ users: MemberCandidate[] }>(`/api/projects/${encodeURIComponent(projectId)}/member-candidates?q=${encodeURIComponent(q)}`);
+  return data.users;
 }
 
 export interface InvitePeek {

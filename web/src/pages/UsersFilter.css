@@ -1,0 +1,67 @@
+/* 用戶頁：搜尋名字、依專案篩選、選了專案之後依角色分組 */
+.users-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+.users-toolbar__search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1 1 200px;
+  max-width: 320px;
+}
+.users-toolbar__search > .ui-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+.users-toolbar__search input {
+  width: 100%;
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  padding: 8px 12px 8px 32px;
+  font-size: 13px;
+  outline: none;
+  font-family: inherit;
+}
+.users-toolbar__search input:focus {
+  border-color: var(--accent);
+}
+.users-toolbar__project {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.users-toolbar__project select {
+  background: var(--surface-1);
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  max-width: 260px;
+}
+.users-toolbar__summary {
+  margin-left: auto;
+}
+
+.users-group {
+  margin-top: 18px;
+}
+.users-group__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+  margin: 0;
+}
+.users-group .users-list {
+  margin-top: 8px;
+}

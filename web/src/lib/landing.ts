@@ -35,6 +35,20 @@ export function landingPath(
   return base;
 }
 
+/**
+ * 專案編輯頁（/admin/projects/<專案>）誰能開：全站製作，或「這個專案的製作」（專案的角色是 admin）。
+ * 專案的製作只開得到自己專案的編輯頁；編輯頁裡能做的事後台另外擋（3D 檢視設定 / Drive 來源 / 封存 / 複製只有全站製作）。
+ */
+export function canOpenProjectEditor(accountRole: UserRole | null | undefined, projectRole: UserRole | null | undefined): boolean {
+  if (!accountRole) return false;
+  return accountRole === 'admin' || projectRole === 'admin';
+}
+
+/** 專案編輯頁的網址 */
+export function projectEditorPath(projectId: string): string {
+  return `/admin/projects/${encodeURIComponent(projectId)}`;
+}
+
 /** 只有製作能開的頁面：/admin 跟 /admin/...（舊的 /admin/settings 會轉去 /settings，不算） */
 export function isAdminOnlyPath(pathname: string): boolean {
   const p = pathname.split(/[?#]/)[0].replace(/\/+$/, '') || '/';

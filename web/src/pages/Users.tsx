@@ -2,7 +2,12 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import AdminLayout from '../components/AdminLayout';
 import * as api from '../lib/api';
 import type { UserAdmin, UserRole } from '../lib/api';
-import { parseServerTime } from '../lib/serverTime';
+import { formatLastLogin } from '../lib/lastSeen';
+import {
+  PROJECT_FILTER_ALL, PROJECT_FILTER_NONE, countUsersByProject, filterSummary, filterUsers, groupUsersByProjectRole, projectFilterLabel,
+  type ProjectFilter,
+} from '../lib/userFilter';
+import { EMPTY_CHOICE, loginCodeFormState, type LoginCodeChoice } from '../lib/loginCodeForm';
 import type { Project } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
 import { ROLE_LABEL } from '../lib/roleLabels';
@@ -14,28 +19,17 @@ import Icon from '../components/Icon';
 import InviteDialog from '../components/InviteDialog';
 import OpenInvitesList from '../components/OpenInvitesList';
 import LoginCodeDialog from '../components/LoginCodeDialog';
-import { Check, Copy, FolderPlus, KeyRound, Link, LoaderCircle, RefreshCw, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
+import LoginCodeSetDialog from '../components/LoginCodeSetDialog';
+import LoginCodeChooser from '../components/LoginCodeChooser';
+import { Check, Copy, FolderPlus, KeyRound, Link, LoaderCircle, RefreshCw, Search, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
 import './Users.css';
+import './UsersFilter.css';
 import { useEscapeClose } from '../lib/useEscapeClose';
 
 const PALETTE = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];
 
-function formatTime(iso: string | null) {
-  if (!iso) return '從未登入';
-  const d = new Date(parseServerTime(iso));  // 手動加 Z 的寫法 Safari 讀不懂（中間是空白不是 T）
-  const ms = Date.now() - d.getTime();
-  const min = Math.floor(ms / 60000);
-  if (min < 1) return '剛才';
-  if (min < 60) return `${min} 分鐘前`;
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return `${hr} 小時前`;
-  const day = Math.floor(hr / 24);
-  if (day < 7) return `${day} 天前`;
-  return d.toLocaleDateString('zh-TW');
-}
-
 /** 剛建立 / 重設的登入碼（只顯示這一次） */
-interface ShownCode { name: string; code: string; shownOnce: boolean; isReset: boolean }
+interface ShownCode { name: string; code: string; shownOnce: boolean; isReset: boolean; custom?: boolean }
 
 export default function Users() {
   const { user: me } = useAuth();
@@ -52,6 +46,11 @@ export default function Users() {
   // 邀請連結對話框：null = 關著；userId = 先選好的人（某個人旁邊的「邀請連結」）
   const [invite, setInvite] = useState<{ userId?: string } | null>(null);
   const [invitesReload, setInvitesReload] = useState(0);
+  // 重設登入碼的對話框（可以選自動產生 / 自己設定）；null = 關著
+  const [resetUser, setResetUser] = useState<UserAdmin | null>(null);
+  // 搜尋名字 + 依專案篩選（選了某個專案時，依他在那個專案的角色分組）
+  const [query, setQuery] = useState('');
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>(PROJECT_FILTER_ALL);
 
   // 重新抓清單。quiet = 背景更新（清單不換成「載入中…」，失敗跳通知、清單留著）。
   // 同時有好幾次在抓時只用最後一次的結果；回傳的 Promise 等到最新的那次放上畫面才結束
@@ -84,25 +83,9 @@ export default function Users() {
 
   useEffect(() => { refresh(); }, [refresh]);
 
-  // 重設登入碼（還沒有的人 = 產生一組）：新的只顯示這一次，舊的馬上不能用
-  async function handleResetCode(u: UserAdmin) {
-    const hasCode = loginCodeDisplay(u).kind !== 'none';
-    const ok = await confirmDialog(hasCode
-      ? {
-        title: `重設「${u.name}」的登入碼？`,
-        message: '舊的登入碼會馬上不能用，對方下次要用新的。',
-        confirmLabel: '重設登入碼',
-        destructive: true,
-      }
-      : { title: `幫「${u.name}」產生一組登入碼？`, confirmLabel: '產生登入碼' });
-    if (!ok) return;
-    try {
-      const { accessCode, shownOnce } = await api.setAccessCode(u.id);
-      setShownCode({ name: u.name, code: accessCode, shownOnce: !!shownOnce, isReset: hasCode });
-      await refresh();
-    } catch (e) {
-      toast.error('重設失敗：' + (e instanceof Error ? e.message : String(e)));
-    }
+  // 重設登入碼（還沒有的人 = 產生一組）：可以自動產生，也可以自己設定；新的只顯示這一次，舊的馬上不能用
+  function handleResetCode(u: UserAdmin) {
+    setResetUser(u);
   }
 
   async function handleCopyCode(code: string) {
@@ -156,6 +139,73 @@ export default function Users() {
     }
   }
 
+  // 篩選：選的專案如果已經不在清單裡（封存了）就當作「全部」
+  const effectiveFilter: ProjectFilter = projectFilter === PROJECT_FILTER_ALL || projectFilter === PROJECT_FILTER_NONE || allProjects.some(p => p.id === projectFilter)
+    ? projectFilter
+    : PROJECT_FILTER_ALL;
+  const visibleUsers = filterUsers(users, { query, project: effectiveFilter });
+  const projectCounts = countUsersByProject(users);
+  const userGroups = effectiveFilter !== PROJECT_FILTER_ALL && effectiveFilter !== PROJECT_FILTER_NONE
+    ? groupUsersByProjectRole(visibleUsers, effectiveFilter)
+    : null;
+
+  const renderUserRow = (u: UserAdmin) => (
+      <article key={u.id} className={'user-row' + (u.deactivated ? ' is-deactivated' : '')}>
+        <div className="avatar avatar--sm" style={{ background: u.avatarColor }}>{u.name[0]}</div>
+        <div className="user-row__main">
+          <div className="user-row__head">
+            <strong>{u.name}</strong>
+            {u.id === me?.id && <span className="users-table__me">你</span>}
+            <select
+              value={u.role}
+              onChange={(e) => handleChangeRole(u, e.target.value as UserRole)}
+              disabled={u.deactivated}
+              className="user-row__role"
+            >
+              {(Object.keys(ROLE_LABEL) as UserRole[]).map(r => (
+                <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+              ))}
+            </select>
+            {u.deactivated
+              ? <span className="users-table__inactive">已停用</span>
+              : <span className="users-table__active">啟用中</span>}
+          </div>
+
+          <LoginCodeRow user={u} onCopy={handleCopyCode} onReset={() => handleResetCode(u)} />
+
+          <div className="user-row__projects">
+            <span className="muted small">可看的專案：</span>
+            {u.projects.length === 0 ? (
+              <span className="muted small">{u.role === 'admin' ? '（製作看得到全部，不用指派）' : '無 — 點右側「指派」加上'}</span>
+            ) : (
+              u.projects.map(p => (
+                <span key={p.projectId} className="user-project-tag" title={ROLE_LABEL[p.role]}>
+                  {p.projectName} · {ROLE_LABEL[p.role]}
+                </span>
+              ))
+            )}
+          </div>
+
+          <div className="user-row__meta">
+            <span className="muted small">上次登入：{formatLastLogin(u.lastSeenAt)}</span>
+          </div>
+        </div>
+
+        <div className="user-row__actions">
+          <button onClick={() => setEditingUserId(u.id)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
+          {u.role !== 'admin' && !u.deactivated && (
+            <button onClick={() => setInvite({ userId: u.id })} title="傳一個邀請連結給他（例如換了手機、忘記登入碼）">
+              <Icon icon={Link} /> 邀請連結
+            </button>
+          )}
+          <button onClick={() => handleToggleActive(u)} title={u.deactivated ? '重新啟用' : '停用'}>
+            {u.deactivated ? <><Icon icon={UserCheck} /> 啟用</> : <><Icon icon={UserX} /> 停用</>}
+          </button>
+          <button onClick={() => handleDelete(u)} disabled={u.id === me?.id} title="刪除" aria-label="刪除"><Icon icon={Trash2} /></button>
+        </div>
+      </article>
+  );
+
   return (
     <AdminLayout>
       <header className="admin-topbar">
@@ -169,7 +219,10 @@ export default function Users() {
       <div className="admin-content">
         <p className="muted small" style={{ marginTop: 0 }}>
           最簡單的方式是傳「邀請連結」：選專案和角色，把訊息貼到 LINE / 微信，對方點開就直接進專案（不用記登入碼，新的人也會自動建帳號）。
-          也可以用「登入碼」：新增用戶時系統會產生一組，對方到 <code>/login</code> 輸入就能登入。每個人只看得到被加入的專案。
+          也可以用「登入碼」：新增用戶時可以讓系統產生一組，也可以自己設定一組比較好記的，對方到 <code>/login</code> 輸入就能登入。每個人只看得到被加入的專案。
+        </p>
+        <p className="muted small">
+          每個專案的成員也可以在那個專案上方的「成員」直接管理（加人、改角色、移出、邀請連結）；專案的製作可以自己管自己專案的成員。這裡是全站所有用戶，可以用名字搜尋，或選一個專案只看那個專案的人。
         </p>
 
         {loading ? (
@@ -181,64 +234,46 @@ export default function Users() {
             <button className="btn btn--ghost" onClick={() => refresh()} style={{ marginTop: 12 }}>重試</button>
           </div>
         ) : (
-          <div className="users-list">
-            {users.map(u => (
-              <article key={u.id} className={'user-row' + (u.deactivated ? ' is-deactivated' : '')}>
-                <div className="avatar avatar--sm" style={{ background: u.avatarColor }}>{u.name[0]}</div>
-                <div className="user-row__main">
-                  <div className="user-row__head">
-                    <strong>{u.name}</strong>
-                    {u.id === me?.id && <span className="users-table__me">你</span>}
-                    <select
-                      value={u.role}
-                      onChange={(e) => handleChangeRole(u, e.target.value as UserRole)}
-                      disabled={u.deactivated}
-                      className="user-row__role"
-                    >
-                      {(Object.keys(ROLE_LABEL) as UserRole[]).map(r => (
-                        <option key={r} value={r}>{ROLE_LABEL[r]}</option>
-                      ))}
-                    </select>
-                    {u.deactivated
-                      ? <span className="users-table__inactive">已停用</span>
-                      : <span className="users-table__active">啟用中</span>}
-                  </div>
+          <>
+            <div className="users-toolbar">
+              <label className="users-toolbar__search">
+                <Icon icon={Search} />
+                <input
+                  type="text" role="searchbox" aria-label="搜尋用戶名字" placeholder="搜尋名字"
+                  value={query} onChange={(e) => setQuery(e.target.value)} autoComplete="off"
+                />
+              </label>
+              <label className="users-toolbar__project">
+                <span>專案</span>
+                <select aria-label="依專案篩選" value={effectiveFilter} onChange={(e) => setProjectFilter(e.target.value)}>
+                  <option value={PROJECT_FILTER_ALL}>全部</option>
+                  {allProjects.map(p => (
+                    <option key={p.id} value={p.id}>{projectFilterLabel(p.name, projectCounts.get(p.id) ?? 0)}</option>
+                  ))}
+                  <option value={PROJECT_FILTER_NONE}>沒有專案</option>
+                </select>
+              </label>
+              <span className="muted small users-toolbar__summary" role="status">{filterSummary(users.length, visibleUsers.length, { query, project: effectiveFilter })}</span>
+              {(query.trim() || effectiveFilter !== PROJECT_FILTER_ALL) && (
+                <button type="button" className="user-row__btn" onClick={() => { setQuery(''); setProjectFilter(PROJECT_FILTER_ALL); }}>清除篩選</button>
+              )}
+            </div>
 
-                  <LoginCodeRow user={u} onCopy={handleCopyCode} onReset={() => handleResetCode(u)} />
-
-                  <div className="user-row__projects">
-                    <span className="muted small">可看的專案：</span>
-                    {u.projects.length === 0 ? (
-                      <span className="muted small">{u.role === 'admin' ? '（製作看得到全部，不用指派）' : '無 — 點右側「指派」加上'}</span>
-                    ) : (
-                      u.projects.map(p => (
-                        <span key={p.projectId} className="user-project-tag" title={ROLE_LABEL[p.role]}>
-                          {p.projectName} · {ROLE_LABEL[p.role]}
-                        </span>
-                      ))
-                    )}
-                  </div>
-
-                  <div className="user-row__meta">
-                    <span className="muted small">上次登入：{formatTime(u.lastSeenAt)}</span>
-                  </div>
-                </div>
-
-                <div className="user-row__actions">
-                  <button onClick={() => setEditingUserId(u.id)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
-                  {u.role !== 'admin' && !u.deactivated && (
-                    <button onClick={() => setInvite({ userId: u.id })} title="傳一個邀請連結給他（例如換了手機、忘記登入碼）">
-                      <Icon icon={Link} /> 邀請連結
-                    </button>
-                  )}
-                  <button onClick={() => handleToggleActive(u)} title={u.deactivated ? '重新啟用' : '停用'}>
-                    {u.deactivated ? <><Icon icon={UserCheck} /> 啟用</> : <><Icon icon={UserX} /> 停用</>}
-                  </button>
-                  <button onClick={() => handleDelete(u)} disabled={u.id === me?.id} title="刪除" aria-label="刪除"><Icon icon={Trash2} /></button>
-                </div>
-              </article>
-            ))}
-          </div>
+            {visibleUsers.length === 0 ? (
+              <div className="empty-card" data-testid="users-empty">
+                <p>{users.length === 0 ? '還沒有用戶。' : '沒有符合的用戶。'}</p>
+              </div>
+            ) : userGroups ? (
+              userGroups.map(g => (
+                <section key={g.role} className="users-group" data-role={g.role}>
+                  <h2 className="users-group__title">{g.label}（{g.users.length}）</h2>
+                  <div className="users-list">{g.users.map(renderUserRow)}</div>
+                </section>
+              ))
+            ) : (
+              <div className="users-list">{visibleUsers.map(renderUserRow)}</div>
+            )}
+          </>
         )}
 
         {!loading && !error && (
@@ -255,6 +290,20 @@ export default function Users() {
         onCreated={async (shown) => { setDialogOpen(false); setShownCode(shown); await refresh(); }}
       />
 
+      {resetUser && (
+        <LoginCodeSetDialog
+          target={{ id: resetUser.id, name: resetUser.name }}
+          hasCode={loginCodeDisplay(resetUser).kind !== 'none'}
+          onClose={() => setResetUser(null)}
+          onDone={(r) => {
+            const u = resetUser;
+            setResetUser(null);
+            setShownCode({ name: u.name, code: r.code, shownOnce: r.shownOnce, isReset: loginCodeDisplay(u).kind !== 'none', custom: r.custom });
+            void refresh({ quiet: true });
+          }}
+        />
+      )}
+
       {shownCode && (
         <LoginCodeDialog
           open
@@ -262,6 +311,7 @@ export default function Users() {
           code={shownCode.code}
           shownOnce={shownCode.shownOnce}
           isReset={shownCode.isReset}
+          custom={shownCode.custom}
           onClose={() => setShownCode(null)}
         />
       )}
@@ -297,13 +347,15 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
   const [role, setRole] = useState<UserRole>('animator');
   const [color, setColor] = useState(PALETTE[0]);
   const [projectIds, setProjectIds] = useState<string[]>([]);
+  const [codeChoice, setCodeChoice] = useState<LoginCodeChoice>(EMPTY_CHOICE);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const codeState = loginCodeFormState(codeChoice, { name });
 
   useEffect(() => {
     if (open) {
       setName(''); setRole('animator'); setColor(PALETTE[0]);
-      setProjectIds([]); setError(null);
+      setProjectIds([]); setError(null); setCodeChoice(EMPTY_CHOICE);
     }
   }, [open]);
 
@@ -314,13 +366,14 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
     setError(null);
     setSubmitting(true);
     try {
-      // 登入碼一律系統產生（10 個字，沒有 0 / O / 1 / I 這種容易看錯的字）
+      // 登入碼：自動產生（10 個字，沒有 0 / O / 1 / I 這種容易看錯的字），或自己設定（規則 lib/loginCodeRules.ts）
       const { accessCode, shownOnce } = await api.createUserAdmin({
         name: name.trim(), role,
         avatarColor: color,
         projectIds,
+        accessCode: codeState.payload,
       });
-      onCreated({ name: name.trim(), code: accessCode, shownOnce: !!shownOnce, isReset: false });
+      onCreated({ name: name.trim(), code: accessCode, shownOnce: !!shownOnce, isReset: false, custom: codeState.payload !== undefined });
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -373,6 +426,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
               <small className="form-hint">建好後也可以從用戶旁邊的「指派」隨時改。</small>
             </div>
           )}
+          <LoginCodeChooser choice={codeChoice} onChange={setCodeChoice} name={name} disabled={submitting} />
           <div className="form-row">
             <label>頭像顏色</label>
             <div className="palette">
@@ -390,8 +444,8 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
           {error && <div className="login-error">{error}</div>}
           <footer className="dialog__footer">
             <button type="button" className="btn btn--ghost" onClick={onClose} disabled={submitting}>取消</button>
-            <button type="submit" className="btn btn--primary" disabled={submitting || !name}>
-              {submitting ? '建立中…' : '建立並產生登入碼'}
+            <button type="submit" className="btn btn--primary" disabled={submitting || !name.trim() || !codeState.canSubmit}>
+              {submitting ? '建立中…' : codeChoice.mode === 'custom' ? '建立並使用這組登入碼' : '建立並產生登入碼'}
             </button>
           </footer>
         </form>

@@ -73,9 +73,10 @@ import {
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Play, RefreshCw, Repeat,
+  ArrowLeft, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Pencil, Play, RefreshCw, Repeat,
   SearchX, Settings, TriangleAlert, UserRoundSearch, Volume2, VolumeX, X,
 } from 'lucide-react';
+import { projectEditorPath } from '../lib/landing';
 import './Studio.css';
 
 type Tab = 'cues' | 'review' | 'activity';
@@ -915,6 +916,9 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   // 鍵盤（[ / ] 切歌、Shift+J / K 切 cue、播放快捷鍵）在上面的 useReviewSession
 
+  // 帳號不是全站製作、但在這個專案是製作：可以進專案編輯頁（全站製作從管理頁進）
+  const canEditProject = !!user && user.role !== 'admin' && projectRole === 'admin' && !va.active;
+
   const topBar = (
     <header className="studio-top">
       <button className="studio-top__back" onClick={() => navigate('/studio')} title="所有專案" aria-label="所有專案"><Icon icon={ArrowLeft} size="md" /></button>
@@ -929,6 +933,10 @@ function StudioInner({ projectId }: { projectId: string }) {
         {projectArchived && <span className="studio-top__archived">已封存，只能看</span>}
       </span>
       <span className="grow" />
+      {/* 這個專案的製作（帳號不是全站製作）：進專案編輯頁 */}
+      {canEditProject && (
+        <Link className="studio-top__help ovf-hide-narrow" to={projectEditorPath(projectId)} title="編輯這個專案（你是這個專案的製作）"><Icon icon={Pencil} /> 編輯專案</Link>
+      )}
       {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
       <a className="studio-top__help ovf-hide-narrow" href={helpUrl(HELP_ANCHORS.animator)} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
       {/* 設定頁有 NDI / AE 連線檢查 */}
@@ -939,6 +947,7 @@ function StudioInner({ projectId }: { projectId: string }) {
         className="ovf-only-narrow"
         header={user ? `${user.name} · 動畫師工作站` : undefined}
         items={[
+          ...(canEditProject ? [{ key: 'edit', label: '編輯專案', icon: Pencil, onSelect: () => navigate(projectEditorPath(projectId)) }] : []),
           { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(HELP_ANCHORS.animator), external: true },
           { key: 'settings', label: '設定（AE 即時連線檢查）', icon: Settings, onSelect: () => navigate('/settings') },
           ...(user ? [{ key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: async () => { await logout(); navigate('/login'); } }] : []),

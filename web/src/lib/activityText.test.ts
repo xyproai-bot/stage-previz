@@ -27,6 +27,16 @@ describe('describeActivity（最近活動的一句話）', () => {
     expect(describeActivity(e('update', 'stage_object', { name: '瞬掉緞帶', changes: { defaultHidden: false } }))).toBe('取消物件「瞬掉緞帶」的預設隱藏');
     expect(describeActivity(e('update', 'stage_object', { name: '主牆', changes: { locked: true } }))).toBe('修改物件「主牆」');
   });
+  it('專案成員、邀請連結：寫給誰、什麼角色，沒有名字也不會出現 undefined', () => {
+    expect(describeActivity(e('create', 'member', { name: '小華', summary: '把「小華」加進專案（導演）' }))).toBe('把「小華」加進專案（導演）');
+    expect(describeActivity(e('update', 'member', { name: '小華', summary: '把「小華」從動畫師改成製作' }))).toBe('把「小華」從動畫師改成製作');
+    expect(describeActivity(e('delete', 'member', { name: '小華' }))).toBe('把「小華」移出專案');
+    expect(describeActivity(e('delete', 'member', {}))).toBe('移出了一位成員');
+    expect(describeActivity(e('create', 'invite', { name: '小陳', role: 'admin' }))).toBe('建立邀請連結「小陳」（製作）');
+    expect(describeActivity(e('create', 'invite', { name: '小陳', role: 'director' }))).toBe('建立邀請連結「小陳」（導演）');
+    expect(describeActivity(e('create', 'invite', {}))).toBe('建立邀請連結');
+    expect(describeActivity(e('delete', 'invite', {}))).toBe('撤銷一條邀請連結');
+  });
   it('交新版後自動回到審查中：沒有歌名也不會出現 undefined', () => {
     const s = describeActivity(e('update', 'song', { statusFrom: 'needs_changes', statusTo: 'in_review', auto: true, label: 'V2' }));
     expect(s).toBe('把歌曲從「需修改」改成「審查中」（交了新版 V2，自動改的）');

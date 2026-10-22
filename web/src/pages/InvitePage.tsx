@@ -80,7 +80,7 @@ export default function InvitePage() {
           <>
             <h1>{state.invite.personName ? `${state.invite.personName}你好` : '你好'}</h1>
             <p className="invite-card__lead">
-              製作邀請你進入「<strong>{state.invite.projectName}</strong>」，你的身分是<strong>{ROLE_LABEL[state.invite.role]}</strong>。
+              製作邀請你進入「<strong>{state.invite.projectName}</strong>」，你的身分是<strong>{state.invite.role === 'admin' ? '這個專案的製作' : ROLE_LABEL[state.invite.role]}</strong>。
             </p>
             {user && state.invite.personName && user.name !== state.invite.personName && (
               <p className="invite-card__note">

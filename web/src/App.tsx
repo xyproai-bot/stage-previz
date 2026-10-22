@@ -15,7 +15,7 @@ import ToastContainer from './components/ToastContainer';
 import { DialogHost } from './components/dialogs';
 import ErrorBoundary from './components/ErrorBoundary';
 import { RequireAuth, useAuth } from './lib/auth';
-import { HomeRedirect, RequireAdmin, RouteLoading } from './lib/roleRouting';
+import { HomeRedirect, RequireAdmin, RequireProjectEditor, RouteLoading } from './lib/roleRouting';
 import MyProjectsPage from './lib/MyProjectsPage';
 import ViewAsPage from './components/ViewAsPage';
 
@@ -43,7 +43,7 @@ export default function App() {
             <Route path="/login" element={<Login />} />
             {/* 管理頁只給製作（admin）；其他角色會被帶回自己的頁面 */}
             <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
-            <Route path="/admin/projects/:projectId" element={<RequireAdmin><ErrorBoundary><ProjectEditor /></ErrorBoundary></RequireAdmin>} />
+            <Route path="/admin/projects/:projectId" element={<RequireProjectEditor><ErrorBoundary><ProjectEditor /></ErrorBoundary></RequireProjectEditor>} />
             <Route path="/admin/shows" element={<RequireAdmin><Shows /></RequireAdmin>} />
             <Route path="/admin/shows/:showId" element={<RequireAdmin><ShowDetail /></RequireAdmin>} />
             <Route path="/admin/users" element={<RequireAdmin><Users /></RequireAdmin>} />

@@ -1,23 +1,31 @@
-// 建立邀請連結：選專案（用戶頁）→ 選人（新的人 / 已經有帳號的人）→ 角色（導演 / 動畫師）→ 有效期限
+// 建立邀請連結：選專案（用戶頁）→ 選人（新的人 / 已經有帳號的人）→ 角色（製作 / 導演 / 動畫師）→ 有效期限
 // 建好之後顯示可以直接貼到 LINE / 微信的訊息 + 複製；下面是還沒用的邀請連結（可以撤銷）。
-//   InviteDialog  對話框（專案頁、用戶頁）
-//   InvitePanel   對話框裡面那一塊（新專案精靈的「邀請人」直接放在頁面裡）
+//   InviteDialog  對話框（用戶頁）
+//   InvitePanel   對話框裡面那一塊（專案的「成員」面板、新專案精靈的「邀請人」直接放在頁面裡）
+//
+// 專案頁（有 projectId）：「已經有帳號的人」用名字搜尋（專案的製作拿不到全部用戶清單）；
+// 用戶頁（沒有 projectId，只有全站製作）：讀整份用戶清單，可以選專案。
+// 角色「製作」= 這個專案的製作（只在這個專案有效）：連結一律只能用一次、最長 7 天（後台也這樣擋）。
 import { useEffect, useMemo, useState } from 'react';
 import * as api from '../lib/api';
-import type { InviteRole, UserAdmin } from '../lib/api';
+import type { InviteRole, MemberCandidate, UserAdmin, UserRole } from '../lib/api';
 import type { Project } from '../lib/mockData';
 import { ROLE_LABEL } from '../lib/roleLabels';
-import { buildInviteMessage, INVITE_DAY_OPTIONS, INVITE_ROLE_OPTIONS } from '../lib/inviteMessage';
+import {
+  buildInviteMessage, clampInviteDays, inviteDayChoices, inviteMustBeSingleUse, INVITE_ROLE_CHOICES,
+} from '../lib/inviteMessage';
 import { inviteUrl } from '../lib/siteUrl';
 import { copyToClipboard } from '../lib/clipboard';
 import { toast } from '../lib/toast';
 import { Check, Copy, Link, LoaderCircle, UserPlus, X } from 'lucide-react';
 import Icon from './Icon';
 import OpenInvitesList from './OpenInvitesList';
+import UserSearchPicker from './UserSearchPicker';
 import HelpLink from './HelpLink';
 import { HELP_ANCHORS } from '../lib/helpLinks';
 import './NewProjectDialog.css';
 import './InviteDialog.css';
+import './MembersPanel.css';
 
 interface PanelProps {
   /** 固定在這個專案（專案頁）；不給 = 可以選專案（用戶頁） */
@@ -45,7 +53,17 @@ interface Created {
   projectName: string;
 }
 
-const isInviteRole = (r: string | undefined): r is InviteRole => r === 'animator' || r === 'director';
+/** 要邀請的「已經有帳號的人」（不管是從搜尋選的，還是從整份清單選的） */
+interface Person {
+  id: string;
+  name: string;
+  /** 在這個專案現在的角色（還不是成員 = null） */
+  projectRole: UserRole | null;
+  /** 帳號的預設角色 */
+  accountRole: UserRole;
+}
+
+const isInviteRole = (r: string | undefined): r is InviteRole => r === 'admin' || r === 'animator' || r === 'director';
 
 export default function InviteDialog({ open, onClose, projectId, projectName, presetUserId, onChanged }: Props) {
   if (!open) return null;
@@ -70,6 +88,7 @@ export default function InviteDialog({ open, onClose, projectId, projectName, pr
 }
 
 export function InvitePanel({ projectId, projectName, presetUserId, onChanged, onCreated, defaultRole = 'director' }: PanelProps) {
+  const projectMode = !!projectId;
   const [projects, setProjects] = useState<Project[]>([]);
   const [users, setUsers] = useState<UserAdmin[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -77,6 +96,8 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
   const [personMode, setPersonMode] = useState<'new' | 'existing'>(presetUserId ? 'existing' : 'new');
   const [name, setName] = useState('');
   const [userId, setUserId] = useState(presetUserId || '');
+  const [pickedCandidate, setPickedCandidate] = useState<MemberCandidate | null>(null);
+  const [sameNameCandidate, setSameNameCandidate] = useState<MemberCandidate | null>(null);
   const [role, setRole] = useState<InviteRole>(defaultRole);
   const [days, setDays] = useState(7);
   const [singleUse, setSingleUse] = useState(true);
@@ -86,40 +107,67 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
   const [copied, setCopied] = useState<'message' | 'link' | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
 
-  // 讀用戶（和專案清單，用戶頁才要）
+  // 用戶頁：讀整份用戶和專案清單（只有全站製作拿得到）
   useEffect(() => {
+    if (projectMode) return;
     setLoadError(null);
     let cancelled = false;
-    Promise.all([api.listUsers(), projectId ? Promise.resolve(null) : api.listProjects()])
+    Promise.all([api.listUsers(), api.listProjects()])
       .then(([u, p]) => {
         if (cancelled) return;
         setUsers(u);
-        if (p) setProjects(p);
+        setProjects(p);
       })
       .catch(e => { if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
-  }, [projectId]);
+  }, [projectMode]);
 
   const targetProjectId = projectId || pickedProjectId;
   const targetProjectName = projectName || projects.find(p => p.id === targetProjectId)?.name || '';
 
-  // 可以邀請的「已經有帳號的人」：啟用中、不是製作（製作用登入碼）
+  // 可以邀請的「已經有帳號的人」（用戶頁）：啟用中、不是製作（製作用登入碼）
   const invitable = useMemo(() => users.filter(u => !u.deactivated && u.role !== 'admin'), [users]);
   const pickedUser = invitable.find(u => u.id === userId) || null;
-  const currentMembership = pickedUser?.projects.find(m => m.projectId === targetProjectId) || null;
+
+  const person: Person | null = projectMode
+    ? (pickedCandidate && { id: pickedCandidate.id, name: pickedCandidate.name, projectRole: pickedCandidate.projectRole, accountRole: pickedCandidate.role })
+    : (pickedUser && {
+      id: pickedUser.id,
+      name: pickedUser.name,
+      projectRole: pickedUser.projects.find(m => m.projectId === targetProjectId)?.role ?? null,
+      accountRole: pickedUser.role,
+    });
 
   // 選了某個人 → 角色先帶他在這個專案（或帳號）原本的角色
   useEffect(() => {
-    if (personMode !== 'existing' || !pickedUser) return;
-    const r = currentMembership?.role ?? pickedUser.role;
+    if (personMode !== 'existing' || !person) return;
+    const r = person.projectRole ?? person.accountRole;
     if (isInviteRole(r)) setRole(r);
-  }, [personMode, pickedUser, currentMembership]);
+  }, [personMode, person?.id, person?.projectRole, person?.accountRole]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 選了製作 → 有效天數不能超過 7 天
+  useEffect(() => { setDays(d => clampInviteDays(role, d)); }, [role]);
+
+  // 專案頁：新的人如果跟現有的用戶同名，提醒一下（用名字搜尋，不讀整份用戶清單）
+  useEffect(() => {
+    setSameNameCandidate(null);
+    const text = name.trim();
+    if (!projectMode || personMode !== 'new' || !text) return;
+    let cancelled = false;
+    const t = setTimeout(() => {
+      api.searchMemberCandidates(projectId!, text)
+        .then(list => { if (!cancelled) setSameNameCandidate(list.find(u => u.name.trim() === text) || null); })
+        .catch(() => { /* 查不到就不提醒 */ });
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [name, personMode, projectMode, projectId]);
 
   const sameNameUser = personMode === 'new' && name.trim()
-    ? users.find(u => !u.deactivated && u.name.trim() === name.trim()) || null
+    ? (projectMode ? sameNameCandidate : users.find(u => !u.deactivated && u.name.trim() === name.trim()) || null)
     : null;
 
-  const canSubmit = !!targetProjectId && (personMode === 'new' ? !!name.trim() : !!pickedUser) && !creating;
+  const forcedSingleUse = inviteMustBeSingleUse(role);
+  const canSubmit = !!targetProjectId && (personMode === 'new' ? !!name.trim() : !!person) && !creating;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -129,9 +177,9 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
     try {
       const { invite, token } = await api.createInvite(targetProjectId, {
         role,
-        ...(personMode === 'existing' ? { userId } : { name: name.trim() }),
+        ...(personMode === 'existing' && person ? { userId: person.id } : { name: name.trim() }),
         expiresInDays: days,
-        singleUse,
+        singleUse: forcedSingleUse ? true : singleUse,
       });
       const url = inviteUrl(token);
       const pName = invite.projectName || targetProjectName;
@@ -167,6 +215,7 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
     setCopied(null);
     setName('');
     setError(null);
+    setPickedCandidate(null);
     if (!presetUserId) { setPersonMode('new'); setUserId(''); }
   }
 
@@ -198,7 +247,7 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
         </div>
       ) : (
         <form className="acct-form" onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-          {!projectId && (
+          {!projectMode && (
             <div className="acct-field">
               <label htmlFor="inv-project">邀請到哪個專案</label>
               <select id="inv-project" value={pickedProjectId} onChange={(e) => setPickedProjectId(e.target.value)} required>
@@ -232,6 +281,25 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
                   </span>
                 )}
               </>
+            ) : projectMode ? (
+              <>
+                <UserSearchPicker
+                  projectId={projectId!}
+                  placeholder="輸入名字找人"
+                  renderAction={(u) => (
+                    <button
+                      type="button"
+                      className={'btn acct-btn ' + (pickedCandidate?.id === u.id ? 'btn--primary' : 'btn--ghost')}
+                      onClick={() => setPickedCandidate(u)}
+                    >
+                      {pickedCandidate?.id === u.id ? '已選他' : '選他'}
+                    </button>
+                  )}
+                />
+                {pickedCandidate && (
+                  <span className="acct-field__hint" data-testid="invite-picked">已選：{pickedCandidate.name}</span>
+                )}
+              </>
             ) : (
               <>
                 <select id="inv-user" aria-label="選擇用戶" value={userId} onChange={(e) => setUserId(e.target.value)}>
@@ -239,21 +307,21 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
                   {invitable.map(u => <option key={u.id} value={u.id}>{u.name}（{ROLE_LABEL[u.role]}）</option>)}
                 </select>
                 {invitable.length === 0 && <span className="acct-field__hint">還沒有可以邀請的用戶（製作帳號請用登入碼登入）。</span>}
-                {pickedUser && currentMembership && isInviteRole(currentMembership.role) && currentMembership.role !== role && (
-                  <span className="acct-field__warn">
-                    他在這個專案現在是「{ROLE_LABEL[currentMembership.role]}」，用了這個連結會改成「{ROLE_LABEL[role]}」。
-                  </span>
-                )}
               </>
+            )}
+            {personMode === 'existing' && person && person.projectRole && person.projectRole !== role && (
+              <span className="acct-field__warn">
+                他在這個專案現在是「{ROLE_LABEL[person.projectRole]}」，用了這個連結會改成「{ROLE_LABEL[role]}」。
+              </span>
             )}
           </div>
 
           <div className="acct-field">
             <span className="acct-field__label">在這個專案的角色</span>
-            <div className="acct-choice" role="radiogroup" aria-label="角色">
-              {INVITE_ROLE_OPTIONS.map(o => (
+            <div className="acct-choice acct-choice--3" role="radiogroup" aria-label="角色">
+              {INVITE_ROLE_CHOICES.map(o => (
                 <label key={o.role} className={'acct-choice__item' + (role === o.role ? ' is-active' : '')}>
-                  <input type="radio" name="inv-role" checked={role === o.role} onChange={() => setRole(o.role)} />
+                  <input type="radio" name="inv-role" checked={role === o.role} onChange={() => setRole(o.role as InviteRole)} />
                   <span>{o.label}<small>{o.hint}</small></span>
                 </label>
               ))}
@@ -264,17 +332,22 @@ export function InvitePanel({ projectId, projectName, presetUserId, onChanged, o
             <span className="acct-field__label">有效期限</span>
             <div className="acct-inline">
               <select aria-label="幾天內有效" value={days} onChange={(e) => setDays(Number(e.target.value))}>
-                {INVITE_DAY_OPTIONS.map(d => <option key={d} value={d}>{d} 天內有效</option>)}
+                {inviteDayChoices(role).map(d => <option key={d} value={d}>{d} 天內有效</option>)}
               </select>
               <label className="acct-check">
-                <input type="checkbox" checked={singleUse} onChange={(e) => setSingleUse(e.target.checked)} />
+                <input
+                  type="checkbox" checked={forcedSingleUse ? true : singleUse} disabled={forcedSingleUse}
+                  onChange={(e) => setSingleUse(e.target.checked)}
+                />
                 只能用一次
               </label>
             </div>
             <span className="acct-field__hint">
-              {singleUse
-                ? '對方用過之後這個連結就不能再用（別人拿到也進不去）。'
-                : '有效期限內最多可以用 10 次（例如手機和電腦都要開），每次都是同一個人。'}
+              {forcedSingleUse
+                ? '製作的連結一律只能用一次、最長 7 天（連結如果外流，只有第一個打開的人進得去）。'
+                : singleUse
+                  ? '對方用過之後這個連結就不能再用（別人拿到也進不去）。'
+                  : '有效期限內最多可以用 10 次（例如手機和電腦都要開），每次都是同一個人。'}
             </span>
           </div>
 

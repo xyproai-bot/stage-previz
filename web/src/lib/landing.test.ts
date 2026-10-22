@@ -1,7 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import {
-  canOpenPath, isAdminOnlyPath, landingNeedsProjects, landingPath, projectListPath, returnPathAfterLogin,
+  canOpenPath, canOpenProjectEditor, isAdminOnlyPath, landingNeedsProjects, landingPath, projectEditorPath, projectListPath, returnPathAfterLogin,
 } from './landing';
+
+describe('專案編輯頁：全站製作，或這個專案的製作', () => {
+  it('全站製作都開得了；專案的製作（帳號是導演 / 動畫師）開得了；其他不行', () => {
+    expect(canOpenProjectEditor('admin', null)).toBe(true);
+    expect(canOpenProjectEditor('admin', 'animator')).toBe(true);
+    expect(canOpenProjectEditor('animator', 'admin')).toBe(true);
+    expect(canOpenProjectEditor('director', 'admin')).toBe(true);
+    expect(canOpenProjectEditor('animator', 'animator')).toBe(false);
+    expect(canOpenProjectEditor('director', 'director')).toBe(false);
+    expect(canOpenProjectEditor('animator', null)).toBe(false);
+    expect(canOpenProjectEditor(null, 'admin')).toBe(false);
+    expect(canOpenProjectEditor(undefined, undefined)).toBe(false);
+  });
+  it('網址會編碼', () => {
+    expect(projectEditorPath('p_1')).toBe('/admin/projects/p_1');
+    expect(projectEditorPath('a b')).toBe('/admin/projects/a%20b');
+  });
+});
 
 describe('landingPath', () => {
   it('製作 → 管理頁（不用專案清單）', () => {

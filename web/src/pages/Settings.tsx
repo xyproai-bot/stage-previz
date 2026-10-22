@@ -14,8 +14,10 @@ import { confirmDialog } from '../components/dialogs';
 import { version as APP_VERSION } from '../../package.json';
 import { ROLE_LABEL } from '../lib/roleLabels';
 import Icon from '../components/Icon';
-import { BookOpen, Download, ExternalLink, Palette, TriangleAlert } from 'lucide-react';
+import { BookOpen, Download, ExternalLink, KeyRound, Palette, TriangleAlert } from 'lucide-react';
 import SystemStatusSection from '../components/SystemStatusSection';
+import LoginCodeSetDialog, { type LoginCodeSetResult } from '../components/LoginCodeSetDialog';
+import LoginCodeDialog from '../components/LoginCodeDialog';
 import './Settings.css';
 
 export default function Settings() {
@@ -41,6 +43,9 @@ export default function Settings() {
 
 function AccountSection() {
   const { user } = useAuth();
+  // 修改我的登入碼：先輸入現在的，再選自動產生 / 自己設定；新的只顯示一次
+  const [changing, setChanging] = useState(false);
+  const [shown, setShown] = useState<LoginCodeSetResult | null>(null);
   if (!user) return null;
   return (
     <section className="settings-card">
@@ -56,9 +61,26 @@ function AccountSection() {
       </div>
       <p className="settings-hint">
         {user.role === 'admin'
-          ? <>要改名字或登入碼，到 <Link to="/admin/users">用戶</Link> 頁。</>
-          : '要改名字或登入碼，請找製作。'}
+          ? <>要改名字，到 <Link to="/admin/users">用戶</Link> 頁。</>
+          : '要改名字，請找製作。'}
+        登入碼可以自己改，也可以自己設定一組比較好記的。
       </p>
+      <div>
+        <button type="button" className="btn btn--ghost" onClick={() => setChanging(true)}>
+          <Icon icon={KeyRound} /> 修改我的登入碼
+        </button>
+      </div>
+      {changing && (
+        <LoginCodeSetDialog
+          target="self"
+          selfName={user.name}
+          onClose={() => setChanging(false)}
+          onDone={(r) => { setChanging(false); setShown(r); }}
+        />
+      )}
+      {shown && (
+        <LoginCodeDialog open name={user.name} code={shown.code} shownOnce={shown.shownOnce} isReset self custom={shown.custom} onClose={() => setShown(null)} />
+      )}
     </section>
   );
 }

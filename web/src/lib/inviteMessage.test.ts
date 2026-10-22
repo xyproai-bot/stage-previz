@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   buildInviteMessage, buildLoginCodeMessage, formatLoginCodeForDisplay, inviteExpiryText, inviteUsesText,
-  inviteValidityText, loginCodeDisplay, INVITE_ROLE_OPTIONS,
+  inviteValidityText, loginCodeDisplay, INVITE_ROLE_OPTIONS, INVITE_ROLE_CHOICES, INVITE_ADMIN_MAX_DAYS,
+  inviteDayChoices, inviteMustBeSingleUse, clampInviteDays,
 } from './inviteMessage';
 import { inviteUrl, loginPageUrl } from './siteUrl';
 
@@ -71,8 +72,23 @@ describe('邀請清單', () => {
     expect(inviteUsesText(0, 10)).toBe('還沒用（最多 10 次）');
     expect(inviteUsesText(2, 10)).toBe('用了 2 次，還剩 8 次');
   });
-  it('角色只有導演、動畫師（用畫面上的名稱）', () => {
+  it('舊的兩個選項照舊：導演、動畫師（用畫面上的名稱）', () => {
     expect(INVITE_ROLE_OPTIONS.map(o => o.label)).toEqual(['導演', '動畫師']);
+  });
+  it('邀請可以選製作、導演、動畫師；製作只限這個專案', () => {
+    expect(INVITE_ROLE_CHOICES.map(o => o.label)).toEqual(['製作', '導演', '動畫師']);
+    expect(INVITE_ROLE_CHOICES[0].role).toBe('admin');
+    expect(INVITE_ROLE_CHOICES[0].hint).toContain('只限這個專案');
+  });
+  it('製作的邀請：最長 7 天、一律只能用一次；導演 / 動畫師照舊', () => {
+    expect(inviteDayChoices('admin')).toEqual([1, 3, 7]);
+    expect(inviteDayChoices('director')).toEqual([1, 3, 7, 14, 30]);
+    expect(inviteMustBeSingleUse('admin')).toBe(true);
+    expect(inviteMustBeSingleUse('animator')).toBe(false);
+    expect(clampInviteDays('admin', 30)).toBe(7);
+    expect(clampInviteDays('admin', 3)).toBe(3);
+    expect(clampInviteDays('director', 30)).toBe(30);
+    expect(INVITE_ADMIN_MAX_DAYS).toBe(7);
   });
 });
 

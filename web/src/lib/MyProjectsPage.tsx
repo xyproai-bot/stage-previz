@@ -8,6 +8,7 @@ import * as api from './api';
 import type { Project, SongStatusCounts } from './mockData';
 import { formatRelativeTime } from './serverTime';
 import { helpUrl } from './helpLinks';
+import { projectEditorPath } from './landing';
 import { ProjectCardSkeleton } from '../components/Skeleton';
 import './myProjects.css';
 
@@ -92,7 +93,15 @@ export default function MyProjectsPage({ kind }: { kind: Kind }) {
 
         {projects && projects.length > 0 && (
           <div className="my-projects__grid">
-            {projects.map(p => <ProjectTile key={p.id} project={p} to={`/${kind}/${encodeURIComponent(p.id)}`} />)}
+            {projects.map(p => (
+              <div key={p.id} className="my-projects__item">
+                <ProjectTile project={p} to={`/${kind}/${encodeURIComponent(p.id)}`} />
+                {/* 這個專案的製作（帳號不是全站製作）：直接進專案編輯頁 */}
+                {user.role !== 'admin' && p.myRole === 'admin' && (
+                  <Link className="my-projects__edit" to={projectEditorPath(p.id)}>編輯專案（你是這個專案的製作）</Link>
+                )}
+              </div>
+            ))}
           </div>
         )}
       </main>

@@ -66,6 +66,35 @@ export const INVITE_ROLE_OPTIONS: ReadonlyArray<{ role: Extract<UserRole, 'anima
 
 export const INVITE_DAY_OPTIONS: readonly number[] = [1, 3, 7, 14, 30];
 
+/**
+ * 邀請時可以選的角色（在「這個專案」的角色）：製作、導演、動畫師。
+ * 製作 = 這個專案的製作（可以編輯這個專案、管理成員），只在這個專案有效，不是全站製作。
+ */
+export const INVITE_ROLE_CHOICES: ReadonlyArray<{ role: UserRole; label: string; hint: string }> = [
+  { role: 'admin', label: ROLE_LABEL.admin, hint: '編輯這個專案、管理成員（只限這個專案）' },
+  { role: 'director', label: ROLE_LABEL.director, hint: '進審片頁：看影片、留言、通過或要求修改' },
+  { role: 'animator', label: ROLE_LABEL.animator, hint: '進工作站：交影片、看導演的留言' },
+];
+
+/** 製作的邀請連結最長幾天、一律只能用一次（連結外流的風險比較大；後台也是這樣擋） */
+export const INVITE_ADMIN_MAX_DAYS = 7;
+
+/** 這個角色的邀請可以選幾天 */
+export function inviteDayChoices(role: UserRole): readonly number[] {
+  return role === 'admin' ? INVITE_DAY_OPTIONS.filter(d => d <= INVITE_ADMIN_MAX_DAYS) : INVITE_DAY_OPTIONS;
+}
+
+/** 這個角色的邀請一律只能用一次（不給選「可以用好幾次」） */
+export function inviteMustBeSingleUse(role: UserRole): boolean {
+  return role === 'admin';
+}
+
+/** 選了製作之後，有效天數超過上限就改回上限 */
+export function clampInviteDays(role: UserRole, days: number): number {
+  const choices = inviteDayChoices(role);
+  return choices.includes(days) ? days : choices[choices.length - 1];
+}
+
 /** 清單上「還有幾天」：還有 3 天 / 今天到期 / 已過期 */
 export function inviteExpiryText(expiresAt: string | null, now = Date.now()): string {
   if (!expiresAt) return '';

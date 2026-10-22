@@ -23,7 +23,7 @@ import SaveIndicator from '../components/SaveIndicator';
 import CueDiffDialog from '../components/CueDiffDialog';
 import ImportCuesDialog from '../components/ImportCuesDialog';
 import ShareLinksDialog from '../components/ShareLinksDialog';
-import InviteDialog from '../components/InviteDialog';
+import ProjectMembersDialog from '../components/ProjectMembersDialog';
 import CommentSearchDialog from '../components/CommentSearchDialog';
 import NotificationBell from '../components/NotificationBell';
 import OverflowMenu, { type OverflowItem } from '../components/OverflowMenu';
@@ -49,7 +49,7 @@ import { isTextEntryTarget, isTypingTarget } from '../lib/keyTarget';
 import { useEscapeClose } from '../lib/useEscapeClose';
 import { chooseDialog, confirmDialog, promptDialog } from '../components/dialogs';
 import { friendlyError, staleStatusMessage } from '../lib/songReview';
-import type { ProjectMember } from '../lib/mockData';
+import type { ProjectMember, ProjectRole } from '../lib/mockData';
 import { SONG_STATUS_LABEL } from '../lib/songReview';
 import SongCodeField from '../components/SongCodeField';
 import AddVideoDialog from '../components/AddVideoDialog';
@@ -74,7 +74,7 @@ import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowRightLeft, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
   Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, LayoutPanelLeft, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
-  Palette, Pencil, Plus, Redo2, RotateCcw, Ruler, Search, Shapes, Sprout, Trash2, Undo2, Upload, UserPlus, X,
+  Palette, Pencil, Plus, Redo2, RotateCcw, Ruler, Search, Shapes, Sprout, Trash2, Undo2, Upload, Users, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import './ProjectEditor.css';
@@ -116,6 +116,8 @@ export default function ProjectEditor() {
   const [mineSongIds, setMineSongIds] = useState<Set<string>>(new Set());
   // 專案成員（「負責動畫師」選單只列這個專案裡角色是動畫師的人）
   const [projectMembers, setProjectMembers] = useState<ProjectMember[]>([]);
+  // 我在這個專案的角色（全站製作一律是製作；專案的製作也是）：決定哪些編輯功能看得到。後台才是真正的權限
+  const [myProjectRole, setMyProjectRole] = useState<ProjectRole | null>(null);
   // 有人用邀請連結進來之後要看得到 → 一進來讀一次、每 25 秒和切回分頁時再讀、關掉邀請視窗時也讀
   const refreshMembers = useCallback(async () => {
     if (!projectId) return;
@@ -123,9 +125,10 @@ export default function ProjectEditor() {
       const p = await api.getProjectMeta(projectId);
       const next = p?.members || [];
       setProjectMembers(prev => (sameMembers(prev, next) ? prev : next));
+      setMyProjectRole(p?.myRole ?? null);
     } catch { /* 讀不到就照舊（只顯示「還沒指派」） */ }
   }, [projectId]);
-  useEffect(() => { setProjectMembers([]); void refreshMembers(); }, [refreshMembers]);
+  useEffect(() => { setProjectMembers([]); setMyProjectRole(null); void refreshMembers(); }, [refreshMembers]);
   useLiveRefresh(refreshMembers, { enabled: !!projectId });
   const animatorMembers = useMemo(() => projectMembers.filter(m => m.role === 'animator'), [projectMembers]);
   // 「用其他身分看」：導演畫面 / 動畫師畫面（每個動畫師一個）/ 客戶畫面（分享連結），開新分頁、只能看
@@ -137,13 +140,14 @@ export default function ProjectEditor() {
     [songs, projectMembers],
   );
   useEffect(() => {
-    if (!needUserNames || userNames) return;
+    // 全站的用戶清單只有全站製作讀得到；專案的製作拿不到就寫「不在專案裡的人」
+    if (!needUserNames || userNames || user?.role !== 'admin') return;
     let cancelled = false;
     api.listUsers()
       .then(list => { if (!cancelled) setUserNames(new Map(list.map(u => [u.id, u.name]))); })
       .catch(() => { /* 讀不到就寫「已刪除的帳號」 */ });
     return () => { cancelled = true; };
-  }, [needUserNames, userNames]);
+  }, [needUserNames, userNames, user?.role]);
 
   // Cues
   const [cues, setCues] = useState<Cue[]>([]);
@@ -193,11 +197,14 @@ export default function ProjectEditor() {
   }, []);
 
   // 機關 offset（per LED panel，公尺）+ 測距校準倍率 — 存在專案上，所有人共用，admin 才能改
-  const view = useProjectViewSettings(projectId, user?.role === 'admin');
+  const isGlobalAdmin = user?.role === 'admin';
+  const view = useProjectViewSettings(projectId, isGlobalAdmin);
+  // 在這個專案能不能編輯內容（全站製作，或這個專案的製作）；3D 檢視設定 / Drive 來源 / 封存 / 複製只有全站製作（view.canEdit、isGlobalAdmin）
+  const editorRole: ProjectRole | null = isGlobalAdmin ? 'admin' : myProjectRole;
   // 比例尺的樂手和器材（全專案共用；製作、導演可以擺）
-  const band = useStageProps(projectId, canEditStageProps(user?.role === 'admin' ? 'admin' : null));
+  const band = useStageProps(projectId, canEditStageProps(editorRole));
   // 視角書籤（專案共用）
-  const camBm = useCameraBookmarks(projectId, canEditCameraBookmarks(user?.role === 'admin' ? 'admin' : null));
+  const camBm = useCameraBookmarks(projectId, canEditCameraBookmarks(editorRole));
   // 現場設定：專案預設 + 自己調過的（存在這台電腦）
   const personalLook = usePersonalLook(projectId, view.lookSettings);
 
@@ -248,7 +255,7 @@ export default function ProjectEditor() {
     navigate(location.pathname + location.search, { replace: true, state: null });
   }, [location.state]);  // eslint-disable-line react-hooks/exhaustive-deps
   // 邀請連結（幫這個專案加導演 / 動畫師）
-  const [inviteOpen, setInviteOpen] = useState(false);
+  const [membersOpen, setMembersOpen] = useState(false);
   const [commentSearchOpen, setCommentSearchOpen] = useState(false);
   const [diffOpen, setDiffOpen] = useState(false);
   const [importCuesOpen, setImportCuesOpen] = useState(false);
@@ -1085,11 +1092,13 @@ export default function ProjectEditor() {
     { key: 'diff', label: '對比', menuLabel: '兩個 cue 對比', title: '兩個 cue 並排對比', icon: Columns2, onSelect: () => setDiffOpen(true), disabled: !selectedSong || masterCues.length < 2, secondary: true },
     { key: 'import', label: '匯入 Cue', menuLabel: '從別首歌匯入 cue', title: '從別首歌匯入 cue（巡迴複製、跨專案沿用）', icon: Import, onSelect: () => setImportCuesOpen(true), disabled: !selectedSong, secondary: true },
     { key: 'search', label: '搜留言', menuLabel: '搜尋留言', title: '搜尋專案內所有歌的留言', icon: Search, onSelect: () => setCommentSearchOpen(true), secondary: true },
-    ...(user?.role !== 'admin' || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => { setUvOpen(false); setLedTplOpen(true); }, secondary: true }]),
-    ...(user?.role !== 'admin' || !modelUrl || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUv', label: '自動貼 UV', menuLabel: '自動貼 UV（LED 的 UV 和對位圖）', title: '自動貼 UV：選 LED 螢幕、填點距或總點數，系統展開 UV、排好畫布、存成新的模型版本', icon: Ruler, onSelect: () => { setLedTplOpen(false); setUvOpen(true); }, secondary: true }]),
+    ...(editorRole !== 'admin' || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => { setUvOpen(false); setLedTplOpen(true); }, secondary: true }]),
+    ...(editorRole !== 'admin' || !modelUrl || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUv', label: '自動貼 UV', menuLabel: '自動貼 UV（LED 的 UV 和對位圖）', title: '自動貼 UV：選 LED 螢幕、填點距或總點數，系統展開 UV、排好畫布、存成新的模型版本', icon: Ruler, onSelect: () => { setLedTplOpen(false); setUvOpen(true); }, secondary: true }]),
     { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
-    { key: 'invite', label: '邀請', menuLabel: '邀請連結', title: '邀請連結：傳給導演 / 動畫師，點開就加進這個專案（不用登入碼）', icon: UserPlus, onSelect: () => setInviteOpen(true) },
-    { key: 'drive', label: 'Drive', menuLabel: projectMeta?.drive_folder_id ? 'Drive 來源（已設定）' : 'Drive 來源', title: 'Drive 來源設定', icon: Cloud, onSelect: () => setDriveOpen(true), secondary: true },
+    // 成員：這個專案有誰（製作 / 導演 / 動畫師）、加人、改角色、移出、邀請連結；全站製作和這個專案的製作都能用
+    ...(editorRole !== 'admin' ? [] : [{ key: 'members', label: '成員', menuLabel: '成員', title: '成員：這個專案有誰、加人、改角色、移出專案、邀請連結（傳給對方，點開就加進這個專案）', icon: Users, onSelect: () => setMembersOpen(true) }]),
+    // Drive 來源只有全站製作能設（專案的製作碰不到 Google 帳號）
+    ...(!isGlobalAdmin ? [] : [{ key: 'drive', label: 'Drive', menuLabel: projectMeta?.drive_folder_id ? 'Drive 來源（已設定）' : 'Drive 來源', title: 'Drive 來源設定', icon: Cloud, onSelect: () => setDriveOpen(true), secondary: true }]),
     { key: 'activity', label: '最近活動', menuLabel: '最近活動', title: '最近活動', icon: HistoryIcon, onSelect: () => setActivityOpen(true), secondary: true },
   ];
 
@@ -1097,7 +1106,7 @@ export default function ProjectEditor() {
     <div className="editor">
       {/* Top */}
       <header className="editor-topbar">
-        <button className="editor-back" onClick={() => navigate('/admin')} title="返回專案總覽" aria-label="返回專案總覽"><Icon icon={ArrowLeft} size="md" /></button>
+        <button className="editor-back" onClick={() => navigate(isGlobalAdmin ? '/admin' : '/studio')} title="返回專案總覽" aria-label="返回專案總覽"><Icon icon={ArrowLeft} size="md" /></button>
         <div className="editor-breadcrumb">
           <span className="muted editor-breadcrumb__root">專案</span>
           <span className="sep editor-breadcrumb__root">/</span>
@@ -1149,19 +1158,21 @@ export default function ProjectEditor() {
               {a.key === 'drive' && projectMeta?.drive_folder_id && <span className="editor-topbar__dot" title="已設定 Drive 資料夾" />}
             </button>
           ))}
-          <OverflowMenu
-            className="ovf-hide-narrow"
-            label={VIEW_AS_MENU_LABEL}
-            trigger={{ icon: Eye, text: <span className="editor-topbar__label"> {VIEW_AS_MENU_LABEL}</span>, className: 'editor-topbar__activity' }}
-            items={viewAsMenu.items}
-            onOpen={viewAsMenu.load}
-          />
+          {isGlobalAdmin && (
+            <OverflowMenu
+              className="ovf-hide-narrow"
+              label={VIEW_AS_MENU_LABEL}
+              trigger={{ icon: Eye, text: <span className="editor-topbar__label"> {VIEW_AS_MENU_LABEL}</span>, className: 'editor-topbar__activity' }}
+              items={viewAsMenu.items}
+              onOpen={viewAsMenu.load}
+            />
+          )}
           <NotificationBell />
           <OverflowMenu
             className="ovf-only-narrow"
             items={[
               ...topbarActions.map(a => ({ key: a.key, label: a.menuLabel, icon: a.icon, disabled: a.disabled, onSelect: a.onSelect, separatorBefore: a.key === 'share' })),
-              ...viewAsMenu.items.map((it, i) => (i === 0 ? { ...it, section: VIEW_AS_MENU_LABEL } : it)),
+              ...(isGlobalAdmin ? viewAsMenu.items.map((it, i) => (i === 0 ? { ...it, section: VIEW_AS_MENU_LABEL } : it)) : []),
             ]}
             onOpen={viewAsMenu.load}
           />
@@ -1284,13 +1295,13 @@ export default function ProjectEditor() {
                           value={s.animatorUserId ?? ''}
                           onChange={(e) => handleAssignAnimator(s.id, e.target.value || null)}
                           disabled={animatorMembers.length === 0 && !s.animatorUserId}
-                          title={animatorMembers.length === 0 ? '這個專案還沒有動畫師：先到「用戶」把動畫師加進這個專案' : '指派後，動畫師在工作站的「我的」就看得到這首歌'}
+                          title={animatorMembers.length === 0 ? '這個專案還沒有動畫師：先到上方的「成員」把動畫師加進這個專案' : '指派後，動畫師在工作站的「我的」就看得到這首歌'}
                         >
                           <option value="">{animatorMembers.length === 0 ? '專案裡還沒有動畫師' : '還沒指派'}</option>
                           {animatorMembers.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                           {s.animatorUserId && !animatorMembers.some(m => m.id === s.animatorUserId) && (
                             <option value={s.animatorUserId}>
-                              {(projectMembers.find(m => m.id === s.animatorUserId)?.name || userNames?.get(s.animatorUserId) || '已刪除的帳號') + '（還不是這個專案的動畫師，請邀請或到「用戶」指派）'}
+                              {(projectMembers.find(m => m.id === s.animatorUserId)?.name || userNames?.get(s.animatorUserId) || (isGlobalAdmin ? '已刪除的帳號' : '不在專案裡的人')) + '（還不是這個專案的動畫師，請到上方的「成員」加入或邀請）'}
                             </option>
                           )}
                         </select>
@@ -1582,7 +1593,7 @@ export default function ProjectEditor() {
         />
       )}
       <LedTemplatesDialog
-        open={ledTplOpen && user?.role === 'admin'}
+        open={ledTplOpen && editorRole === 'admin'}
         projectId={projectId || ''}
         projectName={projectMeta?.name}
         onClose={() => setLedTplOpen(false)}
@@ -1596,7 +1607,7 @@ export default function ProjectEditor() {
       />
 
       <LedUvPanel
-        open={uvOpen && user?.role === 'admin'}
+        open={uvOpen && editorRole === 'admin'}
         projectId={projectId || ''}
         projectName={projectMeta?.name}
         ledObjects={uvObjects}
@@ -1692,11 +1703,12 @@ export default function ProjectEditor() {
         onProjectChanged={refreshProjectMeta}
       />
 
-      <InviteDialog
-        open={inviteOpen}
+      <ProjectMembersDialog
+        open={membersOpen}
         projectId={projectId || ''}
         projectName={projectMeta?.name}
-        onClose={() => { setInviteOpen(false); void refreshMembers(); }}
+        onChanged={() => { void refreshMembers(); }}
+        onClose={() => { setMembersOpen(false); void refreshMembers(); }}
       />
 
       <CommentSearchDialog

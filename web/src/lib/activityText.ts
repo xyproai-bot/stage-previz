@@ -3,6 +3,7 @@
 // 以前沒列到的種類會直接把後台的代號印出來（「建立 song_video」「新增mechanism」），
 // 交新版後自動回到審查中那一筆沒有歌名，會寫成「把歌曲「undefined」…」。
 import type { ActivityEntry } from './api';
+import { MEMBER_ROLE_NAME, type MemberRole } from './projectMembers';
 
 const SONG_STATUS_LABEL: Record<string, string> = {
   todo: '待製作', in_review: '審查中', approved: '已通過', needs_changes: '需修改',
@@ -11,7 +12,7 @@ const SONG_STATUS_LABEL: Record<string, string> = {
 const TARGET_LABEL: Record<string, string> = {
   project: '專案', song: '歌曲', cue: 'cue', cue_state: '物件位置', song_cue_states: '物件位置', stage_object: '物件', model: '模型',
   song_video: '影片', mechanism: '機關', mechanism_group: '一排機關', drive_file: 'Drive 檔案', cue_template: '常用擺位', invite: '邀請連結',
-  share_link: '分享連結', comment: '留言',
+  share_link: '分享連結', comment: '留言', member: '成員',
 };
 
 const ACTION_VERB: Record<string, string> = {
@@ -69,6 +70,21 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
     const moved = num(p.queuedForInfrequent) ?? 0;
     const bits = [removed ? `清掉 ${removed} 版影片（30 天內可以救回來）` : '', moved ? `${moved} 版改成長期存放` : ''].filter(Boolean);
     return `專案結束清影片${bits.length ? `：${bits.join('、')}` : ''}`;
+  }
+  // 專案成員：加進專案 / 改角色 / 移出專案（後台寫好一句 summary）
+  if (type === 'member') {
+    const summary = str(p.summary);
+    if (summary) return summary;
+    if (action === 'delete') return name ? `把${quoted(name)}移出專案` : '移出了一位成員';
+    return name ? `調整成員${quoted(name)}的角色` : '調整了一位成員的角色';
+  }
+  // 邀請連結：建立（寫給誰、什麼角色）/ 撤銷
+  if (type === 'invite') {
+    if (action === 'create') {
+      const role = MEMBER_ROLE_NAME[String(p.role) as MemberRole];
+      return `建立邀請連結${quoted(name)}${role ? `（${role}）` : ''}`;
+    }
+    if (action === 'delete') return '撤銷一條邀請連結';
   }
   // 模型切換版本
   if (type === 'model' && action === 'activate') {
