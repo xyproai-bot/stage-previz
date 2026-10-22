@@ -49,6 +49,7 @@ import { createFrameClock, type FrameClock } from '../lib/ledFrameClock';
 import { createSegmentSwitcher, type SegmentObject, type SegmentSwitcher } from '../lib/stageLook/ledTimelineSwitch';
 import { segmentIndexAt, timelineSummary, type LedTimeline } from '../lib/ledTemplateTimeline';
 import { ensureOwnLedMaterials } from '../lib/stageLook/ledOwnMaterial';
+import { ledScreenMeshes } from '../lib/ledScreen';
 import { pickNdiColorCurve, type NdiColorLut } from '../lib/ndiColor';
 import { readPixels } from '../lib/ndiFrameGrab';
 import NdiColorCalibrationDialog, { colorCurveLabel, useNdiCalibration } from './NdiColorCalibration';
@@ -1666,6 +1667,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           obj = fromModel.clone(true);
           obj.userData.fromModel = true;  // LED 對位圖只看模型裡的（沒模型時的方塊替身不算）
           const isLedPanel = s.category === 'led_panel';
+          // LED 物件裡哪些是螢幕（框架、台體不是；lib/ledScreen.ts）
+          const screens = isLedPanel ? ledScreenMeshes(obj) : null;
           // 給每個子 mesh 標 objectId 讓 raycaster 抓得到
           obj.traverse((child) => {
             child.userData.objectId = s.objectId;
@@ -1682,9 +1685,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
                 stdMat.name = old.name; // 材質面板依名稱調整
                 m.material = stdMat;
               }
-              // 雙面渲染：LED 面板維持單面（emissive 不該從背面看到），其他都雙面（喇叭等不會少一面）
+              // 雙面渲染：LED 螢幕維持單面（emissive 不該從背面看到），其他都雙面（喇叭、LED 的框架等不會少一面）
               const mat = m.material as THREE.MeshStandardMaterial;
-              mat.side = isLedPanel ? THREE.FrontSide : THREE.DoubleSide;
+              mat.side = screens?.has(m) ? THREE.FrontSide : THREE.DoubleSide;
               mat.needsUpdate = true;
             }
           });
@@ -2533,24 +2536,28 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const origAllMats = tplData && wantsOrigAny ? materialsWithOriginalUv(obj) : null;
       const origUvMats = origAllMats && curPlan && planWantsOriginalUv(curPlan, id) ? origAllMats : null;
       const segMats: THREE.MeshStandardMaterial[] = [];
+      // LED 物件裡只有螢幕吃 LED 材質 / 畫面；框架、台體、燈牆面照一般物件畫（lib/ledScreen.ts，跟自動貼 UV 同一條規則）
+      const screens = isLed ? ledScreenMeshes(obj) : null;
 
       obj.traverse((c) => {
         if (!(c as THREE.Mesh).isMesh) return;
+        const isScreen = !!screens && screens.has(c as THREE.Mesh);
         // LED 也放進 LED_LAYER → 環境光的 CubeCamera 只拍這層
-        if (isLed) c.layers.enable(LED_LAYER);
+        if (isScreen) c.layers.enable(LED_LAYER);
+        else if (isLed) c.layers.disable(LED_LAYER);
         const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial;
         if (!m || !('color' in m)) return;
         // 任何分支改材質之前先記下 C4D 原值（材質面板 / 回到原本 用）
         if ((m as THREE.MeshStandardMaterial).isMeshStandardMaterial) captureOriginal(m);
 
-        // 雙面渲染：LED 永遠 FrontSide（emissive 不該從背面看到），其他物件 DoubleSide
-        const targetSide = isLed ? THREE.FrontSide : THREE.DoubleSide;
+        // 雙面渲染：LED 螢幕永遠 FrontSide（emissive 不該從背面看到），其他（含 LED 的框架）DoubleSide
+        const targetSide = isScreen ? THREE.FrontSide : THREE.DoubleSide;
         if (m.side !== targetSide) {
           m.side = targetSide;
           m.needsUpdate = true;
         }
 
-        if (isLed && isLit) {
+        if (isScreen && isLit) {
           // === LED in 現場模式 ===
           // 像真的 LED 牆：底色接近黑、roughness 0.3 → 畫面暗的地方是黑亮面，會映出其他 LED（反射來自 LED 環境光）
           // 畫面 = emissiveMap × tint × 亮度，正面看 = 原檔顏色（不壓色、不吃曝光；ledSurface.ts + ledOutputPass.ts）
@@ -2566,7 +2573,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             m.emissive.copy(accentGreen);
             m.emissiveIntensity = 0.3;
           }
-        } else if (isLed && ledTexture) {
+        } else if (isScreen && ledTexture) {
           // === LED in Quick mode（有畫面）===
           // 快速模式：給動畫師 1:1 對顏色 → 只有畫面，不打燈、不反光、不壓色（以前放在 map 會被燈光打暗一大半）
           configureLedMaterial(m, { mode: 'quick', texture: ledTexture });
@@ -2589,7 +2596,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           });
           // 地板倒影：非 LED 材質都掛上（shader 只在「落在反射平面上、朝上」的地方才取樣倒影）
           // 有材質勾了「鏡面地板」→ 只有勾的材質反光；都沒勾 → 全部（自動找地板）
-          if (!isLed && floorReflRef.current) {
+          if (!isScreen && floorReflRef.current) {
             applyFloorReflection(m, floorReflRef.current.uniforms);
             setFloorReflectionFor(m, mirrorFlagged ? !!materialOverrides?.[m.name]?.mirrorFloor : true);
           }
@@ -2600,7 +2607,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
           }
           if (m.emissiveMap) { m.emissiveMap = null; m.needsUpdate = true; }
           // 切回沒貼圖的 LED → 清掉殘留的 NDI map（避免上次切去 Quick 留下的）
-          if (isLed && m.map) { m.map = null; m.needsUpdate = true; }
+          if (isScreen && m.map) { m.map = null; m.needsUpdate = true; }
           if (isSelected) {
             m.emissive.copy(accentGreen);
             m.emissiveIntensity = 0.4;
@@ -2713,15 +2720,20 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
     // 材質清單：非 LED 物件的材質依名稱分組（用到幾個物件 + C4D 原值）
     const byName = new Map<string, { objects: Set<THREE.Object3D>; original: ModelMaterialInfo['original'] }>();
-    for (const root of roots) {
+    const addMaterials = (root: THREE.Object3D, skip: Set<THREE.Mesh> | null) => {
       root.traverse((c) => {
         const m = (c as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined;
-        if (!(c as THREE.Mesh).isMesh || !m?.isMeshStandardMaterial) return;
+        if (!(c as THREE.Mesh).isMesh || !m?.isMeshStandardMaterial || skip?.has(c as THREE.Mesh)) return;
         const entry = byName.get(m.name) || { objects: new Set(), original: captureOriginal(m) };
         entry.objects.add(root);
         byName.set(m.name, entry);
       });
-    }
+    };
+    for (const root of roots) addMaterials(root, null);
+    // LED 物件裡不是螢幕的部分（框架、台體、燈牆面）也是一般材質，可以在材質面板調（lib/ledScreen.ts）
+    meshesRef.current.forEach((obj, id) => {
+      if (stageObjMap.get(id)?.category === 'led_panel') addMaterials(obj, ledScreenMeshes(obj));
+    });
     const list: ModelMaterialInfo[] = [...byName.entries()].map(([name, e]) => ({ name, count: e.objects.size, original: e.original }));
     setModelMaterials(prev => {
       const key = (l: ModelMaterialInfo[]) => l.map(x => `${x.name}:${x.count}`).join('|');

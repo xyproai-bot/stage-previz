@@ -3,6 +3,7 @@
 // 全部用 root 物件的 local 座標 → 物件之後怎麼移動（cue / 機關 / crossfade）都只要套 matrixWorld。
 
 import * as THREE from 'three';
+import { ledScreenMeshes } from '../ledScreen';
 
 export interface UvRect { u0: number; v0: number; u1: number; v1: number }
 
@@ -52,9 +53,10 @@ function collectTriangles(root: THREE.Object3D): Tri[] {
   const toRoot = root.matrixWorld.clone().invert();
   const m = new THREE.Matrix4();
   const tris: Tri[] = [];
+  const screens = ledScreenMeshes(root);
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
-    if (!mesh.isMesh || !mesh.geometry) return;
+    if (!mesh.isMesh || !mesh.geometry || !screens.has(mesh)) return;   // 只有螢幕發光（框架、台體不算）
     const geo = mesh.geometry as THREE.BufferGeometry;
     const pos = geo.getAttribute('position');
     if (!pos) return;

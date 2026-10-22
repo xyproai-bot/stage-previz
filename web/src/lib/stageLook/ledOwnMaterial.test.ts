@@ -141,7 +141,7 @@ describe('ensureOwnLedMaterials：每個 LED 物件各自一份材質，版型�
     expect(matOf(objects[0])).toBe(first);
   });
 
-  it('同一個物件裡共用同一個材質的 mesh 共用一份複本（設定是整個物件的）；不同材質各一份', () => {
+  it('同一個物件裡共用同一個材質的 mesh 共用一份複本（設定是整個物件的）；框架（名稱沒有 LED）不是螢幕，照用原本的材質', () => {
     const a = new THREE.MeshStandardMaterial({ name: 'LED' });
     const b = new THREE.MeshStandardMaterial({ name: 'Frame' });
     const group = new THREE.Group();
@@ -150,10 +150,22 @@ describe('ensureOwnLedMaterials：每個 LED 物件各自一份材質，版型�
     ensureOwnLedMaterials(group);
     expect(m1.material).toBe(m2.material);
     expect(m1.material).not.toBe(a);
+    expect(m3.material).toBe(b);
+    expect((m1.material as THREE.Material).name).toBe('LED');
+  });
+
+  it('材質名稱都沒有 LED 的舊物件（例如「Screen」）：跟以前一樣全部都是螢幕，不同材質各一份', () => {
+    const a = new THREE.MeshStandardMaterial({ name: 'Screen' });
+    const b = new THREE.MeshStandardMaterial({ name: 'Screen2' });
+    const group = new THREE.Group();
+    const m1 = new THREE.Mesh(new THREE.BufferGeometry(), a), m2 = new THREE.Mesh(new THREE.BufferGeometry(), a), m3 = new THREE.Mesh(new THREE.BufferGeometry(), b);
+    group.add(m1, m2, m3);
+    ensureOwnLedMaterials(group);
+    expect(m1.material).toBe(m2.material);
+    expect(m1.material).not.toBe(a);
     expect(m3.material).not.toBe(b);
     expect(m3.material).not.toBe(m1.material);
-    expect((m1.material as THREE.Material).name).toBe('LED');
-    expect((m3.material as THREE.Material).name).toBe('Frame');
+    expect((m3.material as THREE.Material).name).toBe('Screen2');
   });
 
   it('複本留著名字和 C4D 原值（材質面板依名稱的覆寫、「回到原本」照常）；來源材質一個字都沒動', () => {

@@ -11,6 +11,7 @@
 
 import * as THREE from 'three';
 import type { LedTemplatePlan } from '../ledTemplate';
+import { ledScreenMeshes } from '../ledScreen';
 
 /** 這個影片（版型快照）要不要用這個物件存的原本 UV 取色 */
 export function planWantsOriginalUv(plan: Pick<LedTemplatePlan, 'originalUv'> | null | undefined, objectId: string): boolean {
@@ -23,9 +24,10 @@ export function planWantsOriginalUv(plan: Pick<LedTemplatePlan, 'originalUv'> | 
  */
 export function materialsWithOriginalUv(root: THREE.Object3D): Set<THREE.Material> {
   const all = new Map<THREE.Material, boolean>();
+  const screens = ledScreenMeshes(root);   // 只看螢幕（lib/ledScreen.ts）
   root.traverse((c) => {
     const mesh = c as THREE.Mesh;
-    if (!mesh.isMesh) return;
+    if (!mesh.isMesh || !screens.has(mesh)) return;
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     const has = !!(mesh.geometry as THREE.BufferGeometry | undefined)?.getAttribute('uv1');
     for (const m of mats) if (m) all.set(m, (all.get(m) ?? true) && has);

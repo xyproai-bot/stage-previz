@@ -9,11 +9,12 @@
 import { getBounds, type Document, type Mesh, type Node, type Primitive } from '@gltf-transform/core';
 import { determinant3, transformPoint, type Vec3 } from './geometry';
 import type { ObjectGeom, PrimGeom } from './surfaces';
+// 哪些是螢幕：跟 3D 畫面同一條規則（lib/ledScreen.ts；那個檔案只 import three 的型別，worker 可以用）
+import { LED_MATERIAL_RE } from '../ledScreen';
 
 /** parseGlb.ts 的 PREFIX_RULES（有沒有符合命名規則） */
 const PREFIX_RE = /^(LED|STAGE|MECH|ARTIST|PROP|LIGHT|WALK)[_-]/i;
 const RESERVED_RE = /[[\].:/]/g;
-const LED_MATERIAL_RE = /LED/i;
 
 /** parseGlb.ts 的 computeScaleFactor（模型單位 → 場景單位的自動縮放） */
 export function autoScaleFactor(sizeMeters: number): number {

@@ -15,6 +15,7 @@
 
 import * as THREE from 'three';
 import { captureOriginal } from './materialOverrides';
+import { ledScreenMeshes } from '../ledScreen';
 
 /** 我們做出來的 LED 專用複本（做過就不再複製） */
 const owned = new WeakSet<THREE.Material>();
@@ -40,9 +41,11 @@ function cloneForLed(source: THREE.MeshStandardMaterial): THREE.MeshStandardMate
  */
 export function ensureOwnLedMaterials(obj: THREE.Object3D): void {
   const bySource = new Map<THREE.Material, THREE.MeshStandardMaterial>();
+  // 只有螢幕要複本（框架、台體照用模型的材質，lib/ledScreen.ts）
+  const screens = ledScreenMeshes(obj);
   obj.traverse((c) => {
     const mesh = c as THREE.Mesh;
-    if (!mesh.isMesh) return;
+    if (!mesh.isMesh || !screens.has(mesh)) return;
     const cur = mesh.material;
     if (!cur || Array.isArray(cur) || !(cur as THREE.MeshStandardMaterial).isMeshStandardMaterial || owned.has(cur)) return;
     let own = bySource.get(cur);

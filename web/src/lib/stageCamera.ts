@@ -2,19 +2,21 @@
 // 觀眾在哪一側 = LED 面朝的方向（LED 只畫正面，面一定朝觀眾）。
 
 import * as THREE from 'three';
+import { ledScreenMeshes } from './ledScreen';
 
 const UP = new THREE.Vector3(0, 1, 0);
 
-/** 舞台正面（水平、指向觀眾）：所有 LED 三角面的朝向依面積加總。沒有 LED → +Z */
+/** 舞台正面（水平、指向觀眾）：所有 LED 螢幕三角面的朝向依面積加總（LED 物件裡的框架、台體不算）。沒有 LED → +Z */
 export function stageFrontDirection(ledRoots: THREE.Object3D[]): THREE.Vector3 {
   const sum = new THREE.Vector3();
   const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
   const ab = new THREE.Vector3(), ac = new THREE.Vector3();
   for (const root of ledRoots) {
     root.updateMatrixWorld(true);
+    const screens = ledScreenMeshes(root);
     root.traverse(o => {
       const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
+      if (!mesh.isMesh || !screens.has(mesh)) return;
       const pos = mesh.geometry?.getAttribute('position') as THREE.BufferAttribute | undefined;
       if (!pos) return;
       const index = mesh.geometry.getIndex();
