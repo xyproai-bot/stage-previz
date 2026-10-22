@@ -1601,6 +1601,7 @@ export default function ProjectEditor() {
         list={ledTpls.list}
         ledObjects={ledObjectInfos}
         getSpans={() => mech.sceneQueryRef.current?.ledSpans?.() ?? null}
+        getParts={() => mech.sceneQueryRef.current?.ledPartSpans?.() ?? null}
         onChanged={ledTpls.reload}
         ledCanvas={view.ledCanvas}
         onSetCanvas={view.canEdit ? view.setLedCanvas : undefined}

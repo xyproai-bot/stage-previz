@@ -36,9 +36,18 @@ export interface PrimGeom {
   sign: 1 | -1;
   /** 原本的 UV（每個頂點 2 個數字）；沒有 = null */
   uv: ArrayLike<number> | null;
+  /**
+   * 物件裡有 2 塊以上 LED mesh 時，這個 primitive 屬於第幾塊（ObjectGeom.groupNames 的編號）。有編號的螢幕片不會跟別塊焊在一起、
+   * 頂點只會歸給同一塊的螢幕片；沒有 = 整個物件一塊（跟以前一樣）
+   */
+  group?: number;
 }
 
-export interface ObjectGeom { prims: PrimGeom[] }
+export interface ObjectGeom {
+  prims: PrimGeom[];
+  /** 每一塊 LED mesh 的名稱（PrimGeom.group 的編號）；沒有 = 整個物件一塊 */
+  groupNames?: string[];
+}
 
 export interface PieceFrame {
   origin: Vec3;
@@ -81,6 +90,9 @@ export interface Piece {
   tol: number;
   /** 製作手動指定的類型（不是自動辨識的） */
   forced: boolean;
+  /** 物件拆成好幾塊 LED mesh 時：這一片屬於第幾塊、那一塊的名稱（ObjectGeom.groupNames） */
+  group?: number;
+  label?: string;
 }
 
 export type UnsupportedKind = 'arc' | 'fold' | 'other' | 'toomany' | 'empty' | 'closed' | 'arcfail' | 'freefail';
@@ -157,6 +169,8 @@ interface ScreenTris {
   w: Int32Array;
   /** 1 = 節點是鏡像的（行列式 < 0）：繞向反過來，角的順序要換過才是「朝觀眾」的逆時針 */
   flip: Uint8Array;
+  /** 每個三角形屬於第幾塊 LED mesh（沒拆 = 全部 -1） */
+  grp: Int32Array;
   count: number;
 }
 
@@ -166,6 +180,7 @@ function collectScreenTris(geom: ObjectGeom, diag: number): ScreenTris {
   let total = 0;
   for (const pr of geom.prims) if (pr.screen) total += Math.floor(pr.index.length / 3);
   const p = new Float64Array(total * 9), n = new Float64Array(total * 3), area = new Float64Array(total), w = new Int32Array(total * 3), flip = new Uint8Array(total);
+  const grp = new Int32Array(total).fill(-1);
   let count = 0;
   for (const pr of geom.prims) {
     if (!pr.screen) continue;
@@ -174,7 +189,8 @@ function collectScreenTris(geom: ObjectGeom, diag: number): ScreenTris {
     const weld = (vi: number): number => {
       let id = weldOf[vi];
       if (id >= 0) return id;
-      const key = `${Math.round(pr.pos[vi * 3] / tol)},${Math.round(pr.pos[vi * 3 + 1] / tol)},${Math.round(pr.pos[vi * 3 + 2] / tol)}`;
+      // 不同塊 LED mesh 的頂點不焊在一起（貼在一起的兩塊還是兩片）
+      const key = `${pr.group ?? ''}|${Math.round(pr.pos[vi * 3] / tol)},${Math.round(pr.pos[vi * 3 + 1] / tol)},${Math.round(pr.pos[vi * 3 + 2] / tol)}`;
       id = welds.get(key) ?? -1;
       if (id < 0) { id = welds.size; welds.set(key, id); }
       weldOf[vi] = id;
@@ -196,11 +212,12 @@ function collectScreenTris(geom: ObjectGeom, diag: number): ScreenTris {
       n[count * 3] = nx / l2; n[count * 3 + 1] = ny / l2; n[count * 3 + 2] = nz / l2;
       area[count] = ar;
       flip[count] = pr.sign < 0 ? 1 : 0;
+      if (pr.group !== undefined) grp[count] = pr.group;
       w[count * 3] = weld(ia); w[count * 3 + 1] = weld(ib); w[count * 3 + 2] = weld(ic);
       count++;
     }
   }
-  return { p, n, area, w, flip, count };
+  return { p, n, area, w, flip, grp, count };
 }
 
 function components(tris: ScreenTris): number[][] {
@@ -678,8 +695,12 @@ export function analyzeObject(geom: ObjectGeom, front: Vec3, override: SurfaceOv
         if (tryFree && override === 'auto') fail = 'freefail';
       }
     }
-    if (piece) pieces.push(piece);
-    else worse(fail ?? 'other');
+    if (piece) {
+      // 物件拆成好幾塊 LED mesh：記下這一片是哪一塊（名稱用 mesh 名稱）
+      const g = tris.grp[ids[0]];
+      if (g >= 0 && geom.groupNames?.[g] !== undefined) { piece.group = g; piece.label = geom.groupNames[g]; }
+      pieces.push(piece);
+    } else worse(fail ?? 'other');
   }
   if (worst) return { kind: 'unsupported', unsupported: worst, freeform, pieces: [], warnings, bbox, screenTriangles: tris.count, override };
   if (pieces.length === 0) return empty('empty');
@@ -733,9 +754,12 @@ export function assignVertices(prim: PrimGeom, pieces: readonly Piece[]): { piec
       if (area > bestArea * (1 + 1e-9)) { bestArea = area; only = i; }
     }
   }
+  // 這個 primitive 屬於某一塊 LED mesh：只歸給同一塊的螢幕片（找不到同一塊的才退回全部）
+  const sameGroupOnly = prim.screen && prim.group !== undefined && pieces.some(p => p.group === prim.group);
   for (let v = 0; v < nv; v++) {
     let best = -1, bd = Infinity, bx = 0, by = 0, bs = false;
     for (let i = only >= 0 ? only : 0; i < (only >= 0 ? only + 1 : pieces.length); i++) {
+      if (only < 0 && sameGroupOnly && pieces[i].group !== prim.group) continue;
       const r = localOnPiece(pieces[i], prim.pos[v * 3], prim.pos[v * 3 + 1], prim.pos[v * 3 + 2]);
       if (r.dist < bd) { bd = r.dist; best = i; bx = r.lx; by = r.ly; bs = !!r.seam; }
     }

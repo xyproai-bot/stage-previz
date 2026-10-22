@@ -6,13 +6,13 @@ import type { LedPanelInput } from './ledMap';
 import { ledScreenMeshes } from './ledScreen';
 
 /** 一個 LED 物件底下螢幕 mesh 的三角形 UV（每 6 個數字一個三角形）；沒有 UV 的 mesh 跳過。框架、台體不算（lib/ledScreen.ts） */
-export function collectUvTriangles(root: THREE.Object3D): Float64Array {
+export function collectUvTriangles(root: THREE.Object3D, only?: ReadonlySet<THREE.Mesh>): Float64Array {
   const out: number[] = [];
   const screens = ledScreenMeshes(root);
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh || (mesh as unknown as THREE.Line).isLine || (mesh as unknown as THREE.Points).isPoints) return;
-    if (!screens.has(mesh)) return;
+    if (!screens.has(mesh) || (only && !only.has(mesh))) return;
     const geo = mesh.geometry as THREE.BufferGeometry | undefined;
     const uv = geo?.getAttribute('uv') as THREE.BufferAttribute | THREE.InterleavedBufferAttribute | undefined;
     if (!geo || !uv) return;

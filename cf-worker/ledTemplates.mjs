@@ -614,7 +614,7 @@ export async function importTemplates(env, projectId, data, objIdMap, songTempla
       const k = parseScreenKey(p.screen_key);
       if (!k) continue;
       let key;
-      if (k.kind === 'object') { const o = objIdMap.get(k.id); if (!o) continue; key = 'o:' + o; }
+      if (k.kind === 'object') { const o = objIdMap.get(k.id); if (!o) continue; key = 'o:' + o + (k.part !== undefined ? '~' + k.part : ''); }
       else { const sid = screenIdMap.get(k.id); if (!sid) continue; key = 's:' + sid; }
       stmts.push(env.DB.prepare(
         `INSERT OR IGNORE INTO led_template_screens (template_id, screen_key, dest_x, dest_y, dest_w, dest_h, rotate, flip_h, flip_v) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`

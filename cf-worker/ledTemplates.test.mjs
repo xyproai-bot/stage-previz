@@ -393,3 +393,37 @@ test('複製專案帶著版型、手動切的螢幕、每首歌選的版型（�
   // 空資料什麼都不做
   assert.deepEqual(await importTemplates(env, 'p1', {}, new Map(), []), { templates: 0, screens: 0 });
 });
+
+test('物件裡有好幾塊 LED mesh：每塊一個螢幕（o:<物件 id>~<mesh 名稱>）可以存進版型、改、讀回來、複製專案；舊的 o:<物件 id> 照舊；物件不存在 / 壞名稱 400', async () => {
+  const { db, call } = await setup();
+  const screens = [
+    { key: 'o:oa~升降_正面', dest: { x: 0, y: 0, w: 2000, h: 500 } },
+    { key: 'o:oa~升降_左側', dest: { x: 0, y: 500, w: 500, h: 500 }, rotate: 90 },
+    { key: 'o:ob', dest: { x: 2000, y: 0, w: 100, h: 100 } },   // 舊資料：整個物件一塊
+  ];
+  const made = await call('u_admin', 'POST', `${P}/led-templates`, { name: '升降', canvas: { width: 3000, height: 1000 }, scalePct: 100, screens });
+  assert.equal(made.status, 201);
+  const t = made.data.template;
+  assert.deepEqual(t.screens.map(x => [x.key, x.objectId, x.uv]), [['o:oa~升降_正面', 'oa', null], ['o:oa~升降_左側', 'oa', null], ['o:ob', 'ob', null]]);
+  assert.equal(t.screens[1].rotate, 90);
+
+  // 讀回來
+  const list = (await call('u_admin', 'GET', `${P}/led-templates`)).data;
+  assert.deepEqual(list.templates.find(x => x.id === t.id).screens.map(x => x.key), ['o:oa~升降_正面', 'o:oa~升降_左側', 'o:ob']);
+  // 整個換放法
+  const patched = await call('u_admin', 'PATCH', `${P}/led-templates/${t.id}`, { screens: [screens[1]] });
+  assert.equal(patched.status, 200);
+  assert.deepEqual(patched.data.template.screens.map(x => x.key), ['o:oa~升降_左側']);
+  // 物件不存在 / 不是 LED / 壞名稱
+  for (const key of ['o:nope~面', 'o:ot~面', 'o:oa~', `o:oa~${'字'.repeat(81)}`, `o:oa~a${String.fromCharCode(10)}b`, 's:x~面']) {
+    const bad = await call('u_admin', 'POST', `${P}/led-templates`, { name: 'X' + key.length, canvas: { width: 100, height: 100 }, scalePct: 100, screens: [{ key, dest: { x: 0, y: 0, w: 10, h: 10 } }] });
+    assert.equal(bad.status, 400, key);
+  }
+  // 複製專案：物件 id 換成新的，mesh 名稱留著
+  const dup = await call('u_admin', 'POST', `${P}/duplicate`, { newName: '複本' });
+  assert.equal(dup.status, 201);
+  const np = dup.data.id;
+  const newObjs = Object.fromEntries((await db.prepare(`SELECT id, mesh_name FROM stage_objects WHERE project_id = ?`).bind(np).all()).results.map(o => [o.mesh_name, o.id]));
+  const copy = (await call('u_admin', 'GET', `/api/projects/${np}/led-templates`)).data.templates.find(x => x.kind === 'custom');
+  assert.deepEqual(copy.screens.map(x => [x.key, x.objectId]), [[`o:${newObjs.LED_A}~升降_左側`, newObjs.LED_A]]);
+});

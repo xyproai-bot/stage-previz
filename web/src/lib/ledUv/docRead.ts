@@ -10,7 +10,7 @@ import { getBounds, type Document, type Mesh, type Node, type Primitive } from '
 import { determinant3, transformPoint, type Vec3 } from './geometry';
 import type { ObjectGeom, PrimGeom } from './surfaces';
 // 哪些是螢幕：跟 3D 畫面同一條規則（lib/ledScreen.ts；那個檔案只 import three 的型別，worker 可以用）
-import { LED_MATERIAL_RE } from '../ledScreen';
+import { LED_MATERIAL_RE, MAX_LED_PARTS, partNames } from '../ledScreen';
 
 /** parseGlb.ts 的 PREFIX_RULES（有沒有符合命名規則） */
 const PREFIX_RE = /^(LED|STAGE|MECH|ARTIST|PROP|LIGHT|WALK)[_-]/i;
@@ -181,7 +181,16 @@ export function readLedObjects(doc: Document, wanted: readonly { id: string; mes
         refs.push({ node: n, mesh, prim: p });
       }
     }
-    objects.set(w.id, { id: w.id, meshName: w.meshName, geom: { prims }, refs });
+    // 物件裡有 2 塊以上 LED mesh（螢幕 primitive 分屬 2 個以上的節點）→ 每個節點一塊，名稱用節點（沒有名字用 mesh）的名稱；
+    // 跟 3D 畫面 / 版型同一條規則（lib/ledScreen.ts ledScreenParts）：多於 MAX_LED_PARTS 塊不拆
+    const groupNodes: Node[] = [];
+    prims.forEach((g, i) => { if (g.screen && !groupNodes.includes(refs[i].node)) groupNodes.push(refs[i].node); });
+    const geom: ObjectGeom = { prims };
+    if (anyLedMaterial && groupNodes.length >= 2 && groupNodes.length <= MAX_LED_PARTS) {
+      prims.forEach((g, i) => { if (g.screen) g.group = groupNodes.indexOf(refs[i].node); });
+      geom.groupNames = partNames(groupNodes.map(n => n.getName() || n.getMesh()?.getName()), w.meshName);
+    }
+    objects.set(w.id, { id: w.id, meshName: w.meshName, geom, refs });
   }
   const scene = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0];
   let diag = 0;

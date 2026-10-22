@@ -10,6 +10,7 @@
 // 一個物件有好幾片分開的平面 → 每一片各自是一塊螢幕，分開排（每片各建一個手動螢幕，版型裡才能分開放）。
 
 import type { CanvasSize, PixelRect } from '../ledMap';
+import { partNames } from '../ledScreen';
 import type { UvBox } from '../ledTemplate';
 import { dot, WORLD_UP, type Vec3 } from './geometry';
 import { packStageShaped, type PackItem, type Placed, type PackResult } from './pack';
@@ -187,11 +188,13 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
       obj.mode = 'auto';
       obj.reason = '';
       const count = info.pieces.length;
+      // 物件裡有好幾塊 LED mesh：每一片用 mesh 名稱；沒有（或有的片沒有名稱）= 照舊「物件名 1、2…」
+      const labels = count > 1 && info.pieces.every(p => !!p.label) ? partNames(info.pieces.map(p => p.label), inp.name) : null;
       info.pieces.forEach((piece, i) => {
         const measured = { w: piece.widthU * ctx.metersPerUnit, h: piece.heightU * ctx.metersPerUnit };
         const spec = inp.sizes[i];
         const key = pieceKey(inp.id, count, i);
-        const name = pieceName(inp.name, count, i);
+        const name = labels ? labels[i] : pieceName(inp.name, count, i);
         const size = spec ? resolveSize(spec, measured) : null;
         const pp: PlanPiece = { index: i, key, name, surface: piece.kind, ...(piece.arc ? { convex: piece.arc.convex, spanDeg: (piece.arc.span * 180) / Math.PI, ...(piece.arc.closed ? { closed: true, seamDeg: piece.arc.seamDeg } : {}) } : {}), distortion: piece.distortion, measured, size, placed: null };
         obj.pieces.push(pp);

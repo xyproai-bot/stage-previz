@@ -49,7 +49,7 @@ import { createFrameClock, type FrameClock } from '../lib/ledFrameClock';
 import { createSegmentSwitcher, type SegmentObject, type SegmentSwitcher } from '../lib/stageLook/ledTimelineSwitch';
 import { segmentIndexAt, timelineSummary, type LedTimeline } from '../lib/ledTemplateTimeline';
 import { ensureOwnLedMaterials } from '../lib/stageLook/ledOwnMaterial';
-import { ledScreenMeshes } from '../lib/ledScreen';
+import { ledScreenMeshes, ledScreenParts } from '../lib/ledScreen';
 import { pickNdiColorCurve, type NdiColorLut } from '../lib/ndiColor';
 import { readPixels } from '../lib/ndiFrameGrab';
 import NdiColorCalibrationDialog, { colorCurveLabel, useNdiCalibration } from './NdiColorCalibration';
@@ -80,7 +80,7 @@ import {
   type CanvasSize, type LedLayout, type LedMapMeta,
 } from '../lib/ledMap';
 import { collectUvTriangles, ledPanelInputs, type LedSceneObject } from '../lib/ledMapScene';
-import { buildObjectUniforms, buildScreenList, mapUvRectToTemplate, spanFromAxes, spanFromUv, type LedTemplatePlan, type Placement, type ScreenDef, type SrcSpan } from '../lib/ledTemplate';
+import { buildObjectUniforms, buildScreenList, mapUvRectToTemplate, parseScreenKey, spanFromAxes, spanFromUv, usableParts, type AutoScreenPart, type LedTemplatePlan, type Placement, type ScreenDef, type SrcSpan } from '../lib/ledTemplate';
 import { downloadBlob, drawTestPattern, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import type { UvPreview } from '../lib/ledUv/previewUv';
 import { applyUvPreview } from '../lib/ledUv/previewApply';
@@ -315,6 +315,8 @@ export interface StageSceneQuery {
   groupBox(ids: string[]): { min: MechVec3; max: MechVec3 } | null;
   /** 每個 LED 物件（stage object id）在整張 LED 畫布上的範圍（從模型的 UV 算；LED 畫布版型的螢幕清單用） */
   ledSpans?(): Record<string, SrcSpan>;
+  /** 有 2 塊以上 LED mesh 的 LED 物件：每個 mesh 一塊（名稱 = mesh 名稱、範圍 = 那個 mesh 的 UV 外框）；其他物件沒有 */
+  ledPartSpans?(): Record<string, AutoScreenPart[]>;
 }
 
 const NO_STAGE_PROPS: StagePropItem[] = [];
@@ -551,6 +553,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   onNdiFrameSizeRef.current = onNdiFrameSize;
   const ndiReportedSizeRef = useRef<{ width: number; height: number } | null>(null);
   const ledSpanCacheRef = useRef<WeakMap<THREE.Object3D, SrcSpan | null>>(new WeakMap());
+  const ledPartCacheRef = useRef<WeakMap<THREE.Object3D, AutoScreenPart[]>>(new WeakMap());
   const ledTemplateRemapRef = useRef<Map<string, (r: UvRect) => UvRect | null>>(new Map());
   const ndiColorLutRef = useRef<NdiColorLut | null>(null);
   // 按 × 收起引導卡片：記住是哪一步收的，換到別的問題會再出現
@@ -1846,6 +1849,19 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         }
         return out;
       },
+      ledPartSpans: () => {
+        const list: { id: string; category: string }[] = stageObjectsRef.current
+          ? stageObjectsRef.current.map(o => ({ id: o.id, category: o.category }))
+          : (statesRef.current || []).map(s => ({ id: s.objectId, category: s.category }));
+        const out: Record<string, AutoScreenPart[]> = {};
+        for (const o of list) {
+          if (o.category !== 'led_panel') continue;
+          const mesh = meshesRef.current.get(o.id);
+          const parts = mesh ? ledObjectParts(mesh) : [];
+          if (parts.length > 0) out[o.id] = parts;
+        }
+        return out;
+      },
     };
     sceneQueryRef.current = query;
     return () => { if (sceneQueryRef.current === query) sceneQueryRef.current = null; };
@@ -2418,9 +2434,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       : (statesRef.current || []).map(st => ({ id: st.objectId, name: st.displayName || st.meshName, order: st.order, category: st.category }));
     const autos = list.filter(o => o.category === 'led_panel').map(o => {
       const mesh = meshesRef.current.get(o.id);
-      return { objectId: o.id, name: o.name, order: o.order, src: (mesh && ledObjectSpan(mesh)) || { us: 0, ul: 1, vs: 0, vl: 1 } };
+      return { objectId: o.id, name: o.name, order: o.order, src: (mesh && ledObjectSpan(mesh)) || { us: 0, ul: 1, vs: 0, vl: 1 }, parts: mesh ? ledObjectParts(mesh) : [] };
     });
-    return buildScreenList(autos, tpl.manuals, full);
+    // 舊版型用的「整個物件一塊」(o:<id>) 照舊留在清單裡
+    const inUse = new Set<string>();
+    for (const pl of tpl.timeline ? tpl.timeline.segments.map(sg => sg.plan) : [tpl.plan]) for (const sc of pl?.screens ?? []) inUse.add(sc.key);
+    return buildScreenList(autos, tpl.manuals, full, inUse);
   }
 
   /** 「⋯」→ 版型的下載（對位圖 / AE 合成腳本 / 位置表）：lib/ledTemplateDownload.ts */
@@ -2483,6 +2502,19 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     const span = lay ? spanFromAxes(lay.u, lay.v) : null;
     cache.set(obj, span);
     return span;
+  }
+
+  // LED 物件裡每個 LED mesh 各自的範圍（2 塊以上、而且在畫布上分得開才拆；不拆 = 空陣列）：同一個物件只算一次
+  function ledObjectParts(obj: THREE.Object3D): AutoScreenPart[] {
+    const cache = ledPartCacheRef.current;
+    const hit = cache.get(obj);
+    if (hit) return hit;
+    const parts = usableParts(ledScreenParts(obj, obj.name || 'LED').map((p) => {
+      const lay = layoutPanel({ id: 'span', name: p.name, tris: collectUvTriangles(obj, new Set(p.meshes)) }, { width: 1, height: 1 }, 0);
+      return { name: p.name, src: lay ? spanFromAxes(lay.u, lay.v) : null };
+    }));
+    cache.set(obj, parts);
+    return parts;
   }
 
   // ── Sync 材質 + LED lights + emissive（統一決策，不被其他 effect 覆蓋） ──
@@ -2552,7 +2584,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       let tplData: ReturnType<typeof buildObjectUniforms> | null = null;
       let segPer: SegmentObject['per'] | null = null;
       if ((timeline || ledTemplate) && isLed && ledTexture && (ledTexture === ledMediaTextureRef.current || ledTexture === ndiLiveTextureRef.current?.texture)) {
-        const srcFor = (p: Placement): SrcSpan | null => (p.uv ? spanFromUv(p.uv) : ledObjectSpan(obj));
+        // 手動切的螢幕用自己的範圍；物件裡某個 LED mesh（key = o:<id>~<mesh 名稱>）用那個 mesh 的範圍（找不到 = 不貼）；其他整個物件一塊
+        const srcFor = (p: Placement): SrcSpan | null => {
+          if (p.uv) return spanFromUv(p.uv);
+          const part = parseScreenKey(p.key)?.part;
+          if (part === undefined) return ledObjectSpan(obj);
+          return ledObjectParts(obj).find(x => x.name === part)?.src ?? null;
+        };
         if (timeline) {
           segPer = timeline.segments.map(seg => ({
             plan: seg.plan,

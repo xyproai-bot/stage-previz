@@ -3,6 +3,7 @@
 //
 //   名詞
 //   - 螢幕（screen）：一塊 LED。整個模型物件一塊（key = 'o:<物件 id>'，位置從模型的 UV 外框算）；
+//                     物件裡有 2 塊以上 LED mesh 的，每個 mesh 一塊（key = 'o:<物件 id>~<mesh 名稱>'，位置從那個 mesh 的 UV 外框算）；
 //                     一個物件裡有好幾塊的，在整張畫布上手動框出來（key = 's:<螢幕 id>'，位置是整張畫布的 UV 比例）
 //   - 整張畫布（全部版型）：專案的 LED 畫布，每塊螢幕在裡面的位置 = 它真實的點數
 //   - 版型：挑幾塊螢幕，各自放到版型畫布（像素）的某個長方形裡，可以轉 90° 的倍數、翻轉；沒挑到的螢幕顯示黑的
@@ -69,14 +70,20 @@ export interface SrcSpan { us: number; ul: number; vs: number; vl: number }
 
 export const objectKey = (objectId: string) => `o:${objectId}`;
 export const manualKey = (screenId: string) => `s:${screenId}`;
+/** 物件裡某一塊 LED mesh 的代號（物件 id 不會有「~」，所以第一個「~」後面都是 mesh 名稱） */
+export const partKey = (objectId: string, partName: string) => `o:${objectId}~${partName}`;
+export const PART_NAME_MAX = 80;
 
-const KEY_RE = /^([os]):([A-Za-z0-9_-]{1,64})$/;
+// eslint-disable-next-line no-control-regex
+const KEY_RE = /^([os]):([A-Za-z0-9_-]{1,64})(?:~([^\x00-\x1f\x7f]{1,80}))?$/;
 
-export function parseScreenKey(key: unknown): { kind: 'object' | 'manual'; id: string } | null {
+/** part = 物件裡某一塊 LED mesh 的名稱（只有 'o:' 的才會有；舊的 'o:<物件 id>' 沒有 = 整個物件一塊） */
+export function parseScreenKey(key: unknown): { kind: 'object' | 'manual'; id: string; part?: string } | null {
   if (typeof key !== 'string') return null;
   const m = KEY_RE.exec(key);
   if (!m) return null;
-  return { kind: m[1] === 'o' ? 'object' : 'manual', id: m[2] };
+  if (m[1] === 's') return m[3] === undefined ? { kind: 'manual', id: m[2] } : null;
+  return m[3] === undefined ? { kind: 'object', id: m[2] } : { kind: 'object', id: m[2], part: m[3] };
 }
 
 // ───────────────────────── 輸入檢查（後台 / 前端表單共用）─────────────────────────
@@ -282,6 +289,44 @@ export function uvToLocal(span: SrcSpan, u: number, v: number): [number, number]
   return [Math.min(1, Math.max(0, du / span.ul)), Math.min(1, Math.max(0, dv / span.vl))];
 }
 
+/** 圓環（0~1 接起來）上兩段 [start, start+length] 重疊多長 */
+function ringOverlap(s1: number, l1: number, s2: number, l2: number): number {
+  const segs = (s: number, l: number): [number, number][] => {
+    const a = s - Math.floor(s);
+    return a + l > 1 ? [[a, 1], [0, a + l - 1]] : [[a, a + l]];
+  };
+  let sum = 0;
+  for (const [a0, a1] of segs(s1, l1)) for (const [b0, b1] of segs(s2, l2)) sum += Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+  return Math.min(sum, l1, l2);
+}
+
+/** 兩塊螢幕的範圍重疊的面積，占比較小那塊的比例（0 = 完全分開） */
+export function spanOverlapRatio(a: SrcSpan, b: SrcSpan): number {
+  const area = Math.min(a.ul * a.vl, b.ul * b.vl);
+  if (!(area > 0)) return 0;
+  return (ringOverlap(a.us, a.ul, b.us, b.ul) * ringOverlap(a.vs, a.vl, b.vs, b.vl)) / area;
+}
+
+/** 兩塊 LED mesh 的範圍重疊超過這個比例 = 在畫布上分不開（擠在同一塊 UV），整個物件還是算一塊 */
+export const PART_OVERLAP_LIMIT = 0.05;
+
+/**
+ * 物件裡每個 LED mesh 的範圍 → 可以拆成幾塊獨立螢幕。少於 2 塊、多於 MAX_SCREENS_PER_OBJECT 塊、
+ * 有任何一塊沒有 UV（null）、或有兩塊重疊 → 空陣列（整個物件一塊，跟以前一樣）
+ */
+export function usableParts(parts: readonly { name: string; src: SrcSpan | null }[]): AutoScreenPart[] {
+  if (parts.length < 2 || parts.length > MAX_SCREENS_PER_OBJECT) return [];
+  const out: AutoScreenPart[] = [];
+  for (const p of parts) {
+    if (!p.src) return [];
+    out.push({ name: p.name, src: p.src });
+  }
+  for (let i = 0; i < out.length; i++) for (let j = i + 1; j < out.length; j++) {
+    if (spanOverlapRatio(out[i].src, out[j].src) > PART_OVERLAP_LIMIT) return [];
+  }
+  return out;
+}
+
 /** 取到版型貼圖時往裡縮半個像素，雙線性過濾才不會讀到隔壁那塊螢幕 */
 export function halfTexel(canvas: CanvasSize): [number, number] {
   return [0.5 / canvas.width, 0.5 / canvas.height];
@@ -392,7 +437,9 @@ export function buildObjectUniforms(
 
 // ───────────────────────── 螢幕清單 ─────────────────────────
 
-export interface AutoScreenInput { objectId: string; name: string; order: number; src: SrcSpan }
+/** 物件裡的一塊 LED mesh（物件有 2 塊以上才有）：name = mesh 名稱 */
+export interface AutoScreenPart { name: string; src: SrcSpan }
+export interface AutoScreenInput { objectId: string; name: string; order: number; src: SrcSpan; parts?: readonly AutoScreenPart[] }
 export interface ManualScreen { id: string; objectId: string; name: string; uv: UvBox }
 
 export interface ScreenDef {
@@ -411,7 +458,11 @@ export interface ScreenDef {
  * 可以放進版型的螢幕：每個 LED 物件一塊（範圍從模型的 UV 外框來）；物件有手動切的螢幕時，只列手動切的
  * 排序：物件順序 → 手動切的依建立順序
  */
-export function buildScreenList(autos: readonly AutoScreenInput[], manuals: readonly ManualScreen[], full: CanvasSize): ScreenDef[] {
+export function buildScreenList(
+  autos: readonly AutoScreenInput[], manuals: readonly ManualScreen[], full: CanvasSize,
+  /** 已經存在版型裡的螢幕代號：舊的「整個物件一塊」(o:<id>) 還有版型在用時，物件拆成好幾塊以後它也留在清單裡（舊版型照舊貼得對） */
+  inUse: ReadonlySet<string> = new Set(),
+): ScreenDef[] {
   const splitObjects = new Set(manuals.map(m => m.objectId));
   const out: ScreenDef[] = [];
   const sorted = [...autos].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
@@ -427,7 +478,14 @@ export function buildScreenList(autos: readonly AutoScreenInput[], manuals: read
     }
     const src = a.src;
     const n = nativeSize(src, full);
-    out.push({ key: objectKey(a.objectId), objectId: a.objectId, name: a.name, manual: false, uv: null, src, nativeW: n.w, nativeH: n.h });
+    const parts = a.parts && a.parts.length >= 2 ? a.parts : null;
+    if (!parts || inUse.has(objectKey(a.objectId))) {
+      out.push({ key: objectKey(a.objectId), objectId: a.objectId, name: parts ? `${a.name}（整個物件）` : a.name, manual: false, uv: null, src, nativeW: n.w, nativeH: n.h });
+    }
+    for (const part of parts ?? []) {
+      const pn = nativeSize(part.src, full);
+      out.push({ key: partKey(a.objectId, part.name), objectId: a.objectId, name: part.name, manual: false, uv: null, src: part.src, nativeW: pn.w, nativeH: pn.h });
+    }
   }
   return out;
 }

@@ -13,7 +13,7 @@ import {
 } from '../lib/ledTemplateApi';
 import {
   buildScreenList, checkPlacements, formatPct, normalizeTemplateInput, normalizeTemplateName, ROTATIONS, screenSizeLabel,
-  type Rotation, type ScreenDef, type SrcSpan,
+  type AutoScreenPart, type Rotation, type ScreenDef, type SrcSpan,
 } from '../lib/ledTemplate';
 import {
   addScreenToDraft, copyTemplateName, draftFromTemplate, draftSignature, draftToBody, draftToPlan, emptyDraft, nextTemplateName,
@@ -64,6 +64,8 @@ interface Props {
   ledObjects: readonly LedObjectInfo[];
   /** 3D 畫面算出來的每個 LED 物件在整張畫布上的範圍；沒有（模型還沒載好）= null → 每塊當整張畫布 */
   getSpans: () => Record<string, SrcSpan> | null;
+  /** 有 2 塊以上 LED mesh 的物件：每個 mesh 一塊（名稱、範圍）；沒給 = 每個物件一塊 */
+  getParts?: () => Record<string, AutoScreenPart[]> | null;
   /** 存好 / 刪掉以後，父層重新讀版型清單 */
   onChanged: () => Promise<unknown>;
   /** 正在編輯的版型（3D 的 LED 要貼它的測試圖）；沒在編輯 = null */
@@ -81,7 +83,7 @@ const PREVIEW_THROTTLE_MS = 100;
 const CONTENT_OPACITY_KEY = 'sp_ledtpl_content_opacity';
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
-export default function LedTemplatesDialog({ open, projectId, projectName, onClose, list, ledObjects, getSpans, onChanged, onPreview, ledCanvas, onSetCanvas }: Props) {
+export default function LedTemplatesDialog({ open, projectId, projectName, onClose, list, ledObjects, getSpans, getParts, onChanged, onPreview, ledCanvas, onSetCanvas }: Props) {
   const phone = isPhoneLayout();
   const [canvasW, setCanvasW] = useState('');
   const [canvasH, setCanvasH] = useState('');
@@ -94,6 +96,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
   const [mode, setMode] = useState<'template' | 'full'>('template');
   const [busy, setBusy] = useState(false);
   const [spans, setSpans] = useState<Record<string, SrcSpan>>({});
+  const [parts, setParts] = useState<Record<string, AutoScreenPart[]>>({});
   /** 問了很多次 3D 畫面都沒有 LED 的範圍（沒有模型）：對位圖內容改畫整張畫布一張 */
   const [sceneGaveUp, setSceneGaveUp] = useState(false);
   const [contentOn, setContentOn] = useState(true);
@@ -128,7 +131,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     setSceneGaveUp(false);
     const grab = () => {
       const s = getSpans();
-      if (s && Object.keys(s).length > 0) setSpans(s);
+      if (s && Object.keys(s).length > 0) { setSpans(s); setParts(getParts?.() ?? {}); }
       else if (tries++ < 12) timer = window.setTimeout(grab, 700);
       else setSceneGaveUp(true);
     };
@@ -141,11 +144,14 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
 
   const screens = useMemo<ScreenDef[]>(() => {
     if (!fullCanvas) return [];
+    // 舊版型用的「整個物件一塊」(o:<id>) 還有版型在用時照舊留在清單裡
+    const inUse = new Set<string>();
+    for (const t of customs) for (const sc of t.screens) inUse.add(sc.key);
     return buildScreenList(
-      ledObjects.map(o => ({ objectId: o.id, name: o.name, order: o.order, src: spans[o.id] ?? WHOLE })),
-      manuals ?? [], fullCanvas,
+      ledObjects.map(o => ({ objectId: o.id, name: o.name, order: o.order, src: spans[o.id] ?? WHOLE, parts: parts[o.id] })),
+      manuals ?? [], fullCanvas, inUse,
     );
-  }, [ledObjects, spans, manuals, fullCanvas]);
+  }, [ledObjects, spans, parts, manuals, fullCanvas, customs]);
   const defKeys = useMemo(() => new Set(screens.map(s => s.key)), [screens]);
 
   // 選的版型變了 / 清單重讀 → 重新帶入草稿（有沒存的修改時不蓋掉；內容沒變就不動，選到的螢幕不會被清掉）
