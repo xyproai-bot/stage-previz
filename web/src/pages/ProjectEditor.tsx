@@ -44,6 +44,12 @@ import { RESET_ALL_MENU_LABEL, RESET_ALL_NOTHING, resetAllDialog, resetAllHistor
 import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
+import * as cueLib from '../lib/cueLibraryApi';
+import { applyDraftToLook, applyDraftToStates, suggestLabel } from '../lib/lookDraft';
+import { useLookDraft } from '../lib/useLookDraft';
+import LookDraftBar from '../components/LookDraftBar';
+import SaveAsCueDialog from '../components/SaveAsCueDialog';
+import UpdateCueDialog, { usageSongNames } from '../components/UpdateCueDialog';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { isTextEntryTarget, isTypingTarget } from '../lib/keyTarget';
 import { useEscapeClose } from '../lib/useEscapeClose';
@@ -100,6 +106,8 @@ const STATUS_INFO: Record<SongStatus, { label: string; mod: string }> = {
 };
 /** 審片流程的順序：待製作 → 審查中 → 需修改 → 已通過 */
 const STATUS_ORDER: SongStatus[] = ['todo', 'in_review', 'needs_changes', 'approved'];
+
+const EMPTY_DRAFT_MECHS: Record<string, never> = {};
 
 export default function ProjectEditor() {
   const { projectId } = useParams();
@@ -171,7 +179,7 @@ export default function ProjectEditor() {
   const [modelUrl, setModelUrl] = useState<string | null>(null);
 
   // Cue object states (per selected cue)
-  const [cueStates, setCueStatesState] = useState<CueState[]>([]);
+  const [cueStatesBase, setCueStatesState] = useState<CueState[]>([]);
   // 這份 cueStates 是哪個 cue 的：換 cue 後新的還沒讀到前，不能拿上一個 cue 的來編輯
   const [cueStatesFor, setCueStatesFor] = useState<string | null>(null);
   const [statesError, setStatesError] = useState(false);
@@ -283,14 +291,44 @@ export default function ProjectEditor() {
   const [, setHistoryVersion] = useState(0);
   const bumpHistory = useCallback(() => setHistoryVersion(v => v + 1), []);
   // 機關（右邊「機關」分頁）：每個 cue 的機關位置、定義、速度檢查；改了也記在同一份復原
+  // Cue 庫專案：所有改畫面的動作先放進「還沒存的改動」（草稿），按另存 / 更新才寫進後台（lib/lookDraft.ts）
+  const libMode = !!projectMeta?.cueLibrary;
+  const libId = libMode ? (cues.find(c => c.id === selectedCueId)?.libraryCueId ?? null) : null;
+  const lookDraft = useLookDraft({ projectId, libId, enabled: libMode });
+  const lookDraftRef = useRef(lookDraft);
+  lookDraftRef.current = lookDraft;
+  const libModeRef = useRef(libMode);
+  libModeRef.current = libMode;
+  const libIdRef = useRef(libId);
+  libIdRef.current = libId;
+  // 這個專案 Cue 庫的所有 cue（編號、名稱、幾首歌在用）；另存 / 更新的對話框
+  const [libCues, setLibCues] = useState<cueLib.LibraryCue[]>([]);
+  const libCuesRef = useRef(libCues);
+  libCuesRef.current = libCues;
+  const [saveAsOpen, setSaveAsOpen] = useState<{ after?: () => void } | null>(null);
+  const [updateOpen, setUpdateOpen] = useState<{ usage: cueLib.LibraryCueUsage; after?: () => void } | null>(null);
+  const [draftBusy, setDraftBusy] = useState(false);
+  // 畫面上看到的物件狀態 = 後台給的 + 還沒存的改動
+  const cueStates = useMemo(() => applyDraftToStates(cueStatesBase, lookDraft.draft), [cueStatesBase, lookDraft.draft]);
+  const libDraftForMech = useMemo(() => (libMode && libId
+    ? { mechanisms: lookDraft.draft?.mechanisms ?? EMPTY_DRAFT_MECHS, set: lookDraft.setMechanisms }
+    : undefined), [libMode, libId, lookDraft.draft?.mechanisms, lookDraft.setMechanisms]);
   const mech = useEditorMechanisms({
     projectId, songId: selectedSongId, cues, selectedCueId, canEdit: true, scaleCorrection: view.scaleCorrection,
     history: { push: (scope, step) => historyRef.current.push(scope, step), bump: bumpHistory },
+    libDraft: libDraftForMech,
   });
+  const mechRef = useRef(mech);
+  mechRef.current = mech;
   const currentHistoryScope = historyScope(selectedCueId);
+  const draftUndoOn = libMode && !!libId;
   const historyScopeRef = useRef(currentHistoryScope);
   historyScopeRef.current = currentHistoryScope;
-  const historyCounts = historyRef.current.counts(currentHistoryScope);
+  const baseCounts = historyRef.current.counts(currentHistoryScope);
+  // Cue 庫專案：還沒存的改動可以復原 / 重做，退完才輪到已經存了的步驟
+  const historyCounts = draftUndoOn
+    ? { undo: baseCounts.undo + lookDraft.undoCount, redo: baseCounts.redo + lookDraft.redoCount }
+    : baseCounts;
 
   // 改物件位置 / 顯示、復原、重做都排隊一個一個做：每一步都拿得到前一步存好的值（復原才記得對），
   // 全部做完才重新讀一次（多選拖曳時物件不會一個一個跳回舊位置再跳過來）
@@ -319,6 +357,11 @@ export default function ProjectEditor() {
     return run;
   }, []);
   const runHistory = useCallback((kind: 'undo' | 'redo') => {
+    const ld = lookDraftRef.current;
+    if (ld && libModeRef.current && libIdRef.current) {
+      if (kind === 'undo' && ld.undoCount > 0) { ld.undo(); return; }
+      if (kind === 'redo' && ld.redoCount > 0) { ld.redo(); return; }
+    }
     const scope = historyScopeRef.current;
     const history = historyRef.current;
     if (history.counts(scope)[kind] === 0) return;
@@ -332,6 +375,7 @@ export default function ProjectEditor() {
   }, [runEdit, bumpHistory]);
 
   // 把最新值放進 ref，給 keyboard listener 用（避免 useEffect 因 derived value 變化重綁）
+  const guardRef = useRef<(action: () => void) => void>(a => a());
   const navRef = useRef({ masterCues: [] as Cue[], visibleSongs: [] as Song[], selectedCueId: null as string | null, selectedSongId: null as string | null });
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -364,14 +408,14 @@ export default function ProjectEditor() {
           ? (curIdx < 0 ? 0 : Math.min(curIdx + 1, cs.length - 1))
           : (curIdx <= 0 ? 0 : curIdx - 1);
         // 換 cue 不換分頁：用戶常常只是想一個一個 cue 看舞台長怎樣（要改再自己點「物件狀態」）
-        setSelectedCueId(cs[nextIdx].id);
+        guardRef.current(() => setSelectedCueId(cs[nextIdx].id));
       } else {
         if (ss.length === 0) return;
         const curIdx = ss.findIndex(s => s.id === sid);
         const nextIdx = k === 'j'
           ? (curIdx < 0 ? 0 : Math.min(curIdx + 1, ss.length - 1))
           : (curIdx <= 0 ? 0 : curIdx - 1);
-        setSelectedSongId(ss[nextIdx].id);
+        guardRef.current(() => setSelectedSongId(ss[nextIdx].id));
       }
     }
     window.addEventListener('keydown', onKey);
@@ -820,6 +864,7 @@ export default function ProjectEditor() {
   }
   async function handleResetCue(cueId: string, name: string) {
     if (!projectId || !selectedSongId) return;
+    if (libMode && lookDraft.hasChanges) { toast.info('這個 cue 還有沒存的改動，請先另存、更新或放棄'); return; }
     if (!(await confirmDialog({ title: `重置 cue「${name}」？`, message: '這個 cue 自己設的物件位置和機關位置都會清掉，改回沿用上一個 cue。', confirmLabel: '重置', destructive: true }))) return;
     try {
       await api.resetCue(projectId, selectedSongId, cueId);
@@ -830,6 +875,7 @@ export default function ProjectEditor() {
   // 「所有 cue 的物件回到預設位置」（Cue 分頁的「⋯」）：先數給製作看會清掉多少，確認以後一次清掉，記成復原紀錄的一步（lib/cueResetAll.ts）
   const resetAllBusyRef = useRef(false);
   async function handleResetAllCueObjects() {
+    if (libMode && lookDraft.hasChanges) { toast.info('這個 cue 還有沒存的改動，請先另存、更新或放棄'); return; }
     if (!projectId || !selectedSongId || resetAllBusyRef.current) return;
     if (cuesSongId !== selectedSongId) { toast.warn('這首歌的 cue 還在載入，等一下再試。'); return; }
     const pid = projectId, songId = selectedSongId;
@@ -867,6 +913,7 @@ export default function ProjectEditor() {
   }
   async function handleDeleteCue(cueId: string, name: string) {
     if (!projectId || !selectedSongId) return;
+    if (libMode && cueId === selectedCueId && lookDraft.hasChanges) { toast.info('這個 cue 還有沒存的改動，請先另存、更新或放棄'); return; }
     if (!(await confirmDialog({ title: `刪除 cue「${name}」？`, message: '刪了就救不回來。', confirmLabel: '刪除', destructive: true }))) return;
     try {
       await api.deleteCue(projectId, selectedSongId, cueId);
@@ -895,6 +942,111 @@ export default function ProjectEditor() {
       await refreshCues();
     } catch (e) { toast.error('cue 沒有存到：' + msg(e)); }
   }
+
+  // ── Cue 庫：還沒存的改動 → 另存 / 更新 / 放棄 / 換 cue 時的提醒 ──
+  const refreshLibCues = useCallback(async () => {
+    if (!projectId || !libMode) { setLibCues([]); return; }
+    try { setLibCues(await cueLib.listLibraryCues(projectId)); } catch (e) { console.warn('load library cues failed', e); }
+  }, [projectId, libMode]);
+  useEffect(() => { void refreshLibCues(); }, [refreshLibCues, libId]);
+  const currentLib = libCues.find(c => c.id === libId) ?? null;
+
+  /** 寫進後台之後：草稿清掉，畫面 / 機關 / 清單都重新讀一次 */
+  async function afterLookWrite() {
+    lookDraftRef.current?.clear();
+    await Promise.all([refreshCues(), refreshCueStates(), mechRef.current.refreshPositions(), refreshLibCues(), lookDraftRef.current?.loadBase()]);
+  }
+  async function currentBaseLook() {
+    const ld = lookDraftRef.current;
+    const b = ld?.base ?? await ld?.loadBase() ?? null;
+    return b && ld ? { rev: b.rev, look: { objects: b.objects, mechanisms: b.mechanisms } } : null;
+  }
+
+  /** 回 null = 存好了；回文字 = 要顯示在對話框裡的錯誤 */
+  async function doSaveAs(label: string, name: string): Promise<string | null> {
+    if (!projectId || !selectedSongId || !selectedCueId || !libId) return '沒有選到 cue';
+    const b = await currentBaseLook();
+    if (!b) return '這個 cue 的畫面讀不到，請重新整理';
+    const d = lookDraftRef.current?.getDraft();
+    const look = d ? applyDraftToLook(b.look, d) : b.look;
+    try {
+      const r = await cueLib.createLibraryCue(projectId, { label, name, basedOnId: libId, look, place: { songId: selectedSongId, replaceCueId: selectedCueId } });
+      toast.success(`已另存成 Cue ${r.libraryCue.label}「${r.libraryCue.name}」`);
+      await afterLookWrite();
+      return null;
+    } catch (e) { return msg(e); }
+  }
+
+  /** true = 更新好了。被別人改過（409）→ 草稿留著 */
+  async function doUpdate(): Promise<boolean> {
+    if (!projectId || !libId || !selectedCueId) return false;
+    const b = await currentBaseLook();
+    const d = lookDraftRef.current?.getDraft();
+    if (!b || !d) return false;
+    const look = applyDraftToLook(b.look, d);
+    const pid = projectId, lid = libId, scope = historyScope(selectedCueId);
+    setDraftBusy(true);
+    try {
+      const r = await cueLib.putLibraryLook(pid, lid, look, b.rev);
+      toast.success(`已更新 Cue ${currentLib?.label ?? ''}`);
+      // 更新是一步：復原 = 把換掉之前的畫面寫回去（共用這個 cue 的每首歌都會跟著變）
+      let rev = r.rev;
+      const reload = async () => {
+        await Promise.all([refreshCueStatesRef.current(), mechRef.current.refreshPositions(), refreshLibCues(), lookDraftRef.current?.loadBase()]);
+      };
+      historyRef.current.push(scope, {
+        undo: async () => { rev = (await cueLib.putLibraryLook(pid, lid, r.previous, rev)).rev; await reload(); },
+        redo: async () => { rev = (await cueLib.putLibraryLook(pid, lid, look, rev)).rev; await reload(); },
+      });
+      bumpHistory();
+      await afterLookWrite();
+      return true;
+    } catch (e) {
+      if ((e as cueLib.CueLibraryApiError).status === 409) toast.error('這個 cue 剛被別人改過，請重新整理後再改');
+      else toast.error('更新沒有存到：' + msg(e));
+      return false;
+    } finally { setDraftBusy(false); }
+  }
+
+  /** 按「更新」：有別的 cue 也在用 → 先列出會影響的歌再問 */
+  async function startUpdate(after?: () => void) {
+    if (!projectId || !libId) return;
+    let usage: cueLib.LibraryCueUsage;
+    try { usage = await cueLib.getLibraryCueUsage(projectId, libId); } catch (e) { toast.error('讀不到誰在用這個 cue：' + msg(e)); return; }
+    if (usage.slotCount > 1) { setUpdateOpen({ usage, after }); return; }
+    if (await doUpdate()) after?.();
+  }
+
+  /** 換 cue / 換歌 / 離開之前：有沒存的改動就先問（規格第 10 節） */
+  async function guardLeave(action: () => void) {
+    const ld = lookDraftRef.current;
+    if (!libModeRef.current || !ld || !ld.hasChanges) { action(); return; }
+    const lib = libCuesRef.current.find(c => c.id === libIdRef.current);
+    const label = lib?.label ?? '';
+    const shared = lib && lib.usage.songCount > 1 ? `會影響 ${lib.usage.songCount} 首歌：${usageSongNames(lib.usage).join('、')}。` : '';
+    const ans = await chooseDialog({
+      title: '這個 cue 動到了，要另存成新的 cue 嗎？',
+      message: `Cue ${label}${lib ? `「${lib.name}」` : ''}的改動還沒存。${shared}`,
+      choices: [
+        { value: 'saveas', label: '另存成新的 cue', primary: true },
+        { value: 'update', label: `更新 Cue ${label}` },
+        { value: 'discard', label: '放棄改動' },
+      ],
+    });
+    if (ans === 'saveas') setSaveAsOpen({ after: action });
+    else if (ans === 'update') void startUpdate(action);
+    else if (ans === 'discard') { ld.clear(); action(); }
+  }
+  guardRef.current = (a) => { void guardLeave(a); };
+  const selectCue = (id: string | null) => { if (id !== selectedCueId) guardRef.current(() => setSelectedCueId(id)); };
+  const selectSong = (id: string | null) => { if (id !== selectedSongId) guardRef.current(() => setSelectedSongId(id)); };
+  // 關分頁 / 重新整理：有沒存的改動就讓瀏覽器問一下
+  useEffect(() => {
+    if (!libMode || !lookDraft.hasChanges) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [libMode, lookDraft.hasChanges]);
 
   // ── Cue state (per object override) actions ──
   // 這個 cue 目前的物件狀態：畫面上那份就是這個 cue 的 → 直接用；不是（還在讀）→ 去後台拿
@@ -941,6 +1093,16 @@ export default function ProjectEditor() {
       }, 'objects');
     }
     if (!songId) return Promise.resolve();
+    // Cue 庫專案：改的是「還沒存的改動」，不寫後台
+    if (libMode && libId) {
+      if (cueStatesForRef.current !== cueId) return Promise.resolve();
+      const shown = applyDraftToStates(cueStatesRef.current, lookDraftRef.current?.getDraft());
+      const cur = shown.find(x => x.objectId === objId);
+      if (!cur) return Promise.resolve();
+      const patch = resolvePatch(cur.effective);
+      if (Object.keys(patch).length > 0) lookDraft.setObject(objId, patch);
+      return Promise.resolve();
+    }
     return runEdit(async () => {
       const cur = await loadCueState(pid, songId, cueId, objId);
       if (!cur) return;
@@ -973,6 +1135,7 @@ export default function ProjectEditor() {
   async function handleResetState(objId: string, askFirst = true) {
     if (!projectId || !selectedSongId || !selectedCueId) return;
     if (askFirst && !(await confirmDialog({ title: '把這個物件重置回預設位置？', message: '可以按「復原」改回來。', confirmLabel: '重置' }))) return;
+    if (libMode && libId) { lookDraft.resetObjectFields(objId); return; }
     const pid = projectId, songId = selectedSongId, cueId = selectedCueId;
     const scope = historyScope(cueId);
     try {
@@ -1106,7 +1269,7 @@ export default function ProjectEditor() {
     <div className="editor">
       {/* Top */}
       <header className="editor-topbar">
-        <button className="editor-back" onClick={() => navigate(isGlobalAdmin ? '/admin' : '/studio')} title="返回專案總覽" aria-label="返回專案總覽"><Icon icon={ArrowLeft} size="md" /></button>
+        <button className="editor-back" onClick={() => guardRef.current(() => navigate(isGlobalAdmin ? '/admin' : '/studio'))} title="返回專案總覽" aria-label="返回專案總覽"><Icon icon={ArrowLeft} size="md" /></button>
         <div className="editor-breadcrumb">
           <span className="muted editor-breadcrumb__root">專案</span>
           <span className="sep editor-breadcrumb__root">/</span>
@@ -1243,7 +1406,7 @@ export default function ProjectEditor() {
                   <li
                     key={s.id}
                     className={'song-item' + (selectedSongId === s.id ? ' is-active' : '')}
-                    onClick={() => setSelectedSongId(s.id)}
+                    onClick={() => selectSong(s.id)}
                   >
                     <div className="song-item__order">{String(fullIdx + 1).padStart(2, '0')}</div>
                     {/* 一列四行：代號 + 歌名（太長變「…」）+ 最右邊的「⋯」/ 狀態、cue 數 / 影片 / 負責動畫師。
@@ -1439,7 +1602,7 @@ export default function ProjectEditor() {
           )}
           {/* 機關時間軸：開「機關」分頁時排在 3D 畫面下面（右邊欄太窄） */}
           {rightTab === 'mechanisms' && mech.timelineOpen && mech.mechanisms.length > 0 && selectedSongId && stageObjects.length > 0 && (
-            <MechanismTimeline mech={mech} cues={cues} selectedCueId={selectedCueId} onSelectCue={setSelectedCueId} onClose={() => mech.setTimelineOpen(false)} />
+            <MechanismTimeline mech={mech} cues={cues} selectedCueId={selectedCueId} onSelectCue={selectCue} onClose={() => mech.setTimelineOpen(false)} />
           )}
         </section>
 
@@ -1463,6 +1626,19 @@ export default function ProjectEditor() {
             ))}
           </div>
 
+          {libMode && libId && currentLib && (
+            <LookDraftBar
+              label={currentLib.label}
+              name={currentLib.name}
+              songCount={currentLib.usage.songCount}
+              summary={lookDraft.summary}
+              hasChanges={lookDraft.hasChanges}
+              busy={draftBusy}
+              onSaveAs={() => setSaveAsOpen({})}
+              onUpdate={() => { void startUpdate(); }}
+              onDiscard={() => lookDraft.clear()}
+            />
+          )}
           <div className="editor-cues__body">
             <MechanismHintProvider value={mech}>
             {rightTab === 'objects' ? (
@@ -1490,7 +1666,7 @@ export default function ProjectEditor() {
                 projectName={projectMeta?.name}
                 cues={selectedSongId ? cues : []}
                 selectedCue={selectedSongId ? selectedCue : null}
-                onSelectCue={setSelectedCueId}
+                onSelectCue={selectCue}
                 stageObjects={stageObjects}
                 selectedObjectIds={selectedObjectIds}
                 scaleCorrection={view.scaleCorrection}
@@ -1516,7 +1692,7 @@ export default function ProjectEditor() {
                 cues={masterCues}
                 loading={cuesLoading}
                 selectedId={selectedCueId}
-                onSelect={(id) => { setSelectedCueId(id); }}
+                onSelect={selectCue}
                 onAddBlank={handleAddBlankCue}
                 onClone={handleCloneCue}
                 onSnapshot={handleSnapshotCue}
@@ -1560,7 +1736,7 @@ export default function ProjectEditor() {
                   cues={proposalCues}
                   loading={cuesLoading}
                   selectedId={selectedCueId}
-                  onSelect={(id) => { setSelectedCueId(id); }}
+                  onSelect={selectCue}
                   onDelete={handleDeleteCue}
                   emptyText="這首歌沒有提案"
                 />
@@ -1717,7 +1893,7 @@ export default function ProjectEditor() {
         projectId={projectId || ''}
         songs={songs}
         onClose={() => setCommentSearchOpen(false)}
-        onJump={(songId) => { setSelectedSongId(songId); setCommentSearchOpen(false); }}
+        onJump={(songId) => { selectSong(songId); setCommentSearchOpen(false); }}
       />
 
       {decisionSongId && (() => {
@@ -1744,6 +1920,33 @@ export default function ProjectEditor() {
         onClose={() => setDiffOpen(false)}
       />
 
+      {saveAsOpen && currentLib && (
+        <SaveAsCueDialog
+          defaultLabel={suggestLabel(libCues.map(c => c.label))}
+          defaultName={currentLib.name}
+          existingLabels={libCues.map(c => c.label)}
+          onSave={async (label, name) => {
+            const err = await doSaveAs(label, name);
+            if (!err) { const after = saveAsOpen.after; setSaveAsOpen(null); after?.(); }
+            return err;
+          }}
+          onCancel={() => setSaveAsOpen(null)}
+        />
+      )}
+      {updateOpen && currentLib && (
+        <UpdateCueDialog
+          label={currentLib.label}
+          name={currentLib.name}
+          usage={updateOpen.usage}
+          busy={draftBusy}
+          onConfirm={async () => {
+            if (await doUpdate()) { const after = updateOpen.after; setUpdateOpen(null); after?.(); }
+          }}
+          onSaveAs={() => { const after = updateOpen.after; setUpdateOpen(null); setSaveAsOpen({ after }); }}
+          onCancel={() => setUpdateOpen(null)}
+        />
+      )}
+
       <ImportCuesDialog
         open={importCuesOpen}
         projectId={projectId || ''}
@@ -1768,7 +1971,7 @@ export default function ProjectEditor() {
                 stageObjects={stageObjects}
                 modelUrl={modelUrl}
                 selectedCueId={selectedCueId}
-                onSelectCue={(id) => { setSelectedCueId(id); }}
+                onSelectCue={selectCue}
                 onReordered={refreshCues}
                 projectName={projectMeta?.name}
                 songName={selectedSong.name}

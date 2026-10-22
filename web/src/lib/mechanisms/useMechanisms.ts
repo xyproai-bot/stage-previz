@@ -18,6 +18,7 @@ import { defaultRow, resolvePositions, valuesOf, type PositionsMode, type Resolv
 import { buildMechanismTimeline, checkSongMechanisms, ownMoveFor, sortMasters, type MechanismMotion, type MechanismTimeline, type MotionCue, type SongCheck } from './motion';
 import * as mapi from './mechanismApi';
 import type { StageSceneQuery } from '../../components/StageScene';
+import type { DraftMech } from '../lookDraft';
 
 export interface MechanismSceneProps {
   mechanisms: Mechanism[] | null;
@@ -204,6 +205,11 @@ export function useEditorMechanisms(o: {
   history?: EditorHistory;
   /** 測距校準倍率（吊掛的傾斜 / 共面提醒要把公尺換成場景單位）；沒給 = 1 */
   scaleCorrection?: number;
+  /**
+   * Cue 庫專案：機關的修改先放進「還沒存的改動」（草稿），不直接寫後台。
+   * mechanisms = 草稿裡目前的機關；set = 改一個（null = 回到預設）
+   */
+  libDraft?: { mechanisms: Record<string, DraftMech | null>; set: (entries: Record<string, DraftMech | null>) => void };
 }) {
   const { projectId, songId, selectedCueId } = o;
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
@@ -222,7 +228,8 @@ export function useEditorMechanisms(o: {
   const mechsRef = useRef<Mechanism[] | null>(null);
   mechsRef.current = mechanisms;
   const posRef = useRef(positions);
-  posRef.current = positions;
+  const libDraftRef = useRef(o.libDraft);
+  libDraftRef.current = o.libDraft;
   const historyRef = useRef(o.history);
   historyRef.current = o.history;
 
@@ -254,7 +261,19 @@ export function useEditorMechanisms(o: {
   useEffect(() => { void refreshPositions(); }, [refreshPositions, o.cues]);
   useEffect(() => { setPreview({}); }, [selectedCueId, songId]);
 
-  const list = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
+  const rawList = positions && positions.songId === songId ? positions.list : EMPTY_POSITIONS;
+  // Cue 庫專案：目前選的 cue 的機關列蓋上草稿（畫面、時間軸、速度檢查都看得到還沒存的改動）
+  const draftMech = o.libDraft?.mechanisms;
+  const libActive = !!o.libDraft && positions?.mode === 'library';
+  const list = useMemo(() => {
+    if (!libActive || !draftMech || !selectedCueId || Object.keys(draftMech).length === 0) return rawList;
+    const kept = rawList.filter(p => !(p.cueId === selectedCueId && p.mechanismId in draftMech));
+    for (const [mechanismId, e] of Object.entries(draftMech)) {
+      if (e) kept.push({ cueId: selectedCueId, mechanismId, value: e.value, delaySec: e.delaySec, durationSec: e.durationSec, updatedAt: '', carried: false });
+    }
+    return kept;
+  }, [libActive, draftMech, selectedCueId, rawList]);
+  posRef.current = positions ? { ...positions, list } : positions;
   const pb = usePlayback(mechanisms, list, o.cues, selectedCueId, undefined, positions?.mode);
   const targets = useMemo(() => {
     const keys = Object.keys(preview);
@@ -328,6 +347,11 @@ export function useEditorMechanisms(o: {
         const cueId = selectedCueId, sid = songId;
         const before = ownValue(cueId, mechId);
         if (before !== null && Math.abs(before - value) < 1e-9) return;
+        if (libActive && libDraftRef.current) {
+          const old = ownEntry(cueId, mechId);
+          libDraftRef.current.set({ [mechId]: { value, delaySec: old?.carried ? null : old?.delaySec ?? null, durationSec: old?.carried ? null : old?.durationSec ?? null } });
+          return;
+        }
         const hadOwn = before !== null;
         if (!hadOwn) setMechanisms(prev => prev && prev.map(x => (x.id === mechId ? { ...x, cueCount: x.cueCount + 1 } : x)));
         await writeCue(sid, cueId, mechId, value);
@@ -353,7 +377,7 @@ export function useEditorMechanisms(o: {
       toast.error('機關位置沒有存到：' + (e instanceof Error ? e.message : String(e)));
       void refreshPositions();
     }
-  }, [projectId, songId, selectedCueId, o.canEdit, writeCue, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, songId, selectedCueId, o.canEdit, writeCue, refreshPositions, libActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 回到沿用上一個 cue（刪掉這個 cue 自己的值） */
   const clearValue = useCallback(async (mechId: string) => {
@@ -361,6 +385,7 @@ export function useEditorMechanisms(o: {
     const cueId = selectedCueId, sid = songId;
     const before = ownValue(cueId, mechId);
     if (before === null) return;
+    if (libActive && libDraftRef.current) { libDraftRef.current.set({ [mechId]: null }); return; }
     try {
       await writeCue(sid, cueId, mechId, null);
       historyRef.current?.push(historyScope(cueId), {
@@ -375,7 +400,7 @@ export function useEditorMechanisms(o: {
       toast.error('沒有改回沿用：' + (e instanceof Error ? e.message : String(e)));
       void refreshPositions();
     }
-  }, [projectId, songId, selectedCueId, o.canEdit, writeCue, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, songId, selectedCueId, o.canEdit, writeCue, refreshPositions, libActive]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * 存某個 cue 某個機關的延遲 / 走幾秒（機關時間軸拖完、這個 cue 的欄位打完）。null = 跟著 cue；沒放的欄位不改。
@@ -393,6 +418,11 @@ export function useEditorMechanisms(o: {
     if (own && after.delaySec === before.delaySec && after.durationSec === before.durationSec) return;
     const inherited = pb.resolved.get(cueId)?.[mechId]?.value;
     if (!own && inherited === undefined) return;
+    if (libActive && libDraftRef.current) {
+      if (cueId !== selectedCueId) { toast.info('先選這個 cue 才能改它的機關時間'); return; }
+      libDraftRef.current.set({ [mechId]: { value: own ? own.value : inherited!, delaySec: after.delaySec, durationSec: after.durationSec } });
+      return;
+    }
     const write = async (t: { delaySec: number | null; durationSec: number | null }) => {
       const body = ownEntry(cueId, mechId) ? t : { ...t, value: inherited };
       const r = await mapi.setCueTiming(projectId, sid, cueId, mechId, body);
@@ -414,7 +444,7 @@ export function useEditorMechanisms(o: {
       toast.error('機關的時間沒有存到：' + (e instanceof Error ? e.message : String(e)));
       void refreshPositions();
     }
-  }, [projectId, songId, o.canEdit, pb.resolved, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, songId, o.canEdit, pb.resolved, refreshPositions, libActive, selectedCueId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /**
    * 一次存很多個機關在這個 cue 的位置和延遲（套用花樣）；整批一個交易，復原也是一步。
@@ -424,6 +454,21 @@ export function useEditorMechanisms(o: {
   const applyPositions = useCallback(async (cueId: string, items: { mechanismId: string; value: number; delaySec?: number | null }[]): Promise<boolean> => {
     const sid = songId;
     if (!projectId || !sid || !o.canEdit || items.length === 0) return false;
+    if (libActive && libDraftRef.current) {
+      if (cueId !== selectedCueId) { toast.info('先選這個 cue 才能改它的機關'); return false; }
+      const entries: Record<string, DraftMech | null> = {};
+      for (const it of items) {
+        const old = ownEntry(cueId, it.mechanismId);
+        const keep = old && !old.carried ? old : null;
+        entries[it.mechanismId] = {
+          value: it.value,
+          delaySec: it.delaySec === undefined ? (keep?.delaySec ?? null) : it.delaySec,
+          durationSec: keep?.durationSec ?? null,
+        };
+      }
+      libDraftRef.current.set(entries);
+      return true;
+    }
     const before = items.map(it => ownEntry(cueId, it.mechanismId));
     const forward: BulkPositionItem[] = items.map(it => (it.delaySec === undefined
       ? { mechanismId: it.mechanismId, value: it.value }
@@ -458,7 +503,7 @@ export function useEditorMechanisms(o: {
       void refreshPositions();
       return false;
     }
-  }, [projectId, songId, o.canEdit, refreshPositions]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [projectId, songId, o.canEdit, refreshPositions, libActive, selectedCueId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** 套用花樣前的預覽：一次讓好幾個機關在 3D 畫面移到指定位置（不存）；null = 取消預覽 */
   const previewValues = useCallback((values: MechanismValues | null) => setPreview(values ? { ...values } : {}), []);

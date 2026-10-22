@@ -492,6 +492,9 @@ export interface Cue {
   thumbnailUrl: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Cue 庫專案才有：這個 cue 指到的 Cue 庫的 cue */
+  libraryCueId?: string | null;
+  libraryCue?: { id: string; label: string; name: string } | null;
 }
 
 export async function listCues(projectId: string, songId: string): Promise<Cue[]> {
@@ -1527,6 +1530,8 @@ export interface ProjectFull {
   updated_at: string;
   /** 成員看片也加浮水印（0038；1 = 開；舊版後台沒有 → undefined = 關） */
   watermark_members?: number;
+  /** 是不是 Cue 庫模式（舊後台沒有 → undefined = 舊模式） */
+  cueLibrary?: boolean;
 }
 export async function getProjectFull(projectId: string): Promise<ProjectFull | null> {
   try {
