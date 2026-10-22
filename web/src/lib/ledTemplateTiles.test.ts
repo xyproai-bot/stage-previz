@@ -115,7 +115,7 @@ describe('AE 腳本：每塊 LED 一個合成', () => {
     expect(main.layers.map(l => l.pos)).toEqual([[550, 50], [135, 230], [410, 245]]);
     for (const t of comps.slice(1)) {
       expect(t.layers.length).toBe(1);
-      expect(t.layers[0].guide).toBe(true);
+      expect(t.layers[0].guide).toBe(false);
     }
     expect(comps.slice(1).map(c => [c.w, c.h])).toEqual([[1100, 100], [250, 220], [220, 250]]);
     expect(alerts.length).toBe(1);

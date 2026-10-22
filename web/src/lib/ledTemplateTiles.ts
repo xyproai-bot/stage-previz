@@ -1,6 +1,6 @@
 // LED 版型的「每塊 LED 一張圖」：下載 zip（每塊一張 PNG + 座標表 CSV + AE 腳本）用的純函式部分
 //   - 每塊的圖大小 = 那塊在版型畫布上的像素大小；內容 = 整張模板圖裡那一塊（旋轉、翻轉都已經畫進去，跟畫布上看到的一樣）
-//   - AE 腳本：每塊一個合成（參考圖層設成導引圖層，不輸出）+ 一個整張版型畫布大小的總合成（每塊的合成擺在正確位置）= 最後輸出給 LED 的畫面
+//   - AE 腳本：每塊一個合成（測試圖是一般圖層、鎖住）+ 一個整張版型畫布大小的總合成（每塊的合成擺在正確位置）= 最後輸出給 LED 的畫面
 // 畫圖在 ledTemplateTilesDraw.ts；這裡不碰 canvas，ledTemplateTiles.test.ts 有測。
 
 import { assembleScript, commentSafe } from './aeCompScript';
@@ -66,7 +66,7 @@ const UI = {
   askLen: '合成長度（秒）',
   missing: '這些圖找不到，沒有建：\n',
   undo: 'Stage Previz 建 LED 版型合成',
-  done: '建好了。\n\n總合成「{0}」（{1} × {2}）：每塊 LED 的合成已經擺在正確位置，輸出這個就是給 LED 的畫面。\n每塊 LED 的合成共 {3} 個：把動畫素材放進去（參考圖層是導引圖層，不會輸出）。',
+  done: '建好了。\n\n總合成「{0}」（{1} × {2}）：每塊 LED 的合成已經擺在正確位置，輸出這個就是給 LED 的畫面。\n每塊 LED 的合成共 {3} 個：每個合成裡的「測試圖」是一般圖層，做動畫時關掉或刪掉。',
 };
 
 const RUNNER = `
@@ -102,7 +102,6 @@ for (var i = 0; i < DATA.tiles.length; i++) {
   if (footage.width !== t.w || footage.height !== t.h) {
     ref.property("Scale").setValue([t.w / footage.width * 100, t.h / footage.height * 100]);
   }
-  ref.guideLayer = true;
   ref.locked = true;
   var layer = main.layers.add(comp);
   layer.name = t.name;
@@ -135,7 +134,7 @@ export function buildAeTilesScript(input: AeTilesScriptInput): string {
     width: c.width, height: c.height,
     fps: normalizeAeFps(input.fps),
     comment: `Stage Previz LED 版型 · 專案：${commentSafe(projectName || '未命名專案')} · 版型：${commentSafe(plan.name)} · ${input.date}`,
-    refLayerName: '參考圖（導引圖層，不輸出）',
+    refLayerName: '測試圖',
     tiles: tiles.map(t => ({
       name: commentSafe(t.name), file: t.fileName, x: t.x, y: t.y, w: t.w, h: t.h,
       comment: `位置 ${t.x}, ${t.y} · ${t.w}×${t.h} 像素 · 上方${t.upText} · 轉 ${t.rotate}°${t.flipH ? ' · 左右翻' : ''}${t.flipV ? ' · 上下翻' : ''}`,
