@@ -103,13 +103,14 @@
 /* ─── Body grid ─── */
 .editor-body {
   display: grid;
-  grid-template-columns: 280px 1fr 340px;
+  grid-template-columns: var(--songs-w, 280px) minmax(0, 1fr) var(--side-w, 340px);
   flex: 1;
   min-height: 0;
 }
 
 /* ─── Songs left panel ─── */
 .editor-songs {
+  position: relative;
   background: var(--surface-1);
   border-right: 1px solid var(--border);
   display: flex;
@@ -576,6 +577,7 @@
 
 /* ─── Cues right panel ─── */
 .editor-cues {
+  position: relative;
   background: var(--surface-1);
   border-left: 1px solid var(--border);
   display: flex;
@@ -1423,7 +1425,7 @@
 
 @media (max-width: 1100px) {
   .editor-body {
-    grid-template-columns: 240px 1fr 300px;
+    grid-template-columns: var(--songs-w, 240px) minmax(0, 1fr) var(--side-w, 300px);
   }
 }
 @media (max-width: 900px) {
@@ -1489,4 +1491,34 @@
 /* 手機 / iPad：整個編輯頁的高度用 dvh（網址列縮起來、放下來時跟著變，底下不會被切掉；電腦版不變）*/
 @media (max-width: 1024px) {
   .editor { height: 100vh; height: var(--vvh, 100dvh); }
+}
+
+/* 左右兩欄拖邊緣調寬（usePanelWidth）：細細一條，滑上去變亮；手機版不顯示 */
+.editor-resize {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+}
+.editor-resize--left { left: -4px; }
+.editor-resize--right { right: -4px; }
+.editor-resize::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  background: transparent;
+  transition: background 0.15s;
+}
+.editor-resize:hover::after,
+.editor-resize:active::after {
+  background: var(--accent);
+}
+@media (max-width: 900px) {
+  .editor-resize { display: none; }
 }

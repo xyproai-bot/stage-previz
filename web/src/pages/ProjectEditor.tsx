@@ -76,6 +76,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import './ProjectEditor.css';
+import { usePanelWidth } from '../lib/usePanelWidth';
 
 type RightTab = 'cues' | 'state' | 'mechanisms' | 'proposals' | 'objects';
 type LoadStatus = 'loading' | 'ready' | 'error';
@@ -208,6 +209,9 @@ export default function ProjectEditor() {
   useEscapeClose(storyboardOpen, () => setStoryboardOpen(false));
   const [shareOpen, setShareOpen] = useState(false);
   // LED 畫布版型（數字表單；每首歌選用哪個）
+  // 左右兩欄可以拖邊緣調寬（名字很長時看得到全名），記在這台電腦
+  const songsPanel = usePanelWidth('sp_editor_songs_w', { side: 'left', min: 220, max: 560 });
+  const sidePanel = usePanelWidth('sp_editor_side_w', { side: 'right', min: 300, max: 800 });
   const ledTpls = useLedTemplates(projectId);
   const [ledTplOpen, setLedTplOpen] = useState(false);
   // 畫布大小改了（3D 工具列「設定畫布大小…」或版型面板裡填的）、打開版型面板 → 重讀版型清單（等存檔送出再讀）
@@ -1113,9 +1117,16 @@ export default function ProjectEditor() {
       {/* 手機：編輯請用電腦或平板橫放（只有手機寬度才看得到） */}
       <PhoneEditNote />
 
-      <div className="editor-body">
+      <div
+        className="editor-body"
+        style={{
+          ...(songsPanel.width ? { '--songs-w': `${songsPanel.width}px` } : {}),
+          ...(sidePanel.width ? { '--side-w': `${sidePanel.width}px` } : {}),
+        } as React.CSSProperties}
+      >
         {/* Left — songs */}
         <aside className="editor-songs">
+          <div className="editor-resize editor-resize--right" role="separator" aria-orientation="vertical" aria-label="拖曳調整歌單寬度" title="拖曳調整寬度（雙擊回到預設）" {...songsPanel.handleProps} />
           <div className="editor-songs__header">
             <h3>歌曲</h3>
             <span className="muted">
@@ -1369,6 +1380,7 @@ export default function ProjectEditor() {
 
         {/* Right — Cue panel */}
         <aside className="editor-cues">
+          <div className="editor-resize editor-resize--left" role="separator" aria-orientation="vertical" aria-label="拖曳調整右邊面板寬度" title="拖曳調整寬度（雙擊回到預設）" {...sidePanel.handleProps} />
           <div className="editor-cues__tabs">
             {([
               ['cues',      `Cue (${masterCues.length})`],
