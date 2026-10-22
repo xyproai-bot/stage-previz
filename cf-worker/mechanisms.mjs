@@ -202,7 +202,22 @@ export async function loadMechanisms(env, projectId, onlyId = null, { mech2 = tr
       sides.set(r.mechanism_id, m);
     }
   }
-  return (mr.results || []).map(r => rowToMechanism(r, objs.get(r.id) || [], r.cue_count, sides.get(r.id) || {}));
+  // Cue 庫模式的專案：「幾個 cue 有設定」數 Cue 庫的列（舊模式的專案照舊數 cue_mechanism_positions；還沒有 0042 的資料庫整段略過）
+  const libCounts = await libraryCueCounts(env, projectId);
+  return (mr.results || []).map(r => rowToMechanism(r, objs.get(r.id) || [], libCounts ? (libCounts.get(r.id) || 0) : r.cue_count, sides.get(r.id) || {}));
+}
+
+/** Cue 庫模式的專案：機關 id → 幾個 Cue 庫的 cue 有設定它；舊模式（或還沒有 0042）回 null */
+async function libraryCueCounts(env, projectId) {
+  try {
+    const p = await env.DB.prepare(`SELECT cue_library FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+    if (Number(p?.cue_library) !== 1) return null;
+    const r = await env.DB.prepare(
+      `SELECT lp.mechanism_id, COUNT(*) AS n FROM library_cue_mechanism_positions lp
+         JOIN mechanisms m ON m.id = lp.mechanism_id WHERE m.project_id = ? GROUP BY lp.mechanism_id`
+    ).bind(projectId).all();
+    return new Map((r.results || []).map(x => [x.mechanism_id, Number(x.n)]));
+  } catch { return null; }
 }
 
 /** 網址帶 ?mech=N → 這個畫面看得懂機關 v2 的第幾級（沒帶 / 不是數字 = 0） */

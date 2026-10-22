@@ -87,6 +87,7 @@ import {
 import * as members from './members.mjs';
 // 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
 import * as mech from './mechanisms.mjs';
+import * as cueLib from './cueLibraryRoutes.mjs';
 import * as ledTpl from './ledTemplates.mjs';
 // 自動貼 UV：新模型版本 + 畫布 + 舊版面一次換好、模型版本搭配的畫布
 import * as uvLayouts from './modelUvLayouts.mjs';
@@ -597,8 +598,14 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         ? mech.updateMechanismGroup(request, env, ctx, route.groupId, mechLog(request, env, projectId))
         : mech.deleteMechanismGroup(request, env, ctx, route.groupId, mechLog(request, env, projectId), { dissolve: url.searchParams.get('dissolve') === '1' }));
     case 'mechPositions.bulk':    return mechResp(mech.putCuePositionsBulk(request, env, ctx, cueId));
-    case 'mechanisms.sheet':      return mechResp(mech.mechanismSheet(env, ctx, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
-    case 'mechPositions.list':    return mechResp(mech.listSongPositions(env, ctx, songId, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
+    case 'mechanisms.sheet': {
+      const o = { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) };
+      return mechResp(cueLib.sheetRoute(env, projectId, { ...o, cuelib: cueLib.wantsCueLib(request) }, () => mech.mechanismSheet(env, ctx, o)));
+    }
+    case 'mechPositions.list': {
+      const o = { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) };
+      return mechResp(cueLib.songPositionsRoute(env, projectId, songId, { ...o, cuelib: cueLib.wantsCueLib(request) }, () => mech.listSongPositions(env, ctx, songId, o)));
+    }
     case 'mechPositions.item':
       return mechResp(request.method === 'PUT'
         ? mech.putCuePosition(request, env, ctx, cueId)
@@ -650,7 +657,7 @@ async function listProjects(env, me, opts = {}) {
   const projects = await env.DB.prepare(`
     SELECT
       p.id, p.name, p.description, p.thumbnail_r2_key, p.status, p.show_id, p.tags,
-      p.created_at, p.updated_at, p.watermark_members,
+      p.created_at, p.updated_at, p.watermark_members, p.cue_library,
       (SELECT pm.role FROM project_members pm WHERE pm.project_id = p.id AND pm.user_id = ?) AS my_member_role,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id) AS song_count,
       (SELECT COUNT(*) FROM songs s WHERE s.project_id = p.id AND s.status = 'todo') AS songs_todo,
@@ -707,6 +714,8 @@ async function listProjects(env, me, opts = {}) {
     myRole: projectRoleOf(me?.role, p.my_member_role),
     // 0038：成員看片也加浮水印（製作設定；預設關）
     watermarkMembers: memberWatermarkOn(p.watermark_members),
+    // 0042：Cue 庫模式（true = 這個專案的 cue 畫面存在 Cue 庫）
+    cueLibrary: cueLib.cueLibraryFlag(p),
   }));
 
   return jsonResp({ projects: list });
@@ -747,7 +756,7 @@ async function createProject(request, env, me) {
 async function getProject(env, ctx) {
   const row = await env.DB.prepare(`SELECT * FROM projects WHERE id = ? LIMIT 1`).bind(ctx.projectId).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
-  return jsonResp({ project: row, myRole: ctx.role });
+  return jsonResp({ project: { ...row, cueLibrary: cueLib.cueLibraryFlag(row) }, myRole: ctx.role });
 }
 
 async function updateProject(request, env, ctx) {
@@ -2040,7 +2049,7 @@ async function listCues(env, songId) {
     ORDER BY "order" ASC, created_at ASC
   `).bind(songId).all();
 
-  return jsonResp({ cues: (r.results || []).map(parseCueRow) });
+  return jsonResp({ cues: await cueLib.decorateCueList(env, songId, (r.results || []).map(parseCueRow)) });
 }
 
 function parseCueRow(c) {
@@ -2830,7 +2839,7 @@ async function loadCueStates(env, projectId, cueId) {
 }
 
 async function listCueStates(env, projectId, cueId) {
-  return jsonResp({ states: await loadCueStates(env, projectId, cueId) });
+  return jsonResp({ states: await cueLib.slotStates(env, projectId, cueId, loadCueStates) });
 }
 
 async function upsertCueState(request, env, cueId, objId) {
@@ -6351,12 +6360,12 @@ async function handleShareRouter(request, env, url, ref) {
         `SELECT id, name, "order", crossfade_seconds, video_time_sec, status FROM cues WHERE song_id = ? AND status = 'master' ORDER BY "order"`
       ).bind(songId).all();
       return jsonResp({
-        cues: (r.results || []).map(c => ({
+        cues: await cueLib.decorateCueList(env, songId, (r.results || []).map(c => ({
           id: c.id, name: c.name, order: c.order,
           crossfadeSeconds: c.crossfade_seconds,
           videoTimeSec: typeof c.video_time_sec === 'number' ? c.video_time_sec : null,
           status: c.status,
-        })),
+        })), { share: true }),
       });
     }
     if (wantVideos) {
@@ -6390,7 +6399,10 @@ async function handleShareRouter(request, env, url, ref) {
     }
     if (wantMechPositions) {
       // 每個 cue 自己設的機關位置（只有正式 cue；跟管理頁同一套沿用規則在前端算）
-      return jsonResp({ positions: await mech.loadSongPositions(env, songId, { masterOnly: true, mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }) });
+      const o = { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) };
+      const r = await cueLib.songPositionsRoute(env, link.project_id, songId, { ...o, masterOnly: true, cuelib: cueLib.wantsCueLib(request) },
+        async () => ({ status: 200, body: { positions: await mech.loadSongPositions(env, songId, { masterOnly: true, ...o }) } }));
+      return jsonResp(r.body, r.status);
     }
     if (wantStates) {
       // 跟管理頁 / 導演頁同一份計算（loadCueStates）→ 沒改的物件一樣沿用前面 cue 的位置
@@ -6399,7 +6411,7 @@ async function handleShareRouter(request, env, url, ref) {
         `SELECT id FROM cues WHERE id = ? AND song_id = ? AND status = 'master' LIMIT 1`
       ).bind(cueId, songId).first();
       if (!cue) return jsonResp({ error: 'Cue not found' }, 404);
-      return jsonResp({ states: await loadCueStates(env, link.project_id, cueId) });
+      return jsonResp({ states: await cueLib.slotStates(env, link.project_id, cueId, loadCueStates) });
     }
     return jsonResp({ error: 'Bad share sub-path' }, 404);
   }
