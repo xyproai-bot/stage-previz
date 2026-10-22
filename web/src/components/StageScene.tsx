@@ -364,6 +364,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const userMovedCameraRef = useRef(false);
   const transformRef = useRef<TransformControls | null>(null);
   const meshesRef = useRef<Map<string, THREE.Object3D>>(new Map());
+  // 選到的物件外面框一個亮綠色的方框（不靠材質發光：很多物件共用材質，發光會連別的一起亮），每一幀跟著物件走
+  const selectionBoxesRef = useRef<Map<string, THREE.BoxHelper>>(new Map());
   const modelMeshMapRef = useRef<Map<string, THREE.Object3D>>(new Map()); // mesh_name → top-level node from .glb
   const labelsRef = useRef<Map<string, HTMLDivElement>>(new Map());
   const labelLayerRef = useRef<HTMLDivElement | null>(null);
@@ -1192,6 +1194,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const frameMs = nowTs - lastTickTs;
       const deltaSec = Math.min(frameMs / 1000, 0.1);
       lastTickTs = nowTs;
+      for (const box of selectionBoxesRef.current.values()) box.update();
 
       // 自動畫質：一直卡 → 降一級；一直很順 → 升回去（VR 中不量）
       if (renderer.xr.isPresenting) {
@@ -1976,6 +1979,37 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (travelRef.current?.group === group) travelRef.current = null;
     };
   }, [focusedMechanismId, rig, mechanisms, states, modelVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 選取外框：選到的物件框一個亮綠色方框（穿過別的東西也看得到），唯讀模式不畫 ──
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+    const boxes = selectionBoxesRef.current;
+    const want = new Set(readOnly ? [] : selectedObjectIds);
+    for (const [id, box] of boxes) {
+      const obj = meshesRef.current.get(id);
+      if (!want.has(id) || !obj || (box as unknown as { object?: THREE.Object3D }).object !== obj) {
+        scene.remove(box);
+        box.geometry.dispose();
+        (box.material as THREE.Material).dispose();
+        boxes.delete(id);
+      }
+    }
+    for (const id of want) {
+      if (boxes.has(id)) continue;
+      const obj = meshesRef.current.get(id);
+      if (!obj) continue;
+      const box = new THREE.BoxHelper(obj, 0x10c78a);
+      const mat = box.material as THREE.LineBasicMaterial;
+      mat.depthTest = false;
+      mat.transparent = true;
+      mat.opacity = 0.9;
+      box.renderOrder = 999;
+      box.name = 'selection-box';
+      scene.add(box);
+      boxes.set(id, box);
+    }
+  }, [selectedObjectIds, readOnly, modelVersion, states.length]);
 
   // ── Attach gizmo：單選 attach mesh、多選建 pivot 把 mesh reparent 進去 ──
   useEffect(() => {
@@ -4028,6 +4062,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       {/* 全螢幕預演的小條（滑鼠一動出現 2.5 秒） */}
       {stageShow && show.active && (
         <StageShowBar visible={show.barVisible} info={stageShow} fallbackTitle={cueName ?? projectName} onExit={show.exit} />
+      )}
+      {/* 選到哪個物件：名字寫在左下角（只有手把看不出選到誰） */}
+      {!readOnly && selectedObjectIds.length > 0 && (
+        <div className="stage-scene__selected" aria-live="polite">
+          已選：{selectedObjectIds.length === 1
+            ? (() => { const o = (stageObjects || []).find(x => x.id === selectedObjectIds[0]); return o ? (o.displayName || o.meshName) : '1 個物件'; })()
+            : `${selectedObjectIds.length} 個物件`}
+          <span className="stage-scene__selected-hint">Esc 取消</span>
+        </div>
       )}
       {/* Help overlay */}
       <div className="stage-scene__help">
