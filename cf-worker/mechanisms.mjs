@@ -16,6 +16,7 @@ import { planCueConversion } from '../web/src/lib/mechanisms/convert.ts';
 import { planBatch, planGroupPatch, groupMembers, parseBulkPositions, isNumbering } from '../web/src/lib/mechanisms/group.ts';
 import { planHoistRig } from '../web/src/lib/mechanisms/hoistRig.ts';
 import { hoistGeometryProblem, hoistsOfRig } from '../web/src/lib/mechanisms/hoist.ts';
+import * as cueLibW from './cueLibraryWrites.mjs';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 const newId = (prefix, i = 0) => prefix + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + (i ? String(i) : '');
@@ -450,7 +451,9 @@ export async function updateMechanism(request, env, ctx, mechId, log) {
 
 export async function deleteMechanism(request, env, ctx, mechId, log) {
   const before = await env.DB.prepare(
-    `SELECT m.name, m.group_id, m.variant, (SELECT COUNT(*) FROM cue_mechanism_positions p WHERE p.mechanism_id = m.id) AS n
+    `SELECT m.name, m.group_id, m.variant, (SELECT COUNT(*) FROM cue_mechanism_positions p WHERE p.mechanism_id = m.id) AS n,
+            (SELECT COUNT(*) FROM library_cue_mechanism_positions p WHERE p.mechanism_id = m.id) AS ln,
+            (SELECT cue_library FROM projects WHERE id = m.project_id) AS lib
        FROM mechanisms m WHERE m.id = ? AND m.project_id = ?`
   ).bind(mechId, ctx.projectId).first();
   if (!before) return bad('這個專案裡找不到這個機關', 404);
@@ -459,8 +462,9 @@ export async function deleteMechanism(request, env, ctx, mechId, log) {
   const stmts = [];
   let hoistPositions = 0;
   if (before.variant === 'hoist_rig') {
+    // Cue 庫模式的專案數 Cue 庫的列
     const hp = await env.DB.prepare(
-      `SELECT COUNT(*) AS n FROM cue_mechanism_positions p JOIN mechanisms x ON x.id = p.mechanism_id WHERE x.rig_id = ?`
+      `SELECT COUNT(*) AS n FROM ${Number(before.lib) === 1 ? 'library_cue_mechanism_positions' : 'cue_mechanism_positions'} p JOIN mechanisms x ON x.id = p.mechanism_id WHERE x.rig_id = ?`
     ).bind(mechId).first();
     hoistPositions = Number(hp?.n) || 0;
     stmts.push(env.DB.prepare(`DELETE FROM mechanisms WHERE rig_id = ? AND project_id = ?`).bind(mechId, ctx.projectId));
@@ -473,7 +477,7 @@ export async function deleteMechanism(request, env, ctx, mechId, log) {
     ).bind(before.group_id, ctx.projectId));
   }
   await env.DB.batch(stmts);
-  const removedPositions = (Number(before.n) || 0) + hoistPositions;
+  const removedPositions = (Number(before.lib) === 1 ? Number(before.ln) || 0 : Number(before.n) || 0) + hoistPositions;
   await log?.('delete', 'mechanism', mechId, { name: before.name, removedPositions, variant: before.variant || undefined });
   return ok({ ok: true, removedPositions });
 }
@@ -728,6 +732,9 @@ export async function putCuePosition(request, env, ctx, cueId) {
   if (!p.ok) return bad(p.error, 400, { field: p.field });
   const m = ctx.mechanism;
   if (m.variant === 'hoist_rig') return bad(MECH_MESSAGES.hoistRigValue, 400, { field: 'value' });
+  // Cue 庫專案：寫進這個 cue 指到的 Cue 庫的 cue
+  const sl = await cueLibW.slotLibrary(env, cueId);
+  if (sl.library) return cueLibW.putMechanismPosition(env, sl, cueId, m, p, MECH_MESSAGES);
   const setDelay = p.delaySec !== undefined ? 1 : 0;
   const setDuration = p.durationSec !== undefined ? 1 : 0;
   const delay = p.delaySec ?? null, duration = p.durationSec ?? null;
@@ -785,6 +792,8 @@ export async function putCuePositionsBulk(request, env, ctx, cueId) {
   const byId = new Map(mechs.map(m => [m.id, m]));
   if (p.items.some(it => !byId.has(it.mechanismId))) return bad(MECH_MESSAGES.bulkForeign, 400, { field: 'items' });
   if (p.items.some(it => byId.get(it.mechanismId).variant === 'hoist_rig')) return bad(MECH_MESSAGES.hoistRigValue, 400, { field: 'items' });
+  const sl = await cueLibW.slotLibrary(env, cueId);
+  if (sl.library) return cueLibW.putMechanismPositionsBulk(env, sl, cueId, p.items, byId);
   const touch = () => env.DB.prepare(
     `UPDATE mechanisms SET edited_at = datetime('now') WHERE id IN (SELECT mechanism_id FROM cue_mechanism_positions WHERE cue_id = ?)`
   ).bind(cueId);
@@ -829,6 +838,8 @@ export async function putCuePositionsBulk(request, env, ctx, cueId) {
 
 export async function deleteCuePosition(request, env, ctx, cueId) {
   const m = ctx.mechanism;
+  const sl = await cueLibW.slotLibrary(env, cueId);
+  if (sl.library) return cueLibW.deleteMechanismPosition(env, sl, m.id);
   const [r] = await env.DB.batch([
     env.DB.prepare(`DELETE FROM cue_mechanism_positions WHERE cue_id = ? AND mechanism_id = ?`).bind(cueId, m.id),
     env.DB.prepare(`UPDATE mechanisms SET edited_at = datetime('now') WHERE id = ?`).bind(m.id),
@@ -841,9 +852,9 @@ export async function deleteCuePosition(request, env, ctx, cueId) {
 // ─────────────────────────────────────────────
 
 /** 複製專案：機關（新 id、parent 換成新的）、帶的物件（objIdMap）、每個 cue 的位置（cueIdMap） */
-export async function copyMechanismsToProject(env, srcProjectId, dstProjectId, objIdMap, cueIdMap) {
+export async function copyMechanismsToProject(env, srcProjectId, dstProjectId, objIdMap, cueIdMap, out = null) {
   const exp = await exportMechanisms(env, srcProjectId);
-  return importMechanisms(env, dstProjectId, exp, objIdMap, cueIdMap);
+  return importMechanisms(env, dstProjectId, exp, objIdMap, cueIdMap, out);
 }
 
 /** 匯出檔的三個欄位（資料庫原樣的列） */
@@ -873,7 +884,7 @@ export async function exportMechanisms(env, projectId) {
  * 匯入（或複製）：重新給 id；物件 / cue 對不到的略過；舊的匯出檔沒有這些欄位 → 什麼都不做
  * 定義先全部檢查一次（壞資料略過），parent 等全部建好再接上
  */
-export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap) {
+export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap, out = null) {
   const mechs = Array.isArray(data?.mechanisms) ? data.mechanisms.slice(0, 500) : [];
   if (!mechs.length) return { mechanisms: 0, objects: 0, positions: 0, groups: 0 };
   const idMap = new Map();
@@ -965,6 +976,7 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap)
     positions++;
   }
   for (let i = 0; i < stmts.length; i += 200) await env.DB.batch(stmts.slice(i, i + 200));
+  if (out) out.idMap = idMap;
   return { mechanisms: rows.length, objects, positions, groups };
 }
 
@@ -1080,7 +1092,22 @@ export async function convertCuePositions(request, env, ctx, mechId, log) {
   if (!mech.objectIds.length) return bad('這個機關還沒有選要帶的物件', 400);
   const pid = ctx.projectId;
   const ph = mech.objectIds.map(() => '?').join(',');
-  const [projR, objR, songR, cueR, rowR] = await env.DB.batch([
+  const isLib = Number((await env.DB.prepare(`SELECT cue_library FROM projects WHERE id = ?`).bind(pid).first())?.cue_library) === 1;
+  const [projR, objR, songR, cueR, rowR] = await env.DB.batch(isLib ? [
+    // Cue 庫專案：每個 Cue 庫的 cue 各自是一個只有一個 cue 的序列（沒有沿用）；列的 id = "Cue 庫 cue id|物件 id"
+    env.DB.prepare(`SELECT scale_correction FROM projects WHERE id = ?`).bind(pid),
+    env.DB.prepare(`SELECT id, default_position, default_rotation FROM stage_objects WHERE project_id = ? AND id IN (${ph})`).bind(pid, ...mech.objectIds),
+    env.DB.prepare(`SELECT id, 'Cue 庫' AS name FROM songs WHERE project_id = ? LIMIT 0`).bind(pid),
+    env.DB.prepare(
+      `SELECT l.id, 'lib:' || l.id AS song_id, '編號 ' || l.label || '「' || l.name || '」' AS name, 0 AS "order", 'master' AS status, l.created_at
+         FROM library_cues l WHERE l.project_id = ? ORDER BY l.created_at ASC, l.id ASC`
+    ).bind(pid),
+    env.DB.prepare(
+      `SELECT s.library_cue_id || '|' || s.stage_object_id AS id, s.library_cue_id AS cue_id, s.stage_object_id, s.position, s.rotation, s.scale, s.visible, s.custom_props
+         FROM library_cue_object_states s JOIN library_cues l ON l.id = s.library_cue_id
+        WHERE l.project_id = ? AND s.stage_object_id IN (${ph})`
+    ).bind(pid, ...mech.objectIds),
+  ] : [
     env.DB.prepare(`SELECT scale_correction FROM projects WHERE id = ?`).bind(pid),
     env.DB.prepare(`SELECT id, default_position, default_rotation FROM stage_objects WHERE project_id = ? AND id IN (${ph})`).bind(pid, ...mech.objectIds),
     env.DB.prepare(`SELECT id, name FROM songs WHERE project_id = ?`).bind(pid),
@@ -1110,7 +1137,7 @@ export async function convertCuePositions(request, env, ctx, mechId, log) {
     scale: r.scale, visible: r.visible, customProps: r.custom_props,
   }));
   const plan = planCueConversion({ mechanism: mech, objects, cues, rows, scaleCorrection: scale });
-  const cueName = new Map(cues.map(c => [c.id, `${songName.get(c.songId) || ''} · ${c.name}`]));
+  const cueName = new Map(cues.map(c => [c.id, isLib ? c.name : `${songName.get(c.songId) || ''} · ${c.name}`]));
   const summary = {
     converted: plan.converted.length,
     skipped: plan.skipped.map(s => ({ cueId: s.cueId, name: cueName.get(s.cueId) || s.cueId, reason: s.reason })),
@@ -1120,6 +1147,34 @@ export async function convertCuePositions(request, env, ctx, mechId, log) {
   if (dryRun) return ok({ ok: true, dryRun: true, ...summary });
 
   const stmts = [];
+  if (isLib) {
+    // Cue 庫專案：改 Cue 庫的 cue 的列。自己設的列把位置 / 角度算進「自己設的欄位」；沿用來的列（own = 0）維持沿用，位置也標成沿用
+    const refId = mech.objectIds[0];
+    const carriedLib = new Set((await env.DB.prepare(
+      `SELECT s.library_cue_id FROM library_cue_object_states s JOIN library_cues l ON l.id = s.library_cue_id
+        WHERE l.project_id = ? AND s.stage_object_id = ? AND s.own = 0`).bind(pid, refId).all()).results?.map(r => r.library_cue_id) || []);
+    for (const u of plan.rowUpdates) {
+      const [lc, oid] = u.rowId.split('|');
+      stmts.push(env.DB.prepare(
+        `UPDATE library_cue_object_states SET position = ?, rotation = ?, updated_at = datetime('now'),
+           own_fields = CASE WHEN own = 1 THEN (own_fields | 3) ELSE own_fields END
+         WHERE library_cue_id = ? AND stage_object_id = ?`
+      ).bind(JSON.stringify(u.position), JSON.stringify(u.rotation), lc, oid));
+    }
+    for (const r of plan.rowInserts) {
+      stmts.push(env.DB.prepare(
+        `INSERT OR REPLACE INTO library_cue_object_states (library_cue_id, stage_object_id, position, rotation, scale, visible, custom_props, own, own_fields)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)`
+      ).bind(r.cueId, r.objectId, JSON.stringify(r.position), JSON.stringify(r.rotation), r.scale ?? null, r.visible ?? 1, r.customProps ?? null,
+        3 | (r.scale != null ? 4 : 0) | 8 | (r.customProps != null ? 16 : 0)));
+    }
+    for (const p of plan.positions) {
+      stmts.push(env.DB.prepare(
+        `INSERT OR REPLACE INTO library_cue_mechanism_positions (library_cue_id, mechanism_id, value, carried) VALUES (?, ?, ?, ?)`
+      ).bind(p.cueId, mechId, p.value, carriedLib.has(p.cueId) ? 1 : 0));
+    }
+    stmts.push(env.DB.prepare(`UPDATE library_cues SET rev = rev + 1 WHERE project_id = ?`).bind(pid));
+  } else {
   for (const u of plan.rowUpdates) {
     stmts.push(env.DB.prepare(`UPDATE cue_object_states SET position = ?, rotation = ?, updated_at = datetime('now') WHERE id = ?`)
       .bind(JSON.stringify(u.position), JSON.stringify(u.rotation), u.rowId));
@@ -1134,6 +1189,7 @@ export async function convertCuePositions(request, env, ctx, mechId, log) {
   for (const p of plan.positions) {
     stmts.push(env.DB.prepare(`INSERT OR REPLACE INTO cue_mechanism_positions (cue_id, mechanism_id, value) VALUES (?, ?, ?)`)
       .bind(p.cueId, mechId, p.value));
+  }
   }
   stmts.push(env.DB.prepare(`UPDATE mechanisms SET edited_at = datetime('now'), updated_at = datetime('now') WHERE id = ?`).bind(mechId));
   for (let i = 0; i < stmts.length; i += 200) await env.DB.batch(stmts.slice(i, i + 200));

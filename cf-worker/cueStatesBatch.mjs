@@ -6,6 +6,12 @@
 // 只動 cue_object_states：cue 的名字、時間、轉場、機關的位置（mechanism_positions）、機關時間軸都不碰。
 // 全部只有製作（access.mjs）。一個交易：要嘛全做、要嘛全不做；不會逐一呼叫上百次。
 
+import * as cueLibW from './cueLibraryWrites.mjs';
+
+// Cue 庫模式的專案：處理「這首歌用到的 Cue 庫的 cue」的物件列（改了會影響也用它的別首歌，清單的 shared 會列出來）
+const isLibraryProject = async (env, projectId) =>
+  Number((await env.DB.prepare(`SELECT cue_library FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first())?.cue_library) === 1;
+
 const ok = (body, status = 200) => ({ status, body });
 const bad = (error, status = 400) => ({ status, body: { error } });
 const isObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -41,12 +47,14 @@ function rowToApi(r) {
 }
 
 export async function listSongStates(env, ctx, songId) {
+  if (await isLibraryProject(env, ctx.projectId)) return cueLibW.listSongStatesLibrary(env, songId);
   const rows = (await env.DB.prepare(SELECT_SQL).bind(songId).all()).results || [];
   const cues = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM cues WHERE song_id = ?`).bind(songId).first())?.n || 0;
   return ok({ cueCount: cues, states: rows.map(rowToApi) });
 }
 
 export async function clearSongStates(env, ctx, songId, log) {
+  if (await isLibraryProject(env, ctx.projectId)) return cueLibW.clearSongStatesLibrary(env, ctx, songId, log);
   // 同一個批次：先讀、再刪（D1 的 batch 是一個交易），回傳的就是刪掉的那些
   const [sel] = await env.DB.batch([
     env.DB.prepare(SELECT_SQL).bind(songId),
@@ -65,7 +73,8 @@ export async function clearSongStates(env, ctx, songId, log) {
 
 /** 一列要寫回去的內容（格式不對 = null） */
 function normalizeRow(raw) {
-  if (!isObj(raw) || typeof raw.cueId !== 'string' || typeof raw.objectId !== 'string') return null;
+  if (!isObj(raw) || typeof raw.objectId !== 'string') return null;
+  if (typeof raw.cueId !== 'string' && typeof raw.libraryCueId !== 'string') return null;
   const vec = (v, keys) => {
     if (v === null || v === undefined) return { ok: true, value: null };
     if (!isObj(v) || !keys.every(k => typeof v[k] === 'number' && Number.isFinite(v[k]))) return { ok: false };
@@ -87,7 +96,11 @@ function normalizeRow(raw) {
     if (custom.length > 20000) return null;
   }
   const updatedAt = typeof raw.updatedAt === 'string' && raw.updatedAt.length <= 40 ? raw.updatedAt : null;
-  return { cueId: raw.cueId, objectId: raw.objectId, position: pos.value, rotation: rot.value, scale: scl.value, visible, custom, updatedAt };
+  return {
+    cueId: typeof raw.cueId === 'string' ? raw.cueId : null, libraryCueId: typeof raw.libraryCueId === 'string' ? raw.libraryCueId : null,
+    objectId: raw.objectId, position: pos.value, rotation: rot.value, scale: scl.value, visible, custom, updatedAt,
+    own: typeof raw.own === 'boolean' ? raw.own : undefined, ownFields: Number.isInteger(raw.ownFields) ? raw.ownFields : undefined,
+  };
 }
 
 export async function restoreSongStates(request, env, ctx, songId, log) {
@@ -100,12 +113,13 @@ export async function restoreSongStates(request, env, ctx, songId, log) {
   for (const raw of body.states) {
     const r = normalizeRow(raw);
     if (!r) return bad('要寫回去的內容格式不對');
-    const k = r.cueId + '\n' + r.objectId;
+    const k = (r.libraryCueId || r.cueId) + '\n' + r.objectId;
     if (seen.has(k)) return bad('同一個 cue 的同一個物件重複了');
     seen.add(k);
     rows.push(r);
   }
   if (rows.length === 0) return ok({ ok: true, restored: 0 });
+  if (await isLibraryProject(env, ctx.projectId)) return cueLibW.restoreSongStatesLibrary(env, ctx, songId, rows, log);
 
   // cue 要是這首歌的、物件要是這個專案的
   const cueIds = new Set(((await env.DB.prepare(`SELECT id FROM cues WHERE song_id = ?`).bind(songId).all()).results || []).map(r => r.id));

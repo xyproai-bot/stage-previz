@@ -88,6 +88,8 @@ import * as members from './members.mjs';
 // 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
 import * as mech from './mechanisms.mjs';
 import * as cueLib from './cueLibraryRoutes.mjs';
+import * as cueLibW from './cueLibraryWrites.mjs';
+import * as cueLibBake from './cueLibraryBake.mjs';
 import * as ledTpl from './ledTemplates.mjs';
 // 自動貼 UV：新模型版本 + 畫布 + 舊版面一次換好、模型版本搭配的畫布
 import * as uvLayouts from './modelUvLayouts.mjs';
@@ -1041,9 +1043,11 @@ async function duplicateProject(request, env, projectId) {
 
   // 抓原 project
   const src = await env.DB.prepare(
-    `SELECT id, name, description, model_r2_key, show_id, scale_correction FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
+    `SELECT id, name, description, model_r2_key, show_id, scale_correction, cue_library FROM projects WHERE id = ? AND status != 'archived' LIMIT 1`
   ).bind(projectId).first();
   if (!src) return jsonResp({ error: 'Source project not found' }, 404);
+  // Cue 庫模式的專案：複製出來的也是 Cue 庫模式，內容一樣（舊的物件 / 機關位置表在副本裡維持空的）
+  const libDup = Number(src.cue_library) === 1;
 
   const newName = (body?.newName || `${src.name} (副本)`).toString().trim().slice(0, PROJECT_NAME_MAX);
   const showId = ('showId' in body ? body.showId : src.show_id) || null;
@@ -1120,7 +1124,7 @@ async function duplicateProject(request, env, projectId) {
   if (cueStmts.length > 0) await env.DB.batch(cueStmts);
 
   // 6. 複製 cue_object_states（cue_id + stage_object_id 都 remap 到新 id）
-  const oldStates = await env.DB.prepare(`
+  const oldStates = libDup ? { results: [] } : await env.DB.prepare(`
     SELECT cos.* FROM cue_object_states cos
     JOIN cues c ON cos.cue_id = c.id
     JOIN songs s ON c.song_id = s.id
@@ -1140,7 +1144,21 @@ async function duplicateProject(request, env, projectId) {
   if (stateStmts.length > 0) await env.DB.batch(stateStmts);
 
   // 7. 機關（定義、帶的物件、每個 cue 的位置）。舊的機關滑桿欄位（mechanism_offsets）不再寫：0023 已經轉成機關、跟著上面一起複製
-  const mechCopy = await mech.copyMechanismsToProject(env, projectId, newId, objIdMap, cueIdMap);
+  const mechOut = {};
+  const mechCopy = await mech.copyMechanismsToProject(env, projectId, newId, objIdMap, libDup ? new Map() : cueIdMap, mechOut);
+
+  // 7b. Cue 庫：Cue 庫的 cue、每個 cue 裡的物件和機關、每個 cue 指到哪一個（編號、名稱、備註都一樣，id 全部換新的）
+  let libCopy = null;
+  if (libDup) {
+    const q = async (sql) => (await env.DB.prepare(sql).bind(projectId).all()).results || [];
+    libCopy = await cueLibW.copyLibraryToProject(env, newId, {
+      libraryCues: await q(`SELECT * FROM library_cues WHERE project_id = ? ORDER BY created_at ASC, id ASC`),
+      objectStates: await q(`SELECT s.* FROM library_cue_object_states s JOIN library_cues l ON l.id = s.library_cue_id WHERE l.project_id = ?`),
+      mechanismPositions: await q(`SELECT p.* FROM library_cue_mechanism_positions p JOIN library_cues l ON l.id = p.library_cue_id WHERE l.project_id = ?`),
+      slots: (oldCues.results || []).filter(c => c.library_cue_id && cueIdMap.get(c.id)).map(c => ({ newCueId: cueIdMap.get(c.id), oldLibraryCueId: c.library_cue_id })),
+    }, objIdMap, mechOut.idMap || new Map(), me.id);
+    await env.DB.prepare(`UPDATE projects SET cue_library = 1 WHERE id = ?`).bind(newId).run();
+  }
 
   // 8. LED 畫布版型（0034）：版型、手動切的螢幕、每首歌選的版型
   await ledTpl.copyTemplatesToProject(
@@ -1168,6 +1186,7 @@ async function duplicateProject(request, env, projectId) {
       cues: oldCues.results?.length || 0,
       cueStates: oldStates.results?.length || 0,
       mechanisms: mechCopy.mechanisms,
+      ...(libCopy ? { libraryCues: libCopy.libraryCues } : {}),
     },
   }, 201);
 }
@@ -1204,15 +1223,42 @@ async function createCueTemplate(request, env, ctx) {
   const fromCueId = (body?.fromCueId || '').toString();
   const isGlobal = !!body?.global;
   if (!name) return jsonResp({ error: 'name 必填' }, 400);
-  if (!fromCueId) return jsonResp({ error: '需要來源 cue id' }, 400);
+  const fromLibraryCueId = (body?.fromLibraryCueId || '').toString();
+  if (!fromCueId && !fromLibraryCueId) return jsonResp({ error: '需要來源 cue id' }, 400);
   // 全域模板（每個專案都看得到）只有全站 admin 能建
   if (isGlobal && me.role !== 'admin') return jsonResp({ error: '只有製作可以建立全域模板' }, 403);
 
   // 來源 cue 一定要是這個專案的（不然可以把別人專案的 cue 抄出來）
-  const cue = await env.DB.prepare(
+  const libProject = await cueLib.isLibraryProject(env, projectId);
+  let libSourceId = null;
+  if (libProject && fromLibraryCueId) {
+    const l = await env.DB.prepare(`SELECT id FROM library_cues WHERE id = ? AND project_id = ? LIMIT 1`).bind(fromLibraryCueId, projectId).first();
+    if (!l) return jsonResp({ error: 'Source cue not found' }, 404);
+    libSourceId = l.id;
+  }
+  const cue = fromCueId ? await env.DB.prepare(
     `SELECT c.* FROM cues c JOIN songs s ON s.id = c.song_id WHERE c.id = ? AND s.project_id = ? LIMIT 1`
-  ).bind(fromCueId, projectId).first();
-  if (!cue) return jsonResp({ error: 'Source cue not found' }, 404);
+  ).bind(fromCueId, projectId).first() : null;
+  if (!cue && !libSourceId) return jsonResp({ error: 'Source cue not found' }, 404);
+  if (libProject && cue && !libSourceId) {
+    libSourceId = cue.library_cue_id || null;
+  }
+  if (libProject) {
+    // Cue 庫專案：常用擺位 = 這個 Cue 庫的 cue 的完整畫面（所有列，用物件 / 機關名稱存）
+    const look = libSourceId ? await cueLibW.templateLook(env, libSourceId) : { snapshotStates: [], mechanismPositions: [] };
+    const payload = {
+      position: (cue && (() => { try { return JSON.parse(cue.position_xyz); } catch { return null; } })()) || { x: 0, y: 0, z: 0 },
+      rotation: (cue && (() => { try { return JSON.parse(cue.rotation_xyz); } catch { return null; } })()) || { pitch: 0, yaw: 0, roll: 0 },
+      fov: cue ? cue.fov : 60,
+      crossfadeSeconds: cue ? cue.crossfade_seconds : DEFAULT_CUE_CROSSFADE_SECONDS,
+      ...look,
+    };
+    const tid = 'tpl_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+    await env.DB.prepare(
+      `INSERT INTO cue_templates (id, project_id, name, description, payload, created_by_user_id) VALUES (?, ?, ?, ?, ?, ?)`
+    ).bind(tid, isGlobal ? null : projectId, name, description, JSON.stringify(payload), me.id).run();
+    return jsonResp({ ok: true, id: tid }, 201);
+  }
   const states = await env.DB.prepare(`
     SELECT cos.position, cos.rotation, cos.scale, o.mesh_name
       FROM cue_object_states cos
@@ -1352,6 +1398,18 @@ async function exportProject(request, env, projectId) {
     // LED 畫布版型（0034）：ledTemplates / ledTemplateScreens / ledScreens（songs 列上的 template_id 指到這裡；舊的匯出檔沒有）
     ...(await ledTpl.exportTemplates(env, projectId)),
   };
+  // Cue 庫模式的專案：匯出檔 v2（多帶 Cue 庫的 cue 和它們的畫面；cues 的每一列有 library_cue_id；舊的物件 / 機關位置表是凍結的，不放）
+  // 舊模式的專案維持 v1，檔案內容跟以前一樣
+  if (Number((await env.DB.prepare(`SELECT cue_library FROM projects WHERE id = ?`).bind(projectId).first())?.cue_library) === 1) {
+    const q = async (sql) => (await env.DB.prepare(sql).bind(projectId).all()).results || [];
+    payload.schemaVersion = 2;
+    payload.project.cueLibrary = true;
+    payload.cueObjectStates = [];
+    payload.cueMechanismPositions = [];
+    payload.libraryCues = await q(`SELECT * FROM library_cues WHERE project_id = ? ORDER BY created_at ASC, id ASC`);
+    payload.libraryCueObjectStates = await q(`SELECT s.* FROM library_cue_object_states s JOIN library_cues l ON l.id = s.library_cue_id WHERE l.project_id = ?`);
+    payload.libraryCueMechanismPositions = await q(`SELECT p.* FROM library_cue_mechanism_positions p JOIN library_cues l ON l.id = p.library_cue_id WHERE l.project_id = ?`);
+  }
   return new Response(JSON.stringify(payload, null, 2), {
     status: 200,
     headers: {
@@ -1375,6 +1433,9 @@ async function importProject(request, env) {
 
   const newName = (body?.newName || `${body.project.name} (匯入)`).toString().trim().slice(0, PROJECT_NAME_MAX);
   const newId = 'p_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+  // 新格式（v2，有 Cue 庫）照存；舊格式（v1）：目標是 Cue 庫模式（匯入時指定 cueLibrary: true，或設定「新專案用 Cue 庫」）就烤成 Cue 庫，不然照舊
+  const importV2Lib = Number(body.schemaVersion) >= 2 && Array.isArray(body.libraryCues);
+  const bakeV1 = !importV2Lib && (body.cueLibrary === true || await newProjectsUseCueLibrary(env));
 
   // model_r2_key 預設保留（指向同一個 R2，跨 D1 匯入時可能 broken link，user 自己重 upload）
   const rawKey = typeof body.project.modelR2Key === 'string' ? body.project.modelR2Key : '';
@@ -1444,9 +1505,9 @@ async function importProject(request, env) {
   }
   if (cueStmts.length > 0) await env.DB.batch(cueStmts);
 
-  // cue_object_states
+  // cue_object_states（v2 的 Cue 庫專案：舊表在副本裡維持空的）
   const stateStmts = [];
-  for (const cs of (body.cueObjectStates || [])) {
+  for (const cs of (importV2Lib ? [] : (body.cueObjectStates || []))) {
     const newCueId = cueIdMap.get(cs.cue_id);
     const newObjId = objIdMap.get(cs.stage_object_id);
     if (!newCueId || !newObjId) continue;
@@ -1459,12 +1520,25 @@ async function importProject(request, env) {
   if (stateStmts.length > 0) await env.DB.batch(stateStmts);
 
   // 機關（舊的匯出檔沒有 → 什麼都不做）
-  await mech.importMechanisms(env, newId, body, objIdMap, cueIdMap);
+  const mechImp = {};
+  await mech.importMechanisms(env, newId, body, objIdMap, importV2Lib ? new Map() : cueIdMap, mechImp);
+  if (importV2Lib) {
+    await cueLibW.copyLibraryToProject(env, newId, {
+      libraryCues: body.libraryCues,
+      objectStates: body.libraryCueObjectStates,
+      mechanismPositions: body.libraryCueMechanismPositions,
+      slots: (body.cues || []).filter(c => c.library_cue_id && cueIdMap.get(c.id)).map(c => ({ newCueId: cueIdMap.get(c.id), oldLibraryCueId: c.library_cue_id })),
+    }, objIdMap, mechImp.idMap || new Map(), me.id);
+    await env.DB.prepare(`UPDATE projects SET cue_library = 1 WHERE id = ?`).bind(newId).run();
+  }
   await ledTpl.importTemplates(
     env, newId, body, objIdMap,
     (body.songs || []).filter(x => x.template_id && songIdMap.get(x.id)).map(x => ({ songId: songIdMap.get(x.id), templateId: x.template_id })),
     { songIdMap, cueIdMap },
   );
+
+  // 舊格式 + 目標是 Cue 庫模式：舊的資料先照舊匯進來（上面），再烤成 Cue 庫並切成 Cue 庫模式
+  if (bakeV1) await cueLibBake.bakeProjectToLibrary(env, newId, loadCueStates, me.id);
 
   await logActivity(request, env, newId, 'create', 'project', newId, {
     name: newName,
@@ -1483,6 +1557,14 @@ async function importProject(request, env) {
       cueStates: (body.cueObjectStates || []).length,
     },
   }, 201);
+}
+
+// 新專案（匯入舊格式的匯出檔時）要不要用 Cue 庫：app_settings 的 cue_library_new_projects = '1'（沒有這個設定 / 沒有這張表 = 不用）
+async function newProjectsUseCueLibrary(env) {
+  try {
+    const r = await env.DB.prepare(`SELECT value FROM app_settings WHERE key = 'cue_library_new_projects' LIMIT 1`).first();
+    return r?.value === '1';
+  } catch { return false; }
 }
 
 async function archiveProject(request, env, projectId) {
@@ -1997,6 +2079,18 @@ async function importCuesFromSong(request, env, targetProjectId, targetSongId) {
   let statesInserted = 0;
   let statesSkipped = 0;
 
+  // Cue 庫專案：同一個專案 → 新的 cue 直接指到來源歌的 Cue 庫的 cue；別的專案 → 把來源 cue 現在的畫面
+  // （舊模式的來源用舊算法算出來、Cue 庫模式的來源直接讀）照物件 mesh 名稱 / 機關名稱複製成這個專案 Cue 庫新的 cue（編號接在最大的後面）
+  const tgtLib = await cueLib.isLibraryProject(env, targetProjectId);
+  const sameProject = srcSong.project_id === targetProjectId;
+  let crossLooks = null, crossLabels = null, tgtMechByName = null;
+  if (tgtLib && !sameProject) {
+    crossLooks = await cueLibBake.sourceLooksByName(env, srcSong.project_id, fromSongId, srcCues.map(c => c.id), loadCueStates);
+    crossLabels = (await env.DB.prepare(`SELECT label FROM library_cues WHERE project_id = ?`).bind(targetProjectId).all()).results.map(r => r.label);
+    tgtMechByName = new Map(((await env.DB.prepare(`SELECT id, name, travel_min, travel_max, variant FROM mechanisms WHERE project_id = ?`).bind(targetProjectId).all()).results || [])
+      .map(m => [String(m.name).trim(), m]));
+  }
+
   for (const c of srcCues) {
     const newCueId = 'c_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36) + cuesInserted;
     await env.DB.prepare(`
@@ -2004,6 +2098,19 @@ async function importCuesFromSong(request, env, targetProjectId, targetSongId) {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'master')
     `).bind(newCueId, targetSongId, c.name, nextOrder++, c.position_xyz, c.rotation_xyz, c.fov, c.crossfade_seconds, c.video_time_sec).run();
     cuesInserted++;
+    if (tgtLib) {
+      if (sameProject) {
+        if (c.library_cue_id) await env.DB.prepare(`UPDATE cues SET library_cue_id = ? WHERE id = ?`).bind(c.library_cue_id, newCueId).run();
+      } else {
+        const look = crossLooks.get(c.id) || { objects: [], mechanisms: [] };
+        statesSkipped += look.objects.filter(o => !meshNameToTgt.has(o.meshName)).length;
+        statesInserted += look.objects.filter(o => meshNameToTgt.has(o.meshName)).length;
+        await cueLibBake.insertLibraryCueFromNamedLook(env, targetProjectId, {
+          name: c.name, labels: crossLabels, look, userId: me.id, meshToId: meshNameToTgt, mechByName: tgtMechByName, slotId: newCueId,
+        });
+      }
+      continue;
+    }
     // 機關位置：同一個專案照機關 id，別的專案照機關名稱
     await mech.copyCuePositionsAcross(env, { srcProjectId: srcSong.project_id, dstProjectId: targetProjectId, srcCueId: c.id, dstCueId: newCueId });
 
@@ -2120,7 +2227,30 @@ async function createCue(request, env, projectId, songId) {
   `).bind(id, songId, name, order, position, rotation, fov, crossfade).run();
 
   // 三選一：cloneFrom 或 snapshotStates 或空白
-  if (body?.cloneFrom && /^[a-zA-Z0-9_-]{1,64}$/.test(body.cloneFrom)) {
+  const libProject = await cueLib.isLibraryProject(env, projectId);
+  if (libProject) {
+    // Cue 庫專案：建一個 Cue 庫的 cue（畫面照舊格式的內容）讓這個 cue 指過去
+    let template = null, meshToId = null;
+    if (!body?.cloneFrom && !(Array.isArray(body?.snapshotStates) && body.snapshotStates.length > 0) && body?.fromTemplateId) {
+      const tpl = await env.DB.prepare(`SELECT payload FROM cue_templates WHERE id = ? LIMIT 1`).bind(body.fromTemplateId).first();
+      if (tpl) {
+        try { template = JSON.parse(tpl.payload) || {}; } catch { template = {}; }
+        const objs = await env.DB.prepare(`SELECT id, mesh_name FROM stage_objects WHERE project_id = ?`).bind(projectId).all();
+        meshToId = new Map((objs.results || []).map(o => [o.mesh_name, o.id]));
+        const sets = [], vals = [];
+        if (template.position) { sets.push('position_xyz = ?'); vals.push(JSON.stringify(template.position)); }
+        if (template.rotation) { sets.push('rotation_xyz = ?'); vals.push(JSON.stringify(template.rotation)); }
+        if (template.fov != null) { sets.push('fov = ?'); vals.push(template.fov); }
+        if (template.crossfadeSeconds != null) { sets.push('crossfade_seconds = ?'); vals.push(template.crossfadeSeconds); }
+        if (sets.length > 0) { vals.push(id); await env.DB.prepare(`UPDATE cues SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run(); }
+      }
+    }
+    await cueLibW.createSlotLook(env, {
+      slotId: id, songId, projectId, name, body,
+      cloneSrcSlotId: cloneSrc ? cloneSrc.id : null,
+      projectObjIds, template, meshToId, userId: (await getCurrentUser(request, env))?.id || null,
+    });
+  } else if (body?.cloneFrom && /^[a-zA-Z0-9_-]{1,64}$/.test(body.cloneFrom)) {
     // 複製來源 cue 的所有 cue_object_states
     const src = await env.DB.prepare(`
       SELECT stage_object_id, position, rotation, scale, visible, custom_props
@@ -2196,7 +2326,7 @@ async function createCue(request, env, projectId, songId) {
     }
   }
   // 從目前 3D 畫面建立：前端給每個機關現在的值 → 存成這個 cue 自己的
-  if (!body?.cloneFrom && !body?.fromTemplateId && body?.snapshotMechanisms) {
+  if (!libProject && !body?.cloneFrom && !body?.fromTemplateId && body?.snapshotMechanisms) {
     await mech.snapshotCuePositions(env, projectId, id, body.snapshotMechanisms);
   }
   // 都沒給 → 空白 cue（無 override）
@@ -2212,6 +2342,12 @@ async function createCue(request, env, projectId, songId) {
 
 async function resetCue(request, env, projectId, cueId) {
   const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? LIMIT 1`).bind(cueId).first();
+  const slLib = await cueLibW.slotLibrary(env, cueId);
+  if (slLib.library) {
+    const r = await cueLibW.resetLibraryCue(env, slLib);
+    await logActivity(request, env, projectId, 'reset', 'cue', cueId, { name: before?.name, removed: r.removed, removedMechanismPositions: r.removedMechanismPositions });
+    return jsonResp({ ok: true, removed: r.removed, removedMechanismPositions: r.removedMechanismPositions });
+  }
   const result = await env.DB.prepare(
     `DELETE FROM cue_object_states WHERE cue_id = ?`
   ).bind(cueId).run();
@@ -2846,6 +2982,10 @@ async function upsertCueState(request, env, cueId, objId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
 
+  // Cue 庫專案：寫進這個 cue 指到的 Cue 庫的 cue
+  const sl = await cueLibW.slotLibrary(env, cueId);
+  if (sl.library) return mechResp(cueLibW.putObjectState(env, sl, cueId, objId, body));
+
   // 看 row 是否已存在
   const existing = await env.DB.prepare(
     `SELECT id FROM cue_object_states WHERE cue_id = ? AND stage_object_id = ?`
@@ -2882,6 +3022,12 @@ async function upsertCueState(request, env, cueId, objId) {
 }
 
 async function deleteCueState(request, env, projectId, cueId, objId) {
+  const sl = await cueLibW.slotLibrary(env, cueId);
+  if (sl.library) {
+    const r = await cueLibW.deleteObjectState(env, sl, objId);
+    if (r.removed > 0) await logActivity(request, env, projectId, 'reset', 'cue_state', cueId, { cueName: sl.name });
+    return jsonResp({ ok: true, removed: r.removed });
+  }
   const before = await env.DB.prepare(`
     SELECT c.name AS cue_name, o.display_name, o.mesh_name
     FROM cues c, stage_objects o

@@ -290,6 +290,8 @@ export function useEditorMechanisms(o: {
       const t = timing ?? { delaySec: old?.delaySec ?? null, durationSec: old?.durationSec ?? null };
       return { songId: sid, list: [...rest, { cueId, mechanismId: mechId, value, ...t, updatedAt: '' }], mode };
     });
+    // Cue 庫模式：同一個 Cue 庫的 cue 可能有好幾個 cue 在用，存完重新讀一次才會每一列都對（舊模式不用）
+    if (posRef.current?.mode === 'library') void refreshPositions();
   };
   const ownEntry = (cueId: string, mechId: string) => posRef.current?.list.find(x => x.cueId === cueId && x.mechanismId === mechId) ?? null;
   const ownValue = (cueId: string, mechId: string): number | null => {
