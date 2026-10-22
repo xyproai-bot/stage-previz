@@ -859,7 +859,19 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     transform.setSize(0.9);
 
     // hover 在 gizmo 軸上時就先 disable orbit（不然 orbit 先抓走滑鼠 → camera 跟著轉）
+    // 但正在轉鏡頭（orbit 拖曳中）時不能管：拖過把手上方會把 orbit 關掉 → 鏡頭轉到一半卡住，像撞到牆
+    let orbitDragging = false;
+    orbit.addEventListener('start', () => { orbitDragging = true; });
+    orbit.addEventListener('end', () => {
+      orbitDragging = false;
+      // 放手時剛好停在把手上：照把手的規則補關（不然下一次按在把手上會兩個一起動）
+      if (transform.axis !== null && transform.object) {
+        gizmoBlockRef.current = true;
+        orbit.enabled = false;
+      }
+    });
     transform.addEventListener('axis-changed', (event: any) => {
+      if (orbitDragging) return;
       gizmoBlockRef.current = event.value !== null;
       orbit.enabled = (event.value === null);
     });
