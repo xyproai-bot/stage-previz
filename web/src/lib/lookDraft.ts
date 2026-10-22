@@ -77,6 +77,32 @@ function applyObjectOp(base: LookObjectRow | null, objectId: string, op: DraftOb
   return row;
 }
 
+/**
+ * 把常用擺位的內容套進草稿：目前這個 cue 的畫面整個換成擺位裡的（擺位沒提到的物件 / 機關回到預設）。
+ * 之前草稿裡的動作會被換掉（可以用復原拿回來）。tpl 是後台依這個專案的物件 / 機關 id 轉好的畫面。
+ */
+export function applyLookToDraft(libId: string, base: Look, tpl: Look): LookDraft {
+  const objects: Record<string, DraftObject> = {};
+  const inTpl = new Set<string>();
+  for (const r of tpl.objects) {
+    inTpl.add(r.objectId);
+    const op: DraftObject = { reset: true };
+    for (const f of ['position', 'rotation', 'scale', 'visible'] as const) {
+      if (r[f] != null) (op as Record<string, unknown>)[f] = r[f];
+    }
+    objects[r.objectId] = op;
+  }
+  for (const r of base.objects) if (!inTpl.has(r.objectId)) objects[r.objectId] = { reset: true };
+  const mechanisms: Record<string, DraftMech | null> = {};
+  const mInTpl = new Set<string>();
+  for (const m of tpl.mechanisms) {
+    mInTpl.add(m.mechanismId);
+    mechanisms[m.mechanismId] = { value: m.value, delaySec: m.delaySec, durationSec: m.durationSec };
+  }
+  for (const m of base.mechanisms) if (!mInTpl.has(m.mechanismId)) mechanisms[m.mechanismId] = null;
+  return { libId, objects, mechanisms };
+}
+
 /** 原本的畫面 + 草稿 → 要寫進後台的畫面 */
 export function applyDraftToLook(base: Look, d: LookDraft): Look {
   const objects: LookObjectRow[] = [];

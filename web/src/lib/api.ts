@@ -851,6 +851,19 @@ export async function listCueTemplates(projectId: string): Promise<CueTemplate[]
   return data.templates;
 }
 
+/** 一個常用擺位的內容，已轉成這個專案的物件 / 機關 id（沒有的物件 / 機關略過，skipped 是略過幾個） */
+export interface CueTemplateLook {
+  id: string;
+  name: string;
+  description: string;
+  look: { objects: import('./cueLibraryApi').LookObjectRow[]; mechanisms: import('./cueLibraryApi').LookMechRow[] };
+  skipped: { objects: number; mechanisms: number };
+}
+
+export async function getCueTemplate(projectId: string, templateId: string): Promise<CueTemplateLook> {
+  return http(`/api/projects/${encodeURIComponent(projectId)}/cue-templates/${encodeURIComponent(templateId)}`);
+}
+
 export async function createCueTemplate(projectId: string, input: { name: string; description: string; fromCueId: string; global?: boolean }): Promise<{ id: string }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/cue-templates`, {
     method: 'POST',

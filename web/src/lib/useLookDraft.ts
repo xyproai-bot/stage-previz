@@ -65,6 +65,8 @@ export function useLookDraft(o: { projectId: string | undefined; libId: string |
     summary, hasChanges,
     base: base && base.libId === libId ? base : null,
     loadBase,
+    /** 整份草稿換成新的（套用常用擺位用；可以復原） */
+    replaceDraft: useCallback((d: LookDraft) => { if (libIdRef.current === d.libId) commit(historyPush(histRef.current, d)); }, [commit]),
     setObject: useCallback((objectId: string, patch: Omit<DraftObject, 'reset'>) => edit(d => setObjectFields(d, objectId, patch)), [edit]),
     resetObjectFields: useCallback((objectId: string) => edit(d => resetObject(d, objectId)), [edit]),
     setMechanisms: useCallback((entries: Record<string, DraftMech | null>) => edit(d => Object.entries(entries).reduce((acc, [id, e]) => setMechanism(acc, id, e), d)), [edit]),

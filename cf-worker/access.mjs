@@ -392,6 +392,7 @@ export function describeProjectRoute(method, segs) {
       return null;
 
     case 'cue-templates':
+      if (a) return !b && read ? r('cueTemplates.get', 'member', { tplId: a }) : bad('cueTemplates.get');
       if (read) return r('cueTemplates.list', 'member');
       if (m === 'POST') return r('cueTemplates.create', 'editor');
       return bad('cueTemplates');

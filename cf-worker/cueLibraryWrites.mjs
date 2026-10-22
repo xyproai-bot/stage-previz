@@ -452,6 +452,41 @@ export async function templateLook(env, lcId) {
   };
 }
 
+/**
+ * 常用擺位的內容 → 這個專案的畫面（物件用 stage_object_id、機關用機關 id）。
+ * 物件照 mesh 名稱、機關照名稱對應；這個專案沒有的略過並數出來。
+ * 前端把它套進「還沒存的改動」（草稿）。
+ */
+export async function templateToProjectLook(env, projectId, payload) {
+  const objs = await all(env.DB, `SELECT id, mesh_name FROM stage_objects WHERE project_id = ?`, projectId);
+  const mechs = await all(env.DB, `SELECT id, name FROM mechanisms WHERE project_id = ?`, projectId);
+  const meshToId = new Map(objs.map(o => [o.mesh_name, o.id]));
+  const byName = new Map(mechs.map(m => [String(m.name).trim(), m.id]));
+  const objects = [], mechanisms = [];
+  let skippedObjects = 0, skippedMechanisms = 0;
+  const seenO = new Set(), seenM = new Set();
+  for (const s of (Array.isArray(payload?.snapshotStates) ? payload.snapshotStates : []).slice(0, 5000)) {
+    const oid = meshToId.get(s?.meshName);
+    if (!oid || seenO.has(oid)) { skippedObjects++; continue; }
+    seenO.add(oid);
+    const position = s.position ?? null, rotation = s.rotation ?? null, scale = s.scale ?? null;
+    const visible = s.visible === false ? false : true;
+    const ownFields = [];
+    if (position) ownFields.push('position');
+    if (rotation) ownFields.push('rotation');
+    if (scale) ownFields.push('scale');
+    ownFields.push('visible');
+    objects.push({ objectId: oid, position, rotation, scale, visible, customProps: null, own: true, ownFields });
+  }
+  for (const mp of (Array.isArray(payload?.mechanismPositions) ? payload.mechanismPositions : []).slice(0, 500)) {
+    const mid = byName.get(String(mp?.name ?? '').trim());
+    if (!mid || seenM.has(mid) || !Number.isFinite(Number(mp.value))) { skippedMechanisms++; continue; }
+    seenM.add(mid);
+    mechanisms.push({ mechanismId: mid, value: Number(mp.value), delaySec: secOrNull(mp.delaySec), durationSec: secOrNull(mp.durationSec), carried: false });
+  }
+  return { objects, mechanisms, skipped: { objects: skippedObjects, mechanisms: skippedMechanisms } };
+}
+
 // ───────────────────────── 複製專案 / 匯入新格式：把 Cue 庫整份搬到新專案 ─────────────────────────
 
 /**

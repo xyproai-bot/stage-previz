@@ -46,7 +46,7 @@ import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateFi
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
 import * as cueLib from '../lib/cueLibraryApi';
-import { applyDraftToLook, applyDraftToStates, suggestLabel } from '../lib/lookDraft';
+import { applyDraftToLook, applyDraftToStates, applyLookToDraft, suggestLabel } from '../lib/lookDraft';
 import { useLookDraft } from '../lib/useLookDraft';
 import LookDraftBar from '../components/LookDraftBar';
 import CueLibraryTab from '../components/CueLibraryTab';
@@ -807,6 +807,9 @@ export default function ProjectEditor() {
 
   // ── Cue templates / palette ──
   const [templatePickerOpen, setTemplatePickerOpen] = useState(false);
+  // Cue 庫專案：常用擺位先套進草稿。'apply' = 只套進草稿；'new' = 套進草稿後直接開「另存成新的 cue」
+  const [templatePickerMode, setTemplatePickerMode] = useState<'apply' | 'new'>('apply');
+  const [saveAsName, setSaveAsName] = useState<string | null>(null);
   // 「中途換版型」對話框開在哪一首歌上
   const [timelineSongId, setTimelineSongId] = useState<string | null>(null);
   const timelineSong = timelineSongId ? songs.find(x => x.id === timelineSongId) ?? null : null;
@@ -837,6 +840,30 @@ export default function ProjectEditor() {
     } catch (e) {
       toast.error('常用擺位沒有存到：' + msg(e));
     }
+  }
+
+  /** Cue 庫專案：把常用擺位套進目前這個 cue 的草稿（還沒存的改動），不新增 cue */
+  async function handleApplyTemplateToDraft(templateId: string) {
+    const ld = lookDraftRef.current;
+    if (!projectId || !libId || !ld) { toast.info('先選一個 cue，常用擺位會套在它還沒存的改動裡'); return; }
+    try {
+      const [tpl, base] = await Promise.all([api.getCueTemplate(projectId, templateId), currentBaseLook()]);
+      if (!base) { toast.error('這個 cue 的畫面讀不到，請重新整理'); return; }
+      ld.replaceDraft(applyLookToDraft(libId, base.look, tpl.look));
+      setTemplatePickerOpen(false);
+      const skipped = tpl.skipped.objects + tpl.skipped.mechanisms;
+      toast.success(`已套用常用擺位「${tpl.name}」，還沒存${skipped > 0 ? `（這個專案沒有的 ${skipped} 個物件或機關已略過）` : ''}：可以另存成新的 cue 或更新，不要就按放棄`);
+      if (templatePickerMode === 'new') {
+        setSaveAsName(tpl.name);
+        setSaveAsOpen({});
+      }
+    } catch (e) { toast.error('常用擺位沒有套用：' + msg(e)); }
+  }
+
+  function openTemplatePicker(mode: 'apply' | 'new') {
+    if (!libId) { toast.info('先選一個 cue，常用擺位會套在它還沒存的改動裡'); return; }
+    setTemplatePickerMode(mode);
+    setTemplatePickerOpen(true);
   }
 
   async function handleApplyTemplate(templateId: string) {
@@ -1837,6 +1864,7 @@ export default function ProjectEditor() {
               onSaveAs={() => setSaveAsOpen({})}
               onUpdate={() => { void startUpdate(); }}
               onDiscard={() => lookDraft.clear()}
+              onApplyTemplate={() => openTemplatePicker('apply')}
             />
           )}
           <div className="editor-cues__body">
@@ -1913,6 +1941,7 @@ export default function ProjectEditor() {
                 libLoading={libLoading}
                 onSelect={selectCue}
                 onAdd={() => setAddSlotOpen({})}
+                onNewFromTemplate={() => openTemplatePicker('new')}
                 onChangeTime={changeSlotTime}
                 onChangeFade={changeSlotFade}
                 onSwap={(c) => { if (c.id === selectedCueId && lookDraft.hasChanges) toast.info(DRAFT_BLOCK); else setSwapSlot(c); }}
@@ -2161,14 +2190,14 @@ export default function ProjectEditor() {
       {saveAsOpen && currentLib && (
         <SaveAsCueDialog
           defaultLabel={suggestLabel(libCues.map(c => c.label))}
-          defaultName={currentLib.name}
+          defaultName={saveAsName ?? currentLib.name}
           existingLabels={libCues.map(c => c.label)}
           onSave={async (label, name) => {
             const err = await doSaveAs(label, name);
-            if (!err) { const after = saveAsOpen.after; setSaveAsOpen(null); after?.(); }
+            if (!err) { const after = saveAsOpen.after; setSaveAsOpen(null); setSaveAsName(null); after?.(); }
             return err;
           }}
-          onCancel={() => setSaveAsOpen(null)}
+          onCancel={() => { setSaveAsOpen(null); setSaveAsName(null); }}
         />
       )}
       {addSlotOpen && (
@@ -2288,16 +2317,22 @@ export default function ProjectEditor() {
         open={templatePickerOpen}
         projectId={projectId || ''}
         onClose={() => setTemplatePickerOpen(false)}
-        onPick={handleApplyTemplate}
+        onPick={libMode ? handleApplyTemplateToDraft : handleApplyTemplate}
+        title={libMode ? (templatePickerMode === 'new' ? '從常用擺位建立新 cue' : '套用常用擺位') : '從常用擺位建立 cue'}
+        hint={libMode ? (templatePickerMode === 'new'
+          ? '會先套進這個 cue 還沒存的改動，接著請你取編號和名稱另存成新的 cue。'
+          : '會套進這個 cue 還沒存的改動，不會新增 cue；之後可以另存、更新或放棄。') : undefined}
       />
     </div>
   );
 }
 
 function CueTemplatePickerDialog({
-  open, projectId, onClose, onPick,
+  open, projectId, onClose, onPick, title, hint,
 }: {
   open: boolean;
+  title: string;
+  hint?: string;
   projectId: string;
   onClose: () => void;
   onPick: (templateId: string) => Promise<void>;
@@ -2324,10 +2359,11 @@ function CueTemplatePickerDialog({
     <div className="dialog-overlay" onClick={onClose}>
       <div className="dialog" onClick={(e) => e.stopPropagation()}>
         <header className="dialog__header">
-          <h2>從常用擺位建立 cue</h2>
+          <h2>{title}</h2>
           <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
         <div className="dialog__body">
+          {hint && <p className="muted small">{hint}</p>}
           {loading ? (
             <div className="editor-empty muted">載入中…</div>
           ) : templates.length === 0 ? (

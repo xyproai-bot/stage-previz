@@ -1,7 +1,7 @@
 // 右邊面板最上面那一排：目前這個 cue 有沒有「還沒存的改動」，以及另存 / 更新 / 放棄。
 // 只在 Cue 庫專案出現。規格 5.1。
 
-import { Copy, RefreshCw, Undo2 } from 'lucide-react';
+import { Bookmark, Copy, RefreshCw, Undo2 } from 'lucide-react';
 import Icon from './Icon';
 import './LookDraftBar.css';
 
@@ -17,6 +17,8 @@ interface Props {
   onSaveAs: () => void;
   onUpdate: () => void;
   onDiscard: () => void;
+  /** 套用常用擺位（套進還沒存的改動，再自己決定另存或更新） */
+  onApplyTemplate?: () => void;
 }
 
 export function usageText(songCount: number | null): string {
@@ -26,7 +28,7 @@ export function usageText(songCount: number | null): string {
   return `會影響 ${songCount} 首歌`;
 }
 
-export default function LookDraftBar({ label, name, songCount, summary, hasChanges, busy, onSaveAs, onUpdate, onDiscard }: Props) {
+export default function LookDraftBar({ label, name, songCount, summary, hasChanges, busy, onSaveAs, onUpdate, onDiscard, onApplyTemplate }: Props) {
   const parts: string[] = [];
   if (summary.objects > 0) parts.push(`${summary.objects} 個物件`);
   if (summary.mechanisms > 0) parts.push(`${summary.mechanisms} 個機關`);
@@ -50,6 +52,11 @@ export default function LookDraftBar({ label, name, songCount, summary, hasChang
         <button type="button" className={'btn btn--sm ' + (hasChanges ? 'btn--primary' : 'btn--ghost')} onClick={onSaveAs} disabled={busy}>
           <Icon icon={Copy} /> 另存成新的 cue
         </button>
+        {onApplyTemplate && (
+          <button type="button" className="btn btn--sm btn--ghost" onClick={onApplyTemplate} disabled={busy} title="把常用擺位套進這個 cue 還沒存的改動">
+            <Icon icon={Bookmark} /> 套用常用擺位
+          </button>
+        )}
         {hasChanges && (
           <>
             <button type="button" className="btn btn--sm btn--ghost" onClick={onUpdate} disabled={busy}>

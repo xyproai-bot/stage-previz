@@ -323,6 +323,32 @@ test('常用擺位（cue-templates）：從 slot 或 Cue 庫的 cue 存，內容
   assert.equal((await call('POST', `${P}/cue-templates`, { name: 'x' })).status, 400);
 });
 
+test('常用擺位（cue-templates/:id）：讀單一內容，轉成這個專案的物件 / 機關 id，沒有的略過', async () => {
+  const { db, ids } = await build();
+  const { call } = client(db);
+  const t = await call('POST', `${P}/cue-templates`, { name: '讀取用', fromCueId: ids.c3 });
+  const g = await call('GET', `${P}/cue-templates/${t.data.id}`);
+  assert.equal(g.status, 200, JSON.stringify(g.data));
+  assert.equal(g.data.name, '讀取用');
+  const objIds = new Set(db.raw.prepare(`SELECT id FROM stage_objects WHERE project_id = 'p1'`).all().map(r => r.id));
+  const mechIds = new Set(db.raw.prepare(`SELECT id FROM mechanisms WHERE project_id = 'p1'`).all().map(r => r.id));
+  assert.ok(g.data.look.objects.length > 0);
+  assert.ok(g.data.look.objects.every(o => objIds.has(o.objectId) && o.own === true && o.ownFields.includes('visible')));
+  assert.ok(g.data.look.mechanisms.length > 0);
+  assert.ok(g.data.look.mechanisms.every(m => mechIds.has(m.mechanismId) && m.carried === false));
+  assert.ok(g.data.look.mechanisms.some(m => m.value === 45 && m.delaySec === 0.5));
+  assert.deepEqual(g.data.skipped, { objects: 0, mechanisms: 0 });
+  // 別的專案的專案層級擺位讀不到；不存在 404
+  db.raw.prepare(`INSERT INTO cue_templates (id, project_id, name, description, payload) VALUES ('tpl_other', 'p2', 'x', '', '{}')`).run();
+  assert.equal((await call('GET', `${P}/cue-templates/tpl_other`)).status, 404);
+  assert.equal((await call('GET', `${P}/cue-templates/tpl_nope`)).status, 404);
+  // 這個專案沒有的物件 / 機關 → 略過並數出來
+  db.raw.prepare(`INSERT INTO cue_templates (id, project_id, name, description, payload) VALUES ('tpl_glob', NULL, 'g', '', ?)`)
+    .run(JSON.stringify({ snapshotStates: [{ meshName: '不存在的', position: { x: 1, y: 0, z: 0 } }], mechanismPositions: [{ name: '沒有這個機關', value: 1 }] }));
+  const sk = await call('GET', `${P}/cue-templates/tpl_glob`);
+  assert.deepEqual([sk.data.look.objects.length, sk.data.look.mechanisms.length, sk.data.skipped], [0, 0, { objects: 1, mechanisms: 1 }]);
+});
+
 test('機關：刪掉機關回報的 removedPositions 數 Cue 庫的列；convert-cue-positions 作用在 Cue 庫的 cue', async () => {
   const { db, ids } = await build();
   const { call } = client(db);

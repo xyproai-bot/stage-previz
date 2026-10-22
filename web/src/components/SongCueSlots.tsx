@@ -2,7 +2,7 @@
 // 加 cue 從 Cue 庫選；每列「⋯」可以改時間 / 改轉場 / 換成別的 cue / 複製成新的 cue（只改這首歌）/ 拿掉（Cue 庫裡還在）。
 
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, BookmarkPlus, Check, Clapperboard, Clock, Copy, Library, Plus, Repeat, RotateCcw, Timer, Trash2, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, Bookmark, BookmarkPlus, Check, Clapperboard, Clock, Copy, Library, Plus, Repeat, RotateCcw, Timer, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
 import OverflowMenu, { type OverflowItem } from './OverflowMenu';
 import type { Cue } from '../lib/api';
@@ -21,6 +21,8 @@ interface Props {
   libLoading: boolean;
   onSelect: (id: string) => void;
   onAdd: () => void;
+  /** 從常用擺位建立新 cue（套進草稿再另存） */
+  onNewFromTemplate?: () => void;
   /** 回 null = 改好了；回文字 = 錯誤 */
   onChangeTime: (cue: Cue, sec: number | null) => Promise<string | null>;
   onChangeFade: (cue: Cue, sec: number) => Promise<string | null>;
@@ -36,7 +38,7 @@ interface Props {
 }
 
 export default function SongCueSlots({
-  cues, loading, selectedId, libCues, libLoading, onSelect, onAdd, onChangeTime, onChangeFade, onSwap, onCopyNew, onRemove,
+  cues, loading, selectedId, libCues, libLoading, onSelect, onAdd, onNewFromTemplate, onChangeTime, onChangeFade, onSwap, onCopyNew, onRemove,
   onSaveTemplate, onShowInLibrary, onMove, onResortNow, onResetAllObjects, busy,
 }: Props) {
   const [editing, setEditing] = useState<{ id: string; field: 'time' | 'fade' } | null>(null);
@@ -172,7 +174,10 @@ export default function SongCueSlots({
         </button>
         <OverflowMenu
           label="這首歌所有 cue 的動作"
-          items={[{ key: 'resetAll', label: RESET_ALL_MENU_LABEL, icon: RotateCcw, disabled: cues.length === 0, onSelect: onResetAllObjects }]}
+          items={[
+            ...(onNewFromTemplate ? [{ key: 'newFromTpl', label: '從常用擺位建立新 cue', icon: Bookmark, disabled: busy, onSelect: onNewFromTemplate }] : []),
+            { key: 'resetAll', label: RESET_ALL_MENU_LABEL, icon: RotateCcw, disabled: cues.length === 0, onSelect: onResetAllObjects },
+          ]}
         />
       </div>
     </div>

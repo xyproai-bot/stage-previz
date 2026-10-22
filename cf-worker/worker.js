@@ -513,6 +513,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'export':                return exportProject(request, env, projectId);
     case 'cueTemplates.list':     return listCueTemplates(env, projectId);
     case 'cueTemplates.create':   return createCueTemplate(request, env, ctx);
+    case 'cueTemplates.get':      return getCueTemplate(env, projectId, route.tplId);
 
     case 'drive.files':           return driveListProjectFiles(env, projectId);
     case 'drive.assign':          return driveAssignFile(request, env, projectId, segs[5]);
@@ -1230,6 +1231,23 @@ async function listCueTemplates(env, projectId) {
         createdAt: t.created_at, payload,
       };
     }),
+  });
+}
+
+// 讀單一常用擺位的內容，轉成這個專案的畫面（物件 / 機關 id）→ 前端套進「還沒存的改動」
+async function getCueTemplate(env, projectId, tplId) {
+  if (!/^[a-zA-Z0-9_-]{1,64}$/.test(tplId || '')) return jsonResp({ error: '模板不合法' }, 400);
+  const t = await env.DB.prepare(
+    `SELECT id, name, description, payload FROM cue_templates WHERE id = ? AND (project_id IS NULL OR project_id = ?) LIMIT 1`
+  ).bind(tplId, projectId).first();
+  if (!t) return jsonResp({ error: '找不到這個模板' }, 404);
+  let payload = {};
+  try { payload = JSON.parse(t.payload) || {}; } catch {}
+  const look = await cueLibW.templateToProjectLook(env, projectId, payload);
+  return jsonResp({
+    id: t.id, name: t.name, description: t.description,
+    look: { objects: look.objects, mechanisms: look.mechanisms },
+    skipped: look.skipped,
   });
 }
 

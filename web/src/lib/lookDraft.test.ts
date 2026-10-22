@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { CueState } from './api';
 import type { Look, LookObjectRow } from './cueLibraryApi';
 import {
-  applyDraftToLook, applyDraftToStates, draftHasOps, emptyHistory, historyPush, historyRedo, historyUndo, labelError, newDraft,
+  applyDraftToLook, applyDraftToStates, applyLookToDraft, draftHasOps, emptyHistory, historyPush, historyRedo, historyUndo, labelError, newDraft,
   resetObject, resolveLook, resolveLookMechanisms, setMechanism, setObjectFields, suggestLabel, summarizeDraft, type ObjectDefaults,
 } from './lookDraft';
 // @ts-expect-error 後台的 .mjs 沒有型別
@@ -175,5 +175,28 @@ describe('resolveLook 跟後台的算法一樣', () => {
     const mine = resolveLookMechanisms(mechs, look, 'slot1');
     const theirs = server.resolveSlotMechanisms(mechs, look.mechanisms.map(m => ({ mechanism_id: m.mechanismId, value: m.value, carried: m.carried ? 1 : 0, delay_sec: m.delaySec, duration_sec: m.durationSec })), 'slot1').row;
     expect(mine).toEqual(theirs);
+  });
+});
+
+describe('套用常用擺位進草稿', () => {
+  const TPL: Look = {
+    objects: [row('a', { position: P2, visible: true, ownFields: ['position', 'visible'] }), row('z', { position: P1, visible: true, ownFields: ['position', 'visible'] })],
+    mechanisms: [{ mechanismId: 'm1', value: 9, delaySec: 0.5, durationSec: null, carried: false }],
+  };
+  it('擺位裡的物件換成擺位的值，擺位沒提到的物件 / 機關回到預設', () => {
+    const d = applyLookToDraft('L', BASE, TPL);
+    const out = applyDraftToLook(BASE, d);
+    const byId = new Map(out.objects.map(r => [r.objectId, r]));
+    expect(byId.get('a')?.position).toEqual(P2);
+    expect(byId.get('z')?.position).toEqual(P1);
+    expect(byId.has('b')).toBe(false);
+    expect(byId.has('c')).toBe(false);
+    expect(out.mechanisms.map(m => [m.mechanismId, m.value, m.delaySec])).toEqual([['m1', 9, 0.5]]);
+  });
+  it('擺位跟現在一樣就不算改動；有差才算', () => {
+    const same = applyLookToDraft('L', BASE, { objects: BASE.objects, mechanisms: BASE.mechanisms.filter(m => !m.carried) });
+    // b 是沿用來的、m2 是沿用的 → 套同樣內容後它們變成自己設或回預設，仍算有改動；a / c / m1 沒變
+    expect(summarizeDraft(same, BASE).objects).toBeGreaterThan(0);
+    expect(summarizeDraft(applyLookToDraft('L', BASE, TPL), BASE)).toEqual({ objects: 4, mechanisms: 2 });
   });
 });
