@@ -252,7 +252,7 @@ describe('變形百分比', () => {
     expect(distortionLevel({ max: 0.03, mean: 0 })).toBe('warn');
     expect(distortionLevel({ max: 0.2, mean: 0.1 })).toBe('bad');
     expect(distortionText({ max: 0.03, mean: 0.01 })).toContain('輕微拉伸 3.0%');
-    expect(distortionText({ max: 0, mean: 0 })).toContain('沒有拉伸');
+    expect(distortionText({ max: 0, mean: 0 })).toContain('沒有變形');
   });
 });
 

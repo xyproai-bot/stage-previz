@@ -149,7 +149,7 @@ export function defaultSelected(pieces: readonly { kind: 'flat' | 'arc' | 'ext' 
 export function distortionText(d: DistortionStat): string {
   const lv = distortionLevel(d);
   const nums = `最大 ${pct(d.max)}%、平均 ${pct(d.mean)}%`;
-  if (lv === 'ok') return `變形 ${pct(d.max)}%（${nums}）：沒有拉伸`;
+  if (lv === 'ok') return `沒有變形（${nums}，小到看不出來）`;
   if (lv === 'warn') return `輕微拉伸 ${pct(d.max)}%（${nums}）`;
   return `會變形 ${pct(d.max)}%（${nums}）：這塊建議在 C4D 手動展開，或選「保留原本 UV」`;
 }

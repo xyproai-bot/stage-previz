@@ -586,7 +586,8 @@ const distortionShort = (d: DistortionStat): string => {
   const lv = distortionLevel(d);
   const p = d.max * 100;
   const n = p === 0 ? '0' : p < 0.05 ? '< 0.1' : p < 10 ? p.toFixed(1) : p.toFixed(0);
-  return `${lv === 'ok' ? '變形' : lv === 'warn' ? '輕微拉伸' : '會變形'} ${n}%`;
+  if (lv === 'ok') return '沒有變形'; // 很小的數字（例如 0.01%）是曲面由平面拼成的誤差，看不出來；數字留在滑鼠提示裡
+  return `${lv === 'warn' ? '輕微拉伸' : '會變形'} ${n}%`;
 };
 
 /** 整圈 360 度圓柱的接縫位置：預設在背對觀眾的那一側；往觀眾的右手邊（正）或左手邊（負）轉 */
