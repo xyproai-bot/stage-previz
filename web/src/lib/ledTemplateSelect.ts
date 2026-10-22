@@ -116,6 +116,15 @@ export function snapGroupMove(
 /** 方向鍵微調整組 */
 export const nudgeRects = (rects: readonly PixelRect[], dx: number, dy: number): PixelRect[] => rects.map(r => nudgeRect(r, dx, dy));
 
+/** 置中：整組外框放到畫布正中間（axis = 'x' 左右置中、'y' 上下置中）；整組一起平移、相對位置不變 */
+export function centerGroupOnCanvas(rects: readonly PixelRect[], canvas: { width: number; height: number }, axis: 'x' | 'y'): PixelRect[] {
+  const box = boundsOf(rects);
+  if (!box) return [];
+  return axis === 'x'
+    ? moveGroupTo(rects, { x: Math.round((canvas.width - box.w) / 2) })
+    : moveGroupTo(rects, { y: Math.round((canvas.height - box.h) / 2) });
+}
+
 /** 數字欄位改整組外框的左 / 上：整組平移到那裡（只給一個就只動那個方向） */
 export function moveGroupTo(rects: readonly PixelRect[], target: { x?: number; y?: number }): PixelRect[] {
   const box = boundsOf(rects);

@@ -532,3 +532,20 @@ describe('patchDraftItems / removeScreensFromDraft', () => {
     expect(removeScreensFromDraft(draft3, ['b', 'd']).items.map(i => i.key)).toEqual(['a', 'c']);
   });
 });
+
+describe('置中：整組放到畫布正中間', () => {
+  it('左右置中：整組外框置中，相對位置不變', async () => {
+    const { centerGroupOnCanvas } = await import('./ledTemplateSelect');
+    const out = centerGroupOnCanvas([{ x: 0, y: 10, w: 100, h: 50 }, { x: 150, y: 20, w: 50, h: 50 }], { width: 1000, height: 500 }, 'x');
+    expect(out).toEqual([{ x: 400, y: 10, w: 100, h: 50 }, { x: 550, y: 20, w: 50, h: 50 }]);
+  });
+  it('上下置中：只動上下', async () => {
+    const { centerGroupOnCanvas } = await import('./ledTemplateSelect');
+    const out = centerGroupOnCanvas([{ x: 7, y: 0, w: 10, h: 100 }], { width: 1000, height: 500 }, 'y');
+    expect(out).toEqual([{ x: 7, y: 200, w: 10, h: 100 }]);
+  });
+  it('沒有東西 → 空的', async () => {
+    const { centerGroupOnCanvas } = await import('./ledTemplateSelect');
+    expect(centerGroupOnCanvas([], { width: 10, height: 10 }, 'x')).toEqual([]);
+  });
+});

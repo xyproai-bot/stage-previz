@@ -9,7 +9,7 @@ import { panelColor } from '../lib/ledMap';
 import { ROTATIONS, type PlacementInput, type Rotation, type ScreenDef } from '../lib/ledTemplate';
 import { patchDraftItems, type ItemPatchEntry } from '../lib/ledTemplateDraft';
 import { setRotation } from '../lib/ledTemplateEdit';
-import { boundsOf, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection } from '../lib/ledTemplateSelect';
+import { boundsOf, centerGroupOnCanvas, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection } from '../lib/ledTemplateSelect';
 import { useLedFullMap } from '../lib/useLedFullMap';
 import { useTemplateBackdrop } from '../lib/useTemplateBackdrop';
 import type { LayerBackdrop } from '../lib/ledTemplateContentDraw';
@@ -171,6 +171,10 @@ export default function LedUvArrange({ projectId, autoPlan, plan, arrange, gutte
           onRemove={() => { /* 排版時每一塊都是必要的，不能拿掉 */ }}
           onUndo={arrange.undo}
           onRedo={arrange.redo}
+          onCenter={axis => arrange.apply(d => {
+            const pick = d.items.filter(i => selSet.size === 0 || selSet.has(i.key));
+            return patchDraftItems(d, movePatches(pick, centerGroupOnCanvas(pick.map(c => c.dest), { width: d.width, height: d.height }, axis)));
+          }, { tag: `center:${axis}:${Date.now()}` })}
           fullMap={fullMap.map}
           showContent={contentOn}
           contentOpacity={contentOpacity}

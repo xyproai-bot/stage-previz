@@ -19,7 +19,7 @@ import {
   addScreenToDraft, copyTemplateName, draftFromTemplate, draftSignature, draftToBody, draftToPlan, emptyDraft, nextTemplateName,
   patchDraftItems, removeScreensFromDraft, resetItemSize, type Draft, type ItemPatch, type ItemPatchEntry,
 } from '../lib/ledTemplateDraft';
-import { boundsOf, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection, scaleGroupPct, scaleGroupTo, selectionTag } from '../lib/ledTemplateSelect';
+import { boundsOf, centerGroupOnCanvas, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection, scaleGroupPct, scaleGroupTo, selectionTag } from '../lib/ledTemplateSelect';
 import {
   commit, fitCanvasToItems, newHistory, redo, rectToUv, setRotation, settle, transient, undo, type History,
 } from '../lib/ledTemplateEdit';
@@ -644,6 +644,10 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                 onRemove={removeSelected}
                 onUndo={doUndo}
                 onRedo={doRedo}
+                onCenter={axis => apply(d => {
+                  const pick = d.items.filter(i => selSet.size === 0 || selSet.has(i.key));
+                  return patchDraftItems(d, movePatches(pick, centerGroupOnCanvas(pick.map(c => c.dest), { width: d.width, height: d.height }, axis)));
+                }, {})}
                 fullMap={fullMap.map}
                 showContent={contentOn}
                 contentOpacity={contentOpacity}
