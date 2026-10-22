@@ -368,6 +368,29 @@ export function describeProjectRoute(method, segs) {
       if (m === 'PATCH' || m === 'DELETE') return r('ledScreens.item', 'editor', { screenId: a });
       return bad('ledScreens.item');
 
+    // Cue 庫的 cue（專案層級的畫面；設計：docs/superpowers/specs/2026-10-22-cue-library-design.md 4.1）：看 = 成員，改 = 這個專案的製作
+    case 'library-cues':
+      if (!a) {
+        if (read) return r('libraryCues.list', 'member');
+        if (m === 'POST') return r('libraryCues.create', 'editor');
+        return bad('libraryCues');
+      }
+      if (!b) {
+        if (read) return r('libraryCues.get', 'member', { libId: a });
+        if (m === 'PATCH') return r('libraryCues.patch', 'editor', { libId: a });
+        if (m === 'DELETE') return r('libraryCues.delete', 'editor', { libId: a });
+        return bad('libraryCues.item');
+      }
+      if (c) return null;
+      if (b === 'look') {
+        if (read) return r('libraryCues.look', 'member', { libId: a });
+        if (m === 'PUT') return r('libraryCues.lookPut', 'editor', { libId: a });
+        return bad('libraryCues.look');
+      }
+      if (b === 'states') return read ? r('libraryCues.states', 'member', { libId: a }) : bad('libraryCues.states');
+      if (b === 'usage') return read ? r('libraryCues.usage', 'member', { libId: a }) : bad('libraryCues.usage');
+      return null;
+
     case 'cue-templates':
       if (read) return r('cueTemplates.list', 'member');
       if (m === 'POST') return r('cueTemplates.create', 'editor');

@@ -22,6 +22,21 @@ describe('describeActivity（最近活動的一句話）', () => {
     expect(describeActivity(e('restore', 'song_cue_states', { songName: '開場', restored: 12 }))).toBe('復原歌曲「開場」所有 cue 的物件位置（寫回 12 筆）');
     expect(describeActivity(e('reset', 'song_cue_states', {}))).toBe('把歌曲所有 cue 的物件重置回預設位置');
   });
+  it('Cue 庫：另存、新增、更新、改名、改編號、刪除、這首歌加 / 換 / 改時間 / 拿掉都是白話（編號是自己打的文字）', () => {
+    expect(describeActivity(e('create', 'library_cue', { label: '12-1', name: '副歌全開', basedOnLabel: '12', basedOnName: '副歌全開' }))).toBe('從「12 副歌全開」另存成「12-1 副歌全開」');
+    expect(describeActivity(e('create', 'library_cue', { label: '12', name: '副歌全開' }))).toBe('新增 Cue 庫的 cue「12 副歌全開」');
+    expect(describeActivity(e('update', 'library_cue', { kind: 'look', label: '12', name: '副歌全開', songCount: 3 }))).toBe('更新 Cue 庫的「12 副歌全開」（3 首歌在用）');
+    expect(describeActivity(e('update', 'library_cue', { kind: 'look', label: '12', name: '副歌全開', songCount: 0 }))).toBe('更新 Cue 庫的「12 副歌全開」');
+    expect(describeActivity(e('update', 'library_cue', { kind: 'rename', label: '12', fromName: 'A', toName: '新名字' }))).toBe('把「12」改名成「新名字」');
+    expect(describeActivity(e('update', 'library_cue', { kind: 'relabel', name: '副歌', fromLabel: '12', toLabel: '3-1' }))).toBe('把「12 副歌」的編號改成 3-1');
+    expect(describeActivity(e('delete', 'library_cue', { label: '12', name: '副歌' }))).toBe('刪除 Cue 庫的「12 副歌」');
+    expect(describeActivity(e('create', 'cue', { songName: 'X', videoTimeSec: 45, libraryLabel: '12', libraryName: '副歌' }))).toBe('在歌曲「X」0:45 加上「12 副歌」');
+    expect(describeActivity(e('update', 'cue', { kind: 'repoint', songName: 'X', videoTimeSec: 83, libraryLabel: '13', libraryName: 'B' }))).toBe('把歌曲「X」1:23 的 cue 換成「13 B」');
+    expect(describeActivity(e('update', 'cue', { kind: 'retime', songName: 'X', fromTimeSec: 83, toTimeSec: 90, libraryLabel: '13', libraryName: 'B' }))).toBe('把歌曲「X」1:23 的 cue 時間改成 1:30');
+    expect(describeActivity(e('delete', 'cue', { songName: 'X', videoTimeSec: 83, libraryLabel: '12', libraryName: '副歌' }))).toBe('從歌曲「X」拿掉 1:23 的「12 副歌」');
+    // 舊的 cue 活動文字不變
+    expect(describeActivity(e('delete', 'cue', { name: '副歌' }))).toBe('刪除 cue「副歌」');
+  });
   it('物件預設隱藏：設定 / 取消都是白話', () => {
     expect(describeActivity(e('update', 'stage_object', { name: '瞬掉緞帶', changes: { defaultHidden: true } }))).toBe('把物件「瞬掉緞帶」設成預設隱藏');
     expect(describeActivity(e('update', 'stage_object', { name: '瞬掉緞帶', changes: { defaultHidden: false } }))).toBe('取消物件「瞬掉緞帶」的預設隱藏');

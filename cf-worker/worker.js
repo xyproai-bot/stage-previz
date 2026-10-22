@@ -90,6 +90,7 @@ import * as mech from './mechanisms.mjs';
 import * as cueLib from './cueLibraryRoutes.mjs';
 import * as cueLibW from './cueLibraryWrites.mjs';
 import * as cueLibBake from './cueLibraryBake.mjs';
+import * as cueLibCrud from './cueLibraryCrud.mjs';
 import * as ledTpl from './ledTemplates.mjs';
 // 自動貼 UV：新模型版本 + 畫布 + 舊版面一次換好、模型版本搭配的畫布
 import * as uvLayouts from './modelUvLayouts.mjs';
@@ -365,7 +366,7 @@ async function handleProjectsRouter(request, env, url) {
     const route = describeProjectRoute(request.method, segs);
     if (!route) return jsonResp({ error: 'Not found' }, 404);
     if (route.methodNotAllowed) return jsonResp({ error: 'Method not allowed' }, 405);
-    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.groupId, route.deletedVideoId, route.tplId, route.screenId, route.memberUserId]) {
+    for (const id of [route.songId, route.cueId, route.objId, route.videoId, route.inviteId, route.mechId, route.groupId, route.deletedVideoId, route.tplId, route.screenId, route.memberUserId, route.libId]) {
       if (id !== undefined && !ID_RE.test(id)) return jsonResp({ error: 'Invalid id' }, 400);
     }
 
@@ -551,11 +552,11 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         : jsonResp({ error: '這一版還不能播（還在上傳 / 複製，或失敗了）' }, 404);
 
     case 'cues.list':             return listCues(env, songId);
-    case 'cues.create':           return createCue(request, env, projectId, songId);
+    case 'cues.create':           return createCue(request, env, projectId, songId, ctx);
     case 'cues.reorder':          return reorderCues(request, env, projectId, songId);
     case 'cues.get':              return getCue(env, songId, cueId);
-    case 'cues.patch':            return updateCue(request, env, projectId, songId, cueId);
-    case 'cues.delete':           return deleteCue(request, env, projectId, songId, cueId);
+    case 'cues.patch':            return updateCue(request, env, projectId, songId, cueId, ctx);
+    case 'cues.delete':           return deleteCue(request, env, projectId, songId, cueId, ctx);
     case 'cues.reset':            return resetCue(request, env, projectId, cueId);
 
     case 'cueStatesBatch.list':   return mechResp(cueStatesBatch.listSongStates(env, ctx, songId));
@@ -585,6 +586,17 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
       return mechResp(request.method === 'PATCH'
         ? ledTpl.updateScreen(request, env, ctx, route.screenId, mechLog(request, env, projectId))
         : ledTpl.deleteScreen(request, env, ctx, route.screenId, mechLog(request, env, projectId)));
+
+    // Cue 庫的 cue（cueLibraryCrud.mjs）
+    case 'libraryCues.list':      return mechResp(cueLibCrud.listLibraryCues(env, ctx));
+    case 'libraryCues.create':    return mechResp(cueLibCrud.createLibraryCue(request, env, ctx, mechLog(request, env, projectId)));
+    case 'libraryCues.get':       return mechResp(cueLibCrud.getLibraryCue(env, ctx, route.libId));
+    case 'libraryCues.patch':     return mechResp(cueLibCrud.patchLibraryCue(request, env, ctx, route.libId, mechLog(request, env, projectId)));
+    case 'libraryCues.delete':    return mechResp(cueLibCrud.deleteLibraryCue(env, ctx, route.libId, mechLog(request, env, projectId)));
+    case 'libraryCues.look':      return mechResp(cueLibCrud.getLook(env, ctx, route.libId));
+    case 'libraryCues.lookPut':   return mechResp(cueLibCrud.putLook(request, env, ctx, route.libId, mechLog(request, env, projectId)));
+    case 'libraryCues.states':    return mechResp(cueLibCrud.getLibraryStates(env, ctx, route.libId));
+    case 'libraryCues.usage':     return mechResp(cueLibCrud.libraryCueUsage(env, ctx, route.libId));
 
     case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
     case 'mechanisms.create':     return mechResp(mech.createMechanism(request, env, ctx, mechLog(request, env, projectId)));
@@ -2179,9 +2191,13 @@ function parseCueRow(c) {
   };
 }
 
-async function createCue(request, env, projectId, songId) {
+async function createCue(request, env, projectId, songId, ctx) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  // 新的寫法（Cue 庫）：這首歌加一個指到 Cue 庫的 cue 的 slot
+  if (body && typeof body === 'object' && 'libraryCueId' in body) {
+    return mechResp(cueLibCrud.addSlot(env, ctx, songId, body, mechLog(request, env, projectId)));
+  }
   const name = (body?.name || '').toString().trim().slice(0, CUE_NAME_MAX);
   if (!name) return jsonResp({ error: 'name is required' }, 400);
 
@@ -2379,10 +2395,19 @@ async function getCue(env, songId, cueId) {
 
 const CUE_STATUSES = ['master', 'proposal', 'alternate'];
 
-async function updateCue(request, env, projectId, songId, cueId) {
+async function updateCue(request, env, projectId, songId, cueId, ctx) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   if (!body || typeof body !== 'object' || Array.isArray(body)) return jsonResp({ error: 'Invalid JSON' }, 400);
+  // Cue 庫專案：換指向（libraryCueId）和改時間（videoTimeSec，照時間重排）走新的寫法，其他欄位照舊
+  if ('libraryCueId' in body || (('videoTimeSec' in body) && await cueLib.isLibraryProject(env, projectId))) {
+    const rest = { ...body };
+    delete rest.libraryCueId; delete rest.videoTimeSec;
+    const slotBody = { ...(('libraryCueId' in body) ? { libraryCueId: body.libraryCueId } : {}), ...(('videoTimeSec' in body) ? { videoTimeSec: body.videoTimeSec } : {}) };
+    const r = await cueLibCrud.patchSlot(env, ctx, songId, cueId, slotBody, mechLog(request, env, projectId));
+    if (r.status !== 200 || !Object.keys(rest).length) return jsonResp(r.body, r.status);
+    body = rest;
+  }
 
   const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? AND song_id = ? LIMIT 1`).bind(cueId, songId).first();
 
@@ -2424,11 +2449,17 @@ async function updateCue(request, env, projectId, songId, cueId) {
   return jsonResp({ ok: true });
 }
 
-async function deleteCue(request, env, projectId, songId, cueId) {
-  const before = await env.DB.prepare(`SELECT name FROM cues WHERE id = ? AND song_id = ? LIMIT 1`).bind(cueId, songId).first();
+async function deleteCue(request, env, projectId, songId, cueId, ctx) {
+  const before = await env.DB.prepare(
+    `SELECT c.name, c.video_time_sec, l.label AS lib_label, l.name AS lib_name FROM cues c LEFT JOIN library_cues l ON l.id = c.library_cue_id
+      WHERE c.id = ? AND c.song_id = ? LIMIT 1`).bind(cueId, songId).first();
   const result = await env.DB.prepare(`DELETE FROM cues WHERE id = ? AND song_id = ?`).bind(cueId, songId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
-  await logActivity(request, env, projectId, 'delete', 'cue', cueId, { name: before?.name });
+  await logActivity(request, env, projectId, 'delete', 'cue', cueId, {
+    name: before?.name,
+    // Cue 庫專案：活動文字要寫「從歌曲 X 拿掉 1:23 的 12 …」
+    ...(before?.lib_label ? { songName: ctx?.song?.name, videoTimeSec: typeof before.video_time_sec === 'number' ? before.video_time_sec : null, libraryLabel: before.lib_label, libraryName: before.lib_name } : {}),
+  });
   return jsonResp({ ok: true });
 }
 

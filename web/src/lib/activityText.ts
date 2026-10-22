@@ -10,7 +10,7 @@ const SONG_STATUS_LABEL: Record<string, string> = {
 };
 
 const TARGET_LABEL: Record<string, string> = {
-  project: '專案', song: '歌曲', cue: 'cue', cue_state: '物件位置', song_cue_states: '物件位置', stage_object: '物件', model: '模型',
+  project: '專案', song: '歌曲', cue: 'cue', library_cue: 'Cue 庫的 cue', cue_state: '物件位置', song_cue_states: '物件位置', stage_object: '物件', model: '模型',
   song_video: '影片', mechanism: '機關', mechanism_group: '一排機關', drive_file: 'Drive 檔案', cue_template: '常用擺位', invite: '邀請連結',
   share_link: '分享連結', comment: '留言', member: '成員',
 };
@@ -24,6 +24,8 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 const num = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
 /** 中文接英文中間空一格（「新增 cue」「修改 Drive 檔案」） */
 const join = (a: string, b: string) => (/^[A-Za-z]/.test(b) ? `${a} ${b}` : `${a}${b}`);
+/** 83 → 1:23 */
+const fmtClock = (sec: number) => { const t = Math.max(0, Math.floor(sec)); return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`; };
 /** 「名稱」：有名字才加引號，沒有就不寫（不會出現 undefined） */
 const quoted = (name: string | undefined) => (name ? `「${name}」` : '');
 
@@ -42,6 +44,40 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
   const target = activityTargetLabel(type);
   const verb = activityVerb(action);
   const name = str(p.name);
+
+  // Cue 庫（編號是用戶自己打的文字：「12」「3-1」）
+  if (type === 'library_cue') {
+    const lab = str(p.label) ?? '';
+    const full = (l: string | undefined, n: string | undefined) => quoted([l, n].filter(Boolean).join(' '));
+    if (action === 'create') {
+      const bl = str(p.basedOnLabel), bn = str(p.basedOnName);
+      return bl || bn ? `從${full(bl, bn)}另存成${full(lab, name)}` : `新增 Cue 庫的 cue${full(lab, name)}`;
+    }
+    if (action === 'delete') return `刪除 Cue 庫的${full(lab, name)}`;
+    if (action === 'update') {
+      if (p.kind === 'rename') return `把${quoted(lab)}改名成${quoted(str(p.toName))}`;
+      if (p.kind === 'relabel') return `把${full(str(p.fromLabel), name)}的編號改成 ${str(p.toLabel) ?? ''}`.trim();
+      if (p.kind === 'look') {
+        const songs = num(p.songCount);
+        return `更新 Cue 庫的${full(lab, name)}${songs ? `（${songs} 首歌在用）` : ''}`;
+      }
+    }
+  }
+  // 這首歌的 cue 指到 Cue 庫的 cue（加、換、改時間、拿掉）
+  if (type === 'cue' && str(p.libraryLabel) !== undefined) {
+    const song = str(p.songName);
+    const lib = quoted([str(p.libraryLabel), str(p.libraryName)].filter(Boolean).join(' '));
+    const at = num(p.videoTimeSec);
+    const t = at != null ? fmtClock(at) : '';
+    const songPart = song ? `歌曲${quoted(song)}` : '這首歌';
+    if (action === 'create') return `在${songPart}${t} 加上${lib}`;
+    if (action === 'delete') return `從${songPart}拿掉${t ? ` ${t} 的` : ''}${lib}`;
+    if (action === 'update' && p.kind === 'repoint') return `把${songPart}${t} 的 cue 換成${lib}`;
+    if (action === 'update' && p.kind === 'retime') {
+      const from = num(p.fromTimeSec), to = num(p.toTimeSec);
+      return `把${songPart}${from != null ? fmtClock(from) : ''} 的 cue 時間${to != null ? `改成 ${fmtClock(to)}` : '清掉'}`;
+    }
+  }
 
   // 歌曲狀態改了（含交新版後自動回到審查中）
   if (type === 'song' && action === 'update') {
