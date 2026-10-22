@@ -9,7 +9,7 @@
 // 部署：vite build 會把 dist/ 弄好，部 vercel 後瀏覽器自動撈 sw.js
 // 更新：bump CACHE_VERSION 即可（用戶下次開頁會跳 SW update event）
 
-const CACHE_VERSION = 'v1-2026-05-01';
+const CACHE_VERSION = 'v2-2026-10-22';  // 換版本 = 清掉舊快取（舊版可能把「找不到的檔案」回的首頁當成程式存起來）
 const APP_SHELL = 'sp-shell-' + CACHE_VERSION;
 const R2_CACHE  = 'sp-r2-' + CACHE_VERSION;
 
@@ -76,7 +76,9 @@ async function cacheFirst(cacheName, req) {
   if (hit) return hit;
   try {
     const resp = await fetch(req);
-    if (resp.ok) cache.put(req, resp.clone());
+    // 網站更新後舊的程式檔不在了，伺服器會回首頁（HTML）：這種不能存成程式檔，不然那個網址永遠壞掉
+    const isHtml = (resp.headers.get('content-type') || '').includes('text/html');
+    if (resp.ok && !(isHtml && new URL(req.url).pathname.startsWith('/assets/'))) cache.put(req, resp.clone());
     return resp;
   } catch {
     return new Response('Offline', { status: 503, statusText: 'Offline' });
