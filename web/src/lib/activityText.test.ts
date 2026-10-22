@@ -37,6 +37,11 @@ describe('describeActivity（最近活動的一句話）', () => {
     // 舊的 cue 活動文字不變
     expect(describeActivity(e('delete', 'cue', { name: '副歌' }))).toBe('刪除 cue「副歌」');
   });
+  it('Cue 庫轉場秒數：改預設、這首歌另外設、改回用 Cue 庫的', () => {
+    expect(describeActivity(e('update', 'library_cue', { kind: 'crossfade', label: '3', name: '副歌', fromSeconds: 1, toSeconds: 2 }))).toBe('把 Cue 3「副歌」的轉場改成 2 秒（用到的歌一起變）');
+    expect(describeActivity(e('update', 'cue', { kind: 'crossfade', songName: 'X', libraryLabel: '3', libraryName: '副歌', toSeconds: 2, useLibrary: false }))).toBe('歌曲「X」的 Cue 3「副歌」另外設轉場 2 秒');
+    expect(describeActivity(e('update', 'cue', { kind: 'crossfade', songName: 'X', libraryLabel: '3', libraryName: '副歌', toSeconds: null, useLibrary: true }))).toBe('歌曲「X」的 Cue 3「副歌」轉場改回用 Cue 庫的');
+  });
   it('物件預設隱藏：設定 / 取消都是白話', () => {
     expect(describeActivity(e('update', 'stage_object', { name: '瞬掉緞帶', changes: { defaultHidden: true } }))).toBe('把物件「瞬掉緞帶」設成預設隱藏');
     expect(describeActivity(e('update', 'stage_object', { name: '瞬掉緞帶', changes: { defaultHidden: false } }))).toBe('取消物件「瞬掉緞帶」的預設隱藏');

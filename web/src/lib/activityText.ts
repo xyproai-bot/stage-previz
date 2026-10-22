@@ -29,6 +29,11 @@ const fmtClock = (sec: number) => { const t = Math.max(0, Math.floor(sec)); retu
 /** 「名稱」：有名字才加引號，沒有就不寫（不會出現 undefined） */
 const quoted = (name: string | undefined) => (name ? `「${name}」` : '');
 
+/** 秒數：2 → 2、0.5 → 0.5 */
+const fmtSec = (n: number) => String(Math.round(n * 100) / 100);
+/** Cue 3「名稱」（編號是用戶自己打的文字） */
+const cueName = (label: string | undefined, name: string | undefined) => `Cue${label ? ` ${label}` : ''}${quoted(name)}`;
+
 export function activityTargetLabel(t: string): string {
   return TARGET_LABEL[t] ?? '項目';
 }
@@ -57,6 +62,10 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
     if (action === 'update') {
       if (p.kind === 'rename') return `把${quoted(lab)}改名成${quoted(str(p.toName))}`;
       if (p.kind === 'relabel') return `把${full(str(p.fromLabel), name)}的編號改成 ${str(p.toLabel) ?? ''}`.trim();
+      if (p.kind === 'crossfade') {
+        const to = num(p.toSeconds);
+        return `把 ${cueName(lab, name)}的轉場改成 ${to != null ? fmtSec(to) : '新的'} 秒（用到的歌一起變）`;
+      }
       if (p.kind === 'look') {
         const songs = num(p.songCount);
         return `更新 Cue 庫的${full(lab, name)}${songs ? `（${songs} 首歌在用）` : ''}`;
@@ -73,6 +82,13 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
     if (action === 'create') return `在${songPart}${t} 加上${lib}`;
     if (action === 'delete') return `從${songPart}拿掉${t ? ` ${t} 的` : ''}${lib}`;
     if (action === 'update' && p.kind === 'repoint') return `把${songPart}${t} 的 cue 換成${lib}`;
+    if (action === 'update' && p.kind === 'crossfade') {
+      const to = num(p.toSeconds);
+      const cue = cueName(str(p.libraryLabel), str(p.libraryName));
+      return to == null || p.useLibrary === true
+        ? `${songPart}的 ${cue}轉場改回用 Cue 庫的`
+        : `${songPart}的 ${cue}另外設轉場 ${fmtSec(to)} 秒`;
+    }
     if (action === 'update' && p.kind === 'retime') {
       const from = num(p.fromTimeSec), to = num(p.toTimeSec);
       return `把${songPart}${from != null ? fmtClock(from) : ''} 的 cue 時間${to != null ? `改成 ${fmtClock(to)}` : '清掉'}`;

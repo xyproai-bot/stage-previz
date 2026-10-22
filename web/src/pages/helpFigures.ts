@@ -417,8 +417,8 @@ export const FIGS = {
     boxes: [
       { x: 0, y: 6.11, w: 16.67, h: 93.89, n: 1, dashed: true },
       { x: 16.67, y: 6.11, w: 59.72, h: 5.31, n: 2 },
-      { x: 16.67, y: 11.42, w: 59.72, h: 5.35, n: 3 },
-      { x: 54.58, y: 64.47, w: 21.11, h: 28.19, n: 4 },
+      { x: 16.67, y: 11.42, w: 59.72, h: 5.46, n: 3 },
+      { x: 51.67, y: 52.11, w: 23.89, h: 40.33, n: 4 },
       { x: 16.67, y: 93.78, w: 59.72, h: 6.22, n: 5 },
       { x: 76.39, y: 6.11, w: 23.61, h: 93.89, n: 6, dashed: true },
     ],
@@ -479,12 +479,12 @@ export const FIGS = {
     caption: '貼連結：貼上之後下面會說看起來是哪一種連結',
   }),
   versionBar: fig({
-    src: '/help/animator/version-bar.webp', w: 1000, h: 56, width: 820,
+    src: '/help/animator/version-bar.webp', w: 1000, h: 57, width: 820,
     alt: '影片版本列：V2、V1、說明、加影片',
     caption: '① 每一版（點哪一版 LED 就放哪一版）② 加影片',
     boxes: [
-      { x: 7.44, y: 8.31, w: 23.06, h: 83.38, n: 1 },
-      { x: 88.26, y: 8.96, w: 10.58, h: 82.08, n: 2 },
+      { x: 7.67, y: 12.21, w: 32.61, h: 73.54, n: 1 },
+      { x: 88.49, y: 12.85, w: 10.12, h: 72.26, n: 2 },
     ],
   }),
   reviewTab: fig({
@@ -493,12 +493,12 @@ export const FIGS = {
     caption: '「審查 / 留言」：狀態、導演上次的決定和原因、留言（「已改好（V2）」）',
   }),
   compare: fig({
-    src: '/help/animator/compare.webp', w: 600, h: 506, width: 300,
+    src: '/help/animator/compare.webp', w: 600, h: 583, width: 300,
     alt: '小播放器的比較：選 V1，按鈕或 C 鍵切換',
     caption: '① 選另一版 ② 按這個（或鍵盤 C）切換，停在同一秒',
     boxes: [
-      { x: 12.33, y: 86.21, w: 24.67, h: 11.03, n: 1 },
-      { x: 37.67, y: 85.42, w: 16.22, h: 12.61, n: 2 },
+      { x: 2.62, y: 87.72, w: 29.07, h: 7.78, n: 1 },
+      { x: 33.43, y: 87.43, w: 12.98, h: 8.38, n: 2 },
     ],
   }),
   animLedMenu: fig({
@@ -539,10 +539,10 @@ export const FIGS = {
     alt: '導演總覽：待製作、審查中、需修改、已通過四欄',
     caption: '① 四個狀態 ② 有新版 ③ 審查中的歌可以直接按「通過」「需修改」④ 整體進度',
     boxes: [
-      { x: 0.97, y: 21.52, w: 24.1, h: 16.06, n: 1 },
-      { x: 27.08, y: 55.91, w: 6.15, h: 8.03, n: 2 },
-      { x: 26.25, y: 65.38, w: 22.85, h: 16.06, n: 3 },
-      { x: 14.37, y: 4.55, w: 14.27, h: 7.27, n: 4 },
+      { x: 1.18, y: 22.36, w: 23.68, h: 14.2, n: 1 },
+      { x: 27.29, y: 56.65, w: 5.76, h: 6.19, n: 2 },
+      { x: 26.46, y: 66.09, w: 22.43, h: 14.2, n: 3 },
+      { x: 14.57, y: 5.44, w: 13.85, h: 5.44, n: 4 },
     ],
   }),
   boardPhone: fig({
@@ -551,16 +551,16 @@ export const FIGS = {
     caption: '手機：狀態一欄一欄往下排',
   }),
   songDetail: fig({
-    src: '/help/director/song-detail.webp', w: 1200, h: 716, width: 820,
+    src: '/help/director/song-detail.webp', w: 1200, h: 717, width: 820,
     alt: '導演看一首歌：版本、3D 舞台、小播放器、cue 列、留言',
     caption: '① 上一首 / 下一首 ② 通過 / 需修改（旁邊的「?」打開說明）③ 版本 ④ 小播放器 ⑤ cue 列 ⑥ 審片紀錄和留言',
     boxes: [
-      { x: 6.18, y: 7.76, w: 9.19, h: 3.08, n: 1 },
-      { x: 85.61, y: 7.21, w: 10.57, h: 4.19, n: 2 },
-      { x: 0, y: 12.33, w: 75, h: 5.6, n: 3 },
-      { x: 53.19, y: 57.47, w: 21.11, h: 33.92, n: 4 },
+      { x: 6.32, y: 7.56, w: 8.91, h: 2.62, n: 1 },
+      { x: 58.13, y: 12.38, w: 12.98, h: 3.49, n: 2 },
+      { x: 0, y: 16.92, w: 75, h: 5.71, n: 3 },
+      { x: 50.28, y: 48.95, w: 23.89, h: 42.21, n: 4 },
       { x: 0, y: 92.56, w: 75, h: 7.44, n: 5 },
-      { x: 75, y: 12.33, w: 25, h: 87.67, n: 6, dashed: true },
+      { x: 75, y: 11.45, w: 25, h: 88.55, n: 6, dashed: true },
     ],
   }),
   songPhone: fig({
@@ -590,10 +590,12 @@ export const FIGS = {
     caption: '審片紀錄：哪一版、誰、什麼時候、原因（點原因跳到那則留言）',
   }),
   dirCompare: fig({
-    src: '/help/director/compare.webp', w: 1100, h: 718, width: 560,
+    src: '/help/director/compare.webp', w: 1100, h: 678, width: 560,
     alt: '導演頁比較兩版：小播放器選 V1',
     caption: '① 比較：選 V1，按旁邊的按鈕或 C 在兩版之間切換',
-    boxes: [{ x: 71.67, y: 78.44, w: 26.67, h: 4.82, n: 1 }],
+    boxes: [
+      { x: 67.87, y: 77.76, w: 9.26, h: 3.91, n: 1 },
+    ],
   }),
   annotate: fig({
     src: '/help/director/annotate.webp', w: 1200, h: 716, width: 820,
@@ -627,15 +629,15 @@ export const FIGS = {
     ],
   }),
   shareDesktop: fig({
-    src: '/help/client/share-desktop.webp', w: 1200, h: 716, width: 820,
+    src: '/help/client/share-desktop.webp', w: 1200, h: 717, width: 820,
     alt: '分享連結（電腦）：歌曲、影片、3D 舞台、小播放器、cue',
     caption: '① 歌曲 ② 影片 / AE 即時 / 本地檔案 ③ 重置攝影機 ④ 小播放器 ⑤ cue',
     boxes: [
       { x: 0, y: 4.8, w: 15.21, h: 95.2, n: 1, dashed: true },
-      { x: 16.11, y: 5.49, w: 19.19, h: 4.04, n: 2 },
-      { x: 49.93, y: 17.69, w: 2.64, h: 4.19, n: 3 },
-      { x: 78.19, y: 66.02, w: 21.11, h: 26.02, n: 4 },
-      { x: 15.28, y: 93.2, w: 84.72, h: 6.8, n: 5 },
+      { x: 15.28, y: 4.8, w: 61.11, h: 5.55, n: 2 },
+      { x: 24.2, y: 18.04, w: 20.14, h: 3.49, n: 3 },
+      { x: 51.67, y: 53.31, w: 23.89, h: 38.49, n: 4 },
+      { x: 15.28, y: 93.2, w: 61.11, h: 6.8, n: 5 },
     ],
   }),
   shareMenu: fig({
