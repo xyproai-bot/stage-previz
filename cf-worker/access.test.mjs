@@ -164,6 +164,7 @@ test('路由：讀都是 member，改內容是 editor', () => {
   assert.equal(route('POST', '/api/projects/p1/songs/s1/cue-object-states/clear/x'), null);
   assert.equal(route('POST', '/api/projects/p1/songs/s1/cue-object-states/other'), null);
   assert.equal(route('POST', '/api/projects/p1/songs/s1/cues/reorder').cueId, undefined);
+  assert.deepEqual(route('POST', '/api/projects/p1/songs/s1/cues/rearrange'), { kind: 'cues.rearrange', need: 'editor', songId: 's1' });
   assert.equal(route('PATCH', '/api/projects/p1/stage-objects/o1').objId, 'o1');
   assert.equal(route('POST', '/api/projects/p1/stage-objects/bulk').need, 'editor');
   assert.equal(route('PUT', '/api/projects/p1/model').need, 'editor');

@@ -54,7 +54,8 @@ import { deleteBlockedText, sortLibraryCues, stepLibraryCue } from '../lib/cueLi
 import SaveAsCueDialog from '../components/SaveAsCueDialog';
 import AddSongCueDialog from '../components/AddSongCueDialog';
 import SongCueSlots from '../components/SongCueSlots';
-import { fmtSlotTime, ledSwitchFollows, sortedSlotIds } from '../lib/songSlots';
+import CueDragHandle, { useCueRowDrag } from '../components/CueDragHandle';
+import { canDragOnto, dragHintText, dragReorder, fmtSlotTime, ledSwitchFollows, sortedSlotIds, stepTarget } from '../lib/songSlots';
 import UpdateCueDialog, { usageSongNames } from '../components/UpdateCueDialog';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { isTextEntryTarget, isTypingTarget } from '../lib/keyTarget';
@@ -992,8 +993,35 @@ export default function ProjectEditor() {
       await refreshCues();
     } catch (e) { toast.error('刪除失敗：' + msg(e)); }
   }
+  /** 拖拉改順序（有時間的 cue 時間重新分配，順序永遠照時間）。一次拖拉 = 一個復原步驟 */
+  async function dragMoveCue(fromId: string, toId: string) {
+    if (!projectId || !selectedSongId) return;
+    const pid = projectId, sid = selectedSongId;
+    const r = dragReorder(masterCues, fromId, toId);
+    if (!r) return;
+    const beforeList = [...masterCues].sort((a, b) => a.order - b.order);
+    const before = { ids: beforeList.map(c => c.id), times: Object.fromEntries(beforeList.map(c => [c.id, c.videoTimeSec])) as Record<string, number | null> };
+    const scope = historyScope(selectedCueId);
+    try {
+      await api.rearrangeCues(pid, sid, r.ids);
+      historyRef.current.push(scope, {
+        undo: async () => { await api.rearrangeCues(pid, sid, before.ids, before.times); await refreshCues(); },
+        redo: async () => { await api.rearrangeCues(pid, sid, r.ids, r.times); await refreshCues(); },
+      });
+      bumpHistory();
+      await refreshCues();
+    } catch (e) { toast.error('順序沒有存到：' + msg(e)); await refreshCues(); }
+  }
+  /** 鍵盤上下鍵：跟最近一個同一種（有時間 / 沒時間）的 cue 換 */
+  async function stepCue(cueId: string, direction: -1 | 1) {
+    const to = stepTarget(masterCues, cueId, direction);
+    if (to) await dragMoveCue(cueId, to);
+  }
   async function moveCue(cueId: string, direction: -1 | 1) {
     if (!projectId || !selectedSongId) return;
+    // 隔壁就是同一種（都有時間 / 都沒時間）：走拖拉那條（可復原、時間跟著重新分配）；不一樣才用舊的單純對調
+    const nb = masterCues[masterCues.findIndex(c => c.id === cueId) + direction];
+    if (nb && stepTarget(masterCues, cueId, direction) === nb.id) { await dragMoveCue(cueId, nb.id); return; }
     const list = masterCues;
     const idx = list.findIndex(c => c.id === cueId);
     const newIdx = idx + direction;
@@ -1950,6 +1978,8 @@ export default function ProjectEditor() {
                 onSaveTemplate={(c) => { void handleSaveCueAsTemplate(c.id, c.libraryCue?.name ?? c.name); }}
                 onShowInLibrary={showInLibrary}
                 onMove={moveCue}
+                onDragMove={dragMoveCue}
+                onStep={stepCue}
                 onResortNow={() => { void resortSlots(); }}
                 onResetAllObjects={handleResetAllCueObjects}
                 busy={slotBusy || draftBusy}
@@ -1969,6 +1999,8 @@ export default function ProjectEditor() {
                 onRename={handleRenameCue}
                 onDelete={handleDeleteCue}
                 onMove={moveCue}
+                onDragMove={dragMoveCue}
+                onStep={stepCue}
                 onSaveTemplate={handleSaveCueAsTemplate}
                 onResetAllObjects={handleResetAllCueObjects}
               />
@@ -2405,7 +2437,7 @@ function CueTemplatePickerDialog({
 
 function CueList({
   cues, loading, selectedId, onSelect, onAddBlank, onClone, onSnapshot, onFromTemplate, onDuplicateQuick,
-  onReset, onRename, onDelete, onMove, onSaveTemplate, onResetAllObjects, emptyText,
+  onReset, onRename, onDelete, onMove, onDragMove, onStep, onSaveTemplate, onResetAllObjects, emptyText,
 }: {
   cues: Cue[];
   loading: boolean;
@@ -2420,11 +2452,20 @@ function CueList({
   onRename?: (cueId: string, name: string) => void;
   onDelete: (id: string, name: string) => void;
   onMove?: (cueId: string, direction: -1 | 1) => void;
+  /** 拖拉改順序（有給才會有把手） */
+  onDragMove?: (fromId: string, toId: string) => void;
+  onStep?: (cueId: string, direction: -1 | 1) => void;
   onSaveTemplate?: (cueId: string, name: string) => void;
   /** 這首歌所有 cue 的物件一次回到預設位置（Cue 分頁的「⋯」；提案那一頁沒有） */
   onResetAllObjects?: () => void;
   emptyText?: string;
 }) {
+  const drag = useCueRowDrag({
+    canDrop: (a, b) => canDragOnto(cues, a, b),
+    onDrop: (a, b) => onDragMove?.(a, b),
+    onStep: (id, d) => onStep?.(id, d),
+    disabled: !onDragMove,
+  });
   if (loading) return <div className="editor-empty muted">載入中…</div>;
   return (
     <>
@@ -2438,9 +2479,11 @@ function CueList({
           {cues.map((c, i) => (
             <li
               key={c.id}
-              className={'cue-item' + (selectedId === c.id ? ' is-active' : '') + (c.status === 'proposal' ? ' is-proposal' : '')}
+              data-cue-row={c.id}
+              className={'cue-item' + (selectedId === c.id ? ' is-active' : '') + (c.status === 'proposal' ? ' is-proposal' : '') + drag.rowClass(c.id)}
               onClick={() => onSelect(c.id)}
             >
+              {onDragMove && cues.length > 1 && <CueDragHandle props={drag.handleProps(c.id)} label={`「${c.name}」`} />}
               <div className="cue-item__num">{i + 1}</div>
               <div className="cue-item__main">
                 <div className="cue-item__name">{c.name}</div>
@@ -2461,6 +2504,7 @@ function CueList({
           ))}
         </ul>
       )}
+      {onDragMove && cues.length > 1 && <p className="cue-list__hint muted small">{dragHintText(cues)}</p>}
       {onAddBlank && (
         <div className="editor-cues__footer">
           <CueAddSplitButton

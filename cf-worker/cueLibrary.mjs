@@ -367,6 +367,34 @@ export function orderSlots(slots) {
   return keyed.map((k, i) => ({ ...k.s, order: i }));
 }
 
+/**
+ * 拖拉改順序：orderedIds = 拖完的新順序（整首歌所有 cue）。規則（前端 web/src/lib/songSlots.ts 的 rearrangeSlots 同一個）：
+ * - 有時間的 cue 只在有時間的位置之間換；沒時間的只在沒時間的位置之間換（兩種位置各自維持原本的格子）。
+ * - 有時間的 cue：照拖完的相對順序，把原本那些時間（由小到大）依序重新分配 → 順序和時間永遠對得上。
+ * - 轉場秒數等等都跟著 cue 走，這裡只動順序和時間。
+ * @param {{id:string, order:number, videoTimeSec:number|null}[]} slots 目前的 cue（照 order 排）
+ * @param {string[]} orderedIds 新順序
+ * @returns {{ok:true, ids:string[], times:Record<string, number|null>}|{ok:false, error:string}}
+ */
+export function rearrangeSlots(slots, orderedIds) {
+  const cur = [...(slots || [])].sort((a, b) => Number(a.order) - Number(b.order));
+  if (!Array.isArray(orderedIds) || orderedIds.length !== cur.length || new Set(orderedIds).size !== cur.length) return { ok: false, error: '順序要包含這首歌所有的 cue，不能重複' };
+  const byId = new Map(cur.map(s => [s.id, s]));
+  if (orderedIds.some(id => !byId.has(id))) return { ok: false, error: '順序裡有不是這首歌的 cue' };
+  const timed = (s) => typeof s.videoTimeSec === 'number' && Number.isFinite(s.videoTimeSec);
+  const timedSeq = orderedIds.map(id => byId.get(id)).filter(timed);
+  const plainSeq = orderedIds.map(id => byId.get(id)).filter(s => !timed(s));
+  const times = cur.filter(timed).map(s => s.videoTimeSec).sort((a, b) => a - b);
+  const ids = [];
+  const out = {};
+  let ti = 0, pi = 0;
+  for (const slot of cur) {
+    if (timed(slot)) { const s = timedSeq[ti]; out[s.id] = times[ti]; ids.push(s.id); ti++; }
+    else { const s = plainSeq[pi++]; out[s.id] = null; ids.push(s.id); }
+  }
+  return { ok: true, ids, times: out };
+}
+
 // ───────────────────────── 檢查一個畫面 ─────────────────────────
 
 const inRange = (v) => v == null || (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 3600);

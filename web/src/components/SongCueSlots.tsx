@@ -4,11 +4,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Bookmark, BookmarkPlus, Check, Clapperboard, Clock, Copy, Library, Plus, Repeat, RotateCcw, Timer, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
+import CueDragHandle, { useCueRowDrag } from './CueDragHandle';
 import OverflowMenu, { type OverflowItem } from './OverflowMenu';
 import type { Cue } from '../lib/api';
 import type { LibraryCue } from '../lib/cueLibraryApi';
 import { crossfadeLabel, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
-import { EMPTY_LIBRARY_TEXT, EMPTY_SONG_TEXT, fmtSlotTime, OUT_OF_ORDER_TEXT, slotsOutOfOrder, timeTaken, timeTakenText } from '../lib/songSlots';
+import { canDragOnto, dragHintText, EMPTY_LIBRARY_TEXT, EMPTY_SONG_TEXT, fmtSlotTime, OUT_OF_ORDER_TEXT, slotsOutOfOrder, timeTaken, timeTakenText } from '../lib/songSlots';
 import { RESET_ALL_MENU_LABEL } from '../lib/cueResetAll';
 import './LookDraftBar.css';
 import './AddSongCueDialog.css';
@@ -32,6 +33,9 @@ interface Props {
   onSaveTemplate: (cue: Cue) => void;
   onShowInLibrary: (libraryCueId: string) => void;
   onMove: (cueId: string, direction: -1 | 1) => void;
+  /** 拖拉改順序（有時間的 cue 時間重新分配） */
+  onDragMove: (fromId: string, toId: string) => void;
+  onStep: (cueId: string, direction: -1 | 1) => void;
   onResortNow: () => void;
   onResetAllObjects: () => void;
   busy: boolean;
@@ -39,7 +43,7 @@ interface Props {
 
 export default function SongCueSlots({
   cues, loading, selectedId, libCues, libLoading, onSelect, onAdd, onNewFromTemplate, onChangeTime, onChangeFade, onSwap, onCopyNew, onRemove,
-  onSaveTemplate, onShowInLibrary, onMove, onResortNow, onResetAllObjects, busy,
+  onSaveTemplate, onShowInLibrary, onMove, onDragMove, onStep, onResortNow, onResetAllObjects, busy,
 }: Props) {
   const [editing, setEditing] = useState<{ id: string; field: 'time' | 'fade' } | null>(null);
   const [draft, setDraft] = useState('');
@@ -50,6 +54,12 @@ export default function SongCueSlots({
   useEffect(() => { if (editing) setTimeout(() => inputRef.current?.select(), 20); }, [editing]);
   useEffect(() => { if (editing && !cues.some(c => c.id === editing.id)) setEditing(null); }, [cues, editing]);
 
+  const drag = useCueRowDrag({
+    canDrop: (a, b) => canDragOnto(cues, a, b),
+    onDrop: onDragMove,
+    onStep,
+    disabled: busy || !!editing,
+  });
   const libById = new Map(libCues.map(l => [l.id, l]));
   const outOfOrder = slotsOutOfOrder(cues);
 
@@ -132,9 +142,11 @@ export default function SongCueSlots({
               <li
                 key={c.id}
                 data-slot={c.id}
-                className={'cue-item' + (selectedId === c.id ? ' is-active' : '')}
+                data-cue-row={c.id}
+                className={'cue-item' + (selectedId === c.id ? ' is-active' : '') + drag.rowClass(c.id)}
                 onClick={() => { if (!isEditing) onSelect(c.id); }}
               >
+                {cues.length > 1 && <CueDragHandle props={drag.handleProps(c.id)} label={`Cue ${label}「${name}」`} disabled={busy || !!editing} />}
                 <div className="song-slots__time" title="這個 cue 在影片的第幾秒切進來">{c.videoTimeSec === null ? '—' : fmtSlotTime(c.videoTimeSec)}</div>
                 {label ? <span className="slot-badge" title="Cue 庫編號">{label}</span> : <span className="slot-badge" title="沒有指到 Cue 庫">?</span>}
                 <div className="cue-item__main">
@@ -168,6 +180,7 @@ export default function SongCueSlots({
           })}
         </ul>
       )}
+      {cues.length > 1 && <p className="cue-list__hint muted small">{dragHintText(cues)}</p>}
       <div className="editor-cues__footer">
         <button type="button" className="btn btn--primary editor-cues__add" onClick={onAdd} disabled={busy}>
           <Icon icon={Plus} /> 從 Cue 庫加 cue

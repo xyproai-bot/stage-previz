@@ -91,6 +91,7 @@ import * as cueLib from './cueLibraryRoutes.mjs';
 import * as cueLibW from './cueLibraryWrites.mjs';
 import * as cueLibBake from './cueLibraryBake.mjs';
 import * as cueLibCrud from './cueLibraryCrud.mjs';
+import { rearrangeSlots } from './cueLibrary.mjs';
 import * as ledTpl from './ledTemplates.mjs';
 // 自動貼 UV：新模型版本 + 畫布 + 舊版面一次換好、模型版本搭配的畫布
 import * as uvLayouts from './modelUvLayouts.mjs';
@@ -555,6 +556,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'cues.list':             return listCues(env, songId);
     case 'cues.create':           return createCue(request, env, projectId, songId, ctx);
     case 'cues.reorder':          return reorderCues(request, env, projectId, songId);
+    case 'cues.rearrange':        return rearrangeCues(request, env, projectId, songId);
     case 'cues.get':              return getCue(env, songId, cueId);
     case 'cues.patch':            return updateCue(request, env, projectId, songId, cueId, ctx);
     case 'cues.delete':           return deleteCue(request, env, projectId, songId, cueId, ctx);
@@ -2410,6 +2412,39 @@ async function reorderCues(request, env, projectId, songId) {
   await env.DB.batch(stmts);
   await logActivity(request, env, projectId, 'reorder', 'cue', null, { songId, count: ids.length });
   return jsonResp({ ok: true, updated: ids.length });
+}
+
+/**
+ * POST songs/:s/cues/rearrange  { orderedIds, times? }：拖拉改順序，順序和時間一次寫完（一個 batch，不會有「同時間」的中間狀態）。
+ * 沒給 times：照規則（cueLibrary.rearrangeSlots）把有時間的 cue 的時間重新分配；
+ * 有給 times（復原用）：照給的寫，但時間要是這首歌現有時間的重新分配（不能憑空多出新時間）。
+ */
+async function rearrangeCues(request, env, projectId, songId) {
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const rows = (await env.DB.prepare(
+    `SELECT id, "order", video_time_sec FROM cues WHERE song_id = ? AND status = 'master' ORDER BY "order" ASC, created_at ASC, id ASC`
+  ).bind(songId).all()).results || [];
+  const slots = rows.map(r => ({ id: r.id, order: Number(r.order), videoTimeSec: typeof r.video_time_sec === 'number' ? r.video_time_sec : null }));
+  const r = rearrangeSlots(slots, body?.orderedIds);
+  if (!r.ok) return jsonResp({ error: r.error }, 400);
+  let times = r.times;
+  if (body.times && typeof body.times === 'object') {
+    const want = {};
+    for (const id of r.ids) {
+      const v = body.times[id];
+      if (v !== null && !(typeof v === 'number' && Number.isFinite(v) && v >= 0)) return jsonResp({ error: '時間不對' }, 400);
+      want[id] = v;
+    }
+    const key = (o) => Object.values(o).map(v => (v === null ? 'n' : String(Math.round(v * 1000)))).sort().join(',');
+    if (key(want) !== key(r.times)) return jsonResp({ error: '時間只能在這首歌現有的時間之間重新分配' }, 400);
+    times = want;
+  }
+  const stmts = r.ids.map((id, i) =>
+    env.DB.prepare(`UPDATE cues SET "order" = ?, video_time_sec = ?, updated_at = datetime('now') WHERE id = ? AND song_id = ?`).bind(i, times[id], id, songId));
+  await env.DB.batch(stmts);
+  await logActivity(request, env, projectId, 'reorder', 'cue', null, { songId, count: r.ids.length });
+  return jsonResp({ ok: true, order: r.ids.map((id, i) => ({ id, order: i, videoTimeSec: times[id] })) });
 }
 
 async function getCue(env, songId, cueId) {

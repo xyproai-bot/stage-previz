@@ -52,3 +52,74 @@ describe('時間顯示 / LED 切換點', () => {
     expect(ledSwitchFollows([{ cueId: null }], 'x')).toBe(false);
   });
 });
+
+import { canDragOnto, dragHintText, dragReorder, rearrangeSlots, stepTarget } from './songSlots';
+import { EditHistory, historyScope } from './editHistory';
+
+describe('拖拉改順序', () => {
+  const apply = (r: { ids: string[]; times: Record<string, number | null> }) =>
+    r.ids.map((id, i) => ({ id, order: i, videoTimeSec: r.times[id] }));
+
+  it('有時間的兩個互拖 = 時間對調', () => {
+    const r = dragReorder([s('a', 0, 10), s('b', 1, 30)], 'b', 'a')!;
+    expect(r.ids).toEqual(['b', 'a']);
+    expect(r.times).toEqual({ b: 10, a: 30 });
+  });
+  it('跨好幾格：時間集合不變、依序重新分配、結果仍照時間排', () => {
+    const slots = [s('a', 0, 5), s('b', 1, 10), s('c', 2, 20), s('d', 3, 30), s('e', 4, 40)];
+    const r = dragReorder(slots, 'e', 'b')!;
+    expect(r.ids).toEqual(['a', 'e', 'b', 'c', 'd']);
+    expect(r.times).toEqual({ a: 5, e: 10, b: 20, c: 30, d: 40 });
+    expect(slotsOutOfOrder(apply(r))).toBe(false);
+  });
+  it('往下拖也一樣', () => {
+    const r = dragReorder([s('a', 0, 1), s('b', 1, 2), s('c', 2, 3)], 'a', 'c')!;
+    expect(r.ids).toEqual(['b', 'c', 'a']);
+    expect(r.times).toEqual({ b: 1, c: 2, a: 3 });
+  });
+  it('沒時間的：照拖的位置排，時間不動', () => {
+    const r = dragReorder([s('x', 0, null), s('y', 1, null), s('z', 2, null)], 'z', 'x')!;
+    expect(r.ids).toEqual(['z', 'x', 'y']);
+    expect(Object.values(r.times)).toEqual([null, null, null]);
+  });
+  it('有時間和沒時間混在一起：只能換到同一種的位置，結果還是照時間排得出同樣順序', () => {
+    const slots = [s('a', 0, 10), s('x', 1, null), s('b', 2, 30), s('y', 3, null)];
+    expect(canDragOnto(slots, 'a', 'x')).toBe(false);
+    expect(dragReorder(slots, 'a', 'x')).toBeNull();
+    const r = dragReorder(slots, 'b', 'a')!;
+    expect(r.ids).toEqual(['b', 'x', 'a', 'y']);
+    expect(r.times).toEqual({ b: 10, x: null, a: 30, y: null });
+    expect(slotsOutOfOrder(apply(r))).toBe(false);
+    expect(dragReorder(slots, 'y', 'x')!.ids).toEqual(['a', 'y', 'b', 'x']);
+  });
+  it('不是整首歌的 cue -> null；自己拖自己不行', () => {
+    expect(rearrangeSlots([s('a', 0, 1), s('b', 1, 2)], ['a'])).toBeNull();
+    expect(dragReorder([s('a', 0, 1), s('b', 1, 2)], 'a', 'a')).toBeNull();
+  });
+  it('上下鍵：找最近一個同一種的', () => {
+    const slots = [s('a', 0, 10), s('x', 1, null), s('b', 2, 30)];
+    expect(stepTarget(slots, 'a', 1)).toBe('b');
+    expect(stepTarget(slots, 'x', 1)).toBeNull();
+    expect(stepTarget(slots, 'a', -1)).toBeNull();
+  });
+  it('說明文字：混在一起才講規則', () => {
+    expect(dragHintText([s('a', 0, 1)])).toBe('');
+    expect(dragHintText([s('a', 0, 1), s('b', 1, null)])).toContain('沒時間的只能拖到沒時間的位置');
+    expect(dragHintText([s('a', 0, null), s('b', 1, null)])).not.toContain('時間');
+  });
+  it('一次拖拉 = 一個復原步驟：復原一次就回到原樣，再重做一次又回去', async () => {
+    let state = [s('a', 0, 10), s('b', 1, 30)];
+    const before = { ids: state.map(c => c.id), times: Object.fromEntries(state.map(c => [c.id, c.videoTimeSec])) as Record<string, number | null> };
+    const r = dragReorder(state, 'b', 'a')!;
+    const write = async (ids: string[], times: Record<string, number | null>) => { state = ids.map((id, i) => ({ id, order: i, videoTimeSec: times[id] })); };
+    const h = new EditHistory();
+    await write(r.ids, r.times);
+    h.push(historyScope('a'), { undo: () => write(before.ids, before.times), redo: () => write(r.ids, r.times) });
+    expect(state.map(c => [c.id, c.videoTimeSec])).toEqual([['b', 10], ['a', 30]]);
+    expect(h.counts(historyScope('a')).undo).toBe(1);
+    await h.undo(historyScope('a'));
+    expect(state.map(c => [c.id, c.videoTimeSec])).toEqual([['a', 10], ['b', 30]]);
+    await h.redo(historyScope('a'));
+    expect(state.map(c => [c.id, c.videoTimeSec])).toEqual([['b', 10], ['a', 30]]);
+  });
+});

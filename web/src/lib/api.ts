@@ -552,6 +552,16 @@ export async function reorderCues(projectId: string, songId: string, orderedIds:
   );
 }
 
+/** 拖拉改順序：順序和時間一次寫完。沒給 times = 後台照規則重新分配有時間的 cue 的時間；給了（復原用）= 照給的寫 */
+export async function rearrangeCues(
+  projectId: string, songId: string, orderedIds: string[], times?: Record<string, number | null>,
+): Promise<void> {
+  await http(
+    `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cues/rearrange`,
+    { method: 'POST', body: JSON.stringify(times ? { orderedIds, times } : { orderedIds }) }
+  );
+}
+
 export async function updateCue(
   projectId: string,
   songId: string,

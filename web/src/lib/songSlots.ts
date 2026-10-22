@@ -64,3 +64,69 @@ export function ledSwitchFollows(switches: { cueId: string | null }[], cueId: st
 export const OUT_OF_ORDER_TEXT = '這首歌的 cue 順序跟影片時間對不上；之後改時間或加 cue，會照時間重新排。';
 export const EMPTY_SONG_TEXT = '這首歌還沒有 cue。從 Cue 庫加一個，整首歌就用那個畫面。';
 export const EMPTY_LIBRARY_TEXT = 'Cue 庫還是空的：先把舞台擺好，按「另存成新的 cue」。';
+
+// ───────────────────────── 拖拉改順序 ─────────────────────────
+// 規則（後台 cf-worker/cueLibrary.mjs 的 rearrangeSlots 是同一個）：
+// - 有時間的 cue 只在「有時間的位置」之間換；沒時間的 cue 只在「沒時間的位置」之間換。
+// - 有時間的 cue：照拖完的順序，把原本那些時間（由小到大）依序重新分配，順序和時間永遠對得上。
+// - 轉場秒數等其他東西跟著 cue 走。
+
+const isTimed = (s: SlotLike): boolean => typeof s.videoTimeSec === 'number' && Number.isFinite(s.videoTimeSec);
+
+export interface Rearranged { ids: string[]; times: Record<string, number | null> }
+
+/** 拖完的新順序 → 最後的順序 + 每個 cue 的新時間；順序不是這首歌全部的 cue 就回 null */
+export function rearrangeSlots(slots: SlotLike[], orderedIds: string[]): Rearranged | null {
+  const cur = [...slots].sort((a, b) => Number(a.order) - Number(b.order));
+  if (orderedIds.length !== cur.length || new Set(orderedIds).size !== cur.length) return null;
+  const byId = new Map(cur.map(s => [s.id, s]));
+  if (orderedIds.some(id => !byId.has(id))) return null;
+  const seq = orderedIds.map(id => byId.get(id)!);
+  const timedSeq = seq.filter(isTimed);
+  const plainSeq = seq.filter(s => !isTimed(s));
+  const times = cur.filter(isTimed).map(s => s.videoTimeSec as number).sort((a, b) => a - b);
+  const ids: string[] = [];
+  const out: Record<string, number | null> = {};
+  let ti = 0, pi = 0;
+  for (const slot of cur) {
+    if (isTimed(slot)) { const s = timedSeq[ti]; out[s.id] = times[ti]; ids.push(s.id); ti++; }
+    else { const s = plainSeq[pi++]; out[s.id] = null; ids.push(s.id); }
+  }
+  return { ids, times: out };
+}
+
+/** 這個 cue 可以拖到那個 cue 的位置嗎（有時間的只能換到有時間的位置，沒時間的只能換到沒時間的位置） */
+export function canDragOnto(slots: SlotLike[], fromId: string, toId: string): boolean {
+  if (fromId === toId) return false;
+  const a = slots.find(s => s.id === fromId), b = slots.find(s => s.id === toId);
+  return !!a && !!b && isTimed(a) === isTimed(b);
+}
+
+/** 把 fromId 拖到 toId 的位置（中間經過的 cue 順延）；不能拖就回 null。回傳新的順序 + 新時間 */
+export function dragReorder(slots: SlotLike[], fromId: string, toId: string): Rearranged | null {
+  if (!canDragOnto(slots, fromId, toId)) return null;
+  const ids = [...slots].sort((a, b) => Number(a.order) - Number(b.order)).map(s => s.id);
+  const from = ids.indexOf(fromId), to = ids.indexOf(toId);
+  ids.splice(from, 1);
+  ids.splice(to, 0, fromId);
+  return rearrangeSlots(slots, ids);
+}
+
+/** 上下鍵：往上或往下找最近一個「同一種」（都有時間或都沒時間）的 cue 換過去；找不到 null */
+export function stepTarget(slots: SlotLike[], id: string, dir: -1 | 1): string | null {
+  const list = [...slots].sort((a, b) => Number(a.order) - Number(b.order));
+  const i = list.findIndex(s => s.id === id);
+  if (i < 0) return null;
+  for (let j = i + dir; j >= 0 && j < list.length; j += dir) if (isTimed(list[j]) === isTimed(list[i])) return list[j].id;
+  return null;
+}
+
+/** 清單下面那一句說明（有時間和沒時間混在一起才多講規則） */
+export function dragHintText(slots: SlotLike[]): string {
+  if (slots.length < 2) return '';
+  const timed = slots.filter(isTimed).length;
+  const base = '按住左邊的把手上下拖，可以換順序';
+  if (timed === 0) return base + '。';
+  if (timed === slots.length) return base + '：被拖過的 cue 會重新分配這幾個時間，順序永遠照時間。';
+  return base + '：有時間的 cue 只能拖到有時間的位置（時間重新分配，順序永遠照時間），沒時間的只能拖到沒時間的位置。';
+}

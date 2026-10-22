@@ -442,6 +442,7 @@ export function describeProjectRoute(method, segs) {
         return bad('cues');
       }
       if (c === 'reorder' && !d) return m === 'POST' ? r('cues.reorder', 'editor', { songId }) : bad('cues.reorder');
+      if (c === 'rearrange' && !d) return m === 'POST' ? r('cues.rearrange', 'editor', { songId }) : bad('cues.rearrange');
       const cueId = c;
       if (!d) {
         if (read) return r('cues.get', 'member', { songId, cueId });
