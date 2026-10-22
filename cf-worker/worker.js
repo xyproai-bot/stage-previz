@@ -86,6 +86,7 @@ import * as mech from './mechanisms.mjs';
 import * as ledTpl from './ledTemplates.mjs';
 // 自動貼 UV：新模型版本 + 畫布 + 舊版面一次換好、模型版本搭配的畫布
 import * as uvLayouts from './modelUvLayouts.mjs';
+import * as cueStatesBatch from './cueStatesBatch.mjs';
 // 登入狀態什麼時候失效（重設登入碼 / 停用帳號 → 那個人其他裝置的登入失效）
 import {
   SESSION_TTL_SEC, sessionIssuedAtSec, sessionTokenExp, sessionTokenHash, sessionAllowed,
@@ -540,6 +541,10 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'cues.patch':            return updateCue(request, env, projectId, songId, cueId);
     case 'cues.delete':           return deleteCue(request, env, projectId, songId, cueId);
     case 'cues.reset':            return resetCue(request, env, projectId, cueId);
+
+    case 'cueStatesBatch.list':   return mechResp(cueStatesBatch.listSongStates(env, ctx, songId));
+    case 'cueStatesBatch.clear':  return mechResp(cueStatesBatch.clearSongStates(env, ctx, songId, mechLog(request, env, projectId)));
+    case 'cueStatesBatch.restore': return mechResp(cueStatesBatch.restoreSongStates(request, env, ctx, songId, mechLog(request, env, projectId)));
 
     case 'states.list':           return listCueStates(env, projectId, cueId);
     case 'states.item':

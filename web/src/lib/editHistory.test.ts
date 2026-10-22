@@ -135,6 +135,18 @@ describe('EditHistory（每個 cue 各一份）', () => {
     expect(h.counts('cue:A')).toEqual({ undo: 1, redo: 0 });
   });
 
+  it('同一步放進好幾份紀錄：從哪一份復原 / 重做，就把那一份的名字交給這一步（一次改很多個 cue 的批次修改用）', async () => {
+    const h = new EditHistory();
+    const seen: string[] = [];
+    const step = { undo: async (s: string) => { seen.push('undo@' + s); }, redo: async (s: string) => { seen.push('redo@' + s); } };
+    h.push('cue:A', step);
+    h.push('cue:B', step);
+    await h.undo('cue:B');
+    await h.redo('cue:B');
+    expect(seen).toEqual(['undo@cue:B', 'redo@cue:B']);
+    expect(h.counts('cue:A')).toEqual({ undo: 1, redo: 0 });   // 另一份沒動（要不要清掉是這一步自己的事）
+  });
+
   it('clear：清掉那一份', async () => {
     const h = new EditHistory();
     h.push('cue:A', { undo: async () => {}, redo: async () => {} });

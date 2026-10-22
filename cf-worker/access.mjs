@@ -36,6 +36,7 @@
 //   視角書籤：新增 / 改名 / 刪除 / 換順序                                      admin、導演（canEditCameraBookmarks，規則在 web/src/lib/cameraBookmarks.ts）
 //   自動貼 UV（0036，led-uv）：套用 / 看會動到什麼                            admin（這個專案的 admin，也就是製作）
 //   自動貼 UV：看 / 存排到一半的東西（led-uv/layout，沒有新的 migration）      admin（這個專案的 admin，也就是製作）
+//   一首歌所有 cue 的物件位置：一次看 / 一次清（回到預設位置）/ 一次寫回（復原）    admin（cue-object-states，cueStatesBatch.mjs）
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
 //   歌曲影片：最近刪除、救回來（30 天內）                                      admin（這個專案的 admin）
@@ -379,6 +380,13 @@ export function describeProjectRoute(method, segs) {
       if (b === 'import-cues' && !c) return m === 'POST' ? r('songs.importCues', 'editor', { songId }) : bad('songs.importCues');
       // LED 版型時間線（中途換版型，0039；docs/led-templates-api.md）：整份換掉，只有製作
       if (b === 'template-timeline' && !c) return m === 'PUT' ? r('songs.templateTimeline', 'editor', { songId }) : bad('songs.templateTimeline');
+      // 這首歌所有 cue 的物件覆寫：一次看 / 一次清（回到預設位置）/ 一次寫回（復原），只有製作（cueStatesBatch.mjs）
+      if (b === 'cue-object-states') {
+        if (!c) return read ? r('cueStatesBatch.list', 'editor', { songId }) : bad('cueStatesBatch.list');
+        if (c === 'clear' && !d) return m === 'POST' ? r('cueStatesBatch.clear', 'editor', { songId }) : bad('cueStatesBatch.clear');
+        if (c === 'restore' && !d) return m === 'POST' ? r('cueStatesBatch.restore', 'editor', { songId }) : bad('cueStatesBatch.restore');
+        return null;
+      }
       if (b === 'videos') return describeVideoRoute(m, read, songId, c, d, e);
       // 審片紀錄（V2 需修改、V3 已通過…），新的在前
       if (b === 'reviews' && !c) return read ? r('reviews.list', 'member', { songId }) : bad('reviews.list');

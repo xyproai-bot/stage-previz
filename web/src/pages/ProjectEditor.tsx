@@ -40,6 +40,7 @@ import { usePersonalLook } from '../lib/stageLook/personalLook';
 import { cueTransitionSeconds, crossfadeLabel, NEW_CUE_CROSSFADE_SECONDS, parseCrossfadeInput, parseVideoTimeInput } from '../lib/cueTiming';
 import { EditHistory, historyScope } from '../lib/editHistory';
 import { applyCueStatePatch, cueStateRestorePlan, overridePatch, type CueStateField, type CueStatePatch } from '../lib/cueStateUndo';
+import { RESET_ALL_MENU_LABEL, RESET_ALL_NOTHING, resetAllDialog, resetAllHistoryScopes, runResetAll, summarizeOverrides } from '../lib/cueResetAll';
 import { formatFieldNumber, metersToScene, parseNumberInput, sameAsShown, sceneToMeters, stepNumberInput } from '../lib/numberField';
 import { toast } from '../lib/toast';
 import { useLiveRefresh } from '../lib/liveRefresh';
@@ -819,6 +820,35 @@ export default function ProjectEditor() {
   }
   async function handleRenameCue(cueId: string, currentName: string) {
     if (!projectId || !selectedSongId) return;
+  // 「所有 cue 的物件回到預設位置」（Cue 分頁的「⋯」）：先數給製作看會清掉多少，確認以後一次清掉，記成復原紀錄的一步（lib/cueResetAll.ts）
+  const resetAllBusyRef = useRef(false);
+  async function handleResetAllCueObjects() {
+    if (!projectId || !selectedSongId || resetAllBusyRef.current) return;
+    if (cuesSongId !== selectedSongId) { toast.warn('這首歌的 cue 還在載入，等一下再試。'); return; }
+    const pid = projectId, songId = selectedSongId;
+    resetAllBusyRef.current = true;
+    try {
+      let info: Awaited<ReturnType<typeof api.listSongCueOverrides>>;
+      try { info = await api.listSongCueOverrides(pid, songId); }
+      catch (e) { toast.error('讀不到這首歌的 cue 設定：' + msg(e)); return; }
+      const summary = summarizeOverrides(info.cueCount, info.states);
+      if (summary.overrides === 0) { toast.info(RESET_ALL_NOTHING); return; }
+      if (!(await confirmDialog(resetAllDialog(summary)))) return;
+      const scopes = resetAllHistoryScopes(historyScopeRef.current, cues.map(c => c.id));
+      const removed = await runEdit(() => runResetAll({
+        clear: () => api.clearSongCueOverrides(pid, songId),
+        restore: (states) => api.restoreSongCueOverrides(pid, songId, states),
+        history: historyRef.current,
+        scopes,
+      }), 'states');
+      bumpHistory();
+      toast.success(removed > 0 ? `已清掉 ${removed} 筆物件設定，這首歌所有 cue 的物件都回到預設位置。按 Ctrl+Z 可以一次還原。` : RESET_ALL_NOTHING);
+    } catch (e) {
+      toast.error('沒有清掉：' + msg(e));
+    } finally {
+      resetAllBusyRef.current = false;
+    }
+  }
     const name = (await promptDialog({ title: '改 cue 名稱', label: 'cue 名稱', defaultValue: currentName, confirmLabel: '改名', maxLength: 100 }))?.trim();
     if (!name || name === currentName) return;
     try {
@@ -1486,6 +1516,7 @@ export default function ProjectEditor() {
                 onToggleSelected={toggleSelected}
                 scaleCorrection={view.scaleCorrection}
                 unitsReady={view.loaded}
+                onResetAllObjects={handleResetAllCueObjects}
                 onSet={handleSetState}
                 onToggleVisible={handleToggleVisible}
                 onReset={handleResetState}
@@ -1811,7 +1842,7 @@ function CueTemplatePickerDialog({
 
 function CueList({
   cues, loading, selectedId, onSelect, onAddBlank, onClone, onSnapshot, onFromTemplate, onDuplicateQuick,
-  onReset, onRename, onDelete, onMove, onSaveTemplate, emptyText,
+  onReset, onRename, onDelete, onMove, onSaveTemplate, onResetAllObjects, emptyText,
 }: {
   cues: Cue[];
   loading: boolean;
@@ -1841,6 +1872,8 @@ function CueList({
         <ul className="cue-list">
           {cues.map((c, i) => (
             <li
+  /** 這首歌所有 cue 的物件一次回到預設位置（Cue 分頁的「⋯」；提案那一頁沒有） */
+  onResetAllObjects?: () => void;
               key={c.id}
               className={'cue-item' + (selectedId === c.id ? ' is-active' : '') + (c.status === 'proposal' ? ' is-proposal' : '')}
               onClick={() => onSelect(c.id)}
@@ -1866,13 +1899,22 @@ function CueList({
         </ul>
       )}
       {onAddBlank && (
-        <CueAddSplitButton
-          onAddBlank={onAddBlank}
-          onClone={onClone}
-          onSnapshot={onSnapshot}
-          onFromTemplate={onFromTemplate}
-          hasSelectedCue={!!selectedId}
-        />
+        <div className="editor-cues__footer">
+          <CueAddSplitButton
+            onAddBlank={onAddBlank}
+            onClone={onClone}
+            onSnapshot={onSnapshot}
+            onFromTemplate={onFromTemplate}
+            hasSelectedCue={!!selectedId}
+          />
+          {/* 整首歌的動作收在「⋯」：現在只有一個。每一列的「⋯」是那一個 cue 的動作 */}
+          {onResetAllObjects && (
+            <OverflowMenu
+              label="這首歌所有 cue 的動作"
+              items={[{ key: 'resetAll', label: RESET_ALL_MENU_LABEL, icon: RotateCcw, disabled: cues.length === 0, onSelect: onResetAllObjects }]}
+            />
+          )}
+        </div>
       )}
     </>
   );

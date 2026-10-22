@@ -6,10 +6,10 @@
 // 沒選 cue 時改的是物件預設位置，算另一份（'defaults'）。
 
 export interface HistoryStep {
-  /** 回到改之前 */
-  undo: () => Promise<void>;
+  /** 回到改之前（scope = 是從哪一份紀錄復原的；一般的修改用不到，一次動很多個 cue 的批次修改要用它清掉其他 cue 的紀錄） */
+  undo: (scope: string) => Promise<void>;
   /** 再做一次 */
-  redo: () => Promise<void>;
+  redo: (scope: string) => Promise<void>;
 }
 
 export type HistoryResult = 'done' | 'empty' | 'busy';
@@ -79,7 +79,7 @@ export class EditHistory {
     const rev = s.rev;
     this.running = true;
     try {
-      await step[kind]();
+      await step[kind](scope);
       if (s.rev === rev) to.push(step);
       return 'done';
     } catch (e) {

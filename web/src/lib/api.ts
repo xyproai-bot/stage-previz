@@ -948,6 +948,39 @@ export async function resetCueState(
 
 export type CommentAnchor =
   | { type: 'screen' }
+/**
+ * 一個 cue 裡一個物件自己設的內容（跟 PUT …/states/:objId 寫進去的是同一份）。沒設的欄位是 null（= 沿用前面的 cue / 預設）。
+ * 「所有 cue 的物件回到預設位置」用：一首歌所有 cue 一次看、一次清、一次寫回（cf-worker/cueStatesBatch.mjs，只有製作）。
+ */
+export interface CueStateOverrideRow {
+  cueId: string;
+  objectId: string;
+  position: Vec3 | null;
+  rotation: Euler | null;
+  scale: Vec3 | null;
+  visible: boolean | null;
+  customProps: Record<string, unknown> | null;
+  updatedAt: string | null;
+}
+
+const songStatesBatchPath = (projectId: string, songId: string) =>
+  `/api/projects/${encodeURIComponent(projectId)}/songs/${encodeURIComponent(songId)}/cue-object-states`;
+
+/** 這首歌每個 cue 自己設過的物件（不改任何東西） */
+export async function listSongCueOverrides(projectId: string, songId: string): Promise<{ cueCount: number; states: CueStateOverrideRow[] }> {
+  return http(songStatesBatchPath(projectId, songId));
+}
+
+/** 這首歌所有 cue 的物件設定全部清掉（物件回到預設位置）；回傳被清掉的內容（復原時用 restoreSongCueOverrides 寫回去） */
+export async function clearSongCueOverrides(projectId: string, songId: string): Promise<{ removed: number; states: CueStateOverrideRow[] }> {
+  return http(`${songStatesBatchPath(projectId, songId)}/clear`, { method: 'POST', body: JSON.stringify({}) });
+}
+
+/** 把清掉的內容寫回去（同一個 cue 同一個物件現在又有設定的，以寫回的為準） */
+export async function restoreSongCueOverrides(projectId: string, songId: string, states: CueStateOverrideRow[]): Promise<{ restored: number }> {
+  return http(`${songStatesBatchPath(projectId, songId)}/restore`, { method: 'POST', body: JSON.stringify({ states }) });
+}
+
   | { type: 'world'; world: { x: number; y: number; z: number } }
   | { type: 'mesh'; meshName: string; offset?: { x: number; y: number; z: number } | null };
 

@@ -155,6 +155,14 @@ test('路由：讀都是 member，改內容是 editor', () => {
   assert.deepEqual(route('PUT', '/api/projects/p1/songs/s1/cues/c1/states/o1'),
     { kind: 'states.item', need: 'editor', songId: 's1', cueId: 'c1', objId: 'o1' });
   assert.equal(route('POST', '/api/projects/p1/songs/s1/cues/c1/reset').need, 'editor');
+  // 這首歌所有 cue 的物件覆寫（一次看 / 一次清 / 一次寫回）：只有製作，連「看」也是
+  assert.deepEqual(route('GET', '/api/projects/p1/songs/s1/cue-object-states'), { kind: 'cueStatesBatch.list', need: 'editor', songId: 's1' });
+  assert.deepEqual(route('POST', '/api/projects/p1/songs/s1/cue-object-states/clear'), { kind: 'cueStatesBatch.clear', need: 'editor', songId: 's1' });
+  assert.deepEqual(route('POST', '/api/projects/p1/songs/s1/cue-object-states/restore'), { kind: 'cueStatesBatch.restore', need: 'editor', songId: 's1' });
+  assert.equal(route('GET', '/api/projects/p1/songs/s1/cue-object-states/clear').methodNotAllowed, true);
+  assert.equal(route('PUT', '/api/projects/p1/songs/s1/cue-object-states').methodNotAllowed, true);
+  assert.equal(route('POST', '/api/projects/p1/songs/s1/cue-object-states/clear/x'), null);
+  assert.equal(route('POST', '/api/projects/p1/songs/s1/cue-object-states/other'), null);
   assert.equal(route('POST', '/api/projects/p1/songs/s1/cues/reorder').cueId, undefined);
   assert.equal(route('PATCH', '/api/projects/p1/stage-objects/o1').objId, 'o1');
   assert.equal(route('POST', '/api/projects/p1/stage-objects/bulk').need, 'editor');
