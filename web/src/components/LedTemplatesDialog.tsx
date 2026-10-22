@@ -26,7 +26,7 @@ import {
 import { panelColor, todayString, type PixelRect } from '../lib/ledMap';
 import { downloadBlob } from '../lib/ledMapDraw';
 import { downloadTemplateTable, downloadTemplateTilesZip, guideContentFor, guideShrinkWarning, renderTemplateGuideFile } from '../lib/ledTemplateDownload';
-import { layoutFromSpans } from '../lib/ledTemplateContent';
+import { layoutFromSpans, splitLayoutByScreens } from '../lib/ledTemplateContent';
 import { wholeCanvasLayout, type LayerBackdrop } from '../lib/ledTemplateContentDraw';
 import { useLedFullMap } from '../lib/useLedFullMap';
 import { useTemplateBackdrop } from '../lib/useTemplateBackdrop';
@@ -213,11 +213,11 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     if (!open || phone || !contentOn || !fullW || !fullH) return null;
     const canvas = { width: fullW, height: fullH };
     if (sceneReady) {
-      const lay = layoutFromSpans(ledObjects, spans, canvas);
+      const lay = splitLayoutByScreens(layoutFromSpans(ledObjects, spans, canvas), screens);
       if (lay.panels.length > 0) return lay;
     }
     return sceneGaveUp ? wholeCanvasLayout(canvas) : null;
-  }, [open, phone, contentOn, fullW, fullH, sceneReady, spans, ledObjects, sceneGaveUp]);
+  }, [open, phone, contentOn, fullW, fullH, sceneReady, spans, ledObjects, sceneGaveUp, screens]);
   const fullMap = useLedFullMap(mapLayout);
   const contentNote = fullMap.error
     ? `對位圖內容畫不出來：${fullMap.error}`

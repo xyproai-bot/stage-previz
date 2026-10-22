@@ -13,6 +13,7 @@ import { renderTemplateGuidePng, renderTilePng, type GuideContent, type Template
 import { buildAeTilesScript, layoutFromDefs, TILES_DIR, tilesOf, tilesToCsv, tilesZipFileName } from './ledTemplateTiles';
 import { buildZip, type ZipEntry } from './zipStore';
 import type { LedLayout } from './ledMap';
+import { splitLayoutByScreens } from './ledTemplateContent';
 import { guideFileName } from './ledTemplatePattern';
 import { templateTableFileName, templateTableToCsv, templateTableToJson, timelineTableFileName, timelineTableToCsv, timelineTableToJson } from './ledTemplateTable';
 import { aeTimelineScriptFileName, buildAeTimelineScript } from './aeTimelineScript';
@@ -39,8 +40,10 @@ export async function renderTemplateGuideFile(plan: LedTemplatePlan, defs: reado
 /** 每塊螢幕畫網站上那張測試圖要的東西（整張畫布不知道大小 = null，畫舊的簡單方塊） */
 export function guideContentFor(defs: readonly ScreenDef[], meta: Pick<TemplateDownloadMeta, 'fullCanvas' | 'layout'>): GuideContent | null {
   const full = meta.fullCanvas;
-  const layout = meta.layout ?? (full && full.width > 0 && full.height > 0 ? layoutFromDefs(defs, full) : null);
-  if (!layout) return null;
+  const base = meta.layout ?? (full && full.width > 0 && full.height > 0 ? layoutFromDefs(defs, full) : null);
+  if (!base) return null;
+  // 一個物件裡好幾塊 LED：每塊各自一格測試圖（名稱、座標、外框顏色都是自己的）
+  const layout = splitLayoutByScreens(base, defs);
   const byKey = new Map(defs.map(d => [d.key, d.src]));
   return { layout, spanOf: k => byKey.get(k) ?? null };
 }

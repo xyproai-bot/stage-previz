@@ -5,8 +5,8 @@
 // 所以編輯器框裡看到的內容，就是把版型畫面貼回舞台後這塊 LED 上會出現的內容。
 // 真的拿 canvas 畫在 lib/ledTemplateContentDraw.ts。
 
-import { buildLedLayout, type CanvasSize, type LedLayout, type PixelRect } from './ledMap';
-import { localTransform, type Rotation, type SrcSpan } from './ledTemplate';
+import { buildLedLayout, layoutPanel, panelColor, panelHue, type CanvasSize, type LedLayout, type PixelRect } from './ledMap';
+import { localTransform, parseScreenKey, type Rotation, type ScreenDef, type SrcSpan } from './ledTemplate';
 import type { Matrix6 } from './ledTemplatePattern';
 
 /** 一塊來源：整張畫布圖上的一個長方形（畫布像素，一定在畫布裡）+ 把它擺進版型畫布的矩陣（畫布像素 → 版型畫布像素） */
@@ -119,4 +119,35 @@ export function layoutFromSpans(objects: readonly SpanObject[], spans: Readonly<
     .filter(o => !!spans[o.id])
     .map(o => ({ id: o.id, name: o.name, tris: spanTriangles(spans[o.id]) }));
   return buildLedLayout(inputs, canvas);
+}
+
+/**
+ * 一個物件裡有好幾塊 LED（螢幕代號 o:物件id~mesh名稱）時，整張畫布的測試圖也要一塊一塊各自畫：
+ * 把這個物件那一個整體的格子，換成每塊 LED 各自一格（自己的外框顏色、名稱、x y w h、角落座標），
+ * 這樣每塊取出來的圖是完整的一張，不是物件那張圖被切開。沒有被拆的物件原封不動；沒有任何物件被拆 = 原樣回傳。
+ * 顏色照換完以後的順序重新分。
+ */
+export function splitLayoutByScreens(layout: LedLayout, defs: readonly ScreenDef[]): LedLayout {
+  const partsOf = new Map<string, ScreenDef[]>();
+  for (const d of defs) {
+    const k = parseScreenKey(d.key);
+    if (!k || k.kind !== 'object' || k.part === undefined) continue;
+    const list = partsOf.get(k.id);
+    if (list) list.push(d); else partsOf.set(k.id, [d]);
+  }
+  if (partsOf.size === 0) return layout;
+  let changed = false;
+  const panels: LedLayout['panels'] = [];
+  for (const p of layout.panels) {
+    const parts = partsOf.get(p.id);
+    if (!parts) { panels.push(p); continue; }
+    const made = parts
+      .map(d => layoutPanel({ id: d.key, name: d.name, tris: spanTriangles(d.src) }, layout.canvas, 0))
+      .filter((x): x is NonNullable<typeof x> => !!x);
+    if (made.length === 0) { panels.push(p); continue; }
+    changed = true;
+    panels.push(...made);
+  }
+  if (!changed) return layout;
+  return { ...layout, panels: panels.map((p, i) => ({ ...p, hue: panelHue(i), color: panelColor(i) })) };
 }

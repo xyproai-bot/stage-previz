@@ -2307,7 +2307,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       if (!mesh || !mesh.userData.fromModel) continue;
       objs.push({ id: o.id, name: o.name, order: o.order, root: mesh });
     }
-    return buildLedLayout(ledPanelInputs(objs), canvas);
+    // 一個物件裡有好幾塊 LED：測試圖每塊各自一格（各自的名稱、外框、座標）
+    return buildLedLayout(ledPanelInputs(objs, (o) => {
+      if (ledObjectParts(o.root).length < 2) return null;
+      return ledScreenParts(o.root, o.root.name || 'LED');
+    }), canvas);
   }, []);
   // 哪些 LED（名字 / 順序）：變了才重畫測試圖
   const ledObjectsKey = stageObjects
@@ -2319,11 +2323,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     if (!ledUvPreview) return;
     const applied = applyUvPreview(ledUvPreview, (id) => meshesRef.current.get(id));
     ledSpanCacheRef.current = new WeakMap();
+    ledPartCacheRef.current = new WeakMap();
     emitterCacheRef.current = new WeakMap();
     if (applied.missing.length > 0) console.warn('[StageScene] LED UV 預覽對不上這些物件，沒換：', applied.missing);
     return () => {
       applied.restore();
       ledSpanCacheRef.current = new WeakMap();
+      ledPartCacheRef.current = new WeakMap();
       emitterCacheRef.current = new WeakMap();
     };
   }, [ledUvPreview, modelVersion]);

@@ -35,9 +35,22 @@ export interface LedSceneObject {
   root: THREE.Object3D;
 }
 
-/** 依物件順序整理成 ledMap 的輸入（同一個順序 → 每次顏色都一樣） */
-export function ledPanelInputs(objects: readonly LedSceneObject[]): LedPanelInput[] {
-  return [...objects]
-    .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
-    .map(o => ({ id: o.id, name: o.name, tris: collectUvTriangles(o.root) }));
+/**
+ * 依物件順序整理成 ledMap 的輸入（同一個順序 → 每次顏色都一樣）。
+ * partsOf：物件裡有好幾塊 LED 時回傳每塊（名稱 + mesh），這個物件就換成每塊各自一格（各自的名稱、外框、座標）；回 null / 空 = 整個物件一格（跟以前一樣）
+ */
+export function ledPanelInputs(
+  objects: readonly LedSceneObject[],
+  partsOf?: (obj: LedSceneObject) => readonly { name: string; meshes: THREE.Mesh[] }[] | null,
+): LedPanelInput[] {
+  const out: LedPanelInput[] = [];
+  for (const o of [...objects].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))) {
+    const parts = partsOf?.(o);
+    if (parts && parts.length >= 2) {
+      for (const p of parts) out.push({ id: `${o.id}~${p.name}`, name: p.name, tris: collectUvTriangles(o.root, new Set(p.meshes)) });
+    } else {
+      out.push({ id: o.id, name: o.name, tris: collectUvTriangles(o.root) });
+    }
+  }
+  return out;
 }

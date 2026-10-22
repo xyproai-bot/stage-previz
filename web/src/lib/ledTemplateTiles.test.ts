@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LedTemplatePlan, ScreenDef } from './ledTemplate';
+import { splitLayoutByScreens } from './ledTemplateContent';
 import { buildAeTilesScript, layoutFromDefs, tileFileNames, tilesOf, tilesToCsv, tilesZipFileName } from './ledTemplateTiles';
 import { buildZip, crc32 } from './zipStore';
 import { es3Violations } from '../test/es3Lint';
@@ -161,5 +162,35 @@ describe('下載的圖不再有說明框', () => {
     const src = readFileSync(new URL('./ledTemplateDraw.ts', import.meta.url), 'utf-8');
     expect(src).not.toContain('不要一起輸出');
     expect(src).not.toContain('drawGuideLegend');
+  });
+});
+
+describe('一個物件裡好幾塊 LED：每塊各自一張完整測試圖', () => {
+  const canvas = { width: 8800, height: 2000 };
+  const sp = (us: number, ul: number, vs: number, vl: number) => ({ us, ul, vs, vl });
+  const mk = (key: string, name: string, src: ReturnType<typeof sp>): ScreenDef =>
+    ({ key, objectId: 'x', name, manual: false, uv: null, src, nativeW: Math.round(src.ul * 8800), nativeH: Math.round(src.vl * 2000) });
+  const PARTS: ScreenDef[] = [
+    mk('o:x~曲線升降-3_L', '曲線升降-3_L', sp(0.1, 0.05, 0.2, 0.3)),
+    mk('o:x~曲線升降-3_R', '曲線升降-3_R', sp(0.45, 0.05, 0.2, 0.3)),
+    mk('o:x~曲線升降-3_正面', '曲線升降-3_正面', sp(0.15, 0.3, 0.2, 0.1)),
+  ];
+  // 模擬 3D 排出來的「一個物件一格」（格子 id = 物件 id）
+  const objLayout = (() => {
+    const l = layoutFromDefs([mk('x', '曲線升降-3', sp(0.1, 0.4, 0.2, 0.3)), mk('y', '別的LED', sp(0.6, 0.1, 0, 0.2))], canvas);
+    return { ...l, panels: l.panels.map(p => ({ ...p })) };
+  })();
+
+  it('整個物件一格 -> 換成每塊各自一格，名稱和範圍都是自己的', () => {
+    const out = splitLayoutByScreens(objLayout, PARTS);
+    expect(out.panels.map(p => p.name)).toEqual(['曲線升降-3_L', '曲線升降-3_R', '曲線升降-3_正面', '別的LED']);
+    const l = out.panels[0].rect, f = out.panels[2].rect;
+    expect(l.w).toBeCloseTo(0.05 * 8800); expect(l.h).toBeCloseTo(0.3 * 2000);
+    expect(f.w).toBeCloseTo(0.3 * 8800); expect(f.h).toBeCloseTo(0.1 * 2000);
+    expect(new Set(out.panels.map(p => p.color)).size).toBe(4);
+  });
+  it('沒有拆的物件、舊代號 o:物件id：原樣回傳', () => {
+    expect(splitLayoutByScreens(objLayout, [mk('o:x', '曲線升降-3', sp(0.1, 0.4, 0.2, 0.3))])).toBe(objLayout);
+    expect(splitLayoutByScreens(objLayout, DEFS)).toBe(objLayout);
   });
 });
