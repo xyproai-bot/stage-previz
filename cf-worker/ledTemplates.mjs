@@ -12,6 +12,7 @@ import {
   FULL_TEMPLATE_NAME, MAX_SCREENS_PER_OBJECT, TEMPLATE_VERSION,
 } from '../web/src/lib/ledTemplate.ts';
 import { normalizeLedCanvas } from '../web/src/lib/ledCanvas.ts';
+import { parseCabinet } from '../web/src/lib/ledCabinet.ts';
 import {
   buildTimeline, canvasMismatch, checkTimeline, normalizeTimelineInput, parseTimeline, serializeTimeline, MAX_SWITCHES,
 } from '../web/src/lib/ledTemplateTimeline.ts';
@@ -63,6 +64,11 @@ export async function loadManualScreens(env, projectId) {
   return (r.results || []).map(manualRowToApi);
 }
 
+/** 資料庫的箱體大小兩欄 → { w, h }；任何一欄是空的 = 沒設（null） */
+function cabinetOf(w, h) {
+  return Number.isInteger(w) && Number.isInteger(h) ? { w, h } : null;
+}
+
 /** 版型一列 + 它的放法 → plan（和快照同一個格式）。「全部」沒有放法，畫布跟著專案 */
 export function rowToPlan(row, placementRows, manuals, fullCanvas) {
   const isFull = row.kind === 'full';
@@ -71,6 +77,7 @@ export function rowToPlan(row, placementRows, manuals, fullCanvas) {
       key: p.screen_key,
       dest: { x: p.dest_x, y: p.dest_y, w: p.dest_w, h: p.dest_h },
       rotate: p.rotate, flipH: !!p.flip_h, flipV: !!p.flip_v,
+      cabinet: cabinetOf(p.cabinet_w, p.cabinet_h),
     })),
     manuals,
   );
@@ -80,6 +87,7 @@ export function rowToPlan(row, placementRows, manuals, fullCanvas) {
     name: row.name,
     canvas: isFull ? fullCanvas : { width: row.canvas_w, height: row.canvas_h },
     scalePct: row.scale_pct ?? 100,
+    ...(cabinetOf(row.cabinet_w, row.cabinet_h) ? { cabinet: cabinetOf(row.cabinet_w, row.cabinet_h) } : {}),
     screens,
   };
 }
@@ -167,8 +175,8 @@ async function checkScreenKeys(env, projectId, inputs) {
 
 function placementStatement(env, templateId, p) {
   return env.DB.prepare(
-    `INSERT INTO led_template_screens (template_id, screen_key, dest_x, dest_y, dest_w, dest_h, rotate, flip_h, flip_v) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-  ).bind(templateId, p.key, p.dest.x, p.dest.y, p.dest.w, p.dest.h, p.rotate, p.flipH ? 1 : 0, p.flipV ? 1 : 0);
+    `INSERT INTO led_template_screens (template_id, screen_key, dest_x, dest_y, dest_w, dest_h, rotate, flip_h, flip_v, cabinet_w, cabinet_h) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  ).bind(templateId, p.key, p.dest.x, p.dest.y, p.dest.w, p.dest.h, p.rotate, p.flipH ? 1 : 0, p.flipV ? 1 : 0, p.cabinet?.w ?? null, p.cabinet?.h ?? null);
 }
 
 const nameTakenMessage = (name) => `已經有一個叫「${name}」的版型了，請換一個名字`;
@@ -192,8 +200,8 @@ export async function createTemplate(request, env, ctx, log) {
   try {
     await env.DB.batch([
       env.DB.prepare(
-        `INSERT INTO led_templates (id, project_id, name, kind, canvas_w, canvas_h, scale_pct, sort_order, created_by, created_at, updated_at) VALUES (?, ?, ?, 'custom', ?, ?, ?, ?, ?, ?, ?)`
-      ).bind(id, projectId, v.name, v.canvas.width, v.canvas.height, v.scalePct, sort, me?.id ?? null, t, t),
+        `INSERT INTO led_templates (id, project_id, name, kind, canvas_w, canvas_h, scale_pct, sort_order, created_by, created_at, updated_at, cabinet_w, cabinet_h) VALUES (?, ?, ?, 'custom', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).bind(id, projectId, v.name, v.canvas.width, v.canvas.height, v.scalePct, sort, me?.id ?? null, t, t, v.cabinet?.w ?? null, v.cabinet?.h ?? null),
       ...v.screens.map(p => placementStatement(env, id, p)),
     ]);
   } catch (e) {
@@ -214,7 +222,7 @@ export async function updateTemplate(request, env, ctx, templateId, log) {
   const parsed = normalizeTemplateInput(body, { partial: true });
   if (!parsed.ok) return bad(parsed.error);
   const v = parsed.value;
-  if (!('name' in v) && !v.canvas && v.scalePct === undefined && !v.screens) return bad('沒有可以修改的欄位');
+  if (!('name' in v) && !v.canvas && v.scalePct === undefined && !('cabinet' in v) && !v.screens) return bad('沒有可以修改的欄位');
   if (v.screens) {
     const problem = await checkScreenKeys(env, projectId, v.screens);
     if (problem) return bad(problem);
@@ -228,6 +236,7 @@ export async function updateTemplate(request, env, ctx, templateId, log) {
   if (v.name !== undefined) { sets.push('name = ?'); vals.push(v.name); }
   if (v.canvas) { sets.push('canvas_w = ?', 'canvas_h = ?'); vals.push(v.canvas.width, v.canvas.height); }
   if (v.scalePct !== undefined) { sets.push('scale_pct = ?'); vals.push(v.scalePct); }
+  if ('cabinet' in v) { sets.push('cabinet_w = ?', 'cabinet_h = ?'); vals.push(v.cabinet?.w ?? null, v.cabinet?.h ?? null); }
   sets.push('updated_at = ?'); vals.push(nowIso());
   vals.push(templateId, projectId);
   try {
@@ -554,9 +563,9 @@ async function timelineSnapshotText(env, projectId, songId, startPlan, plansCach
 /** 匯出檔的內容（資料庫原樣的列；「全部」不用匯：新專案自己會有） */
 export async function exportTemplates(env, projectId) {
   const [t, p, s] = await env.DB.batch([
-    env.DB.prepare(`SELECT id, name, canvas_w, canvas_h, scale_pct, sort_order FROM led_templates WHERE project_id = ? AND kind = 'custom' ORDER BY sort_order ASC`).bind(projectId),
+    env.DB.prepare(`SELECT id, name, canvas_w, canvas_h, scale_pct, sort_order, cabinet_w, cabinet_h FROM led_templates WHERE project_id = ? AND kind = 'custom' ORDER BY sort_order ASC`).bind(projectId),
     env.DB.prepare(
-      `SELECT lts.template_id, lts.screen_key, lts.dest_x, lts.dest_y, lts.dest_w, lts.dest_h, lts.rotate, lts.flip_h, lts.flip_v
+      `SELECT lts.template_id, lts.screen_key, lts.dest_x, lts.dest_y, lts.dest_w, lts.dest_h, lts.rotate, lts.flip_h, lts.flip_v, lts.cabinet_w, lts.cabinet_h
          FROM led_template_screens lts JOIN led_templates lt ON lt.id = lts.template_id WHERE lt.project_id = ? AND lt.kind = 'custom' ORDER BY lts.rowid ASC`
     ).bind(projectId),
     env.DB.prepare(`SELECT id, object_id, name, u0, v0, u1, v1, sort_order FROM led_screens WHERE project_id = ? ORDER BY sort_order ASC`).bind(projectId),
@@ -566,6 +575,12 @@ export async function exportTemplates(env, projectId) {
        JOIN songs s ON s.id = sw.song_id WHERE s.project_id = ? ORDER BY sw.sort_order ASC`
   ).bind(projectId).all();
   return { ledTemplates: t.results || [], ledTemplateScreens: p.results || [], ledScreens: s.results || [], songTemplateSwitches: sw.results || [] };
+}
+
+/** 匯出檔的一列 → [cabinet_w, cabinet_h]（舊的匯出檔沒有這兩欄、或不合規格 = 兩個都 null） */
+function importCabinet(row) {
+  const c = parseCabinet({ w: row?.cabinet_w, h: row?.cabinet_h });
+  return c ? [c.w, c.h] : [null, null];
 }
 
 /**
@@ -608,8 +623,8 @@ export async function importTemplates(env, projectId, data, objIdMap, songTempla
     const id = newId('lt_') + n++;
     tplIdMap.set(t.id, id);
     stmts.push(env.DB.prepare(
-      `INSERT INTO led_templates (id, project_id, name, kind, canvas_w, canvas_h, scale_pct, sort_order) VALUES (?, ?, ?, 'custom', ?, ?, ?, ?)`
-    ).bind(id, projectId, name, canvas.width, canvas.height, Number(t.scale_pct) >= 1 && Number(t.scale_pct) <= 400 ? Number(t.scale_pct) : 100, Number(t.sort_order) || n));
+      `INSERT INTO led_templates (id, project_id, name, kind, canvas_w, canvas_h, scale_pct, sort_order, cabinet_w, cabinet_h) VALUES (?, ?, ?, 'custom', ?, ?, ?, ?, ?, ?)`
+    ).bind(id, projectId, name, canvas.width, canvas.height, Number(t.scale_pct) >= 1 && Number(t.scale_pct) <= 400 ? Number(t.scale_pct) : 100, Number(t.sort_order) || n, ...importCabinet(t)));
     for (const p of (placementsByTpl.get(t.id) || [])) {
       const k = parseScreenKey(p.screen_key);
       if (!k) continue;
@@ -617,9 +632,9 @@ export async function importTemplates(env, projectId, data, objIdMap, songTempla
       if (k.kind === 'object') { const o = objIdMap.get(k.id); if (!o) continue; key = 'o:' + o + (k.part !== undefined ? '~' + k.part : ''); }
       else { const sid = screenIdMap.get(k.id); if (!sid) continue; key = 's:' + sid; }
       stmts.push(env.DB.prepare(
-        `INSERT OR IGNORE INTO led_template_screens (template_id, screen_key, dest_x, dest_y, dest_w, dest_h, rotate, flip_h, flip_v) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO led_template_screens (template_id, screen_key, dest_x, dest_y, dest_w, dest_h, rotate, flip_h, flip_v, cabinet_w, cabinet_h) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).bind(id, key, p.dest_x | 0, p.dest_y | 0, Math.max(1, p.dest_w | 0), Math.max(1, p.dest_h | 0),
-        [0, 90, 180, 270].includes(Number(p.rotate)) ? Number(p.rotate) : 0, p.flip_h ? 1 : 0, p.flip_v ? 1 : 0));
+        [0, 90, 180, 270].includes(Number(p.rotate)) ? Number(p.rotate) : 0, p.flip_h ? 1 : 0, p.flip_v ? 1 : 0, ...importCabinet(p)));
     }
   }
   // 每首歌中途換版型的點（歌、Cue、版型都換成新的 id；Cue 對不到的改成純時間；版型 / 歌對不到的略過）

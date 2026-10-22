@@ -2,6 +2,7 @@
 // 草稿存檔時才變成後台要的格式（lib/ledTemplate.ts 的 normalizeTemplateInput 會再檢查一次）。
 
 import type { CanvasSize } from './ledMap';
+import { cabinetsEqual, type Cabinet } from './ledCabinet';
 import {
   defaultDestSize, placementsFromInputs,
   type LedTemplatePlan, type ManualScreen, type PlacementInput, type Rotation, type ScreenDef,
@@ -16,13 +17,16 @@ export interface Draft {
   width: number;
   height: number;
   scalePct: number;
+  /** 整個版型預設的 LED 箱體大小（測試圖網格一格）；沒有 / null = 128 × 128 */
+  cabinet?: Cabinet | null;
   items: PlacementInput[];
 }
 
 export function draftFromTemplate(t: LedTemplate): Draft {
   return {
     id: t.id, name: t.name, width: t.canvas.width, height: t.canvas.height, scalePct: t.scalePct,
-    items: t.screens.map(p => ({ key: p.key, dest: { ...p.dest }, rotate: p.rotate, flipH: p.flipH, flipV: p.flipV })),
+    ...(t.cabinet ? { cabinet: { ...t.cabinet } } : {}),
+    items: t.screens.map(p => ({ key: p.key, dest: { ...p.dest }, rotate: p.rotate, flipH: p.flipH, flipV: p.flipV, ...(p.cabinet ? { cabinet: { ...p.cabinet } } : {}) })),
   };
 }
 
@@ -32,13 +36,14 @@ export function emptyDraft(name: string, canvas: CanvasSize): Draft {
 
 /** 草稿的內容指紋（有沒有改過、要不要重新帶入） */
 export function draftSignature(d: Draft): string {
-  return JSON.stringify([d.id, d.name, d.width, d.height, d.scalePct, d.items.map(i => [i.key, i.dest.x, i.dest.y, i.dest.w, i.dest.h, i.rotate, i.flipH, i.flipV])]);
+  return JSON.stringify([d.id, d.name, d.width, d.height, d.scalePct, d.cabinet ?? null, d.items.map(i => [i.key, i.dest.x, i.dest.y, i.dest.w, i.dest.h, i.rotate, i.flipH, i.flipV, i.cabinet ?? null])]);
 }
 
 /** 草稿 → plan（畫面上算提醒、貼到 3D 用）；items 裡有 key 的才算 */
 export function draftToPlan(d: Draft, manuals: readonly ManualScreen[]): LedTemplatePlan {
   return {
     v: 1, id: d.id, name: d.name, canvas: { width: d.width, height: d.height }, scalePct: d.scalePct,
+    ...(d.cabinet ? { cabinet: d.cabinet } : {}),
     screens: placementsFromInputs(d.items, manuals),
   };
 }
@@ -49,7 +54,8 @@ export function draftToBody(d: Draft, validKeys: ReadonlySet<string>): TemplateB
     name: d.name,
     canvas: { width: d.width, height: d.height },
     scalePct: d.scalePct,
-    screens: d.items.filter(i => validKeys.has(i.key)).map(i => ({ key: i.key, dest: { ...i.dest }, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV })),
+    cabinet: d.cabinet ?? null,
+    screens: d.items.filter(i => validKeys.has(i.key)).map(i => ({ key: i.key, dest: { ...i.dest }, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV, ...(i.cabinet ? { cabinet: { ...i.cabinet } } : {}) })),
   };
 }
 
@@ -66,7 +72,7 @@ export function removeScreenFromDraft(d: Draft, key: string): Draft {
 }
 
 /** 對一塊螢幕的修改（只改有給的欄位） */
-export type ItemPatch = Partial<Pick<PlacementInput, 'dest' | 'rotate' | 'flipH' | 'flipV'>>;
+export type ItemPatch = Partial<Pick<PlacementInput, 'dest' | 'rotate' | 'flipH' | 'flipV' | 'cabinet'>>;
 export interface ItemPatchEntry { key: string; patch: ItemPatch }
 
 const sameRect = (a: PlacementInput['dest'], b: PlacementInput['dest']) => a.x === b.x && a.y === b.y && a.w === b.w && a.h === b.h;
@@ -84,10 +90,23 @@ export function patchDraftItems(d: Draft, patches: readonly ItemPatchEntry[]): D
     const patch = byKey.get(i.key);
     if (!patch) return i;
     const next = { ...i, ...patch };
-    const same = sameRect(next.dest, i.dest) && next.rotate === i.rotate && next.flipH === i.flipH && next.flipV === i.flipV;
+    const same = sameRect(next.dest, i.dest) && next.rotate === i.rotate && next.flipH === i.flipH && next.flipV === i.flipV && cabinetsEqual(next.cabinet, i.cabinet);
     if (same) return i;
     changed = true;
     return next;
+  });
+  return changed ? { ...d, items } : d;
+}
+
+/** 一次把好幾塊螢幕的箱體大小設成同一個（null = 回到版型預設）：一個新草稿 = 復原一步 */
+export function setItemsCabinet(d: Draft, keys: Iterable<string>, cabinet: Cabinet | null): Draft {
+  const set = new Set(keys);
+  let changed = false;
+  const items = d.items.map(i => {
+    if (!set.has(i.key) || cabinetsEqual(i.cabinet, cabinet)) return i;
+    changed = true;
+    const { cabinet: _old, ...rest } = i;
+    return cabinet ? { ...rest, cabinet: { ...cabinet } } : rest;
   });
   return changed ? { ...d, items } : d;
 }

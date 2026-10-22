@@ -5,6 +5,7 @@ import {
   exportScales, groupSameRect, largestPiece, legendLines, pickLegendCorner, rectText, wrapOffsets,
   type CanvasSize, type LedLayout, type LedMapMeta, type LedPanelLayout, type PixelRect,
 } from './ledMap';
+import { DEFAULT_CABINET, gridPositions, type Cabinet } from './ledCabinet';
 
 const FONT = '"Noto Sans TC", "PingFang TC", "Microsoft JhengHei", "Heiti TC", "Segoe UI", system-ui, sans-serif';
 const MONO = '"JetBrains Mono", Consolas, "SF Mono", Menlo, monospace';
@@ -55,6 +56,13 @@ function gridLines(ctx: CanvasRenderingContext2D, r: PixelRect, step: number, sk
     ctx.moveTo(r.x, y); ctx.lineTo(r.x + r.w, y);
   }
   ctx.stroke();
+}
+
+/** 箱體格線的路徑（從 r 的左上角每 cabinet 一條，只畫在裡面）；呼叫的人自己設顏色、粗細再 stroke */
+export function cabinetGridPath(ctx: CanvasRenderingContext2D, r: PixelRect, cabinet: Cabinet) {
+  ctx.beginPath();
+  for (const gx of gridPositions(r.w, cabinet.w)) { ctx.moveTo(r.x + gx, r.y); ctx.lineTo(r.x + gx, r.y + r.h); }
+  for (const gy of gridPositions(r.h, cabinet.h)) { ctx.moveTo(r.x, r.y + gy); ctx.lineTo(r.x + r.w, r.y + gy); }
 }
 
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -347,13 +355,11 @@ function drawPanelPattern(ctx: CanvasRenderingContext2D, p: LedPanelLayout, name
   ctx.fillStyle = `hsl(${hue}, 34%, 13%)`;
   ctx.fillRect(x, y, w, h);
 
-  // 格線：每 100 px，每 500 px 粗一點（對齊畫布原點，跟對位圖同一套）
-  ctx.strokeStyle = 'rgba(255,255,255,0.20)';
-  ctx.lineWidth = Math.max(1.2 * px, 1.5);
-  gridLines(ctx, p.rect, 100, 500);
-  ctx.strokeStyle = 'rgba(255,255,255,0.38)';
-  ctx.lineWidth = Math.max(1.8 * px, 2.5);
-  gridLines(ctx, p.rect, 500);
+  // 格線：一格 = 一片 LED 箱體（預設 128 × 128 像素），從這塊的左上角開始；一種粗細、一種顏色。不足一格的邊緣照實畫出來
+  ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+  ctx.lineWidth = Math.max(1.5 * px, 2);
+  cabinetGridPath(ctx, p.rect, p.cabinet ?? DEFAULT_CABINET);
+  ctx.stroke();
 
   // 中心：整條十字 + 圓 + 中間粗的十字
   ctx.strokeStyle = 'rgba(217,217,217,0.55)';

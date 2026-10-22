@@ -41,6 +41,8 @@ export interface LedPanelLayout {
   /** 三角形面積加起來 / 外框面積（≈1 = 長方形；小很多 = 不是長方形，外框只是包住它） */
   coverage: number;
   triCount: number;
+  /** 測試圖網格一格 = 一片 LED 箱體的大小（真實點數）；沒有 = 128 × 128。版型有設的時候由 lib/ledTemplateCabinet.ts 填上 */
+  cabinet?: { w: number; h: number };
 }
 
 export interface LedLayout {

@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { D1Sqlite, applyMigrations, freshDb } from './testing/d1-sqlite.mjs';
 import { memoryR2 } from './testing/r2-memory.mjs';
 import worker from './worker.js';
-import { stampVideoTemplates, ensureFullTemplate, exportTemplates, importTemplates } from './ledTemplates.mjs';
+import { stampVideoTemplates, ensureFullTemplate, exportTemplates, importTemplates, templatePlanForSnapshot } from './ledTemplates.mjs';
 
 const BASE = 'https://proxy.test';
 const P = '/api/projects/p1';
@@ -426,4 +426,68 @@ test('物件裡有好幾塊 LED mesh：每塊一個螢幕（o:<物件 id>~<mesh 
   const newObjs = Object.fromEntries((await db.prepare(`SELECT id, mesh_name FROM stage_objects WHERE project_id = ?`).bind(np).all()).results.map(o => [o.mesh_name, o.id]));
   const copy = (await call('u_admin', 'GET', `/api/projects/${np}/led-templates`)).data.templates.find(x => x.kind === 'custom');
   assert.deepEqual(copy.screens.map(x => [x.key, x.objectId]), [[`o:${newObjs.LED_A}~升降_左側`, newObjs.LED_A]]);
+});
+
+test('LED 箱體大小（0043）：舊資料沒有 = 預設；版型和每塊螢幕可以設、改、清掉；亂填 400；快照和複製專案帶著；舊版 INSERT 照樣寫得進去', async () => {
+  // migration：舊的版型 / 放法沒有這兩欄，加完以後是 NULL；欄位的 CHECK 擋壞值
+  const old = new D1Sqlite();
+  applyMigrations(old, { before: '0043' });
+  await old.batch([
+    old.prepare(`INSERT INTO projects (id, name) VALUES ('p', 'P')`),
+    old.prepare(`INSERT INTO led_templates (id, project_id, name, canvas_w, canvas_h) VALUES ('t1', 'p', 'A', 100, 100)`),
+    old.prepare(`INSERT INTO led_template_screens (template_id, screen_key, dest_x, dest_y, dest_w, dest_h) VALUES ('t1', 'o:a', 0, 0, 10, 10)`),
+  ]);
+  applyMigrations(old, { only: '0043' });
+  const row = await old.prepare(`SELECT cabinet_w, cabinet_h FROM led_templates WHERE id = 't1'`).first();
+  assert.deepEqual([row.cabinet_w, row.cabinet_h], [null, null]);
+  const prow = await old.prepare(`SELECT cabinet_w, cabinet_h FROM led_template_screens`).first();
+  assert.deepEqual([prow.cabinet_w, prow.cabinet_h], [null, null]);
+  await assert.rejects(old.prepare(`UPDATE led_templates SET cabinet_w = 8 WHERE id = 't1'`).run(), /CHECK/);
+  await old.prepare(`INSERT INTO led_templates (id, project_id, name, canvas_w, canvas_h) VALUES ('t2', 'p', 'B', 100, 100)`).run();   // 舊版後台的 INSERT
+
+  const { env, call } = await setup();
+  // 不設 = 沒有 cabinet 欄位（跟以前的回應一樣）
+  const plain = (await call('u_admin', 'POST', `${P}/led-templates`, MID)).data.template;
+  assert.equal('cabinet' in plain, false);
+  assert.equal('cabinet' in plain.screens[0], false);
+  // 建立時就設：版型預設 + 這塊自己
+  const made = await call('u_admin', 'POST', `${P}/led-templates`, {
+    ...MID, name: '有箱體', cabinet: { w: 256, h: 128 },
+    screens: [{ ...MID.screens[0], cabinet: { w: 128, h: 256 } }, { key: 'o:ob', dest: { x: 0, y: 0, w: 100, h: 100 } }],
+  });
+  assert.equal(made.status, 201);
+  const t = made.data.template;
+  assert.deepEqual(t.cabinet, { w: 256, h: 128 });
+  assert.deepEqual(t.screens[0].cabinet, { w: 128, h: 256 });
+  assert.equal('cabinet' in t.screens[1], false);
+  // 改：只改版型預設，放法不動；null = 清掉
+  const url = `${P}/led-templates/${t.id}`;
+  const p1 = await call('u_admin', 'PATCH', url, { cabinet: { w: 512, h: 128 } });
+  assert.deepEqual(p1.data.template.cabinet, { w: 512, h: 128 });
+  assert.deepEqual(p1.data.template.screens[0].cabinet, { w: 128, h: 256 });
+  const p2 = await call('u_admin', 'PATCH', url, { cabinet: null });
+  assert.equal(p2.status, 200);
+  assert.equal('cabinet' in p2.data.template, false);
+  // 整個換放法：每塊的箱體跟著新的放法
+  const p3 = await call('u_admin', 'PATCH', url, { screens: [{ key: 'o:oa', dest: { x: 0, y: 0, w: 10, h: 10 }, cabinet: { w: 64, h: 64 } }] });
+  assert.deepEqual(p3.data.template.screens[0].cabinet, { w: 64, h: 64 });
+  // 亂填 400
+  for (const bad of [{ w: 3, h: 128 }, { w: 256 }, { w: 1.5, h: 128 }, { w: 99999, h: 128 }, 'big']) {
+    assert.equal((await call('u_admin', 'PATCH', url, { cabinet: bad })).status, 400, JSON.stringify(bad));
+  }
+  assert.equal((await call('u_admin', 'PATCH', url, { screens: [{ key: 'o:oa', dest: { x: 0, y: 0, w: 10, h: 10 }, cabinet: { w: 0, h: 0 } }] })).status, 400);
+  // 導演不能改
+  assert.equal((await call('u_dir', 'PATCH', url, { cabinet: { w: 128, h: 128 } })).status, 403);
+  // 影片版本的快照帶著
+  const plan = await templatePlanForSnapshot(env, 'p1', t.id);
+  assert.deepEqual(plan.screens[0].cabinet, { w: 64, h: 64 });
+  // 複製專案帶著
+  await call('u_admin', 'PATCH', url, { cabinet: { w: 256, h: 128 } });
+  const dup = await call('u_admin', 'POST', `${P}/duplicate`, { newName: '複本' });
+  const list = (await call('u_admin', 'GET', `/api/projects/${dup.data.id}/led-templates`)).data;
+  const copy = list.templates.find(x => x.name === '有箱體');
+  assert.deepEqual(copy.cabinet, { w: 256, h: 128 });
+  assert.deepEqual(copy.screens[0].cabinet, { w: 64, h: 64 });
+  const plainCopy = list.templates.find(x => x.name === '中間底幕');
+  assert.equal('cabinet' in plainCopy, false);
 });

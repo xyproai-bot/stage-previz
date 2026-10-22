@@ -2,7 +2,7 @@
 // 排版的數字在 lib/ledTemplatePattern.ts（純函式，有單元測試），這裡只負責畫。
 
 import { exportScales, type CanvasSize, type LedLayout } from './ledMap';
-import { drawTestPattern } from './ledMapDraw';
+import { cabinetGridPath, drawTestPattern } from './ledMapDraw';
 import type { LedTemplatePlan, ScreenDef, SrcSpan } from './ledTemplate';
 import { contentPieces } from './ledTemplateContent';
 import { guideLayout, layoutPattern, type Matrix6, type PatternItem } from './ledTemplatePattern';
@@ -78,20 +78,11 @@ export function drawTemplatePattern(ctx: CanvasRenderingContext2D, canvas: Canva
     ctx.fillStyle = `hsl(${it.hue.toFixed(1)}, 55%, 27%)`;
     ctx.fillRect(0, 0, lw, lh);
 
-    // 像素格：真實點數（每 step 個 LED 一條線，每 5 條粗一點）
-    const step = lw >= 1600 ? 100 : lw >= 400 ? 50 : 10;
-    const gridPath = (every: number, skip: number) => {
-      ctx.beginPath();
-      for (let gx = every; gx < lw; gx += every) { if (skip && gx % skip === 0) continue; ctx.moveTo(gx, 0); ctx.lineTo(gx, lh); }
-      for (let gy = every; gy < lh; gy += every) { if (skip && gy % skip === 0) continue; ctx.moveTo(0, gy); ctx.lineTo(lw, gy); }
-      ctx.stroke();
-    };
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
-    ctx.lineWidth = line(1.4);
-    gridPath(step, step * 5);
-    ctx.strokeStyle = 'rgba(255,255,255,0.45)';
-    ctx.lineWidth = line(2.2);
-    gridPath(step * 5, 0);
+    // 格線：一格 = 一片 LED 箱體（本地座標 = 真實點數，從這塊的左上角開始；一種粗細、一種顏色）
+    ctx.strokeStyle = 'rgba(255,255,255,0.30)';
+    ctx.lineWidth = line(1.8);
+    cabinetGridPath(ctx, { x: 0, y: 0, w: lw, h: lh }, it.cabinet);
+    ctx.stroke();
 
     // 邊框
     const bw = Math.max(m * 0.014, line(3));

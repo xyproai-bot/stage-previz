@@ -7,6 +7,7 @@ import { apiBase, getSessionToken } from './api';
 import { saveStatus } from './saveStatus';
 import { parsePlan, type LedTemplatePlan, type ManualScreen, type PlacementInput, type UvBox } from './ledTemplate';
 import type { CanvasSize } from './ledMap';
+import type { Cabinet } from './ledCabinet';
 import { parseSwitches, type TimelineInput, type TimelineSwitch } from './ledTemplateTimeline';
 
 export interface LedTemplateApiError extends Error {
@@ -37,6 +38,8 @@ export interface TemplateBody {
   name: string;
   canvas: CanvasSize;
   scalePct: number;
+  /** 整個版型預設的 LED 箱體大小；null = 回到 128 × 128 */
+  cabinet?: Cabinet | null;
   screens: PlacementInput[];
 }
 

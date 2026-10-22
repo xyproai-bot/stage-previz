@@ -15,6 +15,7 @@
 
 import { spanToPixels, type AxisSpan, type CanvasSize, type PixelRect } from './ledMap.ts';
 import { normalizeLedCanvas } from './ledCanvas.ts';
+import { CABINET_RANGE, parseCabinet, type Cabinet } from './ledCabinet.ts';
 
 export const TEMPLATE_VERSION = 1;
 export const TEMPLATE_NAME_MAX = 40;
@@ -45,6 +46,8 @@ export interface Placement {
   rotate: Rotation;
   flipH: boolean;
   flipV: boolean;
+  /** 這塊螢幕自己的 LED 箱體大小（測試圖網格一格）；沒有 / null = 用版型的預設（再沒有 = 128 × 128） */
+  cabinet?: Cabinet | null;
 }
 
 /** 版型的完整排法（後台給的格式，也存在每一版影片裡當快照） */
@@ -55,6 +58,8 @@ export interface LedTemplatePlan {
   canvas: CanvasSize;
   /** LED 真實點數 → 這個版型的比例（100 / 50 / 自訂） */
   scalePct: number;
+  /** 整個版型預設的 LED 箱體大小（測試圖網格一格）；沒有 / null = 128 × 128 */
+  cabinet?: Cabinet | null;
   screens: Placement[];
   /**
    * 自動貼 UV 的「舊版面」快照才有：這些物件（stage_objects.id）的原本 UV 存在模型的第二組 UV（TEXCOORD_1），
@@ -94,12 +99,14 @@ export interface PlacementInput {
   rotate: Rotation;
   flipH: boolean;
   flipV: boolean;
+  cabinet?: Cabinet | null;
 }
 
 export interface TemplateInput {
   name?: string;
   canvas?: CanvasSize;
   scalePct?: number;
+  cabinet?: Cabinet | null;
   screens?: PlacementInput[];
 }
 
@@ -157,7 +164,9 @@ export function normalizePlacementInputs(raw: unknown): Parsed<PlacementInput[]>
     if (rotate === null || !ROTATIONS.includes(rotate as Rotation)) return { ok: false, error: '轉動只能是 0、90、180、270 度' };
     const flipH = flag(item.flipH), flipV = flag(item.flipV);
     if (flipH === null || flipV === null) return { ok: false, error: '翻轉格式不對' };
-    out.push({ key, dest: { x, y, w, h }, rotate: rotate as Rotation, flipH, flipV });
+    const cabinet = parseCabinet(item.cabinet);
+    if (cabinet === undefined) return { ok: false, error: `LED 箱體大小要是 ${CABINET_RANGE[0]} ~ ${CABINET_RANGE[1]} 的整數（寬 × 高）` };
+    out.push({ key, dest: { x, y, w, h }, rotate: rotate as Rotation, flipH, flipV, ...(cabinet ? { cabinet } : {}) });
   }
   return { ok: true, value: out };
 }
@@ -182,6 +191,11 @@ export function normalizeTemplateInput(body: unknown, opts: { partial: boolean }
     out.scalePct = s.value;
   } else if (!opts.partial) {
     out.scalePct = 100;
+  }
+  if ('cabinet' in body) {
+    const c = parseCabinet(body.cabinet);
+    if (c === undefined) return { ok: false, error: `LED 箱體大小要是 ${CABINET_RANGE[0]} ~ ${CABINET_RANGE[1]} 的整數（寬 × 高）` };
+    out.cabinet = c;
   }
   if ('screens' in body || !opts.partial) {
     const p = normalizePlacementInputs(body.screens === undefined ? [] : body.screens);
@@ -497,10 +511,11 @@ export function placementsFromInputs(inputs: readonly PlacementInput[], manuals:
   for (const i of inputs) {
     const k = parseScreenKey(i.key);
     if (!k) continue;
-    if (k.kind === 'object') out.push({ key: i.key, objectId: k.id, uv: null, dest: i.dest, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV });
+    const cab = i.cabinet ? { cabinet: i.cabinet } : {};
+    if (k.kind === 'object') out.push({ key: i.key, objectId: k.id, uv: null, dest: i.dest, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV, ...cab });
     else {
       const m = byId.get(k.id);
-      if (m) out.push({ key: i.key, objectId: m.objectId, uv: m.uv, dest: i.dest, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV });
+      if (m) out.push({ key: i.key, objectId: m.objectId, uv: m.uv, dest: i.dest, rotate: i.rotate, flipH: i.flipH, flipV: i.flipV, ...cab });
     }
   }
   return out;
@@ -636,9 +651,11 @@ export function parsePlan(raw: unknown): LedTemplatePlan | null {
       if (u1 > u0 && v1 > v0) uv = [u0, v0, u1, v1];
     }
     if (k.kind === 'manual' && !uv) continue;
-    screens.push({ key, objectId, uv, dest: { x, y, w, h }, rotate, flipH: s.flipH === true, flipV: s.flipV === true });
+    const cabinet = parseCabinet(s.cabinet);
+    screens.push({ key, objectId, uv, dest: { x, y, w, h }, rotate, flipH: s.flipH === true, flipV: s.flipV === true, ...(cabinet ? { cabinet } : {}) });
   }
   const scale = num(obj.scalePct);
+  const planCabinet = parseCabinet(obj.cabinet);
   const originalUv = Array.isArray(obj.originalUv)
     ? [...new Set(obj.originalUv.filter((x): x is string => typeof x === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(x)))].slice(0, MAX_PLACEMENTS)
     : [];
@@ -648,6 +665,7 @@ export function parsePlan(raw: unknown): LedTemplatePlan | null {
     name: typeof obj.name === 'string' && obj.name ? obj.name : '版型',
     canvas,
     scalePct: scale !== null && scale >= SCALE_RANGE[0] && scale <= SCALE_RANGE[1] ? scale : 100,
+    ...(planCabinet ? { cabinet: planCabinet } : {}),
     screens,
     ...(originalUv.length > 0 ? { originalUv } : {}),
   };

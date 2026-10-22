@@ -3,6 +3,8 @@ import { Copy, Download, FileBraces, FileCode, FileSpreadsheet, LayoutPanelLeft,
 import Icon from './Icon';
 import OverflowMenu from './OverflowMenu';
 import NumField from './NumField';
+import CabinetPicker from './CabinetPicker';
+import { applyCabinets, cabinetsEqual, gridCells, resolveCabinet } from '../lib/ledCabinet';
 import LedTemplateCanvas, { type PatchHow } from './LedTemplateCanvas';
 import LedSplitCanvas from './LedSplitCanvas';
 import LedTemplateLayers from './LedTemplateLayers';
@@ -17,7 +19,7 @@ import {
 } from '../lib/ledTemplate';
 import {
   addScreenToDraft, copyTemplateName, draftFromTemplate, draftSignature, draftToBody, draftToPlan, emptyDraft, nextTemplateName,
-  patchDraftItems, removeScreensFromDraft, resetItemSize, type Draft, type ItemPatch, type ItemPatchEntry,
+  patchDraftItems, removeScreensFromDraft, resetItemSize, setItemsCabinet, type Draft, type ItemPatch, type ItemPatchEntry,
 } from '../lib/ledTemplateDraft';
 import { boundsOf, centerGroupOnCanvas, clickSelect, isAdditive, moveGroupTo, movePatches, pruneSelection, scaleGroupPct, scaleGroupTo, selectionTag } from '../lib/ledTemplateSelect';
 import {
@@ -209,15 +211,22 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
   // 對位圖內容：整張畫布的測試圖（跟 3D 的 LED 沒有影片時顯示的同一張），排法 / 畫布大小換了才重畫一次，拖曳時一直用同一張
   const sceneReady = Object.keys(spans).length > 0;
   const fullW = fullCanvas?.width ?? 0, fullH = fullCanvas?.height ?? 0;
+  // 測試圖網格一格 = 一片 LED 箱體：只有箱體設定變了才重畫整張（拖曳不會）
+  const cabinetSig = JSON.stringify([draft?.cabinet ?? null, (draft?.items ?? []).map(i => i.cabinet ?? null)]);
+  const cabinetPlan = useMemo(
+    () => (draft ? { cabinet: draft.cabinet ?? null, screens: draft.items.map(i => ({ key: i.key, cabinet: i.cabinet ?? null })) } : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [cabinetSig],
+  );
   const mapLayout = useMemo(() => {
     if (!open || phone || !contentOn || !fullW || !fullH) return null;
     const canvas = { width: fullW, height: fullH };
     if (sceneReady) {
-      const lay = splitLayoutByScreens(layoutFromSpans(ledObjects, spans, canvas), screens);
+      const lay = applyCabinets(splitLayoutByScreens(layoutFromSpans(ledObjects, spans, canvas), screens), cabinetPlan);
       if (lay.panels.length > 0) return lay;
     }
-    return sceneGaveUp ? wholeCanvasLayout(canvas) : null;
-  }, [open, phone, contentOn, fullW, fullH, sceneReady, spans, ledObjects, sceneGaveUp, screens]);
+    return sceneGaveUp ? applyCabinets(wholeCanvasLayout(canvas), cabinetPlan) : null;
+  }, [open, phone, contentOn, fullW, fullH, sceneReady, spans, ledObjects, sceneGaveUp, screens, cabinetPlan]);
   const fullMap = useLedFullMap(mapLayout);
   const contentNote = fullMap.error
     ? `對位圖內容畫不出來：${fullMap.error}`
@@ -307,7 +316,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     const cur = d.items.filter(i => selSet.has(i.key));
     return patchDraftItems(d, movePatches(cur, moveGroupTo(cur.map(c => c.dest), { [axis]: n })));
   }, { tag: selectionTag(`g:${axis}`, selected) });
-  const setMeta = (p: Partial<Pick<Draft, 'name' | 'width' | 'height' | 'scalePct'>>, tag: string) => apply(d => ({ ...d, ...p }), { tag });
+  const setMeta = (p: Partial<Pick<Draft, 'name' | 'width' | 'height' | 'scalePct' | 'cabinet'>>, tag: string) => apply(d => ({ ...d, ...p }), { tag });
 
   // 切換 / 關閉前：有沒存的修改要問
   async function askDiscard(): Promise<boolean> {
@@ -437,7 +446,7 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
     try {
       const shown = { ...plan, screens: plan.screens.filter(p => defKeys.has(p.key)) };
       await new Promise(r => requestAnimationFrame(() => r(null)));
-      const { png, fileName } = await renderTemplateGuideFile(shown, screens, projectName ?? '', guideContentFor(screens, downloadMeta()));
+      const { png, fileName } = await renderTemplateGuideFile(shown, screens, projectName ?? '', guideContentFor(screens, downloadMeta(), shown));
       if (png.scale < 1) toast.warn(guideShrinkWarning(png, shown.canvas));
       else toast.success(`模板圖下載好了（${png.width}×${png.height}）`);
       downloadBlob(png.blob, fileName);
@@ -635,6 +644,9 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                   {!scaleIsChoice && <NumField value={draft.scalePct} min={1} max={400} label="比例（%）" onChange={(n) => setMeta({ scalePct: n }, 'scale')} />}
                 </span>
               </label>
+              <label>預設箱體（網格一格）
+                <CabinetPicker label="版型預設箱體" value={draft.cabinet ?? null} onChange={(c) => setMeta({ cabinet: c }, 'cabinet')} />
+              </label>
               <button className="btn btn--ghost" onClick={fitCanvas} title="畫布寬高改成剛好包住放進去的螢幕">畫布剛好包住螢幕</button>
               <span className="ledtpl-seg" role="group" aria-label="顯示哪張畫布">
                 <button className={mode === 'template' ? 'is-on' : ''} aria-pressed={mode === 'template'} onClick={() => setMode('template')}>版型畫布</button>
@@ -747,6 +759,17 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                   <label className="ledtpl-check"><input type="checkbox" checked={selItem.flipV} onChange={(e) => patchItem(selItem.key, { flipV: e.target.checked }, {})} /> 上下翻轉</label>
                 </div>
                 <div className="ledtpl-sel__row">
+                  <label>箱體（網格一格）
+                    <CabinetPicker
+                      label={`${selDef.name} 箱體`}
+                      inheritLabel={`跟版型（${resolveCabinet(null, draft.cabinet).w} × ${resolveCabinet(null, draft.cabinet).h}）`}
+                      value={selItem.cabinet ?? null}
+                      onChange={(c) => apply(d => setItemsCabinet(d, [selItem.key], c), { tag: `cab:${selItem.key}` })}
+                    />
+                  </label>
+                  <small className="muted">{(() => { const g = gridCells({ w: selDef.nativeW, h: selDef.nativeH }, resolveCabinet(selItem.cabinet, draft.cabinet)); return `${g.cols} × ${g.rows} 格`; })()}</small>
+                </div>
+                <div className="ledtpl-sel__row">
                   <button className="btn btn--ghost" onClick={() => apply(d => resetItemSize(d, selDef), {})} title="大小改回「真實點數 × 比例」">標準大小</button>
                   <button className="btn btn--ghost" onClick={() => removeScreen(selItem.key)}>從版型拿掉</button>
                 </div>
@@ -799,6 +822,17 @@ export default function LedTemplatesDialog({ open, projectId, projectName, onClo
                     ) : null;
                   })}
                 </ul>
+                <div className="ledtpl-sel__row">
+                  <label>箱體（網格一格）
+                    <CabinetPicker
+                      label="選到的螢幕箱體"
+                      inheritLabel={`跟版型（${resolveCabinet(null, draft.cabinet).w} × ${resolveCabinet(null, draft.cabinet).h}）`}
+                      value={selItems.every(i => cabinetsEqual(i.cabinet, selItems[0].cabinet)) ? (selItems[0].cabinet ?? null) : null}
+                      mixed={!selItems.every(i => cabinetsEqual(i.cabinet, selItems[0].cabinet))}
+                      onChange={(c) => apply(d => setItemsCabinet(d, selItems.map(i => i.key), c), { tag: 'cab:group' })}
+                    />
+                  </label>
+                </div>
                 <p className="muted small">畫布上方的「轉 90°」「左右翻轉」「上下翻轉」會讓每一塊各自在原地轉、翻。</p>
                 <div className="ledtpl-sel__row">
                   <button className="btn btn--ghost" onClick={() => void removeSelected(selected)}>從版型拿掉這 {selItems.length} 塊</button>

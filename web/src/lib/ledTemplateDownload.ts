@@ -14,6 +14,7 @@ import { buildAeTilesScript, layoutFromDefs, TILES_DIR, tilesOf, tilesToCsv, til
 import { buildZip, type ZipEntry } from './zipStore';
 import type { LedLayout } from './ledMap';
 import { splitLayoutByScreens } from './ledTemplateContent';
+import { applyCabinets } from './ledCabinet';
 import { guideFileName } from './ledTemplatePattern';
 import { templateTableFileName, templateTableToCsv, templateTableToJson, timelineTableFileName, timelineTableToCsv, timelineTableToJson } from './ledTemplateTable';
 import { aeTimelineScriptFileName, buildAeTimelineScript } from './aeTimelineScript';
@@ -38,12 +39,13 @@ export async function renderTemplateGuideFile(plan: LedTemplatePlan, defs: reado
 }
 
 /** 每塊螢幕畫網站上那張測試圖要的東西（整張畫布不知道大小 = null，畫舊的簡單方塊） */
-export function guideContentFor(defs: readonly ScreenDef[], meta: Pick<TemplateDownloadMeta, 'fullCanvas' | 'layout'>): GuideContent | null {
+export function guideContentFor(defs: readonly ScreenDef[], meta: Pick<TemplateDownloadMeta, 'fullCanvas' | 'layout'>, plan?: Pick<LedTemplatePlan, 'cabinet' | 'screens'> | null): GuideContent | null {
   const full = meta.fullCanvas;
   const base = meta.layout ?? (full && full.width > 0 && full.height > 0 ? layoutFromDefs(defs, full) : null);
   if (!base) return null;
   // 一個物件裡好幾塊 LED：每塊各自一格測試圖（名稱、座標、外框顏色都是自己的）
-  const layout = splitLayoutByScreens(base, defs);
+  // 網格一格 = 一片 LED 箱體（版型設的大小；沒設 = 128 × 128）
+  const layout = applyCabinets(splitLayoutByScreens(base, defs), plan);
   const byKey = new Map(defs.map(d => [d.key, d.src]));
   return { layout, spanOf: k => byKey.get(k) ?? null };
 }
@@ -55,7 +57,7 @@ export function guideContentFor(defs: readonly ScreenDef[], meta: Pick<TemplateD
 export async function downloadTemplateTilesZip(
   plan: LedTemplatePlan, defs: readonly ScreenDef[], meta: TemplateDownloadMeta, onProgress?: (done: number, total: number) => void,
 ): Promise<{ fileName: string; count: number; shrunk: boolean }> {
-  const content = guideContentFor(defs, meta);
+  const content = guideContentFor(defs, meta, plan);
   if (!content) throw new Error('還沒填這個專案的 LED 畫布大小');
   const { tiles, items } = tilesOf(plan, defs);
   const entries: ZipEntry[] = [];
@@ -131,7 +133,7 @@ export async function downloadSongTemplateFile(
   }
   try {
     if (kind === 'png') {
-      const { png, fileName } = await renderTemplateGuideFile(shown, defs, meta.projectName, guideContentFor(defs, meta));
+      const { png, fileName } = await renderTemplateGuideFile(shown, defs, meta.projectName, guideContentFor(defs, meta, shown));
       downloadBlob(png.blob, fileName);
       return png.scale < 1
         ? { level: 'warn', text: guideShrinkWarning(png, shown.canvas), duration: 8000 }
@@ -228,7 +230,7 @@ export async function downloadSongTimelineFile(
       const plans = distinctPlans(shown);
       let shrunk: string | null = null;
       for (let i = 0; i < plans.length; i++) {
-        const { png, fileName } = await renderTemplateGuideFile(plans[i].plan, defs, meta.projectName, guideContentFor(defs, meta));
+        const { png, fileName } = await renderTemplateGuideFile(plans[i].plan, defs, meta.projectName, guideContentFor(defs, meta, plans[i].plan));
         downloadBlob(png.blob, fileName);
         if (png.scale < 1 && !shrunk) shrunk = guideShrinkWarning(png, plans[i].plan.canvas);
         if (i + 1 < plans.length) await new Promise(r => setTimeout(r, 400));   // 連續下載幾個檔案，瀏覽器才不會當成一個

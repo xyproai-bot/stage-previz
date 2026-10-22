@@ -7,6 +7,7 @@
 // 座標：版型畫布像素（原點左上，y 朝下）。「本地座標」= 螢幕自己的真實點數（左上 (0,0)，寬 nativeW 高 nativeH）。
 
 import { panelColor, panelHue, safeName, type CanvasSize, type PixelRect } from './ledMap';
+import { resolveCabinet, type Cabinet } from './ledCabinet';
 import { localTransform, type LedTemplatePlan, type Rotation, type ScreenDef } from './ledTemplate';
 
 /** 2D canvas 的 transform(a, b, c, d, e, f)：x' = a·x + c·y + e，y' = b·x + d·y + f */
@@ -34,6 +35,8 @@ export interface PatternItem {
   mirrored: boolean;
   nativeText: string;
   destText: string;
+  /** 測試圖網格一格 = 一片 LED 箱體的大小（真實點數，在螢幕自己的座標裡） */
+  cabinet: Cabinet;
 }
 
 /** 螢幕的上方在版型畫布上指哪裡：本地的 (0, -1) 經過轉動、翻轉 */
@@ -65,7 +68,7 @@ export function applyMatrix(m: Matrix6, x: number, y: number): [number, number] 
 }
 
 /** 排版：版型裡每一塊螢幕一個項目（在模型裡找不到的螢幕略過）；順序照版型裡的放法 */
-export function layoutPattern(plan: Pick<LedTemplatePlan, 'screens'>, defs: readonly ScreenDef[]): PatternItem[] {
+export function layoutPattern(plan: Pick<LedTemplatePlan, 'screens'> & { cabinet?: Cabinet | null }, defs: readonly ScreenDef[]): PatternItem[] {
   const out: PatternItem[] = [];
   for (const p of plan.screens) {
     const index = defs.findIndex(d => d.key === p.key);
@@ -82,6 +85,7 @@ export function layoutPattern(plan: Pick<LedTemplatePlan, 'screens'>, defs: read
       up, upText: upText(up), mirrored: p.flipH !== p.flipV,
       nativeText: `${def.nativeW}×${def.nativeH}`,
       destText: `${p.dest.w}×${p.dest.h}`,
+      cabinet: resolveCabinet(p.cabinet, plan.cabinet),
     });
   }
   return out;
