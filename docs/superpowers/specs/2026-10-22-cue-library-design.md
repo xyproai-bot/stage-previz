@@ -20,7 +20,7 @@ In Taiwanese concert mechanism (機關) crews, a new cue is made by **"save as" 
 | D5 | **Migration bakes each old cue's fully resolved state** (including carried-forward values) into a library cue, so every song looks exactly the same. It also bakes mechanism "own vs inherited" status, so motion is identical too. Truly identical cues (same look and same name) are merged. Names are 「<歌代號> <cue 名>」; merged cues keep the shared name. |
 | D6 | **Per-project switch** `projects.cue_library` (0 = today's model, 1 = Cue 庫). Production and test share one worker and one D1, so the backend can ship at any time: legacy projects take exactly today's code paths. A duplicated test project is switched first; production projects are switched at cutover (Stage 10). Old tables are never modified, so rollback means flipping the switch back. |
 | D7 | **Console editing model.** In a Cue 庫 project, stage edits go into **「還沒存的改動」** (a programmer/draft). The primary action is **「另存成新的 cue」**. **「更新 Cue N」** writes in place: it is secondary and deliberate, and asks for confirmation when other songs use the cue. **「放棄」** throws the draft away. |
-| D8 | **Console numbering.** Each library cue has a unique decimal number per project (1, 2, 2.5, 2.75, at most 3 decimals) plus a name. 另存 suggests a number between the base and the next cue (2 → 2.5). |
+| D8 | **(REPLACED by section 10.2: free-text labels)** ~~Console numbering.~~ Each library cue has a unique decimal number per project (1, 2, 2.5, 2.75, at most 3 decimals) plus a name. 另存 suggests a number between the base and the next cue (2 → 2.5). |
 | D9 | **常用擺位 (cue templates) stay** as a cross-project palette. In a Cue 庫 project, 「套用常用擺位」 applies into the draft, and 「存成常用擺位」 saves a library cue's full look. Templates are not converted to library cues. |
 | D10 | **Deleting a library cue is blocked while any song uses it.** Removing a slot or deleting a song never deletes library cues. |
 
@@ -578,9 +578,14 @@ Stage 3 is the largest backend stage. If it runs long, split it into 3a (server)
 - **Migration script:** fixtures → SQL → apply on a fresh SQLite with all migrations → verify; idempotent re-run; `--revert`; a run on a real production export (Stage 2 and Stage 10).
 - **UX audit** (Stages 6–9) on the test project: the console flow (move things → 另存 → it appears in the song and the library), the shared-cue warning, undo after 更新, leaving with a draft, J/K in both lists, and the director / share pages unchanged.
 
-## 10. Open questions for the owner
+## 10. Owner decisions (2026-10-22) — these OVERRIDE anything above that disagrees
 
-1. 搬進 Cue 庫的 cue 要怎麼編號？
-   - (A) 全部照歌單順序 1、2、3…（建議，數字小）
-   - (B) 每首歌一段：第 3 首歌是 301、302…（一看就知道是哪首歌來的）
-2. 搬家之後，改 cue 1 不會再自動帶到後面的 cue（每個 cue 是各自的一個畫面，所以才能給很多首歌共用）。這樣可以嗎？如果常常需要「同一個物件在很多個 cue 一起改」，之後可以加一個「一起改：其他有一樣設定的 cue」。
+1. **Snapshot only, no carry-forward (confirmed).** 用戶原話：「cue 庫設定的東西就是要按照我的 cue 庫走，沒有沿用這種東西。要沿用，就是新的 cue，一種造型就是一個 cue。」 Risk 8.1 is accepted as intended. Do NOT build a 「一起改」 tool.
+2. **Cue numbers are free text the user types, not decimals.** This replaces D8, 2.4 and the `number REAL` column:
+   - Column `label TEXT NOT NULL` (instead of `number REAL`), unique per project after trim + case-insensitive compare. Any non-empty text up to 16 characters: 「12」「3-1」「301」「2.5」「A」 are all fine. Errors: 「編號不能空白」「這個編號已經有了」「編號最多 16 個字」.
+   - Sorting: natural sort (split into digit / non-digit runs, compare digit runs numerically): 1, 2, 2.5, 3, 3-1, 12, 301. Ties → creation order.
+   - `suggestLabel(existing)` = (largest leading integer among labels) + 1, as text; "1" when empty. It is only a pre-filled suggestion; the user can type anything (3-1, 301, a new last number). No between-numbers logic, no 「中間沒有空的編號」 message.
+   - In sentences: 「Cue 12「副歌全開」」 stays, using the label.
+   - Migration: number library cues 1, 2, 3… in setlist order (song order, then cue order within each song).
+3. **Songs reference library cues in any order** (e.g. Cue 17 at 0:00, then Cue 1). Slot order is by time, never by library label.
+4. **Prompt when the stage was changed.** In a song, when the user switches to another cue, another song, or leaves the editor while 「還沒存的改動」 exists, ask: 「這個 cue 動到了，要另存成新的 cue 嗎？」 with 「另存成新的 cue」(opens the dialog with editable 編號 + 名稱, pre-filled with `suggestLabel` and the base name) / 「更新 Cue X」 (with the 「會影響 N 首歌」 line when shared) / 「放棄改動」 / 「取消」. The draft bar itself stays as designed in 5.1.
