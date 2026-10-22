@@ -2,7 +2,7 @@
 // 只在 Cue 庫模式的專案出現。點一列 = 在 3D 預覽這個 cue 的畫面，不改任何歌。
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Check, Copy, Hash, Library, ListMusic, Pencil, RotateCcw, Search, Trash2, X } from 'lucide-react';
+import { Check, Copy, Hash, Library, ListMusic, Pencil, Plus, RotateCcw, Search, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
 import OverflowMenu from './OverflowMenu';
 import type { LibraryCue, LibraryCueUsage } from '../lib/cueLibraryApi';
@@ -27,6 +27,8 @@ interface Props {
   onResetAll: (lc: LibraryCue) => void;
   /** 點誰在用的連結：跳去那首歌的那個 cue */
   onJump: (songId: string, cueId: string) => void;
+  /** 加到目前選的這首歌（沒選歌 = 不給） */
+  onAddToSong?: (lc: LibraryCue) => void;
   /** 底下的「另存成新的 cue」（從目前舞台） */
   onSaveAs: () => void;
   busy: boolean;
@@ -48,7 +50,7 @@ function UsageLinks({ usage, onJump }: { usage: LibraryCueUsage; onJump: Props['
   );
 }
 
-export default function CueLibraryTab({ cues, loading, shownId, previewing, onSelect, onCopy, onRename, onRelabel, onDelete, onResetAll, onJump, onSaveAs, busy }: Props) {
+export default function CueLibraryTab({ cues, loading, shownId, previewing, onSelect, onCopy, onRename, onRelabel, onDelete, onResetAll, onJump, onAddToSong, onSaveAs, busy }: Props) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [editing, setEditing] = useState<{ id: string; field: 'name' | 'label' } | null>(null);
@@ -188,6 +190,7 @@ export default function CueLibraryTab({ cues, loading, shownId, previewing, onSe
                   label={`Cue ${lc.label} 的更多動作`}
                   align="auto"
                   items={[
+                    ...(onAddToSong ? [{ key: 'addsong', label: '加到這首歌', icon: Plus, onSelect: () => onAddToSong(lc), disabled: busy }] : []),
                     { key: 'copy', label: '另存 / 複製成新的 cue', icon: Copy, onSelect: () => onCopy(lc) },
                     { key: 'rename', label: '改名稱', icon: Pencil, onSelect: () => startEdit(lc, 'name') },
                     { key: 'relabel', label: '改編號', icon: Hash, onSelect: () => startEdit(lc, 'label') },

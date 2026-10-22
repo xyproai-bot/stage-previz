@@ -189,14 +189,17 @@ test('搬成 Cue 庫模式前後：每個 cue 的物件狀態、機關位置、�
   for (const song of SONGS.p1) {
     const b = before.p1.cues.get(song), a = after.cues.get(song);
     // cue 清單：原本的欄位一樣，多 libraryCueId / libraryCue
-    assert.deepEqual(a.cues.map(({ libraryCueId, libraryCue, ...rest }) => rest), b.cues);
+    assert.deepEqual(a.cues.map(({ libraryCueId, libraryCue, slotName, name, ...rest }) => rest), b.cues.map(({ name, ...rest }) => rest));
+    // 第 8 階段：name = Cue 庫名稱，cue 自己原本的名字放 slotName
+    a.cues.forEach((c, i) => { assert.equal(c.name, c.libraryCue.name); assert.equal(c.slotName, b.cues[i].name); });
     for (const c of a.cues) {
       const lc = libOf(c.id);
       assert.equal(c.libraryCueId, lc.id);
       assert.deepEqual(c.libraryCue, { id: lc.id, label: lc.label, name: lc.name });
     }
     // 分享連結的 cue 清單：libraryCue 只有 {label, name}
-    assert.deepEqual(a.shareCues.map(({ libraryCue, ...rest }) => rest), b.shareCues);
+    assert.deepEqual(a.shareCues.map(({ libraryCue, slotName, name, ...rest }) => rest), b.shareCues.map(({ name, ...rest }) => rest));
+    for (const c of a.shareCues) assert.equal(c.name, c.libraryCue.name);
     for (const c of a.shareCues) assert.deepEqual(c.libraryCue, { label: libOf(c.id).label, name: libOf(c.id).name });
 
     // 物件狀態：專案和分享連結，每個 cue 都一樣

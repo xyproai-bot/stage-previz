@@ -1,0 +1,28 @@
+.slot-badge { flex: none; min-width: 34px; max-width: 76px; padding: 2px 6px; border-radius: 6px; background: var(--surface-3, var(--surface-2)); border: 1px solid var(--border); font-size: 12px; font-weight: 600; text-align: center; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.add-slot-dlg { max-width: 520px; width: 95vw; }
+.add-slot-dlg__search { display: flex; align-items: center; gap: 6px; padding: 0 10px; height: 34px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); color: var(--text-dim); }
+.add-slot-dlg__search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 13px; }
+.add-slot-dlg__search:focus-within { border-color: var(--accent, #3b82f6); }
+.add-slot-dlg__list { margin-top: 8px; max-height: 240px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; border: 1px solid var(--border); border-radius: 8px; padding: 4px; }
+.add-slot-dlg__opt { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 6px; border: 1px solid transparent; background: transparent; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.add-slot-dlg__opt:hover { background: var(--surface-2); }
+.add-slot-dlg__opt.is-selected { border-color: var(--accent, #3b82f6); background: color-mix(in srgb, var(--accent, #3b82f6) 10%, transparent); }
+.add-slot-dlg__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.add-slot-dlg__use { flex: none; font-size: 11.5px; }
+.add-slot-dlg__empty { padding: 14px; text-align: center; font-size: 12.5px; }
+.add-slot-dlg__row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.add-slot-dlg__row > label:first-child { width: 72px; font-size: 13px; }
+.add-slot-dlg__row input[type='text'], .add-slot-dlg__row input:not([type]) { width: 96px; }
+.add-slot-dlg__check { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; color: var(--text-dim); }
+
+/* 這首歌的 cue 清單（Cue 庫專案） */
+.song-slots { display: flex; flex-direction: column; min-height: 0; }
+.song-slots__notice { margin: 8px 12px 0; padding: 8px 10px; border-radius: 8px; background: var(--surface-2); border: 1px solid var(--border); font-size: 12.5px; line-height: 1.6; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.song-slots__time { flex: none; min-width: 44px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--text-dim); text-align: right; }
+.song-slots__edit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 4px; }
+.song-slots__edit input { width: 84px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--accent, #3b82f6); background: var(--surface-1); color: var(--text); font: inherit; font-size: 13px; }
+.song-slots__edit input[aria-invalid='true'] { border-color: var(--danger, #e5484d); }
+.song-slots__edit .btn { display: inline-flex; align-items: center; gap: 4px; }
+.song-slots__error { flex-basis: 100%; color: var(--danger, #e5484d); font-size: 12px; }
+.song-slots__shared { margin-left: 6px; }

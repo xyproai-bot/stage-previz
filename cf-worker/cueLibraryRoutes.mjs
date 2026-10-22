@@ -75,8 +75,10 @@ export async function decorateCueList(env, songId, cues, { share = false } = {})
     const lc = r?.library_cue_id
       ? (share ? { label: r.label, name: r.lib_name } : { id: r.library_cue_id, label: r.label, name: r.lib_name })
       : null;
+    // 第 8 階段：name 改成 Cue 庫的名稱（導演頁 / 工作站 / 分享頁 / AE 標記都用 name），cue 自己原本的名字放 slotName
+    const named = lc ? { ...c, name: r.lib_name, slotName: c.name } : c;
     // 分享連結不給 Cue 庫的 id（訪客只看編號和名稱）
-    return share ? { ...c, libraryCue: lc } : { ...c, libraryCueId: r?.library_cue_id || null, libraryCue: lc };
+    return share ? { ...named, libraryCue: lc } : { ...named, libraryCueId: r?.library_cue_id || null, libraryCue: lc };
   });
 }
 

@@ -51,6 +51,9 @@ import LookDraftBar from '../components/LookDraftBar';
 import CueLibraryTab from '../components/CueLibraryTab';
 import { deleteBlockedText, sortLibraryCues, stepLibraryCue } from '../lib/cueLibraryList';
 import SaveAsCueDialog from '../components/SaveAsCueDialog';
+import AddSongCueDialog from '../components/AddSongCueDialog';
+import SongCueSlots from '../components/SongCueSlots';
+import { fmtSlotTime, ledSwitchFollows, sortedSlotIds } from '../lib/songSlots';
 import UpdateCueDialog, { usageSongNames } from '../components/UpdateCueDialog';
 import { useLiveRefresh } from '../lib/liveRefresh';
 import { isTextEntryTarget, isTypingTarget } from '../lib/keyTarget';
@@ -1107,6 +1110,82 @@ export default function ProjectEditor() {
       else { setJumpCueId(cueId); setSelectedSongId(songId); }
     });
   };
+  // ── 這首歌的 cue（Cue 庫專案）：加 / 換 / 改時間 / 拿掉 / 複製成新的 cue ──
+  const [addSlotOpen, setAddSlotOpen] = useState<{ libraryCueId?: string } | null>(null);
+  const [swapSlot, setSwapSlot] = useState<Cue | null>(null);
+  const [copySlot, setCopySlot] = useState<Cue | null>(null);
+  const [slotBusy, setSlotBusy] = useState(false);
+  const DRAFT_BLOCK = '這個 cue 還有沒存的改動，請先另存、更新或放棄';
+  async function afterSlotWrite() {
+    await Promise.all([refreshCues(), refreshLibCues(), refreshCueStates(), mechRef.current.refreshPositions()]);
+  }
+  async function addSlot(v: { libraryCueId: string; videoTimeSec: number | null; crossfadeSeconds: number }): Promise<string | null> {
+    if (!projectId || !selectedSongId) return '先選一首歌';
+    try {
+      const r = await cueLib.addSongSlot(projectId, selectedSongId, v);
+      await afterSlotWrite();
+      if (!lookDraftRef.current?.hasChanges) { setLibPreviewId(null); setSelectedCueId(r.slot.id); }
+      toast.success('已加進這首歌');
+      return null;
+    } catch (e) { return msg(e); }
+  }
+  async function swapSlotTo(cue: Cue, v: { libraryCueId: string }): Promise<string | null> {
+    if (!projectId || !selectedSongId) return '先選一首歌';
+    if (cue.id === selectedCueId && lookDraftRef.current?.hasChanges) return DRAFT_BLOCK;
+    try {
+      await cueLib.updateSongSlot(projectId, selectedSongId, cue.id, { libraryCueId: v.libraryCueId });
+      await afterSlotWrite();
+      return null;
+    } catch (e) { return msg(e); }
+  }
+  async function changeSlotTime(cue: Cue, sec: number | null): Promise<string | null> {
+    if (!projectId || !selectedSongId) return '先選一首歌';
+    try {
+      await cueLib.updateSongSlot(projectId, selectedSongId, cue.id, { videoTimeSec: sec });
+      await refreshCues();
+      return null;
+    } catch (e) { return msg(e); }
+  }
+  async function changeSlotFade(cue: Cue, sec: number): Promise<string | null> {
+    if (!projectId || !selectedSongId) return '先選一首歌';
+    try {
+      await cueLib.updateSongSlot(projectId, selectedSongId, cue.id, { crossfadeSeconds: sec });
+      await refreshCues();
+      return null;
+    } catch (e) { return msg(e); }
+  }
+  async function removeSlot(cue: Cue) {
+    if (!projectId || !selectedSongId) return;
+    if (cue.id === selectedCueId && lookDraft.hasChanges) { toast.info(DRAFT_BLOCK); return; }
+    const lc = cue.libraryCue;
+    const led = ledSwitchFollows(parseSwitches(selectedSong?.templateSwitches), cue.id);
+    const when = cue.videoTimeSec !== null ? fmtSlotTime(cue.videoTimeSec) : '這個 cue';
+    const ledText = led ? `${when} 有 LED 版型跟著這個 cue 換，拿掉之後那個換版型的點也會一起拿掉。` : '';
+    if (!(await confirmDialog({
+      title: lc ? `從這首歌拿掉 Cue ${lc.label}「${lc.name}」？` : '從這首歌拿掉這個 cue？',
+      message: `只是從這首歌的清單拿掉，Cue 庫裡的 cue 還在，別的歌也不受影響。${ledText ? ' ' + ledText : ''}`,
+      confirmLabel: '拿掉', destructive: true,
+    }))) return;
+    setSlotBusy(true);
+    try {
+      await cueLib.removeSongSlot(projectId, selectedSongId, cue.id);
+      historyRef.current.clear(historyScope(cue.id));
+      if (selectedCueId === cue.id) setSelectedCueId(null);
+      await Promise.all([afterSlotWrite(), refreshSongs()]);
+    } catch (e) { toast.error('沒有拿掉：' + msg(e)); }
+    finally { setSlotBusy(false); }
+  }
+  async function resortSlots() {
+    if (!projectId || !selectedSongId) return;
+    setSlotBusy(true);
+    try {
+      await api.reorderCues(projectId, selectedSongId, sortedSlotIds(masterCues));
+      await refreshCues();
+    } catch (e) { toast.error('沒有排好：' + msg(e)); }
+    finally { setSlotBusy(false); }
+  }
+  const showInLibrary = (lcId: string) => { setRightTab('library'); selectLib(lcId); };
+
   const [copyOf, setCopyOf] = useState<cueLib.LibraryCue | null>(null);
   const [libBusy, setLibBusy] = useState(false);
   async function relabelOrRename(lc: cueLib.LibraryCue, patch: { name?: string; label?: string }): Promise<string | null> {
@@ -1804,6 +1883,7 @@ export default function ProjectEditor() {
                 onDelete={(lc) => { void deleteLib(lc); }}
                 onResetAll={(lc) => { void resetAllLib(lc); }}
                 onJump={jumpToSlot}
+                onAddToSong={selectedSongId ? (lc) => setAddSlotOpen({ libraryCueId: lc.id }) : undefined}
                 onSaveAs={() => { if (libId) setSaveAsOpen({}); else toast.info('先點一個 cue，再從它另存'); }}
                 busy={libBusy || draftBusy}
               />
@@ -1822,6 +1902,27 @@ export default function ProjectEditor() {
               ) : (
                 <div className="editor-empty muted">先在左側選一首歌</div>
               )
+            ) : rightTab === 'cues' && libMode ? (
+              <SongCueSlots
+                cues={masterCues}
+                loading={cuesLoading}
+                selectedId={selectedCueId}
+                libCues={libCues}
+                libLoading={libLoading}
+                onSelect={selectCue}
+                onAdd={() => setAddSlotOpen({})}
+                onChangeTime={changeSlotTime}
+                onChangeFade={changeSlotFade}
+                onSwap={(c) => { if (c.id === selectedCueId && lookDraft.hasChanges) toast.info(DRAFT_BLOCK); else setSwapSlot(c); }}
+                onCopyNew={(c) => { if (c.id === selectedCueId && lookDraft.hasChanges) toast.info(DRAFT_BLOCK); else setCopySlot(c); }}
+                onRemove={(c) => { void removeSlot(c); }}
+                onSaveTemplate={(c) => { void handleSaveCueAsTemplate(c.id, c.libraryCue?.name ?? c.name); }}
+                onShowInLibrary={showInLibrary}
+                onMove={moveCue}
+                onResortNow={() => { void resortSlots(); }}
+                onResetAllObjects={handleResetAllCueObjects}
+                busy={slotBusy || draftBusy}
+              />
             ) : rightTab === 'cues' ? (
               <CueList
                 cues={masterCues}
@@ -2066,6 +2167,47 @@ export default function ProjectEditor() {
             return err;
           }}
           onCancel={() => setSaveAsOpen(null)}
+        />
+      )}
+      {addSlotOpen && (
+        <AddSongCueDialog
+          mode="add"
+          libCues={libCues}
+          slots={masterCues}
+          initialLibraryCueId={addSlotOpen.libraryCueId}
+          onSubmit={async (v) => { const err = await addSlot(v); if (!err) setAddSlotOpen(null); return err; }}
+          onCancel={() => setAddSlotOpen(null)}
+        />
+      )}
+      {swapSlot && (
+        <AddSongCueDialog
+          mode="swap"
+          libCues={libCues}
+          slots={masterCues}
+          currentLibraryCueId={swapSlot.libraryCueId}
+          onSubmit={async (v) => { const err = await swapSlotTo(swapSlot, v); if (!err) setSwapSlot(null); return err; }}
+          onCancel={() => setSwapSlot(null)}
+        />
+      )}
+      {copySlot && copySlot.libraryCueId && (
+        <SaveAsCueDialog
+          defaultLabel={suggestLabel(libCues.map(c => c.label))}
+          defaultName={copySlot.libraryCue?.name ?? copySlot.name}
+          existingLabels={libCues.map(c => c.label)}
+          onSave={async (label, name) => {
+            if (!projectId || !selectedSongId) return '先選一首歌';
+            try {
+              const r = await cueLib.createLibraryCue(projectId, {
+                label, name, basedOnId: copySlot.libraryCueId!,
+                place: { songId: selectedSongId, replaceCueId: copySlot.id },
+              });
+              toast.success(`這首歌改用新的 Cue ${r.libraryCue.label}「${r.libraryCue.name}」，原本的 cue 沒動`);
+              await afterSlotWrite();
+              setCopySlot(null);
+              return null;
+            } catch (e) { return msg(e); }
+          }}
+          onCancel={() => setCopySlot(null)}
         />
       )}
       {copyOf && (
@@ -2826,17 +2968,20 @@ function CueMetaEditor({
 
   return (
     <div className="cue-meta-editor">
-      <div className="cue-meta-editor__row">
-        <label>當前 cue 名稱</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          onBlur={saveName}
-          onKeyDown={enterToBlur}
-          maxLength={100}
-        />
-      </div>
+      {/* Cue 庫專案：名稱是 Cue 庫那個 cue 的，到 Cue 庫分頁改 */}
+      {!cue.libraryCueId && (
+        <div className="cue-meta-editor__row">
+          <label>當前 cue 名稱</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onBlur={saveName}
+            onKeyDown={enterToBlur}
+            maxLength={100}
+          />
+        </div>
+      )}
       <div className="cue-meta-editor__row">
         <label>轉場（秒）</label>
         <input
