@@ -44,6 +44,8 @@ export interface PlanObjectIn {
   seamDeg?: number;
   /** 物件裡有好幾塊 LED mesh 時，個別塊的選擇（mesh 名稱 → 保留原本 UV / 不放進畫布）；沒列 = 跟著整個物件（自動貼）。只有整個物件是「自動貼」才看這個 */
   pieceChoices?: Record<string, PieceChoice>;
+  /** 這個物件上次自動貼 UV 切出來的各片螢幕（片的編號 → 螢幕 id）：這次套用直接把它們搬到新位置，不再多切一份（splitManuals 找出來的） */
+  pieceScreens?: Record<number, string>;
 }
 
 /** 物件裡某一塊 LED mesh 不跟著自動貼：保留原本 UV（搬到新位置）、或不放進畫布（它的 UV 不動，也沒有螢幕） */
@@ -70,6 +72,8 @@ export interface PlanPiece {
   measured: Measured;
   size: SizeResult | null;
   placed: Placed | null;
+  /** 上次套用時這一片已經切出來的螢幕 id（套用時搬位置，不新切） */
+  screenId?: string;
   /** 物件裡有好幾塊 LED mesh 時：這一片的 mesh 名稱和編號（PrimGeom.group） */
   label?: string;
   group?: number;
@@ -215,6 +219,7 @@ export function buildPlan(inputs: readonly PlanObjectIn[], ctx: PlanContext): Pl
         const groupRegion = choice === 'keep' ? info.groupRegions?.[piece.group!] ?? null : null;
         if (choice === 'keep' && !groupRegion) { obj.warnings.push(`${name}：原本沒有 UV，沒辦法保留，這一塊不放進畫布`); choice = 'exclude'; }
         const pp: PlanPiece = { index: i, key: choice === 'keep' ? `o:${inp.id}~${piece.label}` : key, name, ...(grouped ? { label: piece.label, group: piece.group } : {}), ...(choice ? { choice } : {}), surface: piece.kind, ...(piece.arc ? { convex: piece.arc.convex, spanDeg: (piece.arc.span * 180) / Math.PI, ...(piece.arc.closed ? { closed: true, seamDeg: piece.arc.seamDeg } : {}) } : {}), distortion: piece.distortion, measured, size, placed: null };
+        if (count > 1 && !choice && inp.pieceScreens?.[i]) pp.screenId = inp.pieceScreens[i];
         obj.pieces.push(pp);
         if (choice === 'exclude') return;
         if (choice === 'keep' && groupRegion) {
@@ -421,7 +426,7 @@ export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanv
         if (!old) return;  // 原本就沒有 UV：舊影片本來就沒有畫面可以保護
         if (old.region.wraps) { if (!exact) unprotected.push(p.name); return; }
         if (old.err > EXACT && !exact) approximate.push(p.name);
-        const key = o.pieces.length > 1 ? `s:@${o.id}#${i}` : `o:${o.id}`;
+        const key = p.screenId ? `s:${p.screenId}` : o.pieces.length > 1 ? `s:@${o.id}#${i}` : `o:${o.id}`;
         // 版型的方向 = 原本的方向 ∘ 新排法方向的反方向（新排法轉過 / 翻過，舊影片的畫面才貼得回原本的樣子）
         const now = p.placed ? { rotate: p.placed.rotate, flipH: p.placed.flipH, flipV: p.placed.flipV } : IDENTITY_ORIENTATION;
         const rel = isIdentity(now) ? old.rel : composeOrientation(old.rel, invertOrientation(now));
@@ -433,13 +438,49 @@ export function buildLegacy(plan: Plan, inputs: readonly PlanObjectIn[], oldCanv
 }
 
 /** 一個物件有好幾片分開的平面 → 每一片建一個手動螢幕（範圍 = 排好的長方形） */
+/** 上次切出來、這次還在用的各片螢幕：範圍換成排好的新位置 */
+export function pieceScreenUpdatesOf(plan: Plan): { id: string; uv: UvBox }[] {
+  const out: { id: string; uv: UvBox }[] = [];
+  const cw = plan.canvas.width, ch = plan.canvas.height;
+  for (const o of plan.objects) {
+    if (o.mode !== 'auto' || o.pieces.length < 2) continue;
+    for (const p of o.pieces) {
+      if (!p.placed || !p.screenId) continue;
+      out.push({ id: p.screenId, uv: [p.placed.x / cw, p.placed.y / ch, (p.placed.x + p.placed.w) / cw, (p.placed.y + p.placed.h) / ch] });
+    }
+  }
+  return out;
+}
+
+/**
+ * 自動貼 UV 自己上次切出來的螢幕（每片一個、範圍正好是這片現在的 UV）不算「手動切」：
+ * 不然套用過一次再打開，多片的物件（例如曲線升降台）就變成「已手動切」、只剩一整塊。
+ * 螢幕數 = 片數，而且每一片都剛好對上一個螢幕（誤差 2 個畫布像素內）才算；其他照舊當手動切的。
+ */
+export function splitManuals(info: ObjectInfo | null, manuals: readonly ManualBox[], oldCanvas: CanvasSize): { manuals: ManualBox[]; pieceScreens?: Record<number, string> } {
+  if (!info || info.kind !== 'ok' || info.pieces.length < 2 || manuals.length !== info.pieces.length) return { manuals: [...manuals] };
+  const used = new Set<string>();
+  const ids: Record<number, string> = {};
+  for (let i = 0; i < info.pieces.length; i++) {
+    const r = info.oldPieces[i]?.region.rect;
+    if (!r) return { manuals: [...manuals] };
+    const m = manuals.find(x => !used.has(x.id)
+      && Math.abs(x.uv[0] * oldCanvas.width - r.x) <= 2 && Math.abs(x.uv[1] * oldCanvas.height - r.y) <= 2
+      && Math.abs(x.uv[2] * oldCanvas.width - (r.x + r.w)) <= 2 && Math.abs(x.uv[3] * oldCanvas.height - (r.y + r.h)) <= 2);
+    if (!m) return { manuals: [...manuals] };
+    used.add(m.id);
+    ids[i] = m.id;
+  }
+  return { manuals: [], pieceScreens: ids };
+}
+
 export function pieceScreensOf(plan: Plan): PieceScreen[] {
   const out: PieceScreen[] = [];
   const cw = plan.canvas.width, ch = plan.canvas.height;
   for (const o of plan.objects) {
     if (o.mode !== 'auto' || o.pieces.length < 2) continue;
     o.pieces.forEach((p, i) => {
-      if (!p.placed) return;
+      if (!p.placed || p.screenId) return;   // 已經有螢幕的片是搬位置（pieceScreenUpdatesOf），不新切
       out.push({ ref: `${o.id}#${i}`, objectId: o.id, name: p.name, uv: [p.placed.x / cw, p.placed.y / ch, (p.placed.x + p.placed.w) / cw, (p.placed.y + p.placed.h) / ch] });
     });
   }

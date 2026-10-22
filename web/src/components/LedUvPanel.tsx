@@ -10,7 +10,7 @@ import { downloadBlob, renderAlignmentMapPng } from '../lib/ledMapDraw';
 import { AeCanvasTooBigError, downloadAeCompScript } from '../lib/aeCompScriptDownload';
 import { isPhoneLayout } from '../lib/viewportVars';
 import type { LedCanvas } from '../lib/ledCanvas';
-import { buildLegacy, buildPlan, excludedIdsOf, pieceKey, pieceScreensOf, type ManualBox, type PieceChoice, type Plan, type PlanObjectIn } from '../lib/ledUv/plan';
+import { buildLegacy, buildPlan, excludedIdsOf, pieceKey, pieceScreensOf, pieceScreenUpdatesOf, splitManuals, type ManualBox, type PieceChoice, type Plan, type PlanObjectIn } from '../lib/ledUv/plan';
 import { previewLayout } from '../lib/ledUv/previewLayout';
 import type { Arrangement, ArrangeNative } from '../lib/ledUv/arrange';
 import type { PackResult } from '../lib/ledUv/pack';
@@ -179,7 +179,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       const sel: Record<string, boolean> = {};
       for (const o of ledObjects) {
         const info = result.infos[o.id];
-        const can = !!info && info.kind === 'ok' && !(manualsBy[o.id]?.length);
+        const can = !!info && info.kind === 'ok' && !splitManuals(info, manualsBy[o.id] ?? [], oldCanvas).manuals.length;
         sel[o.id] = can && (restored && o.id in restored.selected ? restored.selected[o.id] : !!info && defaultSelected(info.pieces));
       }
       setSelected(sel);
@@ -235,8 +235,8 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
     if (info && info.kind === 'ok') info.pieces.forEach((_, i) => { sizes[i] = formToSpec(forms[pieceKey(o.id, info.pieces.length, i)] ?? EMPTY_FORM); });
     const pieceChoices: Record<string, PieceChoice> = {};
     for (const [k, v] of Object.entries(pieceFlags)) if (pieceOwner(k) === o.id) pieceChoices[k.slice(o.id.length + 1)] = v;
-    return { id: o.id, name: o.name, order: o.order, info, selected: !!selected[o.id], excluded: !!excluded[o.id], sizes, manuals: manualsBy[o.id] ?? [], override: overrides[o.id] ?? 'auto', seamDeg: seams[o.id] ?? 0, ...(Object.keys(pieceChoices).length > 0 ? { pieceChoices } : {}) };
-  }), [ledObjects, ana, forms, selected, excluded, manualsBy, overrides, seams, pieceFlags]);
+    return { id: o.id, name: o.name, order: o.order, info, selected: !!selected[o.id], excluded: !!excluded[o.id], sizes, ...splitManuals(info, manualsBy[o.id] ?? [], oldCanvas), override: overrides[o.id] ?? 'auto', seamDeg: seams[o.id] ?? 0, ...(Object.keys(pieceChoices).length > 0 ? { pieceChoices } : {}) };
+  }), [ledObjects, ana, forms, selected, excluded, manualsBy, overrides, seams, pieceFlags, oldCanvas]);
 
   const gutterPx = Math.max(0, Math.min(64, Math.round(Number(gutter) || 0)));
   // 照舞台自動排的方案（沒套用自己排的排法）：螢幕清單、框裡的畫面、「自動排一次」都從它來
@@ -390,7 +390,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
       setAna(a => (a ? { ...a, infos: { ...a.infos, ...r.infos }, uv1: { ...a.uv1, ...r.uv1 } } : a));
       // 換類型以後，曲面的預設選擇跟著重算（變形太大的預設保留原本 UV）；已經動過的物件不改他的選擇
       const info = r.infos[id];
-      if (what === 'override') setSelected(s => ({ ...s, [id]: !!info && info.kind === 'ok' && !(manualsBy[id]?.length) && defaultSelected(info.pieces) }));
+      if (what === 'override') setSelected(s => ({ ...s, [id]: !!info && info.kind === 'ok' && !splitManuals(info, manualsBy[id] ?? [], oldCanvas).manuals.length && defaultSelected(info.pieces) }));
     } catch (e) {
       toast.error((what === 'override' ? '換類型失敗：' : '轉接縫失敗：') + (e instanceof Error ? e.message : String(e)));
     } finally {
@@ -466,7 +466,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
           ? { canvas: { width: lg.canvas.width, height: lg.canvas.height }, screens: lg.screens.map(s => ({ key: s.key, dest: s.dest, rotate: s.rotate, flipH: s.flipH, flipV: s.flipV })), originalUv: lg.originalUv }
           : null,
         pieceScreens: pieceScreensOf(plan),
-        screenUpdates: plan.objects.flatMap(o => o.keep?.manualUpdates ?? []),
+        screenUpdates: [...plan.objects.flatMap(o => o.keep?.manualUpdates ?? []), ...pieceScreenUpdatesOf(plan)],
         ...(excludeIds.length > 0 ? { excludeObjects: excludeIds } : {}),
       });
       heldKey = null;
@@ -490,7 +490,7 @@ export default function LedUvPanel({ open, projectId, projectName, ledObjects, l
 
   const body = !ana || !plan
     ? null
-    : tab === 'pick' ? <PickTab plan={plan} ana={ana} inputs={inputs} selected={selected} excluded={excluded} onChoice={setChoice} onPieceChoice={setPieceChoice} overrides={overrides} busyId={reBusy} onOverride={(id, v) => void changeOverride(id, v)} onSeam={(id, deg) => void changeSeam(id, deg)} onAll={(v) => setSelected(Object.fromEntries(ledObjects.map(o => [o.id, v && ana.infos[o.id]?.kind === 'ok' && !(manualsBy[o.id]?.length)])))} />
+    : tab === 'pick' ? <PickTab plan={plan} ana={ana} inputs={inputs} selected={selected} excluded={excluded} onChoice={setChoice} onPieceChoice={setPieceChoice} overrides={overrides} busyId={reBusy} onOverride={(id, v) => void changeOverride(id, v)} onSeam={(id, deg) => void changeSeam(id, deg)} onAll={(v) => setSelected(Object.fromEntries(ledObjects.map(o => [o.id, v && ana.infos[o.id]?.kind === 'ok' && !splitManuals(ana.infos[o.id] ?? null, manualsBy[o.id] ?? [], oldCanvas).manuals.length])))} />
       : tab === 'size' ? <SizeTab plan={plan} forms={forms} bulk={bulk} setBulk={setBulk} onBulk={applyBulk} setForm={setForm} scaleCorrection={scaleCorrection} />
         : tab === 'layout' ? <LedUvArrange projectId={projectId} autoPlan={autoPlan!} plan={plan} arrange={arrange} gutter={gutter} setGutter={setGutter} />
           : <ApplyTab plan={statsPlan ?? plan} stats={stats!} legacy={legacy!} uv1={ana.uv1} impact={impact} list={list} oldCanvas={oldCanvas} hasProjectCanvas={!!ledCanvas} run={run} onApply={doApply} projectName={projectName} />;
