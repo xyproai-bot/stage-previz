@@ -11,6 +11,7 @@ import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPa
 import { VRButton } from 'three/examples/jsm/webxr/VRButton.js';
 import type { CueState, Vec3, Euler, StageObject, CameraView } from '../lib/api';
 import { fitFov } from '../lib/review/annotations';
+import { applyClipPlanes } from '../lib/cameraClip';
 import { computeFrontView, computePresetView, CAMERA_PRESETS, type CameraPreset } from '../lib/stageCamera';
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
@@ -1211,6 +1212,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const deltaSec = Math.min(frameMs / 1000, 0.1);
       lastTickTs = nowTs;
       for (const box of selectionBoxesRef.current.values()) box.update();
+
+      // 動態 near / far：鏡頭遠時 near 拉大，貼很近的兩個面才不會閃爍
+      if (!renderer.xr.isPresenting) {
+        const oc = orbitRef.current;
+        const d = walkPointerLockRef.current || !oc ? 0 : camera.position.distanceTo(oc.target);
+        if (applyClipPlanes(camera, d, stageBoundsRef.current.radius * 2)) camera.updateProjectionMatrix();
+      }
 
       // 自動畫質：一直卡 → 降一級；一直很順 → 升回去（VR 中不量）
       if (renderer.xr.isPresenting) {
