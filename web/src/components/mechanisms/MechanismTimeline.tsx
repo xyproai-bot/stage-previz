@@ -13,6 +13,7 @@ import type { Mechanism, MechanismGroup } from '../../lib/mechanisms/model';
 import { layoutMechanisms } from '../../lib/mechanisms/group';
 import { formatMechValue, formatSeconds, sortMasters, type TimelineMove } from '../../lib/mechanisms/motion';
 import { sheetTime } from '../../lib/mechanisms/cueSheet';
+import { LIB_START_ID } from '../../lib/mechanisms/libraryView';
 
 interface Props {
   mech: EditorMechanisms;
@@ -21,6 +22,11 @@ interface Props {
   selectedCueId: string | null;
   onSelectCue: (id: string) => void;
   onClose: () => void;
+  /**
+   * Cue 庫裡看一個 cue：cues 是 [預設位置, 這個 cue]（lib/mechanisms/libraryView.ts）；
+   * 時間軸只畫這個 cue 從開始轉場（0 秒）到最後一個機關停下，沒有別的 cue
+   */
+  single?: { label: string; name: string } | null;
 }
 
 const LABEL_W = 132;
@@ -35,15 +41,19 @@ type TlRow =
   | { key: string; kind: 'mech'; mech: Mechanism; member: boolean }
   | { key: string; kind: 'group'; group: MechanismGroup; members: Mechanism[]; collapsed: boolean };
 
-export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectCue, onClose }: Props) {
+export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectCue, onClose, single = null }: Props) {
   const tl = mech.timeline;
   const mechanisms = mech.mechanisms;
   const masters = useMemo(() => sortMasters(cues), [cues]);
-  const cueNo = useMemo(() => new Map(masters.map((c, i) => [c.id, i + 1])), [masters]);
+  const cueNo = useMemo(() => new Map<string, string | number>(masters.map((c, i) => [c.id, single ? single.label : i + 1])), [masters, single]);
   const cueById = useMemo(() => new Map(cues.map(c => [c.id, c])), [cues]);
-  const untimed = masters.filter(c => c.videoTimeSec == null).length;
+  const untimed = single ? 0 : masters.filter(c => c.videoTimeSec == null).length;
   const scrollRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
+  const rulerHeadRef = useRef<HTMLDivElement>(null);
+  const rulerWrapRef = useRef<HTMLDivElement>(null);
+  // 時間尺固定在最上面（上下捲只捲機關那幾排），左右捲時跟著色塊一起動
+  const syncRuler = () => { if (rulerWrapRef.current && scrollRef.current) rulerWrapRef.current.scrollLeft = scrollRef.current.scrollLeft; };
   const clockRef = useRef<HTMLSpanElement>(null);
   const [pps, setPps] = useState<number | null>(null);   // 每秒幾 px；null = 還沒量（整首放得下）
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -51,7 +61,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
   dragRef.current = drag;
   const [playing, setPlaying] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const total = Math.max(10, (tl?.endTime ?? 0) + 4);
+  const total = single ? Math.max(4, (tl?.endTime ?? 0) + 1.5) : Math.max(10, (tl?.endTime ?? 0) + 4);
   // 一排機關：標題行可以收起來（預設展開）；一排的成員接在標題行後面
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const rows = useMemo<TlRow[]>(() => {
@@ -99,8 +109,9 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
 
   // ── 播放頭（只改 DOM）──
   const showHead = (t: number | null) => {
-    const h = headRef.current;
-    if (h) { h.style.display = t === null ? 'none' : 'block'; if (t !== null) h.style.transform = `translateX(${t * scale}px)`; }
+    for (const h of [headRef.current, rulerHeadRef.current]) {
+      if (h) { h.style.display = t === null ? 'none' : 'block'; if (t !== null) h.style.transform = `translateX(${t * scale}px)`; }
+    }
     if (clockRef.current) clockRef.current.textContent = t === null ? '' : sheetTime(t);
   };
   const setTime = (t: number | null) => {
@@ -108,7 +119,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     showHead(t);
     setPreviewing(t !== null);
   };
-  useEffect(() => { showHead(mech.previewTimeRef.current); }); // 縮放後播放頭跟著
+  useEffect(() => { showHead(mech.previewTimeRef.current); syncRuler(); }); // 縮放後播放頭跟著
   useEffect(() => () => { mech.setPreviewTime(null); }, [mech.setPreviewTime]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!playing) return;
@@ -199,8 +210,10 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
 
   const header = (
     <div className="mech-tl__bar">
-      <strong className="mech-tl__title">機關時間軸</strong>
-      <span className="muted small mech-tl__hint">拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）</span>
+      <strong className="mech-tl__title">{single ? `Cue ${single.label} 的機關時間軸` : '機關時間軸'}</strong>
+      <span className="muted small mech-tl__hint" title={single ? '0 秒 = 這個 cue 開始轉場；預覽從預設位置開始動，在歌裡會從前一個 cue 的位置開始' : undefined}>
+        {single ? '0 秒 = 開始轉場。拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）' : '拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）'}
+      </span>
       <span className="grow" />
       <span ref={clockRef} className="mech-tl__clock" aria-live="off" />
       <button type="button" className="mech-icon-btn" disabled={!tl} onClick={() => { if (playing) setPlaying(false); else { if (mech.previewTimeRef.current === null || mech.previewTimeRef.current >= total) setTime(0); setPreviewing(true); setPlaying(true); } }}
@@ -221,6 +234,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
         <div className="mech-tl__empty muted small">
           {mechanisms.length === 0
             ? '還沒有機關：先在右邊「機關」分頁新增機關'
+            : single ? '這個 cue 還沒有可以畫的機關'
             : '這首歌的 cue 還沒有設「對應影片時間」：設了之後機關就會排在時間軸上'}
         </div>
       </section>
@@ -233,7 +247,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     list.push(mv);
     movesBy.set(mv.mechId, list);
   }
-  const cueLabel = (id: string) => `Cue ${cueNo.get(id) ?? '?'}「${cueById.get(id)?.name ?? ''}」`;
+  const cueLabel = (id: string) => (id === LIB_START_ID ? '預設位置' : `Cue ${cueNo.get(id) ?? '?'}「${cueById.get(id)?.name ?? ''}」`);
   const toggleGroup = (id: string) => setCollapsed(s => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   /** 一排的標題行：每個 cue 一條合併的色塊（最早開始動 → 最後一個到位）；收起來時看這一條就知道整排什麼時候動 */
@@ -249,7 +263,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     }
     return (
       <div key={row.key} className={'mech-tl__row mech-tl__row--group' + (row.members.some(m => m.id === mech.focusedId) ? ' is-focused' : '')}>
-        {tl!.windows.map(w => <span key={w.cueId} className="mech-tl__gridline" style={{ left: 8 + w.arrive * scale }} />)}
+        {tl!.windows.filter(w => w.cueId !== LIB_START_ID).map(w => <span key={w.cueId} className="mech-tl__gridline" style={{ left: 8 + w.arrive * scale }} />)}
         {[...byCue.entries()].map(([cueId, b]) => {
           const sel = cueId === selectedCueId && row.members.some(m => m.id === mech.focusedId);
           const label = `「${row.group.name}」${cueLabel(cueId)}：${b.n} 個機關，${sheetTime(b.start)} 最早開始動、${sheetTime(b.end)} 最後一個到位`;
@@ -283,26 +297,32 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
               onClick={() => mech.setFocusedId(row.mech.id)} title={row.mech.name}>{row.mech.name}</button>
           )))}
         </div>
-        <div className="mech-tl__scroll" ref={scrollRef}>
-          <div className="mech-tl__content" style={{ width }}>
-            <div className="mech-tl__ruler" onPointerDown={onRulerDown} onPointerMove={onRulerMove} title="點一下 / 拖：3D 畫面的機關跟著這個時間">
-              {ticks.map(t => (
-                <span key={t} className="mech-tl__tick" style={{ left: 8 + t * scale }}>{sheetTime(t).replace(/\.0$/, '')}</span>
-              ))}
-              {tl.windows.map(w => (
-                <span key={w.cueId}>
-                  {w.arrive > w.start && <span className="mech-tl__go" style={{ left: 8 + w.start * scale, width: (w.arrive - w.start) * scale }} />}
-                  <span className={'mech-tl__cue' + (w.cueId === selectedCueId ? ' is-selected' : '')} style={{ left: 8 + w.arrive * scale }}
-                    title={`${cueLabel(w.cueId)}：${sheetTime(w.start)} GO、${sheetTime(w.arrive)} 到位`}>{cueNo.get(w.cueId)}</span>
-                </span>
-              ))}
+        <div className="mech-tl__main">
+          <div className="mech-tl__rulerwrap" ref={rulerWrapRef}>
+            <div style={{ width }}>
+          <div className="mech-tl__ruler" onPointerDown={onRulerDown} onPointerMove={onRulerMove} title="點一下 / 拖：3D 畫面的機關跟著這個時間">
+            {ticks.map(t => (
+              <span key={t} className="mech-tl__tick" style={{ left: 8 + t * scale }}>{sheetTime(t).replace(/\.0$/, '')}</span>
+            ))}
+            {tl.windows.filter(w => w.cueId !== LIB_START_ID).map(w => (
+              <span key={w.cueId}>
+                {w.arrive > w.start && <span className="mech-tl__go" style={{ left: 8 + w.start * scale, width: (w.arrive - w.start) * scale }} />}
+                <span className={'mech-tl__cue' + (w.cueId === selectedCueId ? ' is-selected' : '')} style={{ left: 8 + w.arrive * scale }}
+                  title={`${cueLabel(w.cueId)}：${sheetTime(w.start)} GO、${sheetTime(w.arrive)} 到位`}>{cueNo.get(w.cueId)}</span>
+              </span>
+            ))}
+            <div ref={rulerHeadRef} className="mech-tl__head" style={{ display: 'none' }} aria-hidden="true" />
+          </div>
             </div>
+          </div>
+          <div className="mech-tl__scroll" ref={scrollRef} onScroll={syncRuler}>
+          <div className="mech-tl__content" style={{ width }}>
             {rows.map(row => {
               if (row.kind === 'group') return groupRow(row);
               const m = row.mech;
               return (
               <div key={m.id} className={'mech-tl__row' + (mech.focusedId === m.id ? ' is-focused' : '')}>
-                {tl.windows.map(w => <span key={w.cueId} className="mech-tl__gridline" style={{ left: 8 + w.arrive * scale }} />)}
+                {tl.windows.filter(w => w.cueId !== LIB_START_ID).map(w => <span key={w.cueId} className="mech-tl__gridline" style={{ left: 8 + w.arrive * scale }} />)}
                 {(movesBy.get(m.id) || []).map(mv => {
                   const d = drag && drag.cueId === mv.cueId && drag.mechId === mv.mechId ? drag : null;
                   const delay = d ? d.delay : mv.delay;
@@ -341,6 +361,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
               );
             })}
             <div ref={headRef} className="mech-tl__head" style={{ display: 'none' }} aria-hidden="true" />
+          </div>
           </div>
         </div>
       </div>

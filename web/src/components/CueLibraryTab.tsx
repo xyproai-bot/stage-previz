@@ -1,12 +1,12 @@
 // 右邊「Cue 庫」分頁：專案所有 Cue 庫的 cue，搜尋 / 篩選 / 預覽 / 改名稱與編號 / 誰在用 / 刪除。規格 5.2、第 10 節。
 // 只在 Cue 庫模式的專案出現。點一列 = 在 3D 預覽這個 cue 的畫面，不改任何歌。
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Check, Copy, Hash, Library, ListMusic, Pencil, Plus, RotateCcw, Search, Timer, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
 import OverflowMenu from './OverflowMenu';
 import type { LibraryCue, LibraryCueUsage } from '../lib/cueLibraryApi';
-import { filterLibraryCues, fmtTime, usageLabel, type LibraryFilter } from '../lib/cueLibraryList';
+import { filterLibraryCues, usageLabel, usageSlotText, type LibraryFilter } from '../lib/cueLibraryList';
 import { labelError, LABEL_MAX } from '../lib/lookDraft';
 import { crossfadeLabel, parseCrossfadeInput } from '../lib/cueTiming';
 import './CueLibraryTab.css';
@@ -30,30 +30,41 @@ interface Props {
   onResetAll: (lc: LibraryCue) => void;
   /** 點誰在用的連結：跳去那首歌的那個 cue */
   onJump: (songId: string, cueId: string) => void;
+  /** 歌單上這首歌現在的代號和名字（用來顯示「用在：S01 …」；找不到 = 用後台給的） */
+  songInfo?: (songId: string) => { code?: string | null; name: string } | null;
   /** 加到目前選的這首歌（沒選歌 = 不給） */
   onAddToSong?: (lc: LibraryCue) => void;
   /** 底下的「另存成新的 cue」（從目前舞台） */
   onSaveAs: () => void;
   busy: boolean;
+  /** 「正在編輯」底下的小分頁：清單 / 機關 */
+  subTab?: 'list' | 'mech';
+  onSubTab?: (t: 'list' | 'mech') => void;
+  /** 「機關」小分頁的內容（跟右邊「機關」分頁同一個元件） */
+  mechanisms?: ReactNode;
 }
 
-function UsageLinks({ usage, onJump }: { usage: LibraryCueUsage; onJump: Props['onJump'] }) {
+function UsageLinks({ usage, onJump, songInfo }: { usage: LibraryCueUsage; onJump: Props['onJump']; songInfo?: Props['songInfo'] }) {
   if (usage.slots.length === 0) return <span className="cue-lib__nouse">沒有歌在用</span>;
   return (
     <>
-      {usage.slots.map((s, i) => (
+      {usage.slots.map((s, i) => {
+        // 歌的代號 / 名字以歌單現在的為準（在歌單上改了代號，Cue 庫讀到的舊資料還沒更新）
+        const name = songInfo?.(s.songId)?.name ?? s.songName;
+        return (
         <span key={s.cueId}>
           {i > 0 && '、'}
-          <button type="button" className="cue-lib__link" onClick={() => onJump(s.songId, s.cueId)} title={`跳到 ${s.songName} 的這個 cue`}>
-            {s.songCode || s.songName}{s.videoTimeSec !== null ? ` ${fmtTime(s.videoTimeSec)}` : ''}
+          <button type="button" className="cue-lib__link" onClick={() => onJump(s.songId, s.cueId)} title={`跳到 ${name} 的這個 cue`}>
+            {usageSlotText(s, songInfo)}
           </button>
         </span>
-      ))}
+        );
+      })}
     </>
   );
 }
 
-export default function CueLibraryTab({ cues, loading, shownId, previewing, onSelect, onCopy, onRename, onRelabel, onSetFade, onDelete, onResetAll, onJump, onAddToSong, onSaveAs, busy }: Props) {
+export default function CueLibraryTab({ cues, loading, shownId, previewing, onSelect, onCopy, onRename, onRelabel, onSetFade, onDelete, onResetAll, onJump, onAddToSong, onSaveAs, busy, songInfo, subTab = 'list', onSubTab, mechanisms }: Props) {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<LibraryFilter>('all');
   const [editing, setEditing] = useState<{ id: string; field: 'name' | 'label' | 'fade' } | null>(null);
@@ -132,12 +143,22 @@ export default function CueLibraryTab({ cues, loading, shownId, previewing, onSe
         <div className="cue-lib__now" role="status">
           <strong>Cue {current.label}「{current.name}」</strong>
           <span className="cue-lib__nowsub">
-            用在：<UsageLinks usage={current.usage} onJump={onJump} />
+            用在：<UsageLinks usage={current.usage} onJump={onJump} songInfo={songInfo} />
           </span>
           {previewing && <span className="cue-lib__nowsub">這首歌沒有用到它。在 3D 上微調會變成「還沒存的改動」，按上面的「覆蓋」只會改 Cue 庫，不動這首歌。</span>}
         </div>
       )}
 
+      {current && onSubTab && (
+        <div className="cue-lib__subtabs" role="tablist" aria-label="Cue 庫的內容">
+          {([['list', 'Cue 清單'], ['mech', '機關']] as const).map(([k, l]) => (
+            <button key={k} type="button" role="tab" aria-selected={subTab === k} className={'cue-lib__subtab' + (subTab === k ? ' is-active' : '')} onClick={() => onSubTab(k)}>{l}</button>
+          ))}
+        </div>
+      )}
+      {current && onSubTab && subTab === 'mech' ? (
+        <div className="cue-lib__mech">{mechanisms}</div>
+      ) : (<>
       <div className="cue-lib__list" role="listbox" aria-label="Cue 庫的 cue">
         {loading && cues.length === 0 ? (
           <div className="editor-empty muted">載入中…</div>
@@ -251,6 +272,7 @@ export default function CueLibraryTab({ cues, loading, shownId, previewing, onSe
         <button type="button" className="btn btn--sm btn--ghost" onClick={onSaveAs} disabled={busy}><Icon icon={Copy} /> 另存成新的 cue</button>
         <span className="cue-lib__hint">J / K 照編號上下切換</span>
       </div>
+      </>)}
     </div>
   );
 }

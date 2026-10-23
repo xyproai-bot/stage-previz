@@ -62,6 +62,20 @@ export function usageSongList(usage: LibraryCueUsage): string[] {
   return out;
 }
 
+/**
+ * 「用在：S01 0:00」那一個連結的字：歌單上現在的代號 / 名字為準
+ * （在歌單上改了代號，Cue 庫讀到的資料還是舊的，不照歌單會寫成舊代號）；歌單裡找不到才用後台給的
+ */
+export function usageSlotText(
+  slot: { songId: string; songName: string; songCode: string | null; videoTimeSec: number | null },
+  songInfo?: ((songId: string) => { code?: string | null; name: string } | null) | null,
+): string {
+  const live = songInfo?.(slot.songId) ?? null;
+  const code = live ? live.code ?? null : slot.songCode;
+  const name = live ? live.name : slot.songName;
+  return `${code || name}${slot.videoTimeSec !== null ? ` ${fmtTime(slot.videoTimeSec)}` : ''}`;
+}
+
 /** 刪不掉時的說明 */
 export function deleteBlockedText(usage: LibraryCueUsage): string {
   return `${usage.songCount} 首歌在用（${usageSongList(usage).join('、')}），先從這些歌拿掉才能刪`;

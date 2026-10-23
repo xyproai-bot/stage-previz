@@ -349,9 +349,14 @@ export default function ProjectEditor() {
     () => (libMode && libPreviewId ? { mechanisms: previewBaseMech ?? [] } : null),
     [libMode, libPreviewId, previewBaseMech],
   );
+  // Cue 庫分頁的小分頁：清單 / 機關（機關 = 這個 Cue 庫 cue 自己的機關，不用先回到某首歌）
+  const [libSub, setLibSub] = useState<'list' | 'mech'>('list');
+  const libShown = libCues.find(c => c.id === libId) ?? null;
+  const libraryMechOn = rightTab === 'library' && libMode && libSub === 'mech' && !!libShown;
   const mech = useEditorMechanisms({
     projectId, songId: selectedSongId, cues, selectedCueId, canEdit: true, scaleCorrection: view.scaleCorrection,
     previewLook,
+    libraryView: libraryMechOn && libShown ? { name: libShown.name, crossfadeSeconds: libShown.crossfadeSeconds } : null,
     history: { push: (scope, step) => historyRef.current.push(scope, step), bump: bumpHistory },
     libDraft: libDraftForMech,
   });
@@ -1879,6 +1884,14 @@ export default function ProjectEditor() {
           {rightTab === 'mechanisms' && mech.timelineOpen && mech.mechanisms.length > 0 && selectedSongId && stageObjects.length > 0 && (
             <MechanismTimeline mech={mech} cues={cues} selectedCueId={selectedCueId} onSelectCue={selectCue} onClose={() => mech.setTimelineOpen(false)} />
           )}
+          {/* Cue 庫的機關時間軸：只有這一個 cue（從開始轉場到最後一個機關停下），不用先選歌 */}
+          {libraryMechOn && libShown && mech.libraryCues && mech.timelineOpen && mech.mechanisms.length > 0 && stageObjects.length > 0 && (
+            <MechanismTimeline
+              mech={mech} cues={mech.libraryCues as unknown as Cue[]} selectedCueId={mech.libraryCues[1]?.id ?? null}
+              onSelectCue={() => {}} onClose={() => mech.setTimelineOpen(false)}
+              single={{ label: libShown.label, name: libShown.name }}
+            />
+          )}
         </section>
 
         {/* Right — Cue panel */}
@@ -1963,9 +1976,27 @@ export default function ProjectEditor() {
                 onDelete={(lc) => { void deleteLib(lc); }}
                 onResetAll={(lc) => { void resetAllLib(lc); }}
                 onJump={jumpToSlot}
+                songInfo={(id) => songs.find(s => s.id === id) ?? null}
                 onAddToSong={selectedSongId ? (lc) => setAddSlotOpen({ libraryCueId: lc.id }) : undefined}
                 onSaveAs={() => { if (libId) setSaveAsOpen({}); else toast.info('先點一個 cue，再從它另存'); }}
                 busy={libBusy || draftBusy}
+                subTab={libSub}
+                onSubTab={setLibSub}
+                mechanisms={libShown && mech.libraryCues ? (
+                  <MechanismTab
+                    mech={mech}
+                    projectId={projectId || ''}
+                    projectName={projectMeta?.name}
+                    cues={mech.libraryCues as unknown as Cue[]}
+                    selectedCue={(mech.libraryCues[1] as unknown as Cue) ?? null}
+                    onSelectCue={() => {}}
+                    stageObjects={stageObjects}
+                    selectedObjectIds={selectedObjectIds}
+                    scaleCorrection={view.scaleCorrection}
+                    onStatesChanged={() => { void refreshCueStates(); }}
+                    library={{ label: libShown.label, name: libShown.name }}
+                  />
+                ) : null}
               />
             ) : songsLoading && !selectedSongId ? (
               <div className="editor-empty muted">載入中…</div>

@@ -260,15 +260,17 @@
 .mech-tl__empty { padding: 14px 12px; }
 .mech-tl__body { display: flex; align-items: flex-start; min-height: 0; overflow-y: auto; } /* flex-start：右邊色塊那欄照內容高度，跟左邊名字一起捲（不然色塊被切在框的高度，名字卻一直往下長） */
 .mech-tl__labels { flex-shrink: 0; border-right: 1px solid var(--border); }
-.mech-tl__ruler-pad { height: 30px; border-bottom: 1px solid var(--border); padding: 4px 6px; font-size: 10.5px; white-space: nowrap; overflow: hidden; }
+.mech-tl__ruler-pad { position: sticky; top: 0; z-index: 3; background: var(--surface-1); box-sizing: border-box; height: 30px; border-bottom: 1px solid var(--border); padding: 4px 6px; font-size: 10.5px; white-space: nowrap; overflow: hidden; }
 .mech-tl__label {
   display: block; width: 100%; height: 28px; text-align: left; padding: 0 8px; font-size: 12px; color: var(--text-dim);
   background: transparent; border: none; border-bottom: 1px solid var(--border); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .mech-tl__label.is-focused { color: var(--warn); }
+.mech-tl__main { flex: 1; min-width: 0; }
+.mech-tl__rulerwrap { position: sticky; top: 0; z-index: 3; overflow: hidden; background: var(--surface-1); } /* 時間尺在捲動區外面：上下捲不會跑掉，左右由 scrollLeft 同步 */
 .mech-tl__scroll { flex: 1; overflow-x: auto; overflow-y: hidden; min-width: 0; }
 .mech-tl__content { position: relative; }
-.mech-tl__ruler { position: relative; height: 30px; border-bottom: 1px solid var(--border); cursor: col-resize; user-select: none; touch-action: none; }
+.mech-tl__ruler { position: relative; box-sizing: border-box; height: 30px; border-bottom: 1px solid var(--border); cursor: col-resize; user-select: none; touch-action: none; }
 .mech-tl__tick { position: absolute; top: 0; font-size: 10px; color: var(--text-muted); font-family: var(--font-mono); transform: translateX(-2px); border-left: 1px solid var(--border); padding-left: 3px; height: 13px; line-height: 13px; }
 .mech-tl__go { position: absolute; bottom: 0; height: 5px; background: rgba(255, 255, 255, 0.12); border-radius: 2px; }
 .mech-tl__cue {
@@ -344,3 +346,4 @@
   background: rgba(16, 199, 138, 0.3); border: 1px solid var(--accent); overflow: hidden;
 }
 .mech-tl__gmove.is-selected { box-shadow: 0 0 0 2px var(--text); }
+.mech-lib-note { margin: 0 0 6px; }

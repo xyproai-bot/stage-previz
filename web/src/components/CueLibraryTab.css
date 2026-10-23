@@ -33,3 +33,7 @@
 .cue-lib__foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border); }
 .cue-lib__foot .btn { display: inline-flex; align-items: center; gap: 4px; }
 .cue-lib__hint { font-size: 11.5px; color: var(--text-dim); }
+.cue-lib__subtabs { display: flex; gap: 4px; padding: 6px 12px 0; border-bottom: 1px solid var(--border); }
+.cue-lib__subtab { border: 0; background: transparent; color: var(--text-dim); font: inherit; font-size: 12.5px; padding: 5px 12px; border-bottom: 2px solid transparent; cursor: pointer; }
+.cue-lib__subtab.is-active { color: var(--text); border-bottom-color: var(--accent, #3b82f6); }
+.cue-lib__mech { flex: 1; min-height: 0; overflow-y: auto; }

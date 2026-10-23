@@ -41,12 +41,17 @@ interface Props {
   scaleCorrection: number;
   /** 轉換舊位置後，物件位置也變了 → 重新讀 */
   onStatesChanged: () => void;
+  /**
+   * Cue 庫分頁裡的「機關」：看的是 Cue 庫的一個 cue（不屬於哪一首歌）。
+   * 同一套列、延遲 / 走幾秒、花樣，只是標題寫 Cue 庫的編號、不給換 cue、不放「設定機關」（那是整個專案的，在右邊「機關」分頁）
+   */
+  library?: { label: string; name: string } | null;
 }
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 export default function MechanismTab({
-  mech, projectId, projectName, cues, selectedCue, onSelectCue, stageObjects, selectedObjectIds, scaleCorrection, onStatesChanged,
+  mech, projectId, projectName, cues, selectedCue, onSelectCue, stageObjects, selectedObjectIds, scaleCorrection, onStatesChanged, library = null,
 }: Props) {
   const mechanisms = mech.mechanisms;
   const [editingId, setEditingId] = useState<string | 'new' | null>(null);
@@ -81,8 +86,8 @@ export default function MechanismTab({
   }, [cues]);
   const cueLabel = useMemo(() => {
     const no = new Map(cues.filter(c => c.status === 'master').sort((a, b) => a.order - b.order).map((c, i) => [c.id, i + 1]));
-    return (id: string) => (no.has(id) ? `Cue ${no.get(id)}「${cueName(id)}」` : `「${cueName(id)}」`);
-  }, [cues, cueName]);
+    return (id: string) => (library && id !== selectedCue?.id ? `「${cueName(id)}」` : library ? `Cue ${library.label}「${library.name}」` : no.has(id) ? `Cue ${no.get(id)}「${cueName(id)}」` : `「${cueName(id)}」`);
+  }, [cues, cueName, library, selectedCue?.id]);
 
   // 舞台正面（「往觀眾」「往左」、方向字）：模型讀好之後問一次；打開設定時再問一次
   useEffect(() => {
@@ -93,7 +98,8 @@ export default function MechanismTab({
   const editingDefault = !selectedCue;
   const cueCheck = selectedCue ? mech.check?.cues.get(selectedCue.id) : undefined;
   const masterIdx = selectedCue ? masters.findIndex(c => c.id === selectedCue.id) : -1;
-  const title = !selectedCue
+  const title = library ? `Cue ${library.label}「${library.name}」`
+    : !selectedCue
     ? '預設位置（沒選 cue）'
     : masterIdx >= 0 ? `Cue ${masterIdx + 1}「${selectedCue.name}」` : `「${selectedCue.name}」`;
 
@@ -361,7 +367,7 @@ export default function MechanismTab({
       onPreview={(v) => mech.previewValue(m.id, v)}
       onClear={() => void mech.clearValue(m.id)}
       timing={selectedCue ? mech.timings.get(selectedCue.id)?.[m.id] ?? null : null}
-      showTiming={!!selectedCue && mech.selectedRow[m.id]?.source === 'own' && !!cueCheck?.items[m.id]?.prevCueId}
+      showTiming={!!selectedCue && mech.selectedRow[m.id]?.source === 'own' && (!!library || !!cueCheck?.items[m.id]?.prevCueId)}
       cueSpan={cueCheck?.items[m.id]?.span ?? null}
       cueLabel={cueLabel}
       onTiming={selectedCue ? (patch) => void mech.commitTiming(selectedCue.id, m.id, patch) : undefined}
@@ -611,16 +617,21 @@ export default function MechanismTab({
       )}
 
       <section className="mech-section">
+        {library && (
+          <p className="muted small mech-lib-note" role="note">
+            預覽從預設位置開始動；在歌裡會從前一個 cue 的位置開始。延遲和走幾秒跟著這個 cue 存，改完按上面的「覆蓋」才會存進 Cue 庫。
+          </p>
+        )}
         <header className="mech-section__head">
           <h3 className="mech-section__title">這個 cue 的機關位置 · <span className="mech-section__cue">{title}</span></h3>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <button
+            {!library && <button
               type="button"
               className="btn btn--ghost btn--sm"
               onClick={() => void exportSheet()}
               disabled={exporting || mechanisms.length === 0}
               title="用 Excel 打開；整個專案每首歌、每個 cue、每個機關一行"
-            ><Icon icon={exporting ? LoaderCircle : FileSpreadsheet} spin={exporting} /> 匯出機關總表</button>
+            ><Icon icon={exporting ? LoaderCircle : FileSpreadsheet} spin={exporting} /> 匯出機關總表</button>}
             <HelpLink anchor={HELP_ANCHORS.prodMechanisms} />
           </span>
         </header>
@@ -631,7 +642,7 @@ export default function MechanismTab({
             <span>顯示機關時間軸</span>
           </label>
         )}
-        {cues.length > 0 && (
+        {!library && cues.length > 0 && (
           <label className="mech-cue-pick">
             <span className="muted small">換 cue</span>
             <select value={selectedCue?.id ?? ''} onChange={e => onSelectCue(e.target.value || null)} aria-label="換 cue">
@@ -655,7 +666,7 @@ export default function MechanismTab({
         )}
       </section>
 
-      <section className="mech-section">
+      {!library && <section className="mech-section">
         <header className="mech-section__head">
           <h3 className="mech-section__title">設定機關</h3>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
@@ -699,7 +710,7 @@ export default function MechanismTab({
             {layout.map((it, i) => (it.type === 'single' ? setupItem(it.mech, i) : it.type === 'rig' ? setupRig(it.rig, it.hoists, i) : setupGroup(it.group, it.members, i)))}
           </ul>
         )}
-      </section>
+      </section>}
     </div>
   );
 }

@@ -19,6 +19,7 @@ import { buildMechanismTimeline, checkSongMechanisms, ownMoveFor, sortMasters, t
 import * as mapi from './mechanismApi';
 import type { StageSceneQuery } from '../../components/StageScene';
 import type { DraftMech } from '../lookDraft';
+import { buildLibraryView } from './libraryView';
 
 export interface MechanismSceneProps {
   mechanisms: Mechanism[] | null;
@@ -217,6 +218,12 @@ export function useEditorMechanisms(o: {
    * 給它的機關列 → 當成一個只存在畫面上的 cue（不寫後台）
    */
   previewLook?: { mechanisms: { mechanismId: string; value: number; delaySec: number | null; durationSec: number | null; carried: boolean }[] } | null;
+  /**
+   * 右邊「Cue 庫」分頁的機關：看的是 Cue 庫的一個 cue，不屬於哪一首歌。
+   * 給了 → 檢查表和時間軸改用「預設位置 → 這個 cue」的小時間表（lib/mechanisms/libraryView.ts），
+   * 時間軸只畫這個 cue 從開始轉場到最後一個機關停下；不給 = 照歌的 cue（右邊「機關」分頁）
+   */
+  libraryView?: { name: string; crossfadeSeconds: number } | null;
 }) {
   const { projectId, songId } = o;
   const previewLook = o.previewLook ?? null;
@@ -280,7 +287,8 @@ export function useEditorMechanisms(o: {
     : rawSaved), [rawSaved, previewLook]);
   // Cue 庫專案：目前選的 cue 的機關列蓋上草稿（畫面、時間軸、速度檢查都看得到還沒存的改動）
   const draftMech = o.libDraft?.mechanisms;
-  const libActive = !!o.libDraft && positions?.mode === 'library';
+  // Cue 庫專案、有看一個 Cue 庫的 cue → 改動進草稿（不需要先選歌）
+  const libActive = !!o.libDraft;
   const list = useMemo(() => {
     if (!libActive || !draftMech || !selectedCueId || Object.keys(draftMech).length === 0) return rawList;
     const kept = rawList.filter(p => !(p.cueId === selectedCueId && p.mechanismId in draftMech));
@@ -290,15 +298,24 @@ export function useEditorMechanisms(o: {
     return kept;
   }, [libActive, draftMech, selectedCueId, rawList]);
   posRef.current = positions ? { ...positions, list } : positions;
-  const pb = usePlayback(mechanisms, list, cues, selectedCueId, undefined, positions?.mode);
+  const pb = usePlayback(mechanisms, list, cues, selectedCueId, undefined, positions?.mode ?? (o.libDraft ? 'library' : undefined));
+  const lv = o.libraryView ?? null;
+  const libView = useMemo(
+    () => (lv && selectedCueId && pb.axes && pb.axes.length ? buildLibraryView(pb.axes, pb.resolved, pb.timings, selectedCueId, lv.name, lv.crossfadeSeconds) : null),
+    [lv?.name, lv?.crossfadeSeconds, !!lv, selectedCueId, pb.axes, pb.resolved, pb.timings], // eslint-disable-line react-hooks/exhaustive-deps
+  );
+  const timeline = libView ? libView.timeline : pb.timeline;
+  const timelineRef = useRef(timeline);
+  timelineRef.current = timeline;
   const targets = useMemo(() => {
     const keys = Object.keys(preview);
     return keys.length ? { ...pb.targets, ...preview } : pb.targets;
   }, [pb.targets, preview]);
-  const check = useMemo<SongCheck | null>(
+  const songCheck = useMemo<SongCheck | null>(
     () => (pb.axes && pb.axes.length ? checkSongMechanisms(pb.axes, cues, pb.resolved, pb.timings) : null),
     [pb.axes, cues, pb.resolved, pb.timings],
   );
+  const check = libView ? libView.check : songCheck;
   // 吊掛（v2 第 4 階段）：每個 cue、每一組吊掛的傾斜和說明（到位時 + 走過來的路上四個吊點不在同一個平面上 / 兩點的高度差比距離大）
   const scale = o.scaleCorrection && o.scaleCorrection > 0 ? o.scaleCorrection : 1;
   const hoistRigs = useMemo(() => buildHoistRigs(mechanisms), [mechanisms]);
@@ -359,8 +376,8 @@ export function useEditorMechanisms(o: {
     setPreview(p => { if (!(mechId in p)) return p; const n = { ...p }; delete n[mechId]; return n; });
     const scope = historyScope(selectedCueId);
     try {
-      if (selectedCueId && songId) {
-        const cueId = selectedCueId, sid = songId;
+      if (selectedCueId && (songId || libActive)) {
+        const cueId = selectedCueId, sid = songId ?? '';
         const before = ownValue(cueId, mechId);
         if (before !== null && Math.abs(before - value) < 1e-9) return;
         if (libActive && libDraftRef.current) {
@@ -397,8 +414,8 @@ export function useEditorMechanisms(o: {
 
   /** 回到沿用上一個 cue（刪掉這個 cue 自己的值） */
   const clearValue = useCallback(async (mechId: string) => {
-    if (!projectId || !selectedCueId || !songId || !o.canEdit) return;
-    const cueId = selectedCueId, sid = songId;
+    if (!projectId || !selectedCueId || (!songId && !libActive) || !o.canEdit) return;
+    const cueId = selectedCueId, sid = songId ?? '';
     const before = ownValue(cueId, mechId);
     if (before === null) return;
     if (libActive && libDraftRef.current) { libDraftRef.current.set({ [mechId]: null }); return; }
@@ -423,8 +440,8 @@ export function useEditorMechanisms(o: {
    * 這個 cue 還沒有自己的位置 → 用沿用來的值一起存（畫面不會變）；復原時整列刪掉回到沿用。
    */
   const commitTiming = useCallback(async (cueId: string, mechId: string, patch: { delaySec?: number | null; durationSec?: number | null }) => {
-    const sid = songId;
-    if (!projectId || !sid || !o.canEdit) return;
+    const sid = songId ?? '';
+    if (!projectId || (!sid && !libActive) || !o.canEdit) return;
     const own = ownEntry(cueId, mechId);
     const before = { delaySec: own?.delaySec ?? null, durationSec: own?.durationSec ?? null };
     const after = {
@@ -468,8 +485,8 @@ export function useEditorMechanisms(o: {
    * 回 true = 存好了
    */
   const applyPositions = useCallback(async (cueId: string, items: { mechanismId: string; value: number; delaySec?: number | null }[]): Promise<boolean> => {
-    const sid = songId;
-    if (!projectId || !sid || !o.canEdit || items.length === 0) return false;
+    const sid = songId ?? '';
+    if (!projectId || (!sid && !libActive) || !o.canEdit || items.length === 0) return false;
     if (libActive && libDraftRef.current) {
       if (cueId !== selectedCueId) { toast.info('先選這個 cue 才能改它的機關'); return false; }
       const entries: Record<string, DraftMech | null> = {};
@@ -530,9 +547,9 @@ export function useEditorMechanisms(o: {
   const setPreviewTime = useCallback((t: number | null) => { previewTimeRef.current = t; }, []);
   const editorAtFrame = useCallback((): MechanismValues | null => {
     const t = previewTimeRef.current;
-    const tl = pb.timelineRef.current;
+    const tl = timelineRef.current;
     return t !== null && tl ? tl.valuesAt(t) : null;
-  }, [pb.timelineRef]);
+  }, []);
 
   /** 拖滑桿時邊拖邊看（不存）；null = 取消預覽 */
   const previewValue = useCallback((mechId: string, value: number | null) => {
@@ -609,7 +626,7 @@ export function useEditorMechanisms(o: {
     /** 吊掛（v2 第 4 階段）：每一組的吊點資料、每個 cue 的傾斜和說明 */
     hoistRigs, hoistChecks,
     /** 延遲 / 走幾秒（v2）、機關時間軸 */
-    commitTiming, timings: pb.timings, timeline: pb.timeline, setPreviewTime, previewTimeRef, timelineOpen, setTimelineOpen,
+    commitTiming, timings: pb.timings, timeline, libraryCues: libView?.cues ?? null, setPreviewTime, previewTimeRef, timelineOpen, setTimelineOpen,
     refreshDefs, refreshPositions, sceneProps,
     /** 目前 cue 的機關值（從目前 3D 畫面建立 cue 時一起存） */
     currentValues: pb.targets,
