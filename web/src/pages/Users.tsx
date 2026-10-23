@@ -133,6 +133,13 @@ export default function Users() {
       toast.warn('不能把自己改成別的角色：至少要留一個製作。');
       return;
     }
+    // 全站製作看得到所有專案、能管用戶：先問一次（常見誤會：只想讓他管某個專案 → 應該到那個專案的「成員」設成製作）
+    if (role === 'admin' && u.role !== 'admin' && !(await confirmDialog({
+      title: `把「${u.name}」改成全站製作？`,
+      message: '全站製作看得到你所有的專案、能管全部用戶。\n只想讓他管某一個專案的話，請不要改這裡，到那個專案上方的「成員」把他設成「製作」。',
+      confirmLabel: '改成全站製作',
+      destructive: true,
+    }))) return;
     try {
       await api.updateUserAdmin(u.id, { role });
       await refresh();
@@ -181,7 +188,7 @@ export default function Users() {
               className="user-row__role"
             >
               {(Object.keys(ROLE_LABEL) as UserRole[]).map(r => (
-                <option key={r} value={r}>{ROLE_LABEL[r]}</option>
+                <option key={r} value={r}>{r === 'admin' ? '全站製作（看得到全部專案）' : ROLE_LABEL[r]}</option>
               ))}
             </select>
             {u.deactivated
@@ -421,7 +428,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
             <select id="u-role" value={role} onChange={(e) => setRole(e.target.value as UserRole)}>
               <option value="animator">{ROLE_LABEL.animator}</option>
               <option value="director">{ROLE_LABEL.director}</option>
-              <option value="admin">{ROLE_LABEL.admin}（看得到全部專案、可以管用戶）</option>
+              <option value="admin">全站製作（看得到全部專案、可以管用戶）</option>
             </select>
             <small className="form-hint">這是預設角色。指派到某個專案時，可以在那個專案改成別的角色。</small>
           </div>
