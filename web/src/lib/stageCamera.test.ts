@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import * as THREE from 'three';
-import { stageFrontDirection, fitDistance, computeFrontView, computePresetView } from './stageCamera';
+import {
+  stageFrontDirection, fitDistance, computeFrontView, computePresetView, mainLedRoots, countBlockedSamples, FOH_EYE_HEIGHT,
+} from './stageCamera';
 
 /** 一片朝向 dir 的 LED（PlaneGeometry 預設朝 +Z） */
 function ledFacing(dir: THREE.Vector3, at = new THREE.Vector3()) {
@@ -122,5 +124,66 @@ describe('computePresetView', () => {
     const distFront = front.position.distanceTo(front.target);
     const distVip = vip.position.distanceTo(vip.target);
     expect(distVip).toBeLessThan(distFront);
+  });
+});
+
+describe('面向演出者的 LED（題詞）', () => {
+  /** 主 LED 面向 +Z（觀眾在 +Z）、地板高度 0；題詞面向 -Z，懸吊在觀眾席上方 */
+  function scene(promptZ: number, promptY: number) {
+    const main = ledFacing(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 4, 0));
+    main.scale.set(5, 5, 1);  // 20m x 10m 的主螢幕（比題詞大）
+    main.updateMatrixWorld(true);
+    const floor = new THREE.Mesh(new THREE.BoxGeometry(40, 0.2, 40), new THREE.MeshBasicMaterial());
+    floor.position.set(0, 0.1, 0);
+    floor.updateMatrixWorld(true);
+    const prompt = new THREE.Mesh(new THREE.PlaneGeometry(10, 2), new THREE.MeshBasicMaterial());
+    prompt.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), new THREE.Vector3(0, 0, -1));
+    prompt.position.set(0, promptY, promptZ);
+    prompt.updateMatrixWorld(true);
+    return { main, floor, prompt };
+  }
+
+  it('mainLedRoots 排除面向演出者的 LED，其他留著', () => {
+    const { main, prompt } = scene(30, 6);
+    const side = ledFacing(new THREE.Vector3(1, 0, 0), new THREE.Vector3(-14, 3, 0));  // 側面的不排除
+    expect(mainLedRoots([main, prompt, side])).toEqual([main, side]);
+    expect(mainLedRoots([prompt])).toEqual([prompt]);
+  });
+
+  it('題詞不影響看向點和正面方向', () => {
+    const { main, floor, prompt } = scene(30, 6);
+    for (const preset of ['front', 'foh', 'stands', 'vip'] as const) {
+      const a = computePresetView(preset, [main, floor, prompt], [main, prompt], 50, 16 / 9);
+      const b = computePresetView(preset, [main, floor], [main], 50, 16 / 9);
+      expect(a.target.distanceTo(b.target)).toBeLessThan(1e-6);
+      expect(a.position.z).toBeGreaterThan(a.target.z);  // 還是在觀眾那一側
+      expect(a.position.distanceTo(b.position)).toBeLessThan(1e-6);
+    }
+  });
+
+  it('控台高度 = 地面 + 1.7m', () => {
+    const { main, floor, prompt } = scene(30, 6);
+    const v = computePresetView('foh', [main, floor, prompt], [main, prompt], 50, 16 / 9);
+    expect(v.position.y).toBeCloseTo(0 + FOH_EYE_HEIGHT, 1);
+    expect(Math.abs(v.position.x - v.target.x)).toBeLessThan(1e-6);  // 正對中間
+  });
+
+  it('射線沒被題詞擋住（題詞在鏡頭後面）', () => {
+    const { main, floor, prompt } = scene(60, 5);
+    const v = computePresetView('foh', [main, floor, prompt], [main, prompt], 50, 16 / 9);
+    expect(countBlockedSamples(v.position, [main], [prompt])).toBe(0);
+  });
+
+  it('題詞掛在鏡頭和舞台中間時，會試著微調，最後不會比一開始更糟', () => {
+    // 先算沒有題詞的控台位置，再把題詞掛在中間一點、略高於眼睛
+    const base = scene(0, 0);
+    const v0 = computePresetView('foh', [base.main, base.floor], [base.main], 50, 16 / 9);
+    const z = (v0.position.z + v0.target.z) / 2;
+    const { main, floor, prompt } = scene(z, FOH_EYE_HEIGHT + 0.5);
+    const blockedAtStart = countBlockedSamples(v0.position, [main], [prompt]);
+    expect(blockedAtStart).toBeGreaterThan(0);
+    const v = computePresetView('foh', [main, floor, prompt], [main, prompt], 50, 16 / 9);
+    expect(countBlockedSamples(v.position, [main], [prompt])).toBeLessThanOrEqual(blockedAtStart);
+    expect(v.position.y).toBeGreaterThanOrEqual(0.8 + 0.2 - 1e-6);  // 不會鑽進地板
   });
 });
