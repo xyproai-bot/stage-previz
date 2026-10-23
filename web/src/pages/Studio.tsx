@@ -786,7 +786,7 @@ function StudioInner({ projectId }: { projectId: string }) {
   useVideoJobDone(onJobDone);
 
   async function handleDeleteVersion(item: VersionItem) {
-    if (!selectedSong || !(await confirmDialog({ ...splitQuestion(deleteVersionMessage(item)), confirmLabel: `刪除 ${item.label || '這一版'}`, destructive: true }))) return;
+    if (!selectedSong || !(await confirmDialog({ ...splitQuestion(deleteVersionMessage(item)), confirmLabel: '永久刪除', destructive: true }))) return;
     try {
       await deleteSongVideo(projectId, selectedSong.id, item.id);
       toast.success(`已刪除 ${item.label}`);

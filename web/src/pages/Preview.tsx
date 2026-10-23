@@ -1004,7 +1004,7 @@ function SongDetail({
   useVideoJobDone(onJobDone);
 
   async function handleDeleteVersion(item: VersionItem) {
-    if (!(await confirmDialog({ ...splitQuestion(deleteVersionMessage(item)), confirmLabel: `刪除 ${item.label || '這一版'}`, destructive: true }))) return;
+    if (!(await confirmDialog({ ...splitQuestion(deleteVersionMessage(item)), confirmLabel: '永久刪除', destructive: true }))) return;
     try {
       await deleteSongVideo(projectId, song.id, item.id);
       toast.success(`已刪除 ${item.label}`);

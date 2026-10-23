@@ -155,17 +155,17 @@ test('清檔案：只清刪掉超過 30 天的那幾版的檔案；還在的、�
 
 // ─── 刪除 / 最近刪除 / 救回來 ───
 
-test('刪掉一版 → 最近刪除看得到（還剩 30 天）→ 製作救回來，號碼不變；動畫師、導演不能救；清掉的救不回來', async () => {
+test('舊的軟刪除資料 → 最近刪除看得到（還剩 30 天）→ 製作救回來，號碼不變；動畫師、導演不能救；清掉的救不回來', async () => {
   const t = await setup();
   const v1 = await addVideo(t, { version: 1 });
   const v2 = await addVideo(t, { version: 2 });
   await t.db.prepare(`UPDATE songs SET video_version_seq = 2 WHERE id = 's1'`).run();
   const base = '/api/projects/p1/songs/s1/videos';
 
-  assert.equal((await t.call('u_a1', 'DELETE', `${base}/${v2.id}`)).status, 200);
-  const row = await t.db.prepare(`SELECT deleted_at, purge_after, deleted_by FROM song_videos WHERE id = ?`).bind(v2.id).first();
-  assert.equal(Date.parse(row.purge_after) - Date.parse(row.deleted_at), 30 * DAY);
-  assert.equal(row.deleted_by, 'u_a1');
+  // 按「刪除」現在是永久刪除（下面另一個測試）；最近刪除裡的是以前刪的舊資料和「專案結束清影片」清掉的，這裡直接造一筆
+  const nowIsoStr = iso(Date.now());
+  await t.db.prepare(`UPDATE song_videos SET deleted_at = ?, purge_after = ?, deleted_by = 'u_a1' WHERE id = ?`)
+    .bind(nowIsoStr, iso(Date.parse(nowIsoStr) + 30 * DAY), v2.id).run();
   assert.ok(t.r2.bytes(v2.key), '檔案留著');
 
   assert.equal((await t.call('u_a1', 'GET', `${base}/deleted`)).status, 403);
@@ -197,6 +197,127 @@ test('刪掉一版 → 最近刪除看得到（還剩 30 天）→ 製作救回�
     .bind(iso(Date.now() - 40 * DAY), iso(Date.now() - 10 * DAY), iso(Date.now()), v1.id).run();
   assert.equal((await t.call('u_admin', 'POST', `${base}/${v1.id}/restore`)).status, 410);
   assert.equal((await t.call('u_admin', 'GET', `${base}/deleted`)).data.videos.length, 0);
+});
+
+// ─── 永久刪除 ───
+
+async function seedVideoExtras(t, v, { author = 'u_a1' } = {}) {
+  const att = { r2: `comment-attachments/p1/s1/att_${v.id}.png`, thumb: `comment-attachments/p1/s1/att_${v.id}_t.jpg` };
+  await t.r2.put(att.r2, new Uint8Array([9]));
+  await t.r2.put(att.thumb, new Uint8Array([8]));
+  await t.db.batch([
+    t.db.prepare(`INSERT INTO comments (id, project_id, song_id, time_in_video, text, status, author_name, author_role, created_at, video_id, video_version, annotation_json)
+                  VALUES (?, 'p1', 's1', 1, '改一下', 'open', '王導', 'director', ?, ?, 1, '{"v":1}')`).bind(`c_${v.id}`, iso(Date.now()), v.id),
+    t.db.prepare(`INSERT INTO comments (id, project_id, song_id, time_in_video, text, status, author_name, author_role, created_at, reply_to_comment_id)
+                  VALUES (?, 'p1', 's1', 1, '收到', 'open', '阿凱', 'animator', ?, ?)`).bind(`r_${v.id}`, iso(Date.now()), `c_${v.id}`),
+    t.db.prepare(`INSERT INTO comment_attachments (id, project_id, song_id, comment_id, r2_key, thumb_key, mime, size, created_at)
+                  VALUES (?, 'p1', 's1', ?, ?, ?, 'image/png', 1, ?)`).bind(`att_${v.id}`, `c_${v.id}`, att.r2, att.thumb, iso(Date.now())),
+    t.db.prepare(`INSERT INTO song_reviews (id, project_id, song_id, video_id, video_version, status, by_name, created_at)
+                  VALUES (?, 'p1', 's1', ?, 1, 'needs_changes', '王導', ?)`).bind(`rv_${v.id}`, v.id, iso(Date.now())),
+    t.db.prepare(`INSERT INTO notifications (id, user_id, project_id, song_id, video_id, kind, created_at)
+                  VALUES (?, ?, 'p1', 's1', ?, 'new_version', ?)`).bind(`n_${v.id}`, author, v.id, iso(Date.now())),
+  ]);
+  return att;
+}
+
+const count = async (t, sql, ...b) => (await t.db.prepare(sql).bind(...b).first()).n;
+
+test('永久刪除一版：影片檔、留言（含回覆、畫記、留言圖片）、審片紀錄、通知一起刪掉；別的版本不動；號碼不再用', async () => {
+  const t = await setup();
+  const v1 = await addVideo(t, { version: 1 });
+  const v2 = await addVideo(t, { version: 2 });
+  await t.db.prepare(`UPDATE songs SET video_version_seq = 2 WHERE id = 's1'`).run();
+  const a1 = await seedVideoExtras(t, v1);
+  const a2 = await seedVideoExtras(t, v2);
+  const base = '/api/projects/p1/songs/s1/videos';
+
+  const r = await t.call('u_a1', 'DELETE', `${base}/${v2.id}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.r2Pending, 0);
+  assert.equal(t.r2.bytes(v2.key), null, '影片檔刪掉了');
+  assert.equal(t.r2.bytes(a2.r2), null);
+  assert.equal(t.r2.bytes(a2.thumb), null);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_videos WHERE id = ?`, v2.id), 0);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM comments WHERE id IN (?, ?)`, `c_${v2.id}`, `r_${v2.id}`), 0);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM comment_attachments WHERE id = ?`, `att_${v2.id}`), 0);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_reviews WHERE video_id = ?`, v2.id), 0);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM notifications WHERE video_id = ?`, v2.id), 0);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM r2_pending_deletes`), 0);
+  // V1 完全沒動
+  assert.ok(t.r2.bytes(v1.key));
+  assert.ok(t.r2.bytes(a1.r2));
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_videos WHERE id = ?`, v1.id), 1);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM comments WHERE id IN (?, ?)`, `c_${v1.id}`, `r_${v1.id}`), 2);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_reviews WHERE video_id = ?`, v1.id), 1);
+  // 最近刪除沒有它；清單只剩 V1；號碼還是記著 2
+  assert.equal((await t.call('u_admin', 'GET', `${base}/deleted`)).data.videos.length, 0);
+  assert.deepEqual((await t.call('u_admin', 'GET', base)).data.videos.map(v => v.label), ['V1']);
+  assert.equal((await t.db.prepare(`SELECT video_version_seq AS n FROM songs WHERE id = 's1'`).first()).n, 2);
+  // 再刪一次 = 找不到；救回也不行
+  assert.equal((await t.call('u_a1', 'DELETE', `${base}/${v2.id}`)).status, 404);
+  assert.equal((await t.call('u_admin', 'POST', `${base}/${v2.id}/restore`)).status, 404);
+});
+
+test('永久刪除的權限不變：別人的動畫師、外人不能刪；自己的、製作可以', async () => {
+  const t = await setup();
+  const mine = await addVideo(t, { version: 1, by: 'u_a1' });
+  const base = '/api/projects/p1/songs/s1/videos';
+  assert.equal((await t.call('u_a2', 'DELETE', `${base}/${mine.id}`)).status, 403);
+  assert.equal((await t.call('u_out', 'DELETE', `${base}/${mine.id}`)).status, 403);
+  assert.equal((await t.call(null, 'DELETE', `${base}/${mine.id}`)).status, 401);
+  assert.ok(t.r2.bytes(mine.key), '沒權限不能刪');
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_videos WHERE id = ?`, mine.id), 1);
+  assert.equal((await t.call('u_admin', 'DELETE', `${base}/${mine.id}`)).status, 200);
+  assert.equal(t.r2.bytes(mine.key), null);
+});
+
+test('永久刪除時 R2 刪失敗：資料照刪、不讓使用者卡住；沒刪掉的檔案記起來，排程補刪（不受 VIDEO_PURGE 開關影響）', async () => {
+  const t = await setup({ purge: 'dry-run' });
+  const v = await addVideo(t, { version: 1 });
+  const a = await seedVideoExtras(t, v);
+  const realDelete = t.r2.delete.bind(t.r2);
+  t.r2.delete = async () => { throw new Error('R2 暫時不能用'); };
+
+  const r = await t.call('u_a1', 'DELETE', `/api/projects/p1/songs/s1/videos/${v.id}`);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.r2Pending, 3);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_videos WHERE id = ?`, v.id), 0);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM comments WHERE video_id = ?`, v.id), 0);
+  assert.ok(t.r2.bytes(v.key), '檔案還在 R2');
+  const pend = (await t.db.prepare(`SELECT r2_key, attempts, last_error FROM r2_pending_deletes ORDER BY r2_key`).all()).results;
+  assert.deepEqual(pend.map(x => x.r2_key).sort(), [a.r2, a.thumb, v.key].sort());
+  assert.ok(pend.every(x => x.attempts === 1 && /R2 暫時不能用/.test(x.last_error)));
+
+  // 排程：R2 還是壞 → 繼續留著
+  const still = await storage.runPendingR2Deletes(t.env);
+  assert.equal(still.failed, 3);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM r2_pending_deletes`), 3);
+  // R2 好了 → 補刪（dry-run 模式也要刪）
+  t.r2.delete = realDelete;
+  const out = await storage.runStorageCron(t.env);
+  assert.equal(out.pendingDeletes.deleted, 3);
+  assert.equal(t.r2.bytes(v.key), null);
+  assert.equal(t.r2.bytes(a.r2), null);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM r2_pending_deletes`), 0);
+});
+
+test('永久刪除：貼連結交的版本（沒有 R2 檔案）也能刪；還在上傳的連分段上傳一起取消', async () => {
+  const t = await setup();
+  const base = '/api/projects/p1/songs/s1/videos';
+  await t.db.prepare(`INSERT INTO song_videos (id, project_id, song_id, version, source, original_url, r2_key, mime, status, created_by)
+                      VALUES ('sv_link', 'p1', 's1', 1, 'link', 'https://x.test/a.mp4', '', 'video/mp4', 'failed', 'u_a1')`).run();
+  const r = await t.call('u_a1', 'DELETE', `${base}/sv_link`);
+  assert.equal(r.status, 200);
+  assert.equal(r.data.r2Pending, 0);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_videos WHERE id = 'sv_link'`), 0);
+
+  const mpu = await t.r2.createMultipartUpload('videos/p1/s1/sv_up.mp4');
+  await t.db.prepare(`INSERT INTO song_videos (id, project_id, song_id, source, r2_key, mime, status, upload_id, created_by)
+                      VALUES ('sv_up', 'p1', 's1', 'upload', 'videos/p1/s1/sv_up.mp4', 'video/mp4', 'uploading', ?, 'u_a1')`).bind(mpu.uploadId).run();
+  await t.db.prepare(`INSERT INTO song_video_parts (video_id, part_number, etag, size_bytes) VALUES ('sv_up', 1, 'e', 1)`).run();
+  assert.equal((await t.call('u_a1', 'DELETE', `${base}/sv_up`)).status, 200);
+  assert.equal(t.r2.uploads.has(mpu.uploadId), false);
+  assert.equal(await count(t, `SELECT COUNT(*) AS n FROM song_video_parts`), 0);
 });
 
 // ─── 專案結束清影片 ───

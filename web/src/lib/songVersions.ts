@@ -253,12 +253,10 @@ export function canModifyVideo(p: PermInput & { item: Pick<VersionItem, 'kind' |
   return !!p.item.byId && p.item.byId === p.userId;
 }
 
-/** 刪除前確認的話：講清楚號碼不會再用 */
+/** 刪除前確認的話：永久刪除，講清楚救不回來 */
 export function deleteVersionMessage(item: Pick<VersionItem, 'label' | 'title'>): string {
   const name = item.label || '這一版';
-  return `要刪掉 ${name}${item.title ? `（${item.title}）` : ''} 嗎？\n\n`
-    + '刪掉後，所有人的清單上都看不到這一版。30 天內製作可以在「影片版本 → 最近刪除」救回來，30 天後檔案會清掉。\n'
-    + `${name} 這個號碼不會再用：之後交的新版本號碼會繼續往上加，不會補回 ${name}。`;
+  return `永久刪除 ${name}？影片檔和這個版本的留言、畫記都會刪掉，刪了救不回來。`;
 }
 
 /**

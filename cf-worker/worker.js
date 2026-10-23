@@ -5604,16 +5604,17 @@ async function patchSongVideo(request, env, ctx) {
   return songVideoResponse(env, ctx, v);
 }
 
-// 刪掉一版：從清單拿掉（R2 的檔案留 30 天，製作可以在「最近刪除」救回來，之後排程清掉）；號碼不會再用。還沒好的會順便取消
+// 刪掉一版：永久刪除（影片檔、這一版的留言 / 畫記 / 審片紀錄全部刪掉，救不回來）；號碼不會再用。還沒好的會順便取消
+// R2 刪不掉時資料照刪，沒刪掉的檔案記起來，排程之後補刪（storage.hardDeleteVideo / runPendingR2Deletes）
 async function deleteSongVideo(request, env, ctx) {
   const { me, song, role, video: v } = ctx;
   const d = videoModifyDecision({ role, userId: me.id, song, video: v });
   if (!d.ok) return jsonResp({ error: d.error }, d.status);
-  await cancelAndHideVideo(env, v, '已取消', me.id);
+  const r = await storage.hardDeleteVideo(env, v);
   await logActivity(request, env, ctx.projectId, 'delete', 'song_video', v.id, {
-    songId: v.song_id, version: v.version, label: versionLabel(v.version), title: v.title,
+    songId: v.song_id, version: v.version, label: versionLabel(v.version), title: v.title, permanent: true,
   });
-  return jsonResp({ ok: true });
+  return jsonResp({ ok: true, r2Pending: r.pending });
 }
 
 // 救回刪掉的版本（storage.mjs；號碼不變）

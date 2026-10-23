@@ -116,6 +116,91 @@ export async function runPurgeStep(env, { now = Date.now(), limit = STORAGE_DEFA
 }
 
 // ─────────────────────────────────────────────
+// 永久刪除一版（按「刪除」）：資料和 R2 檔案同一個請求裡就刪掉，不留
+// ─────────────────────────────────────────────
+
+/**
+ * 這一版整個刪掉：影片檔、這一版的留言（含回覆、畫記、留言裡的圖片）、審片紀錄、通知、複製 / 搬動的工作紀錄，最後是這一版本身。
+ * 版本號碼不會再用（songs.video_version_seq 只增不減）。
+ * 順序：① 先把要刪的 R2 位置記進 r2_pending_deletes，和資料庫的刪除放在同一批（不會資料沒了、位置也忘了）
+ *      ② 試著刪 R2，刪成功的從 r2_pending_deletes 拿掉；失敗的留著，排程（runPendingR2Deletes）之後補刪，不讓使用者卡住。
+ * @returns {{deleted: number, pending: number, r2Failed: boolean}}  deleted = R2 刪掉幾個檔案，pending = 還沒刪掉、等排程補刪的檔案數
+ */
+export async function hardDeleteVideo(env, v, now = Date.now()) {
+  const t = nowIso(now);
+  const attRows = await env.DB.prepare(`
+    SELECT r2_key, thumb_key FROM comment_attachments
+     WHERE comment_id IN (SELECT id FROM comments WHERE video_id = ?1 OR reply_to_comment_id IN (SELECT id FROM comments WHERE video_id = ?1))
+  `).bind(v.id).all().then(r => r.results || []).catch(() => []);
+  const keys = new Set();
+  if (v.r2_key) keys.add(v.r2_key);
+  for (const a of attRows) for (const k of [a?.r2_key, a?.thumb_key]) if (typeof k === 'string' && k) keys.add(k);
+
+  // 沒傳完的分段上傳 / 搬長期存放到一半的暫存，先收掉（這些不是檔案，不用記）
+  if (v.upload_id && v.r2_key) { try { await env.MODELS.resumeMultipartUpload(v.r2_key, v.upload_id).abort(); } catch { /* 已經沒了 */ } }
+  try {
+    const job = await env.DB.prepare(`SELECT upload_id FROM video_storage_jobs WHERE video_id = ? LIMIT 1`).bind(v.id).first();
+    if (job?.upload_id && v.r2_key) { try { await env.MODELS.resumeMultipartUpload(v.r2_key, job.upload_id).abort(); } catch { /* ignore */ } }
+  } catch { /* 沒有這張表就算了 */ }
+
+  const stmts = [];
+  for (const k of keys) {
+    stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO r2_pending_deletes (r2_key, created_at) VALUES (?, ?)`).bind(k, t));
+  }
+  const vid = v.id;
+  stmts.push(
+    env.DB.prepare(`DELETE FROM comment_attachments WHERE comment_id IN (SELECT id FROM comments WHERE video_id = ?1 OR reply_to_comment_id IN (SELECT id FROM comments WHERE video_id = ?1))`).bind(vid),
+    env.DB.prepare(`DELETE FROM comments WHERE reply_to_comment_id IN (SELECT id FROM comments WHERE video_id = ?1)`).bind(vid),
+    env.DB.prepare(`DELETE FROM comments WHERE video_id = ?1`).bind(vid),
+    env.DB.prepare(`DELETE FROM song_reviews WHERE video_id = ?1`).bind(vid),
+    env.DB.prepare(`DELETE FROM notifications WHERE video_id = ?1`).bind(vid),
+    env.DB.prepare(`DELETE FROM video_storage_jobs WHERE video_id = ?1`).bind(vid),
+    env.DB.prepare(`DELETE FROM song_video_parts WHERE video_id = ?1`).bind(vid),
+    env.DB.prepare(`DELETE FROM song_videos WHERE id = ?1`).bind(vid),
+  );
+  await env.DB.batch(stmts);
+
+  const list = [...keys];
+  let deleted = 0;
+  for (let i = 0; i < list.length; i += 500) {
+    const part = list.slice(i, i + 500);
+    try {
+      await env.MODELS.delete(part);
+      deleted += part.length;
+      await env.DB.batch(part.map(k => env.DB.prepare(`DELETE FROM r2_pending_deletes WHERE r2_key = ?`).bind(k)));
+    } catch (e) {
+      console.warn('[video hard delete] R2 沒刪成功，等排程補刪', v.id, e?.message || e);
+      const msg = String(e?.message || e).slice(0, 200);
+      try { await env.DB.batch(part.map(k => env.DB.prepare(`UPDATE r2_pending_deletes SET attempts = attempts + 1, last_error = ? WHERE r2_key = ?`).bind(msg, k))); } catch { /* 只是紀錄 */ }
+    }
+  }
+  return { deleted, pending: list.length - deleted, r2Failed: deleted < list.length };
+}
+
+/** 排程補刪：永久刪除時 R2 沒刪成功的檔案（不受 VIDEO_PURGE 開關影響：這是使用者按了刪除的） */
+export async function runPendingR2Deletes(env, { limit = 200 } = {}) {
+  const out = { candidates: 0, deleted: 0, failed: 0 };
+  if (!env.MODELS) return out;
+  const r = await env.DB.prepare(`SELECT r2_key FROM r2_pending_deletes ORDER BY created_at LIMIT ?`).bind(limit).all();
+  const keys = (r.results || []).map(x => x.r2_key);
+  out.candidates = keys.length;
+  for (let i = 0; i < keys.length; i += 100) {
+    const part = keys.slice(i, i + 100);
+    try {
+      await env.MODELS.delete(part);
+      await env.DB.batch(part.map(k => env.DB.prepare(`DELETE FROM r2_pending_deletes WHERE r2_key = ?`).bind(k)));
+      out.deleted += part.length;
+    } catch (e) {
+      out.failed += part.length;
+      const msg = String(e?.message || e).slice(0, 200);
+      console.error('[cron r2 pending delete]', msg);
+      try { await env.DB.batch(part.map(k => env.DB.prepare(`UPDATE r2_pending_deletes SET attempts = attempts + 1, last_error = ? WHERE r2_key = ?`).bind(msg, k))); } catch { /* ignore */ }
+    }
+  }
+  return out;
+}
+
+// ─────────────────────────────────────────────
 // 最近刪除 / 救回來（只有製作；router 已經檢查）
 // ─────────────────────────────────────────────
 
@@ -764,6 +849,7 @@ export async function runStorageCron(env, { now = Date.now() } = {}) {
   if (!env.DB) return {};
   const out = {};
   for (const [name, fn] of [
+    ['pendingDeletes', () => runPendingR2Deletes(env)],
     ['purge', () => runPurgeStep(env, { now })],
     ['scan', () => runStorageScanStep(env, { now })],
     ['storageClass', () => runStorageClassStep(env, { now })],

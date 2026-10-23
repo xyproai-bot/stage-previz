@@ -109,11 +109,11 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
   if (!open) return null;
 
   async function handleDelete(it: VersionItem) {
-    if (!(await confirmDialog({ ...splitQuestion(deleteVersionMessage(it)), confirmLabel: `刪除 ${it.label || '這一版'}`, destructive: true }))) return;
+    if (!(await confirmDialog({ ...splitQuestion(deleteVersionMessage(it)), confirmLabel: '永久刪除', destructive: true }))) return;
     setBusyId(it.id);
     try {
       await deleteSongVideo(projectId, song.id, it.id);
-      toast.success(`已刪除 ${it.label}（30 天內可以在「最近刪除」救回來）`);
+      toast.success(`已永久刪除 ${it.label}`);
       setDeletedRev(n => n + 1);
       await versions.reload();
       onChanged();

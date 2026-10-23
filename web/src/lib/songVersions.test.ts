@@ -185,11 +185,9 @@ describe('誰能加 / 刪影片（跟後台一樣）', () => {
     expect(canModifyVideo({ projectRole: 'director', userId: 'u_d', song: other, item: { kind: 'version', byId: 'u_d' } })).toBe(false);
   });
 
-  it('刪除確認講清楚號碼不會再用', () => {
+  it('刪除確認講清楚是永久刪除、救不回來', () => {
     const msg = deleteVersionMessage({ label: 'V2', title: 'S01_開場' });
-    expect(msg).toContain('V2（S01_開場）');
-    expect(msg).toContain('V2 這個號碼不會再用');
-    expect(msg).toContain('30 天內製作可以在「影片版本 → 最近刪除」救回來');
+    expect(msg).toBe('永久刪除 V2？影片檔和這個版本的留言、畫記都會刪掉，刪了救不回來。');
   });
 
   it('拿掉還沒好的那一版：失敗的「拿掉」、還在傳的「停止上傳」、複製中的「停止複製」，都是紅色按鈕', () => {
