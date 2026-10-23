@@ -51,6 +51,8 @@ interface Props {
   onRetryFinish?: (v: SongVideo) => void;
   /** 專案的 LED 畫布大小：貼連結的版本第一次播之後，跟它比（還沒設定 = 不比） */
   ledCanvas?: CanvasSize | null;
+  /** 這首歌現在選的版型（影片沒記下交的時候用哪個版型，才拿這個比）；沒選 = 不傳 */
+  songTemplate?: { name: string; canvas: CanvasSize } | null;
   /** 有給才出現「最近刪除」（製作：30 天內可以救回來） */
   onShowDeleted?: () => void;
   /** 現在登入的人（自己交的那一版跟別版重複 → 提醒他） */
@@ -87,7 +89,7 @@ function versionTooltip(it: VersionItem): string {
 export default function SongVersionBar({
   status, error, items, selectedKey, onSelect, pending, jobs, onRetryLoad, onAdd,
   canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
-  stalled, onResumePending, onRetryFinish, ledCanvas, onShowDeleted, userId,
+  stalled, onResumePending, onRetryFinish, ledCanvas, songTemplate, onShowDeleted, userId,
 }: Props) {
   // 預覽模式（製作用其他身分看）：交影片、刪除、重試…照樣出現但按不下去
   const { ro } = useViewAs();
@@ -103,7 +105,9 @@ export default function SongVersionBar({
   const playChecks = usePlayChecks();
   const notesOf = (it: VersionItem) => playCheckNotes(it.kind === 'version' ? playChecks[it.id] : null, {
     sizeBytes: it.video?.sizeBytes ?? null,
-    ledCanvas,
+    // 影片交的時候記下的版型優先（沒記 = 這首歌現在的版型；整條時間線換版型的不拿單一版型比）
+    ledCanvas: it.timeline ? null : ledCanvas,
+    template: it.timeline ? null : (it.template ?? songTemplate ?? null),
     includeWarnings: !!it.video && it.video.source !== 'upload',
   });
   const selectedNotes = selected ? notesOf(selected) : null;

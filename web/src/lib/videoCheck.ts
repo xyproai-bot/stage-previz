@@ -308,7 +308,7 @@ export type PlayCheck =
 /** 版本列上要顯示的：播不了 → 擋的那句；可以播 → 提醒（解析度、位元率、畫布） */
 export function playCheckNotes(
   check: PlayCheck | null | undefined,
-  opts: { sizeBytes?: number | null; ledCanvas?: CanvasSize | null; includeWarnings: boolean },
+  opts: { sizeBytes?: number | null; ledCanvas?: CanvasSize | null; includeWarnings: boolean; template?: { name: string; canvas: CanvasSize } | null },
 ): { error: string | null; warnings: string[] } {
   if (!check) return { error: null, warnings: [] };
   if (check.status === 'cannotPlay') return { error: CANNOT_PLAY_TEXT, warnings: [] };
@@ -317,6 +317,7 @@ export function playCheckNotes(
     probe: { ok: true, width: check.width, height: check.height, durationSec: check.durationSec },
     sizeBytes: opts.sizeBytes,
     ledCanvas: opts.ledCanvas,
+    template: opts.template ?? null,
   });
   return { error: null, warnings: r.warnings.map(w => w.text) };
 }

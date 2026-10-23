@@ -1157,6 +1157,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 emptyText={canAdd ? '還沒有影片，按右邊「加影片」交第一版給導演看' : '這首歌還沒有影片'}
                 newVersion={source === 'version' ? newVersion : null}
                 ledCanvas={view.ledCanvas}
+                songTemplate={songTplPlan}
               />
               <div className="studio-stage__scene" ref={stageRef}>
                 <StageScene

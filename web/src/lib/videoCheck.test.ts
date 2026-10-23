@@ -176,6 +176,26 @@ describe('playCheckNotes：版本第一次播之後，版本列上寫什麼', ()
   });
 });
 
+describe('playCheckNotes：版本記了版型就跟版型畫布比（不是整張 LED 畫布）', () => {
+  const played = { status: 'ok' as const, width: 1920, height: 1080, durationSec: 60, at: 1 };
+  const main = { name: 'Main LED', canvas: { width: 10496, height: 2304 } };
+  const full = { width: 11648, height: 3328 };
+  it('警告寫版型的大小，不是整張畫布', () => {
+    const w = playCheckNotes(played, { ledCanvas: full, template: main, includeWarnings: true }).warnings;
+    expect(w).toHaveLength(1);
+    expect(w[0]).toContain('10496×2304');
+    expect(w[0]).toContain('Main LED');
+    expect(w[0]).not.toContain('11648');
+  });
+  it('影片剛好是版型的一半 → 不提醒變形', () => {
+    const half = { status: 'ok' as const, width: 5248, height: 1152, durationSec: 60, at: 1 };
+    expect(playCheckNotes(half, { ledCanvas: full, template: main, includeWarnings: true }).warnings).toEqual([]);
+  });
+  it('沒版型 → 照整張畫布比（跟以前一樣）', () => {
+    expect(playCheckNotes(played, { ledCanvas: full, includeWarnings: true }).warnings[0]).toContain('11648×3328');
+  });
+});
+
 describe('選了 LED 版型：影片大小跟版型畫布比', () => {
   const ok = (w: number, h: number) => ({ ok: true as const, width: w, height: h, durationSec: 60 });
   const template = { name: '中間底幕', canvas: { width: 4400, height: 1012 } };
