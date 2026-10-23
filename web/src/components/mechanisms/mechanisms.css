@@ -258,7 +258,7 @@
 .mech-tl__hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .mech-tl__clock { font-family: var(--font-mono); font-size: 12px; color: var(--accent); min-width: 48px; text-align: right; }
 .mech-tl__empty { padding: 14px 12px; }
-.mech-tl__body { display: flex; min-height: 0; overflow-y: auto; }
+.mech-tl__body { display: flex; align-items: flex-start; min-height: 0; overflow-y: auto; } /* flex-start：右邊色塊那欄照內容高度，跟左邊名字一起捲（不然色塊被切在框的高度，名字卻一直往下長） */
 .mech-tl__labels { flex-shrink: 0; border-right: 1px solid var(--border); }
 .mech-tl__ruler-pad { height: 30px; border-bottom: 1px solid var(--border); padding: 4px 6px; font-size: 10.5px; white-space: nowrap; overflow: hidden; }
 .mech-tl__label {
