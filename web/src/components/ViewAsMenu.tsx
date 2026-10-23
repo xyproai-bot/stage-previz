@@ -25,6 +25,8 @@ interface Options {
   onCreateShare: () => void;
   /** 第一個項目上面要不要寫小標題「用其他身分看」（手機的「⋯」裡跟別的項目放在一起時） */
   withSection?: boolean;
+  /** 選單最下面多兩項「直接打開」導演頁 / 動畫師工作站（不是預覽，用自己的身分看、可以留言）；編輯頁用 */
+  withDirect?: boolean;
 }
 
 type LinksState =
@@ -36,7 +38,7 @@ export function clientShareUrl(link: Pick<ShareLink, 'token' | 'slug'>): string 
   return link.slug ? shareSlugUrl(link.slug) : shareTokenUrl(link.token);
 }
 
-export function useViewAsMenu({ projectId, animators, onCreateShare, withSection }: Options): { items: OverflowItem[]; load: () => void } {
+export function useViewAsMenu({ projectId, animators, onCreateShare, withSection, withDirect }: Options): { items: OverflowItem[]; load: () => void } {
   const [links, setLinks] = useState<LinksState>({ status: 'idle' });
   const loadingRef = useRef(false);
   const createRef = useRef(onCreateShare);
@@ -95,8 +97,20 @@ export function useViewAsMenu({ projectId, animators, onCreateShare, withSection
     } else {
       list.push({ key: 'viewas-client', label: '客戶畫面（讀取分享連結中…）', icon: Globe, disabled: true });
     }
+    if (withDirect) {
+      list.push(
+        {
+          key: 'open-director', label: '打開導演頁（可留言）', icon: Clapperboard,
+          href: `/preview/${encodeURIComponent(projectId)}`, external: true, section: '直接打開（用自己的名字留言）',
+        },
+        {
+          key: 'open-studio', label: '打開動畫師工作站（可留言）', icon: Palette,
+          href: `/studio/${encodeURIComponent(projectId)}`, external: true,
+        },
+      );
+    }
     return list;
-  }, [projectId, animators, links, withSection]);
+  }, [projectId, animators, links, withSection, withDirect]);
 
   return { items, load };
 }

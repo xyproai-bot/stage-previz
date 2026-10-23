@@ -25,6 +25,12 @@ describe('parseViewAs：只有製作的 ?as= 才算數', () => {
     expect(parseViewAs('?as=director', undefined)).toBeNull();
   });
 
+  it('這個專案的製作（帳號不是製作、專案角色是製作）也算數；專案角色是導演 / 動畫師 / 不是成員不算', () => {
+    expect(parseViewAs('?as=director', 'animator', 'admin')).toEqual({ previewRole: 'director', previewUserId: null, readOnly: true });
+    expect(parseViewAs('?as=animator&user=u_ming', 'director', 'admin')).toEqual({ previewRole: 'animator', previewUserId: 'u_ming', readOnly: true });
+    for (const pr of ['director', 'animator', null, undefined]) expect(parseViewAs('?as=director', 'animator', pr)).toBeNull();
+  });
+
   it('看不懂的 ?as= / 沒有 ?as= → 照平常', () => {
     expect(parseViewAs('', 'admin')).toBeNull();
     expect(parseViewAs('?as=admin', 'admin')).toBeNull();

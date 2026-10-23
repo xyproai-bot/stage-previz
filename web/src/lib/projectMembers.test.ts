@@ -32,6 +32,7 @@ describe('專案的製作能做什麼：說明文字', () => {
   it('一行字，寫出能做的和不能做的', () => {
     expect(PROJECT_ADMIN_SCOPE_TEXT).not.toContain('\n');
     expect(PROJECT_ADMIN_SCOPE_TEXT).toMatch(/^專案的「製作」可以編輯這個專案（模型、歌單、cue、機關、版型、分享）/);
+    expect(PROJECT_ADMIN_SCOPE_TEXT).toContain('打開導演頁和動畫師工作站');
     expect(PROJECT_ADMIN_SCOPE_TEXT).toContain('看不到別的專案');
     expect(PROJECT_ADMIN_SCOPE_TEXT).toContain('管全站用戶');
     for (const c of PROJECT_ADMIN_CANNOT) expect(PROJECT_ADMIN_SCOPE_TEXT).toContain(c.phrase);

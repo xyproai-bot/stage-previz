@@ -568,4 +568,65 @@ test('說明那一行：每一項「能做」「不能做」都對過真的路�
   for (const c of PROJECT_ADMIN_CANNOT) assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes(c.phrase.replace(/^(看不到|管|改)/, '')) || PROJECT_ADMIN_SCOPE_TEXT.includes(c.phrase), c.phrase);
   assert.match(PROJECT_ADMIN_SCOPE_TEXT, /^專案的「製作」可以編輯這個專案（模型、歌單、cue、機關、版型、分享）/);
   assert.equal(PROJECT_ADMIN_SCOPE_TEXT.includes('\n'), false);
+  assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes('打開導演頁和動畫師工作站'));
+});
+
+// ─── 專案製作打開導演頁 / 動畫師工作站（帳號是動畫師，只在 p1 當製作） ───
+
+test('專案製作看導演頁 / 工作站要的資料：自己的專案讀得到、能留言；別的專案、全站的東西碰不到', async () => {
+  const { call } = await setup();
+  const mk = async (who, project) => {
+    const r = await call(who, 'POST', `/api/projects/${project}/songs`, { name: '歌' });
+    assert.equal(r.status, 201, JSON.stringify(r.data));
+    return r.data.id || r.data.song?.id;
+  };
+  const s1 = await mk('u_admin', 'p1');
+  const s2 = await mk('u_pm2', 'p2');
+  const as = 'u_pm';
+
+  // 自己專案：導演頁 / 工作站會讀的東西都讀得到
+  for (const path of [
+    '/api/projects/p1', '/api/projects/p1/songs', '/api/projects/p1/activity', '/api/projects/p1/comments/summary',
+    `/api/projects/p1/songs/${s1}/reviews`, `/api/projects/p1/songs/${s1}/videos`,
+    `/api/comments?session=p1-${s1}`, '/api/projects', '/api/notifications',
+  ]) {
+    const r = await call(as, 'GET', path);
+    assert.equal(r.status, 200, `${path} → ${r.status} ${JSON.stringify(r.data)}`);
+  }
+  // 能留言（以自己的名字）
+  const id = 'c_' + Math.random().toString(36).slice(2, 10);
+  const posted = await call(as, 'POST', `/api/comments?session=p1-${s1}`, { comment: { id, text: '整合一下意見' } });
+  assert.ok(posted.status === 200 || posted.status === 201, JSON.stringify(posted.data));
+  const list = await call(as, 'GET', `/api/comments?session=p1-${s1}`);
+  const mine = (list.data.comments || []).find(c => c.id === id);
+  assert.ok(mine, '剛留的言讀得回來');
+  assert.equal(mine.author, '阿宏');
+  // 專案裡的導演看得到他的留言
+  const dirList = await call('u_dir', 'GET', `/api/comments?session=p1-${s1}`);
+  assert.ok((dirList.data.comments || []).some(c => c.id === id));
+
+  // 路由表：這幾條讀取只要是成員就行
+  const segs = (p) => p.split('/').filter(Boolean);
+  for (const p of ['/api/projects/p1/comments/summary', `/api/projects/p1/songs/${s1}/reviews`, `/api/projects/p1/songs/${s1}/videos`, '/api/projects/p1/activity']) {
+    const route = describeProjectRoute('GET', segs(p));
+    assert.equal(route.need, 'member', p);
+    assert.equal(roleMeetsNeed(route.need, { role: 'admin', globalRole: 'animator' }), true, p);
+    assert.equal(roleMeetsNeed(route.need, { role: null, globalRole: 'animator' }), false, p);
+  }
+
+  // 別的專案：讀不到、不能留言
+  for (const path of [
+    '/api/projects/p2', '/api/projects/p2/songs', '/api/projects/p2/comments/summary',
+    `/api/projects/p2/songs/${s2}/reviews`, `/api/projects/p2/songs/${s2}/videos`, `/api/comments?session=p2-${s2}`,
+  ]) {
+    const r = await call(as, 'GET', path);
+    assert.ok(r.status === 403 || r.status === 404, `${path} → ${r.status}`);
+  }
+  const other = await call(as, 'POST', `/api/comments?session=p2-${s2}`, { comment: { id: 'c_other01', text: '亂入' } });
+  assert.equal(other.status, 403);
+  // 全站的東西還是碰不到
+  assert.equal((await call(as, 'GET', '/api/users')).status, 403);
+  assert.equal((await call(as, 'GET', '/api/invites')).status, 403);
+  assert.equal((await call(as, 'PATCH', '/api/projects/p1', { look_settings: {} })).status, 403);
+  assert.equal((await call(as, 'PATCH', '/api/projects/p1', { drive_folder_id: 'x' })).status, 403);
 });

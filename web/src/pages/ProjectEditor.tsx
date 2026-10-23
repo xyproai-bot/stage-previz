@@ -149,7 +149,7 @@ export default function ProjectEditor() {
   useLiveRefresh(refreshMembers, { enabled: !!projectId });
   const animatorMembers = useMemo(() => projectMembers.filter(m => m.role === 'animator'), [projectMembers]);
   // 「用其他身分看」：導演畫面 / 動畫師畫面（每個動畫師一個）/ 客戶畫面（分享連結），開新分頁、只能看
-  const viewAsMenu = useViewAsMenu({ projectId: projectId || '', animators: animatorMembers, onCreateShare: () => setShareOpen(true) });
+  const viewAsMenu = useViewAsMenu({ projectId: projectId || '', animators: animatorMembers, onCreateShare: () => setShareOpen(true), withDirect: true });
   // 指派的人已經不是這個專案的成員（例如複製專案後，成員不會帶過去）→ 拿全部用戶的名字，選單上才寫得出是誰
   const [userNames, setUserNames] = useState<Map<string, string> | null>(null);
   const needUserNames = useMemo(
@@ -221,6 +221,8 @@ export default function ProjectEditor() {
   const view = useProjectViewSettings(projectId, isGlobalAdmin);
   // 在這個專案能不能編輯內容（全站製作，或這個專案的製作）；3D 檢視設定 / Drive 來源 / 封存 / 複製只有全站製作（view.canEdit、isGlobalAdmin）
   const editorRole: ProjectRole | null = isGlobalAdmin ? 'admin' : myProjectRole;
+  // 「用其他身分看」和直接打開導演頁 / 工作站：全站製作，或這個專案的製作（只限這個專案）
+  const canViewAs = editorRole === 'admin';
   // 比例尺的樂手和器材（全專案共用；製作、導演可以擺）
   const band = useStageProps(projectId, canEditStageProps(editorRole));
   // 視角書籤（專案共用）
@@ -1600,7 +1602,7 @@ export default function ProjectEditor() {
               {a.key === 'drive' && projectMeta?.drive_folder_id && <span className="editor-topbar__dot" title="已設定 Drive 資料夾" />}
             </button>
           ))}
-          {isGlobalAdmin && (
+          {canViewAs && (
             <OverflowMenu
               className="ovf-hide-narrow"
               label={VIEW_AS_MENU_LABEL}
@@ -1614,7 +1616,7 @@ export default function ProjectEditor() {
             className="ovf-only-narrow"
             items={[
               ...topbarActions.map(a => ({ key: a.key, label: a.menuLabel, icon: a.icon, disabled: a.disabled, onSelect: a.onSelect, separatorBefore: a.key === 'share' })),
-              ...(isGlobalAdmin ? viewAsMenu.items.map((it, i) => (i === 0 ? { ...it, section: VIEW_AS_MENU_LABEL } : it)) : []),
+              ...(canViewAs ? viewAsMenu.items.map((it, i) => (i === 0 ? { ...it, section: VIEW_AS_MENU_LABEL } : it)) : []),
             ]}
             onOpen={viewAsMenu.load}
           />

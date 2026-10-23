@@ -29,6 +29,9 @@ export const MEMBER_ROLE_HINT: Record<MemberRole, string> = {
  */
 export const PROJECT_ADMIN_CAN: readonly string[] = ['模型', '歌單', 'cue', '機關', '版型', '分享', '成員'];
 
+/** 專案的「製作」還能打開導演頁和動畫師工作站，看大家的留言、畫記、審片狀態，並用自己的名字留言（測試：cf-worker/members.test.mjs） */
+export const PROJECT_ADMIN_VIEW_TEXT = '還能打開導演頁和動畫師工作站，看大家的留言和審片狀態、用自己的名字留言';
+
 /** 專案的「製作」不能做的事（後端會擋；說明裡一起寫出來，免得以為什麼都能改） */
 export const PROJECT_ADMIN_CANNOT: readonly { label: string; phrase: string }[] = [
   { label: '別的專案', phrase: '看不到別的專案' },
@@ -40,7 +43,7 @@ export const PROJECT_ADMIN_CANNOT: readonly { label: string; phrase: string }[] 
 
 /** 面板上那一行說明（由上面兩個清單組出來，所以說明跟測試過的權限一定一樣） */
 export const PROJECT_ADMIN_SCOPE_TEXT =
-  `專案的「製作」可以編輯這個專案（${PROJECT_ADMIN_CAN.slice(0, -1).join('、')}），也可以管理它的成員；` +
+  `專案的「製作」可以編輯這個專案（${PROJECT_ADMIN_CAN.slice(0, -1).join('、')}），也可以管理它的成員，${PROJECT_ADMIN_VIEW_TEXT}；` +
   `看不到別的專案，也不能${PROJECT_ADMIN_CANNOT.slice(1).map(c => c.phrase).join('、')}`;
 
 export interface MemberLike {

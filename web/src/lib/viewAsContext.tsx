@@ -7,7 +7,7 @@
 //     <button {...va.ro('原本的說明')} onClick={...}>   // 寫入的按鈕：預覽時按不下去、滑上去寫「預覽模式只能看」
 //     onSomething={va.guard(fn)}               // 會寫資料的動作：預覽時改成說一聲
 //
-//   預覽開著時（只有製作、網址有 ?as=）：
+//   預覽開著時（只有製作或這個專案的製作、網址有 ?as=）：
 //     - 先讀專案成員（要知道看的是哪個動畫師），讀完才畫頁面 —— 也保證「擋寫入」已經裝好了才開始讀資料
 //     - 擋下所有寫入的請求（installWriteGuard）；離開預覽就拿掉
 //     - 上面一條橫幅（components/ViewAsBanner，App 路由用 components/ViewAsPage 包起來）：在看誰的畫面、換成導演 / 動畫師、回到編輯
@@ -110,12 +110,27 @@ export function ViewAsProvider({ children, banner }: { children: ReactNode; bann
   const asParam = params.get('as');
   const userParam = params.get('user');
   const accountRole = user?.role;
+  // 帳號不是全站製作、網址又有 ?as= → 先問一次自己在這個專案是不是製作（專案的製作也能用）；問完才決定要不要預覽
+  const asWanted = asParam === 'director' || asParam === 'animator';
+  const needLookup = !!user && accountRole !== 'admin' && asWanted && !!projectId;
+  const lookupKey = user && projectId ? `${user.id}/${projectId}` : '';
+  const [looked, setLooked] = useState<{ key: string; role: ProjectRole | null } | null>(null);
+  useEffect(() => {
+    if (!needLookup || !projectId) return;
+    let cancelled = false;
+    api.getProjectInfo(projectId)
+      .then(info => { if (!cancelled) setLooked({ key: lookupKey, role: info.myRole }); })
+      .catch(() => { if (!cancelled) setLooked({ key: lookupKey, role: null }); });
+    return () => { cancelled = true; };
+  }, [needLookup, projectId, lookupKey]);
+  const lookupPending = needLookup && (!looked || looked.key !== lookupKey);
+  const projectRoleForView = needLookup && looked && looked.key === lookupKey ? looked.role : null;
   const viewAs = useMemo(() => {
     const q = new URLSearchParams();
     if (asParam) q.set('as', asParam);
     if (userParam) q.set('user', userParam);
-    return parseViewAs(q, accountRole);
-  }, [asParam, userParam, accountRole]);
+    return parseViewAs(q, accountRole, projectRoleForView);
+  }, [asParam, userParam, accountRole, projectRoleForView]);
   const active = !!viewAs && !!projectId;
 
   // 專案成員（看的是哪個動畫師、橫幅上換人）
@@ -179,6 +194,8 @@ export function ViewAsProvider({ children, banner }: { children: ReactNode; bann
     return () => { root.classList.remove('viewas-on'); root.style.removeProperty('--viewas-h'); };
   }, [active]);
 
+  // 還在問「我在這個專案是不是製作」→ 先不畫頁面（免得預覽的頁面在擋寫入裝好之前就開始讀、寫）
+  if (lookupPending) return <RouteLoading text="正在打開預覽…" />;
   if (!active) return <>{children}</>;
   const ready = guardOn && memberList !== null;
   return (

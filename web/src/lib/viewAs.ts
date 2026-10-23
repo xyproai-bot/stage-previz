@@ -5,7 +5,7 @@
 //   /studio/<專案>?as=animator&user=<id>     看某個動畫師：「我的」只有指派給他的歌
 //
 // 規則：
-//   - 只有帳號是製作（admin）才算數；別人在網址加 ?as= 一律當沒加（不會因此多看到什麼，也不會少）
+//   - 只有帳號是製作（admin），或「這個專案的製作」（專案裡的角色是製作）才算數；別人在網址加 ?as= 一律當沒加（不會因此多看到什麼，也不會少）
 //   - 預覽一律「只能看」：按鈕照樣出現（看得到真的版面），但按不下去，滑上去寫「預覽模式只能看」；
 //     萬一有漏掉的按鈕，送出去的寫入請求也會在瀏覽器這邊被擋下來（installWriteGuard），不會改到資料
 //   - 只在這台電腦的動作照常：播影片、換版本、A/B 比較、本地檔案、轉攝影機、下載 LED 對位圖、AE 即時
@@ -30,9 +30,16 @@ export const VIEW_AS_BLOCKED_MESSAGE = '預覽模式只能看，不會改到資�
 
 const USER_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
-/** 網址參數 → 預覽設定；不是製作、沒有 / 看不懂 ?as= → null（照平常） */
-export function parseViewAs(search: string | URLSearchParams, accountRole: string | null | undefined): ViewAs | null {
-  if (accountRole !== 'admin') return null;
+/**
+ * 網址參數 → 預覽設定；不是製作、沒有 / 看不懂 ?as= → null（照平常）。
+ * projectRole = 這個人在網址上這個專案裡的角色（專案的製作：帳號不是全站製作，但在這個專案是製作）
+ */
+export function parseViewAs(
+  search: string | URLSearchParams,
+  accountRole: string | null | undefined,
+  projectRole?: string | null,
+): ViewAs | null {
+  if (accountRole !== 'admin' && projectRole !== 'admin') return null;
   const p = typeof search === 'string' ? new URLSearchParams(search) : search;
   const as = p.get('as');
   if (as !== 'director' && as !== 'animator') return null;
