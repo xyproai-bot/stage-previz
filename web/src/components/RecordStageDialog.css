@@ -1,0 +1,31 @@
+.record-dialog { max-width: 520px; }
+.record-dialog__lead { margin: 0 0 12px; font-size: 13px; color: var(--text-dim); line-height: 1.6; word-break: break-all; }
+.record-dialog__row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
+.record-dialog__label { width: 52px; color: var(--text-dim); font-size: 13px; flex: none; }
+.record-dialog__warn { margin: -4px 0 12px 64px; font-size: 12px; color: var(--warn, #e0a030); line-height: 1.5; }
+.record-dialog__check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 4px 0 12px; cursor: pointer; }
+.record-dialog__hint { margin: 0 0 8px; font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+.record-dialog__webm { color: var(--text); }
+.record-dialog .dialog__footer .btn { display: inline-flex; align-items: center; gap: 6px; }
+@media (max-width: 640px) {
+  .record-dialog { max-width: none; }
+  .record-dialog__warn { margin-left: 0; }
+}
+
+/* 錄影中：蓋在 3D 畫面上，擋住轉視角，顯示進度和「停止」 */
+.record-lock { position: fixed; inset: 0; z-index: 900; cursor: progress; }
+.record-bar {
+  position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 901;
+  display: flex; align-items: center; gap: 12px; padding: 8px 12px;
+  background: rgba(20, 22, 26, 0.92); border: 1px solid var(--border, #333); border-radius: 10px;
+  max-width: calc(100% - 24px); box-shadow: 0 4px 18px rgba(0, 0, 0, 0.4); color: var(--text);
+}
+.record-bar__dot { width: 10px; height: 10px; border-radius: 50%; background: #e5484d; flex: none; animation: record-blink 1.2s ease-in-out infinite; }
+@keyframes record-blink { 50% { opacity: 0.3; } }
+@media (prefers-reduced-motion: reduce) { .record-bar__dot { animation: none; } }
+.record-bar__text { font-size: 13px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.record-bar__track { width: 180px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, 0.15); overflow: hidden; flex: none; }
+.record-bar__fill { height: 100%; background: #e5484d; }
+.record-bar .btn { display: inline-flex; align-items: center; gap: 6px; }
+.record-done { font-size: 12px; color: var(--text-dim); margin: 0 12px 6px; line-height: 1.5; }
+@media (max-width: 640px) { .record-bar__track { width: 90px; } }

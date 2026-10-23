@@ -20,6 +20,9 @@ import { formatClockShort } from '../lib/review/timecode';
 import MiniPlayer from '../components/MiniPlayer';
 import SongVersionBar, { versionByline } from '../components/SongVersionBar';
 import AddVideoDialog from '../components/AddVideoDialog';
+import RecordStageDialog, { type RecordChoice } from '../components/RecordStageDialog';
+import { useStageRecorder } from '../lib/useStageRecorder';
+import { captionForCue, progressLabel, recordFileName, stripExt, WEBM_NOTE } from '../lib/stageRecording';
 import LedSourceSwitch, { readLedSource, saveLedSource, type LedSource } from '../components/LedSourceSwitch';
 import LedTemplateChip, { LedTemplateHint } from '../components/LedTemplateChip';
 import { useLedTemplates } from '../lib/useLedTemplates';
@@ -74,7 +77,7 @@ import {
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, BookOpen, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Pencil, Play, RefreshCw, Repeat,
+  ArrowLeft, BookOpen, Clapperboard, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Pencil, Play, RefreshCw, Repeat,
   SearchX, Settings, TriangleAlert, UserRoundSearch, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { projectEditorPath } from '../lib/landing';
@@ -680,6 +683,38 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   // ── 審片：播放快捷鍵（空白鍵、J / K / L、, / .、I / O）、Shift+J / K 切 cue、[ / ] 切歌、區段、打開留言、畫記 ──
   const viewApiRef = useRef<StageViewApi | null>(null);
+  // 錄成影片：本地檔案、已交的版本都能錄（AE 即時不行）；錄的時候整頁鎖住
+  const captionState = useRef({ cues: masterCues, cueId: selectedCueId });
+  captionState.current = { cues: masterCues, cueId: selectedCueId };
+  const getCaption = useCallback(() => captionForCue(captionState.current.cues, captionState.current.cueId), []);
+  const recorder = useStageRecorder({ player, viewApiRef, getCaption });
+  const [recordOpen, setRecordOpen] = useState(false);
+  const recordSource = versionVideoMode && selectedVersion ? selectedVersion.label : fileVideoMode && media.active ? stripExt(media.active.name) : '';
+  const canRecord = videoMode && player.ready && !recorder.locked;
+  const startRecord = (c: RecordChoice) => {
+    setRecordOpen(false);
+    const bm = c.bookmarkId ? camBm.bookmarks.find(b => b.id === c.bookmarkId) : null;
+    const song = selectedSong ? songTitle(selectedSong) : '';
+    void recorder.start({
+      resolution: c.resolution,
+      scope: c.scope,
+      view: bm ? { position: bm.position, target: bm.target, fov: bm.fov } : null,
+      caption: c.caption,
+      fileName: (ext) => recordFileName({ project: projectName, song, source: recordSource, date: new Date(), ext }),
+    });
+  };
+  const recordButton = (cls: string, withText: boolean) => (
+    <button
+      type="button"
+      className={cls}
+      onClick={() => setRecordOpen(true)}
+      disabled={!canRecord || !!recorder.unsupported}
+      title={recorder.unsupported ?? '錄成影片：把 3D 舞台和 LED 上的影片錄成 mp4，可以傳給導演'}
+      aria-label="錄成影片"
+    >
+      <Icon icon={Clapperboard} />{withText && ' 錄成影片'}
+    </button>
+  );
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const [pendingCommentTime, setPendingCommentTime] = useState<number | null>(null);
   const cueStep = useCallback((dir: 1 | -1) => {
@@ -1233,6 +1268,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     label={selectedVersion.label}
                     detail={versionByline(selectedVersion) || selectedVersion.title}
                     storageKey="sp_mini_player:studio"
+                    extra={recordButton('mini-player__btn', false)}
                     collapseOnTouch
                     onRetry={retryVersion}
                     compare={compare}
@@ -1302,6 +1338,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                     aria-label={player.muted ? '開聲音' : '靜音'}
                   ><Icon icon={player.muted ? VolumeX : Volume2} /></button>
                   <span className="share-player__name" title={media.active.name}>{media.active.name}</span>
+                  {recordButton('share-player__btn', false)}
                   <button
                     className="share-player__btn"
                     onClick={() => { if (media.active) media.remove(media.active.id); }}
@@ -1309,6 +1346,13 @@ function StudioInner({ projectId }: { projectId: string }) {
                     aria-label="從清單移除這支影片"
                   ><Icon icon={X} /></button>
                 </div>
+              )}
+              {videoMode && (recorder.unsupported || recorder.lastDone || recorder.error) && (
+                <p className="record-done" role="status">
+                  {recorder.error ? `錄影沒成功：${recorder.error}`
+                    : recorder.lastDone ? `已存成 ${recorder.lastDone.fileName}（${(recorder.lastDone.bytes / 1048576).toFixed(1)} MB，${progressLabel({ elapsed: recorder.lastDone.seconds, length: recorder.lastDone.seconds })}）${recorder.lastDone.partial ? '，中途停止，只有錄到的這一段' : ''}${recorder.lastDone.isMp4 ? '' : `。${WEBM_NOTE}`}`
+                    : `錄成影片：${recorder.unsupported}`}
+                </p>
               )}
               {masterCues.length > 0 && (
                 <div className="studio-cuebar">
@@ -1476,6 +1520,30 @@ function StudioInner({ projectId }: { projectId: string }) {
         </aside>
       </div>
 
+      {recordOpen && videoMode && (
+        <RecordStageDialog
+          onClose={() => setRecordOpen(false)}
+          onStart={startRecord}
+          format={recorder.format}
+          bookmarks={camBm.bookmarks}
+          currentTime={player.video.currentTime}
+          duration={player.duration}
+          sourceLabel={recordSource}
+        />
+      )}
+      {recorder.locked && (
+        <>
+          <div className="record-lock" aria-hidden="true" />
+          <div className="record-bar" role="status" aria-live="polite">
+            <span className="record-bar__dot" aria-hidden="true" />
+            <span className="record-bar__text">
+              {recorder.phase === 'preparing' ? '準備錄影…' : recorder.phase === 'saving' ? '正在存檔…' : `錄影中 ${recorder.progress ? progressLabel(recorder.progress) : ''}`}
+            </span>
+            <span className="record-bar__track"><span className="record-bar__fill" style={{ width: `${Math.round((recorder.progress?.fraction ?? 0) * 100)}%`, display: 'block' }} /></span>
+            <button type="button" className="btn btn--ghost" onClick={recorder.stop} disabled={recorder.phase !== 'recording'}>停止</button>
+          </div>
+        </>
+      )}
       {addOpen && selectedSong && (
         <AddVideoDialog
           open

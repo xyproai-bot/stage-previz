@@ -15,6 +15,11 @@
   height: 100% !important;
 }
 
+/* 錄影中：畫面固定畫成錄影的大小，視窗上照比例縮小顯示（比例不同就留黑邊） */
+.stage-scene[data-recording] canvas {
+  object-fit: contain;
+}
+
 /* ── 3D 工具列（StageToolbar.tsx）──
    永遠一排、置中。放不下時（量 3D 區塊的寬，不是整個視窗）：
      1. 全部帶字 → 2. 從最不常用的開始拿掉字 → 3. 全部只剩圖示 → 4. 不常用的收進「更多」（⋯）

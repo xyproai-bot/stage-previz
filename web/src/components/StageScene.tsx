@@ -307,6 +307,13 @@ export interface StageViewApi {
   aspect(): number;
   /** 使用者自己開始轉 / 縮放視角（畫記要收起來） */
   onUserMove(cb: () => void): () => void;
+  /**
+   * 錄影用：把 3D 畫面固定畫成這個大小（不管視窗多大；畫面上照比例縮小顯示）；null = 還原成跟視窗一樣大。
+   * 固定大小時不降畫質、解析度倍率固定 1。
+   */
+  setRecordSize(size: { width: number; height: number } | null): void;
+  /** 3D 畫面的 canvas（錄影用） */
+  canvas(): HTMLCanvasElement | null;
 }
 
 /** 設定機關時問舞台的事（StageScene 的 sceneQueryRef） */
@@ -352,6 +359,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const containerRef = useRef<HTMLDivElement>(null);
+  /** 錄影中固定的畫面大小（null = 跟視窗一樣大） */
+  const recordSizeRef = useRef<{ width: number; height: number } | null>(null);
+  const applyQualityRef = useRef<(() => void) | null>(null);
   // 全螢幕預演：3D 舞台這一塊拉滿整個螢幕；預演中一律唯讀（不選物件、不拖 gizmo）
   const show = useStageFullscreen(containerRef, !!stageShow);
   const readOnly = readOnlyProp || viewer || show.active;
@@ -1128,10 +1138,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       // 光暈 0 = 整個不畫（省 13 次全畫面運算）
       if (bloomPassRef.current) bloomPassRef.current.enabled = q.bloomScale > 0 && lookRef.current.bloomStrength > 0;
       if (renderer.xr.isPresenting) return;  // VR 中不能改尺寸
-      const w = container.clientWidth;
-      const h = container.clientHeight;
+      const rec = recordSizeRef.current;
+      const w = rec ? rec.width : container.clientWidth;
+      const h = rec ? rec.height : container.clientHeight;
       if (w === 0 || h === 0) return;
-      const pr = Math.min(window.devicePixelRatio, q.pixelRatioCap);
+      const pr = rec ? 1 : Math.min(window.devicePixelRatio, q.pixelRatioCap);
       if (renderer.getPixelRatio() !== pr) renderer.setPixelRatio(pr);
       renderer.setSize(w, h);
       camera.aspect = w / h;
@@ -1146,6 +1157,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       const rs = q.reflectionScale;
       if (rs > 0) floorReflRef.current?.setSize(w * rs, h * rs);
     };
+
+    applyQualityRef.current = applyQuality;
 
     // ── 機關：每幀最後把「cue 位置 + 機關」寫到 mesh（只有這裡寫）──
     //   正在 3D 拖的物件不動（拖完會把放手的位置倒回 cue 位置）；多選的物件暫時在 pivot 底下 → 換算成 pivot 裡的位置
@@ -1221,7 +1234,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       }
 
       // 自動畫質：一直卡 → 降一級；一直很順 → 升回去（VR 中不量）
-      if (renderer.xr.isPresenting) {
+      if (renderer.xr.isPresenting || recordSizeRef.current) {
         adaptiveQuality.hold(nowTs, 2000);
       } else {
         const nextQuality = adaptiveQuality.frame(nowTs, frameMs);
@@ -1927,6 +1940,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       },
       aspect: () => viewAspect(),
       onUserMove: (cb) => { listeners.add(cb); return () => { listeners.delete(cb); }; },
+      setRecordSize: (size) => {
+        recordSizeRef.current = size && size.width > 0 && size.height > 0 ? { width: Math.round(size.width), height: Math.round(size.height) } : null;
+        if (containerRef.current) { if (recordSizeRef.current) containerRef.current.dataset.recording = '1'; else delete containerRef.current.dataset.recording; }
+        applyQualityRef.current?.();
+      },
+      canvas: () => rendererRef.current?.domElement ?? null,
     };
     viewApiRef.current = api;
     return () => {
@@ -3537,6 +3556,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   /** 畫面寬高比：直接量容器（不靠 camera.aspect，畫面剛出現 / 分頁在背景時它可能還沒更新） */
   function viewAspect(): number {
+    const rec = recordSizeRef.current;
+    if (rec) return rec.width / rec.height;
     const el = containerRef.current;
     const w = el?.clientWidth || 0, h = el?.clientHeight || 0;
     return w > 0 && h > 0 ? w / h : (cameraRef.current?.aspect || 16 / 9);
