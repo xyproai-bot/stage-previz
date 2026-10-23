@@ -29,8 +29,8 @@ export const MEMBER_ROLE_HINT: Record<MemberRole, string> = {
  */
 export const PROJECT_ADMIN_CAN: readonly string[] = ['模型', '歌單', 'cue', '機關', '版型', '分享', '成員'];
 
-/** 專案的「製作」還能打開導演頁和動畫師工作站，看大家的留言、畫記、審片狀態，並用自己的名字留言（測試：cf-worker/members.test.mjs） */
-export const PROJECT_ADMIN_VIEW_TEXT = '還能打開導演頁和動畫師工作站，看大家的留言和審片狀態、用自己的名字留言';
+/** 專案的「製作」還能直接打開導演頁和動畫師工作站，用自己的名字操作（上傳 / 刪影片、審片、留言、畫記）（測試：cf-worker/members.test.mjs） */
+export const PROJECT_ADMIN_VIEW_TEXT = '還能直接打開導演頁和動畫師工作站（替任何一首歌交影片、刪版本、決定通過 / 需修改、留言、畫記）';
 
 /** 專案的「製作」不能做的事（後端會擋；說明裡一起寫出來，免得以為什麼都能改） */
 export const PROJECT_ADMIN_CANNOT: readonly { label: string; phrase: string }[] = [

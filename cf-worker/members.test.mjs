@@ -568,7 +568,7 @@ test('說明那一行：每一項「能做」「不能做」都對過真的路�
   for (const c of PROJECT_ADMIN_CANNOT) assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes(c.phrase.replace(/^(看不到|管|改)/, '')) || PROJECT_ADMIN_SCOPE_TEXT.includes(c.phrase), c.phrase);
   assert.match(PROJECT_ADMIN_SCOPE_TEXT, /^專案的「製作」可以編輯這個專案（模型、歌單、cue、機關、版型、分享）/);
   assert.equal(PROJECT_ADMIN_SCOPE_TEXT.includes('\n'), false);
-  assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes('打開導演頁和動畫師工作站'));
+  assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes('直接打開導演頁和動畫師工作站'));
 });
 
 // ─── 專案製作打開導演頁 / 動畫師工作站（帳號是動畫師，只在 p1 當製作） ───

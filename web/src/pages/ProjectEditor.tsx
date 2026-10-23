@@ -149,7 +149,7 @@ export default function ProjectEditor() {
   useLiveRefresh(refreshMembers, { enabled: !!projectId });
   const animatorMembers = useMemo(() => projectMembers.filter(m => m.role === 'animator'), [projectMembers]);
   // 「用其他身分看」：導演畫面 / 動畫師畫面（每個動畫師一個）/ 客戶畫面（分享連結），開新分頁、只能看
-  const viewAsMenu = useViewAsMenu({ projectId: projectId || '', animators: animatorMembers, onCreateShare: () => setShareOpen(true), withDirect: true });
+  const viewAsMenu = useViewAsMenu({ projectId: projectId || '', animators: animatorMembers, onCreateShare: () => setShareOpen(true) });
   // 指派的人已經不是這個專案的成員（例如複製專案後，成員不會帶過去）→ 拿全部用戶的名字，選單上才寫得出是誰
   const [userNames, setUserNames] = useState<Map<string, string> | null>(null);
   const needUserNames = useMemo(
@@ -1538,6 +1538,11 @@ export default function ProjectEditor() {
     ...(editorRole !== 'admin' || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledtpl', label: '版型', menuLabel: 'LED 版型', title: 'LED 版型：只出幾塊螢幕時，排進一張比較小的畫布', icon: LayoutPanelLeft, onSelect: () => { setUvOpen(false); setLedTplOpen(true); }, secondary: true }]),
     ...(editorRole !== 'admin' || !modelUrl || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUv', label: '自動貼 UV', menuLabel: '自動貼 UV（LED 的 UV 和對位圖）', title: '自動貼 UV：選 LED 螢幕、填點距或總點數，系統展開 UV、排好畫布、存成新的模型版本', icon: Ruler, onSelect: () => { setLedTplOpen(false); setUvEntry(e => ({ mode: 'full', n: e.n })); setUvOpen(true); }, secondary: true }]),
     ...(editorRole !== 'admin' || !modelUrl || !uvApplied || (ledTpls.loaded && !ledTpls.list) ? [] : [{ key: 'ledUvAdjust', label: '調整排版', menuLabel: '調整排版（自動貼 UV 套用過的）', title: '調整排版：自動貼 UV 套用過了，直接到「排版」那一步，位置是上次套用時的樣子；拖完按「套用」就好，不用重走一遍', icon: LayoutPanelLeft, onSelect: () => { setLedTplOpen(false); setUvEntry(e => ({ mode: 'adjust', n: e.n + 1 })); setUvOpen(true); }, secondary: true }]),
+    // 直接打開導演頁 / 動畫師工作站：用自己的身分，什麼都能做（不是預覽）；全站製作和這個專案的製作都有
+    ...(!canViewAs ? [] : [
+      { key: 'openDirector', label: '導演頁', menuLabel: '導演頁（直接操作）', title: '打開導演頁（新分頁）：用自己的身分審片、留言、畫記，可以決定通過 / 需修改', icon: Clapperboard, onSelect: () => { window.open(`/preview/${encodeURIComponent(projectId || '')}`, '_blank', 'noopener'); } },
+      { key: 'openStudio', label: '動畫師工作站', menuLabel: '動畫師工作站（直接操作）', title: '打開動畫師工作站（新分頁）：用自己的身分替任何一首歌交影片、刪版本、留言、畫記', icon: Palette, onSelect: () => { window.open(`/studio/${encodeURIComponent(projectId || '')}`, '_blank', 'noopener'); } },
+    ]),
     { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
     // 成員：這個專案有誰（製作 / 導演 / 動畫師）、加人、改角色、移出、邀請連結；全站製作和這個專案的製作都能用
     ...(editorRole !== 'admin' ? [] : [{ key: 'members', label: '成員', menuLabel: '成員', title: '成員：這個專案有誰、加人、改角色、移出專案、邀請連結（傳給對方，點開就加進這個專案）', icon: Users, onSelect: () => setMembersOpen(true) }]),
