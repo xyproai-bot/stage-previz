@@ -14,14 +14,14 @@ import { ROLE_LABEL } from '../lib/roleLabels';
 import { formatLoginCodeForDisplay, loginCodeDisplay, LOGIN_CODE_HIDDEN_TEXT } from '../lib/inviteMessage';
 import { copyToClipboard } from '../lib/clipboard';
 import { toast } from '../lib/toast';
-import { confirmDialog } from '../components/dialogs';
+import { confirmDialog, promptDialog } from '../components/dialogs';
 import Icon from '../components/Icon';
 import InviteDialog from '../components/InviteDialog';
 import OpenInvitesList from '../components/OpenInvitesList';
 import LoginCodeDialog from '../components/LoginCodeDialog';
 import LoginCodeSetDialog from '../components/LoginCodeSetDialog';
 import LoginCodeChooser from '../components/LoginCodeChooser';
-import { Check, Copy, FolderPlus, KeyRound, Link, LoaderCircle, RefreshCw, Search, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
+import { Check, Copy, FolderPlus, KeyRound, Pencil, Link, LoaderCircle, RefreshCw, Search, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
 import './Users.css';
 import './UsersFilter.css';
 import { useEscapeClose } from '../lib/useEscapeClose';
@@ -110,6 +110,24 @@ export default function Users() {
     }
   }
 
+  async function handleRename(u: UserAdmin) {
+    const name = await promptDialog({
+      title: `改「${u.name}」的名字`,
+      label: '名字（大家在專案裡看到的）',
+      defaultValue: u.name,
+      confirmLabel: '儲存',
+      maxLength: 80,
+    });
+    if (name == null || !name.trim() || name.trim() === u.name) return;
+    try {
+      await api.updateUserAdmin(u.id, { name: name.trim() });
+      await refresh();
+      toast.success(`已改名為「${name.trim()}」`);
+    } catch (e) {
+      toast.error('名字沒有改成：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   async function handleChangeRole(u: UserAdmin, role: UserRole) {
     if (u.id === me?.id && role !== 'admin') {
       toast.warn('不能把自己改成別的角色：至少要留一個製作。');
@@ -192,6 +210,7 @@ export default function Users() {
         </div>
 
         <div className="user-row__actions">
+          <button onClick={() => void handleRename(u)} title="改名字"><Icon icon={Pencil} /> 改名</button>
           <button onClick={() => setEditingUserId(u.id)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
           {u.role !== 'admin' && !u.deactivated && (
             <button onClick={() => setInvite({ userId: u.id })} title="傳一個邀請連結給他（例如換了手機、忘記登入碼）">
