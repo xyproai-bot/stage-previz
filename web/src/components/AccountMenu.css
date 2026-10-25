@@ -1,0 +1,30 @@
+/* 上方列右邊的「頭像 + 名字」：點開有「改名字」「換顏色」 */
+.account-menu__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px 3px 4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.account-menu__trigger:hover,
+.account-menu__trigger.is-open {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text);
+}
+.account-menu__trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.account-menu__name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (hover: none) and (pointer: coarse) {
+  .account-menu__trigger { min-height: 40px; }
+}

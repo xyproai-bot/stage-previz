@@ -154,3 +154,6 @@
 
 /* 步驟後面的「看圖」：開新分頁到 /help 那一段 */
 .settings-help-link { margin-left: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+
+/* 我的帳號：改名字 / 換顏色 / 修改登入碼 */
+.settings-account__actions { display: flex; flex-wrap: wrap; gap: 8px; }

@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
 import AdminLayout from '../components/AdminLayout';
 import { useAuth } from '../lib/auth';
 import { useNdiConnection } from '../lib/ndiConnection';
@@ -14,10 +13,11 @@ import { confirmDialog } from '../components/dialogs';
 import { version as APP_VERSION } from '../../package.json';
 import { ROLE_LABEL } from '../lib/roleLabels';
 import Icon from '../components/Icon';
-import { BookOpen, Download, ExternalLink, KeyRound, Palette, TriangleAlert } from 'lucide-react';
+import { BookOpen, Download, ExternalLink, KeyRound, Palette, Pencil, TriangleAlert } from 'lucide-react';
 import SystemStatusSection from '../components/SystemStatusSection';
 import LoginCodeSetDialog, { type LoginCodeSetResult } from '../components/LoginCodeSetDialog';
 import LoginCodeDialog from '../components/LoginCodeDialog';
+import { RECOLOR_ME_LABEL, RENAME_ME_LABEL, useAccountEdit } from '../components/AccountMenu';
 import './Settings.css';
 
 export default function Settings() {
@@ -43,6 +43,7 @@ export default function Settings() {
 
 function AccountSection() {
   const { user } = useAuth();
+  const account = useAccountEdit();
   // 修改我的登入碼：先輸入現在的，再選自動產生 / 自己設定；新的只顯示一次
   const [changing, setChanging] = useState(false);
   const [shown, setShown] = useState<LoginCodeSetResult | null>(null);
@@ -60,12 +61,15 @@ function AccountSection() {
         </dl>
       </div>
       <p className="settings-hint">
-        {user.role === 'admin'
-          ? <>要改名字，到 <Link to="/admin/users">用戶</Link> 頁。</>
-          : '要改名字，請找製作。'}
-        登入碼可以自己改，也可以自己設定一組比較好記的。
+        名字和頭像顏色可以自己改，大家在專案裡看到的會跟著變。登入碼可以自己改，也可以自己設定一組比較好記的。
       </p>
-      <div>
+      <div className="settings-account__actions">
+        <button type="button" className="btn btn--ghost" onClick={() => void account.renameMe()}>
+          <Icon icon={Pencil} /> {RENAME_ME_LABEL}
+        </button>
+        <button type="button" className="btn btn--ghost" onClick={() => void account.recolorMe()}>
+          <Icon icon={Palette} /> {RECOLOR_ME_LABEL}
+        </button>
         <button type="button" className="btn btn--ghost" onClick={() => setChanging(true)}>
           <Icon icon={KeyRound} /> 修改我的登入碼
         </button>

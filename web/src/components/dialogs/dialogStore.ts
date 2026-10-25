@@ -51,10 +51,16 @@ export interface Choice {
   label: string;
   /** 主要選項（綠色、按 Enter 就是選它）；沒有標的話第一個是主要 */
   primary?: boolean;
+  /** 字前面的小色塊（例：頭像顏色），CSS 顏色 */
+  swatch?: string;
+  /** 目前就是這個（直排的時候畫一個勾，螢幕報讀會念「目前」） */
+  current?: boolean;
 }
 
 export interface ChooseOptions extends BaseOptions {
   choices: Choice[];
+  /** 'row' = 按鈕排成一排（預設，兩三個選項）；'list' = 一個選項一行、由上到下（選項比較多，例：選哪一首歌） */
+  layout?: 'row' | 'list';
 }
 
 export type DialogRequest =

@@ -252,3 +252,19 @@
 .share-link-row__flag { display: inline-flex; align-items: center; gap: 4px; }
 .share-link-row__flag.is-on { color: #8ec5ff; }
 .share-link-row__code { padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+
+/* 建好以後改密碼 / 有效期 / 分享的歌（文字按鈕，不用猜圖示是什麼） */
+.share-link-row__settings { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
+.share-link-row__setting {
+  display: inline-flex; align-items: center; gap: 5px;
+  min-height: 28px; padding: 3px 10px;
+  background: transparent; color: var(--text-dim);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-md);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.share-link-row__setting:hover { background: var(--surface-2); color: var(--text); }
+.share-link-row__setting:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+@media (max-width: 640px) {
+  .share-link-row__setting { min-height: 36px; padding: 6px 12px; font-size: 13px; }
+}

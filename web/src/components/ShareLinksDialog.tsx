@@ -7,12 +7,16 @@ import {
 } from '../lib/shareSlug';
 import { shareSlugUrl, shareTokenUrl } from '../lib/siteUrl';
 import { parseServerTime } from '../lib/serverTime';
-import { Clock, Copy, Dices, ExternalLink, Eye, Folder, Lock, MessageSquareOff, MessageSquareText, Music, Pencil, ShieldBan, Stamp, Tag, Trash2, X } from 'lucide-react';
+import { Clock, Copy, Dices, ExternalLink, Eye, Folder, KeyRound, Lock, LockOpen, MessageSquareOff, MessageSquareText, Music, Pencil, ShieldBan, Stamp, Tag, Trash2, X } from 'lucide-react';
 import Icon from './Icon';
-import { confirmDialog, promptDialog } from './dialogs';
+import { chooseDialog, confirmDialog, promptDialog } from './dialogs';
 import './ShareLinksDialog.css';
 import { useEscapeClose } from '../lib/useEscapeClose';
 import { NEW_LINK_PROTECTION, canSetMemberWatermark, memberWatermarkOn } from '../lib/watermark/policy';
+import {
+  EDIT_EXPIRY_LABEL, EDIT_PASSWORD_LABEL, EDIT_SONGS_LABEL, NEVER_EXPIRES_LABEL, REMOVE_PASSWORD_LABEL, SAVED_TOAST, SHARE_PASSWORD_MAX,
+  expiryChoices, expiryPatch, expiryText, passwordPatch, scopeChoices, scopePatch, scopeText,
+} from '../lib/shareLinkEdit';
 import {
   LABEL_ON_WATERMARK_NOTE, LEGACY_LINK_NOTE, MEMBER_WATERMARK_DENIED, MEMBER_WATERMARK_HINT, MEMBER_WATERMARK_LABEL,
   NO_DOWNLOAD_HINT, NO_DOWNLOAD_LABEL, PROTECTION_LIMIT_NOTE, WATERMARK_HINT, WATERMARK_LABEL,
@@ -255,6 +259,66 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
     }
   }
 
+  /** 建好以後改密碼 / 有效期 / 分享的歌：存好提示「已更新」 */
+  async function saveEdit(l: ShareLink, patch: api.ShareLinkPatch) {
+    try {
+      await api.updateShareLink(projectId, l.token, patch);
+      toast.success(SAVED_TOAST);
+      await refresh();
+    } catch (e) {
+      toast.error('沒有改成：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function editPassword(l: ShareLink) {
+    const next = await promptDialog({
+      title: EDIT_PASSWORD_LABEL,
+      message: l.hasPassword
+        ? '改好之後，舊密碼馬上不能用；已經用舊密碼打開的人，要重新輸入新密碼才能繼續看。'
+        : '這條連結現在沒有密碼。設好之後，打開的人要先輸入密碼。',
+      label: '新密碼',
+      maxLength: SHARE_PASSWORD_MAX,
+      confirmLabel: '儲存',
+    });
+    const patch = passwordPatch(next);
+    if (!patch) return;
+    await saveEdit(l, patch);
+  }
+
+  async function removePassword(l: ShareLink) {
+    if (!(await confirmDialog({
+      title: '拿掉這條連結的密碼？',
+      message: '拿掉之後，拿到連結的人不用輸入密碼就能打開。',
+      confirmLabel: REMOVE_PASSWORD_LABEL,
+      destructive: true,
+    }))) return;
+    await saveEdit(l, { password: null });
+  }
+
+  async function editExpiry(l: ShareLink) {
+    const picked = await chooseDialog({
+      title: EDIT_EXPIRY_LABEL,
+      message: `現在：${expiryText(l.expiresAt)}。選一個，從今天重新算起。`,
+      choices: expiryChoices(l.expiresAt),
+    });
+    const patch = expiryPatch(picked);
+    if (!patch) return;
+    await saveEdit(l, patch);
+  }
+
+  async function editSongs(l: ShareLink) {
+    const picked = await chooseDialog({
+      title: EDIT_SONGS_LABEL,
+      message: `現在分享的是：${scopeText(l.songId, songs)}。選好之後，拿到連結的人就只看得到這個範圍。`,
+      choices: scopeChoices(songs, l.songId),
+      layout: 'list',
+    });
+    const patch = scopePatch(picked, songs);
+    if (!patch) return;
+    if ((patch.songId ?? null) === (l.songId ?? null)) return;
+    await saveEdit(l, patch);
+  }
+
   async function copyLink(url: string) {
     try {
       await navigator.clipboard.writeText(url);
@@ -417,7 +481,9 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                               ? <><Icon icon={Music} size="xs" /> {songs.find(s => s.id === l.songId)?.name || '單首歌'}</>
                               : <><Icon icon={Folder} size="xs" /> 整個專案</>}
                             {l.hasPassword && <> · <Icon icon={Lock} size="xs" /> 有密碼</>}
-                            {l.expiresAt && <> · <Icon icon={Clock} size="xs" /> {expired ? '已過期' : `到期 ${new Date(parseServerTime(l.expiresAt)).toLocaleDateString('zh-TW')}`}</>}
+                            {l.expiresAt
+                              ? <> · <Icon icon={Clock} size="xs" /> {expired ? '已過期' : `到期 ${new Date(parseServerTime(l.expiresAt)).toLocaleDateString('zh-TW')}`}</>
+                              : <> · <Icon icon={Clock} size="xs" /> {NEVER_EXPIRES_LABEL}</>}
                             <> · <Icon icon={Eye} size="xs" /> {l.viewCount} 次瀏覽</>
                             {l.allowComments && <> · <span className="share-link-row__comments"><Icon icon={MessageSquareText} size="xs" /> 可以留言{l.guestCommentCount ? `（${l.guestCommentCount} 則）` : ''}</span></>}
                             {!l.allowComments && !!l.guestCommentCount && <> · <Icon icon={MessageSquareOff} size="xs" /> 留言已關（之前 {l.guestCommentCount} 則）</>}
@@ -427,6 +493,22 @@ export default function ShareLinksDialog({ open, projectId, projectName, songs, 
                             <span className={'share-link-row__flag' + (l.watermark ? ' is-on' : '')}><Icon icon={Stamp} size="xs" /> {l.watermark ? '有浮水印' : '沒有浮水印'}</span>
                             <span className={'share-link-row__flag' + (l.noDownload ? ' is-on' : '')}><Icon icon={ShieldBan} size="xs" /> {l.noDownload ? '禁止下載' : '可以下載'}</span>
                             {l.shortId && <span className="share-link-row__code" title="浮水印上印的連結編號：外流的畫面上看到這組，就是這一條連結">編號 {l.shortId}</span>}
+                          </div>
+                          <div className="share-link-row__settings">
+                            <button type="button" className="share-link-row__setting" onClick={() => void editPassword(l)}>
+                              <Icon icon={KeyRound} size="xs" /> {EDIT_PASSWORD_LABEL}
+                            </button>
+                            {l.hasPassword && (
+                              <button type="button" className="share-link-row__setting" onClick={() => void removePassword(l)}>
+                                <Icon icon={LockOpen} size="xs" /> {REMOVE_PASSWORD_LABEL}
+                              </button>
+                            )}
+                            <button type="button" className="share-link-row__setting" onClick={() => void editExpiry(l)}>
+                              <Icon icon={Clock} size="xs" /> {EDIT_EXPIRY_LABEL}
+                            </button>
+                            <button type="button" className="share-link-row__setting" onClick={() => void editSongs(l)}>
+                              <Icon icon={Music} size="xs" /> {EDIT_SONGS_LABEL}
+                            </button>
                           </div>
                         </div>
                         <div className="share-link-row__actions">

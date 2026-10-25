@@ -52,6 +52,10 @@ import {
   canSetMemberWatermark, MEMBER_WATERMARK_DENIED_MESSAGE, PROTECTION_FLAG_ERROR, memberWatermarkOn,
 } from '../web/src/lib/watermark/policy.ts';
 import { signSharePlay, decideShareStream, withShareQuery, sharePlaybackCacheControl, shortLinkId } from './shareMedia.mjs';
+// 分享連結建好以後改密碼 / 有效期 / 分享的歌（純判斷）
+import { parseShareLinkEdits, hasShareLinkEdits } from './shareLinkEdit.mjs';
+// 用戶自己的名字 / 頭像顏色的規則（前後台共用同一個檔）
+import { cleanUserName, userNameProblem, planMyProfileUpdate } from '../web/src/lib/userProfileRules.ts';
 // 留言（D1 一則一列）
 // （發 / 改 / 刪在 reviews.mjs；這裡只剩讀清單和舊版 KV 留言串）
 import { sanitizeComment, rowToComment, COMMENT_ID_RE, thumbKeyFromPath } from './comments.mjs';
@@ -244,6 +248,7 @@ async function routeRequest(request, env) {
   if (url.pathname === '/api/auth/login'  && request.method === 'POST')  return authLogin(request, env);
   if (url.pathname === '/api/auth/logout' && request.method === 'POST')  return authLogout();
   if (url.pathname === '/api/auth/me'     && request.method === 'GET')   return authMe(request, env);
+  if (url.pathname === '/api/auth/me'     && request.method === 'PATCH') return updateMyProfile(request, env);
   if (url.pathname === '/api/auth/change-code' && request.method === 'POST') return changeMyLoginCode(request, env);
 
   // 公開分享連結（read-only，無需登入）
@@ -3762,6 +3767,26 @@ async function authMe(request, env) {
   return jsonResp({ user: email ? { ...me, email } : me });
 }
 
+// 用戶改自己：只收名字（name）和頭像顏色（avatarColor）。
+// 角色、email、登入碼、停用…其他欄位一律不收、不理（有偷塞也不會改到）；只能改「登入的這個人」自己，網址上沒有別人的 id。
+// 規則（長度、空白、顏色格式）跟全站製作改別人的名字用同一個檔：web/src/lib/userProfileRules.ts
+async function updateMyProfile(request, env) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  const me = await getCurrentUser(request, env);
+  if (!me) return jsonResp({ error: '未登入' }, 401);
+  let body;
+  try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
+  const plan = planMyProfileUpdate(body);
+  if (!plan.ok) return jsonResp({ error: plan.error }, 400);
+  const sets = [], values = [];
+  if (plan.name !== undefined) { sets.push('name = ?'); values.push(plan.name); }
+  if (plan.avatarColor !== undefined) { sets.push('avatar_color = ?'); values.push(plan.avatarColor); }
+  const r = await env.DB.prepare(`UPDATE users SET ${sets.join(', ')} WHERE id = ? AND deactivated = 0`).bind(...values, me.id).run();
+  if (!r.meta?.changes) return jsonResp({ error: '未登入' }, 401);
+  const u = await env.DB.prepare(`SELECT id, name, role, avatar_color FROM users WHERE id = ? LIMIT 1`).bind(me.id).first();
+  return jsonResp({ ok: true, user: { id: u.id, name: u.name, role: u.role, avatarColor: u.avatar_color } });
+}
+
 // ─── Users (admin) CRUD ───
 
 async function handleUsersRouter(request, env, url) {
@@ -3885,7 +3910,7 @@ async function loginCodeColumns(code, mode) {
 async function createUser(request, env) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
-  const name = (body?.name || '').toString().trim().slice(0, 80);
+  const name = cleanUserName(body?.name);
   const role = ['admin', 'animator', 'director'].includes(body?.role) ? body.role : 'animator';
   const avatarColor = (body?.avatarColor || '#10c78a').toString().slice(0, 8);
   if (!name) return jsonResp({ error: 'name 必填' }, 400);
@@ -3942,7 +3967,12 @@ async function updateUser(request, env, userId) {
   let body;
   try { body = await request.json(); } catch { return jsonResp({ error: 'Invalid JSON' }, 400); }
   const sets = [], values = [];
-  if ('name' in body) { sets.push('name = ?'); values.push((body.name || '').toString().slice(0, 80)); }
+  if ('name' in body) {
+    // 跟用戶自己改名字、新增用戶同一條規則（前後空白去掉、最多 80 字、不能是空的）
+    const nameProblem = userNameProblem(body.name);
+    if (nameProblem) return jsonResp({ error: nameProblem }, 400);
+    sets.push('name = ?'); values.push(cleanUserName(body.name));
+  }
   if ('role' in body && ['admin', 'animator', 'director'].includes(body.role)) {
     sets.push('role = ?'); values.push(body.role);
   }
@@ -6286,7 +6316,9 @@ async function handleProjectShareLinks(request, env, ctx, token) {
   }
   if (request.method === 'PATCH') {
     // 設定 / 換 / 拿掉好讀網址。換掉之後舊的網址名稱馬上失效（舊式 /share/<連結碼> 照樣能用）
-    // 可以改：好讀網址（slug）、允許看的人留言（allowComments，打開只有製作）、連結名稱（label）；舊版前端只送 slug
+    // 可以改：好讀網址（slug）、允許看的人留言（allowComments，打開只有製作）、連結名稱（label）、浮水印 / 禁止下載；
+    //         密碼（password）、有效期（expiresInDays / expiresAt）、分享的歌（songId）——規則見 shareLinkEdit.mjs。
+    // 舊版前端只送 slug：沒給的欄位一律不動
     let body = {};
     try { body = await request.json(); } catch {}
     const hasSlug = !!body && 'slug' in body;
@@ -6295,7 +6327,10 @@ async function handleProjectShareLinks(request, env, ctx, token) {
     // 0038：浮水印、禁止下載（有給的才改）
     const prot = resolveLinkProtectionPatch(body);
     if (!prot.ok) return jsonResp({ error: prot.error }, 400);
-    if (!hasSlug && Object.keys(extra.fields).length === 0 && Object.keys(prot.fields).length === 0) return jsonResp({ error: '缺少 slug' }, 400);
+    const edit = parseShareLinkEdits(body);
+    if (!edit.ok) return jsonResp({ error: edit.error }, 400);
+    const edits = edit.edits;
+    if (!hasSlug && Object.keys(extra.fields).length === 0 && Object.keys(prot.fields).length === 0 && !hasShareLinkEdits(edits)) return jsonResp({ error: '缺少 slug' }, 400);
     const sets = [];
     const vals = [];
     let parsed = null;
@@ -6306,6 +6341,22 @@ async function handleProjectShareLinks(request, env, ctx, token) {
     }
     for (const [k, v] of Object.entries(extra.fields)) { sets.push(`${k} = ?`); vals.push(v); }
     for (const [k, v] of Object.entries(prot.fields)) { sets.push(`${k} = ?`); vals.push(v); }
+    if ('password' in edits) {
+      // 跟建立時一模一樣：只存加鹽雜湊（同一個函式），舊的明文欄位一起清掉。
+      // 通行證綁的是目前的密碼雜湊 → 換密碼 / 拿掉密碼之後，用舊密碼拿到的通行證全部失效（要重新輸入）。
+      const hashed = edits.password ? await hashSharePassword(edits.password) : null;
+      sets.push('password_hash = ?', 'password_salt = ?', 'password = ?');
+      vals.push(hashed?.hash ?? null, hashed?.salt ?? null, null);
+    }
+    if ('expiresAt' in edits) { sets.push('expires_at = ?'); vals.push(edits.expiresAt); }
+    if ('songId' in edits) {
+      // 只能分享這個專案的歌（別的專案的歌 → 404，跟建立時一樣）
+      if (edits.songId) {
+        const s = await env.DB.prepare(`SELECT id FROM songs WHERE id = ? AND project_id = ? LIMIT 1`).bind(edits.songId, projectId).first();
+        if (!s) return jsonResp({ error: '這個專案裡找不到這首歌' }, 404);
+      }
+      sets.push('song_id = ?'); vals.push(edits.songId);
+    }
     let changes = 0;
     try {
       const r = await env.DB.prepare(
@@ -6317,8 +6368,13 @@ async function handleProjectShareLinks(request, env, ctx, token) {
       throw e;
     }
     if (!changes) return jsonResp({ error: '找不到這個分享連結' }, 404);
-    const cur = await env.DB.prepare(`SELECT slug, allow_comments, label, watermark, no_download FROM share_links WHERE token = ? LIMIT 1`).bind(token).first();
-    return jsonResp({ ok: true, token, slug: cur?.slug ?? null, allowComments: !!cur?.allow_comments, label: cur?.label ?? null, ...protectionOfRow(cur) });
+    const cur = await env.DB.prepare(
+      `SELECT slug, allow_comments, label, watermark, no_download, song_id, expires_at, password, password_hash FROM share_links WHERE token = ? LIMIT 1`
+    ).bind(token).first();
+    return jsonResp({
+      ok: true, token, slug: cur?.slug ?? null, allowComments: !!cur?.allow_comments, label: cur?.label ?? null, ...protectionOfRow(cur),
+      songId: cur?.song_id ?? null, expiresAt: cur?.expires_at ?? null, hasPassword: shareLinkHasPassword(cur),
+    });
   }
   return jsonResp({ error: 'Method not allowed' }, 405);
 }

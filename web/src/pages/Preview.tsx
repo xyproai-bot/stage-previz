@@ -6,6 +6,7 @@ import type { Cue, CueState, Song, SongComment, StageObject } from '../lib/api';
 import { defaultVisible, isDefaultHidden } from '../lib/defaultHidden';
 import type { ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
+import AccountMenu, { useAccountEdit } from '../components/AccountMenu';
 import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
 import { memberWatermarkOn } from '../lib/watermark/policy';
 import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
@@ -97,6 +98,7 @@ export default function Preview() {
 function PreviewInner({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const account = useAccountEdit();
   // 製作用「導演畫面」預覽時：user / 角色換成導演，寫入的按鈕按不下去（lib/viewAsContext.tsx）
   const user = useViewAsUser();
   const va = useViewAs();
@@ -507,13 +509,19 @@ function PreviewInner({ projectId }: { projectId: string }) {
               { key: 'show', label: showMode ? '停止整場串播' : '整場串播', icon: showMode ? Square : Play, active: showMode, disabled: songs.length === 0, onSelect: () => setShowMode(m => !m) },
             ] : []),
             { key: 'help', label: '使用說明', icon: CircleHelp, onSelect: () => setHelpOpen(true) },
+            ...(user && !va.active ? account.itemsAfterSeparator : []),
             ...(user ? [{ key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: async () => { await logout(); navigate('/login'); } }] : []),
           ]}
         />
         {user && (
           <span className="preview-top__user ovf-hide-narrow">
-            <span className="avatar avatar--sm" style={{ background: user.avatarColor }} title={user.name}>{user.name[0]}</span>
-            <span className="preview-top__user-name">{user.name}</span>
+            {/* 「用其他身分看」時畫面上的「我」是被看的人，不能在這裡改名字（改的是製作自己的帳號） */}
+            {va.active ? (
+              <>
+                <span className="avatar avatar--sm" style={{ background: user.avatarColor }} title={user.name}>{user.name[0]}</span>
+                <span className="preview-top__user-name">{user.name}</span>
+              </>
+            ) : <AccountMenu nameClassName="preview-top__user-name" />}
             <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
           </span>
         )}

@@ -154,6 +154,55 @@
 .sp-dialog__btn--danger:focus-visible { outline-color: var(--danger); }
 .sp-dialog__btn[aria-disabled='true'] { opacity: 0.45; }
 
+/* 選項比較多：一個選項一行（選哪一首歌、選顏色） */
+.sp-dialog__choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(52dvh, 420px);
+  overflow-y: auto;
+  margin: 2px 0 0;
+  padding: 2px;
+}
+.sp-dialog__choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 12px;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  font-size: 13.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+.sp-dialog__choice:hover { background: var(--surface-2); }
+.sp-dialog__choice:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.sp-dialog__choice.is-current { border-color: var(--accent); }
+.sp-dialog__choice.is-primary { background: var(--accent); color: #000; border-color: transparent; }
+.sp-dialog__choice-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sp-dialog__choice-now {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+}
+.sp-dialog__swatch {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+}
+
 /* 手機：靠上（鍵盤跳出來不會蓋到）、按鈕平分一整行、夠大好按 */
 @media (max-width: 640px) {
   .sp-dialog-backdrop {
@@ -163,6 +212,7 @@
   .sp-dialog { padding: 20px 18px 16px; max-height: calc(100dvh - 32px); }
   .sp-dialog__actions { gap: 10px; }
   .sp-dialog__btn { flex: 1 1 0; min-height: 44px; padding: 10px 12px; font-size: 15px; }
+  .sp-dialog__choice { min-height: 46px; font-size: 15px; }
   .sp-dialog--danger .sp-dialog__message,
   .sp-dialog__head:has(.sp-dialog__icon) + .sp-dialog__message { padding-left: 0; }
 }

@@ -172,6 +172,12 @@ export async function updateUserAdmin(id: string, patch: Partial<{
   await http(`/api/users/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
 }
 
+/** 改我自己的名字 / 頭像顏色（每個登入的人都可以；其他欄位後台一律不收）。回傳改好的我 */
+export async function updateMyProfile(patch: { name?: string; avatarColor?: string }): Promise<AuthUser> {
+  const data = await http<{ user: AuthUser }>('/api/auth/me', { method: 'PATCH', body: JSON.stringify(patch) });
+  return data.user;
+}
+
 /** 重設別人的登入碼（只有全站製作）；accessCode 沒填 = 系統產生，有填 = 自己設定（規則 lib/loginCodeRules.ts） */
 export async function setAccessCode(id: string, accessCode?: string): Promise<{ ok: true; accessCode: string; shownOnce?: boolean }> {
   return http(`/api/users/${encodeURIComponent(id)}/access-code`, {
@@ -1424,8 +1430,21 @@ export async function updateShareLinkSlug(projectId: string, token: string, slug
   });
 }
 
-/** 改「允許看的人留言」（打開只有製作）、連結名稱、浮水印、禁止下載（有給的才改） */
-export async function updateShareLink(projectId: string, token: string, patch: { allowComments?: boolean; label?: string | null; watermark?: boolean; noDownload?: boolean }): Promise<{ allowComments: boolean; label: string | null; watermark?: boolean; noDownload?: boolean }> {
+/** 改連結的設定（有給的才改）：允許看的人留言（打開只有製作）、連結名稱、浮水印、禁止下載，以及建好以後才能改的三樣 */
+export interface ShareLinkPatch {
+  allowComments?: boolean;
+  label?: string | null;
+  watermark?: boolean;
+  noDownload?: boolean;
+  /** 字串 = 設新密碼（換掉之後舊密碼進來的人要重新輸入）；null = 拿掉密碼 */
+  password?: string | null;
+  /** 正數 = 從現在起算幾天後過期；null = 不會過期 */
+  expiresInDays?: number | null;
+  /** 歌的 id = 只分享那一首（要是這個專案的歌）；null = 整個專案 */
+  songId?: string | null;
+}
+
+export async function updateShareLink(projectId: string, token: string, patch: ShareLinkPatch): Promise<{ allowComments: boolean; label: string | null; watermark?: boolean; noDownload?: boolean; hasPassword?: boolean; expiresAt?: string | null; songId?: string | null }> {
   return http(`/api/projects/${encodeURIComponent(projectId)}/share-links/${encodeURIComponent(token)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),

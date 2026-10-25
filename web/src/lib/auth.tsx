@@ -10,6 +10,8 @@ interface AuthState {
   refresh: () => Promise<void>;
   login: (accessCode: string) => Promise<void>;
   logout: () => Promise<void>;
+  /** 改我自己的名字 / 頭像顏色；改好後畫面上所有「我」的地方一起換 */
+  updateProfile: (patch: { name?: string; avatarColor?: string }) => Promise<void>;
 }
 
 const AuthCtx = createContext<AuthState | null>(null);
@@ -58,8 +60,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
+  const updateProfile = useCallback(async (patch: { name?: string; avatarColor?: string }) => {
+    const u = await api.updateMyProfile(patch);
+    // 後台只回名字 / 顏色這些；浮水印用的 email 留著
+    setUser(prev => (prev ? { ...prev, ...u } : u));
+  }, []);
+
   return (
-    <AuthCtx.Provider value={{ user, loading, refresh, login, logout }}>
+    <AuthCtx.Provider value={{ user, loading, refresh, login, logout, updateProfile }}>
       {children}
     </AuthCtx.Provider>
   );

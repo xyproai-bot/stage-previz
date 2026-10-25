@@ -6,6 +6,7 @@ import type { ActivityEntry, Cue, CueState, Song, SongComment, StageObject } fro
 import { defaultVisible, isDefaultHidden } from '../lib/defaultHidden';
 import type { ProjectMember, ProjectRole } from '../lib/mockData';
 import { useAuth } from '../lib/auth';
+import AccountMenu, { useAccountEdit } from '../components/AccountMenu';
 import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
 import { memberWatermarkOn } from '../lib/watermark/policy';
 import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
@@ -112,6 +113,7 @@ export default function Studio() {
 function StudioInner({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const account = useAccountEdit();
   // 製作用「動畫師畫面」預覽時：user / 角色換成那個動畫師，寫入的按鈕按不下去（lib/viewAsContext.tsx）
   const user = useViewAsUser();
   const va = useViewAs();
@@ -991,13 +993,19 @@ function StudioInner({ projectId }: { projectId: string }) {
           ...(canEditProject ? [{ key: 'edit', label: '編輯專案', icon: Pencil, onSelect: () => navigate(projectEditorPath(projectId)) }] : []),
           { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(HELP_ANCHORS.animator), external: true },
           { key: 'settings', label: '設定（AE 即時連線檢查）', icon: Settings, onSelect: () => navigate('/settings') },
+          ...(user && !va.active ? account.itemsAfterSeparator : []),
           ...(user ? [{ key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: async () => { await logout(); navigate('/login'); } }] : []),
         ]}
       />
       {user && (
         <span className="studio-top__user ovf-hide-narrow">
-          <span className="avatar avatar--sm" style={{ background: user.avatarColor }} title={user.name}>{user.name[0]}</span>
-          <span className="studio-top__user-name">{user.name}</span>
+          {/* 「用其他身分看」時畫面上的「我」是被看的人，不能在這裡改名字（改的是製作自己的帳號） */}
+          {va.active ? (
+            <>
+              <span className="avatar avatar--sm" style={{ background: user.avatarColor }} title={user.name}>{user.name[0]}</span>
+              <span className="studio-top__user-name">{user.name}</span>
+            </>
+          ) : <AccountMenu nameClassName="studio-top__user-name" />}
           <button className="link-btn" onClick={async () => { await logout(); navigate('/login'); }}>登出</button>
         </span>
       )}

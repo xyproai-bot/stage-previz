@@ -10,6 +10,7 @@ import { formatRelativeTime } from './serverTime';
 import { helpUrl } from './helpLinks';
 import { projectEditorPath } from './landing';
 import { ProjectCardSkeleton } from '../components/Skeleton';
+import AccountMenu from '../components/AccountMenu';
 import './myProjects.css';
 
 type Kind = 'studio' | 'preview';
@@ -59,8 +60,7 @@ export default function MyProjectsPage({ kind }: { kind: Kind }) {
         <a className="my-projects__link" href={helpUrl()} target="_blank" rel="noopener">使用說明</a>
         <Link className="my-projects__link" to="/settings">設定</Link>
         <span className="my-projects__user">
-          <span className="avatar avatar--sm" style={{ background: user.avatarColor }}>{user.name?.[0] || '?'}</span>
-          <span className="my-projects__user-name">{user.name}</span>
+          <AccountMenu nameClassName="my-projects__user-name" />
         </span>
         <button
           className="my-projects__link my-projects__logout"

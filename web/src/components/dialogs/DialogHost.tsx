@@ -6,7 +6,7 @@
 //   - 會刪掉 / 弄不回來的動作：紅色按鈕，按鈕上寫動作（「刪除」不是「確定」）
 //   - 手機：靠上（不會被鍵盤蓋住）、按鈕夠大
 import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { TriangleAlert } from 'lucide-react';
+import { Check, TriangleAlert } from 'lucide-react';
 import Icon from '../Icon';
 import { dialogs, primaryChoice, type DialogRequest } from './dialogStore';
 import './DialogHost.css';
@@ -87,6 +87,11 @@ function DialogView({ req }: { req: DialogRequest }) {
   const { title, message, cancelLabel = '取消' } = req.options;
   const icon = req.options.icon ?? (destructive ? TriangleAlert : undefined);
   const primary = req.kind === 'choose' ? primaryChoice(req.options.choices) : null;
+  // 選項比較多的時候一個選項一行（直排）：沒有明確標 primary 的話，先把焦點放在「目前」那個，沒有就第一個
+  const listLayout = req.kind === 'choose' && req.options.layout === 'list';
+  const focusChoice = req.kind === 'choose'
+    ? (req.options.choices.find(c => c.primary) ?? (listLayout ? req.options.choices.find(c => c.current) : undefined) ?? req.options.choices[0] ?? null)
+    : null;
 
   function cancel() {
     dialogs.cancel(req.id);
@@ -97,7 +102,7 @@ function DialogView({ req }: { req: DialogRequest }) {
       setTouched(true);
       if (!canConfirm) { inputRef.current?.focus(); return; }
       dialogs.settle(req.id, value);
-    } else if (primary) dialogs.settle(req.id, primary.value);
+    } else if (primary && !listLayout) dialogs.settle(req.id, primary.value);  // 直排的選項要自己點，Enter 不替人選
   }
   const acceptRefFn = useRef(accept);
   acceptRefFn.current = accept;
@@ -226,6 +231,25 @@ function DialogView({ req }: { req: DialogRequest }) {
           </form>
         )}
 
+        {req.kind === 'choose' && listLayout && (
+          <div className="sp-dialog__choices" role="group" aria-label={title}>
+            {req.options.choices.map(c => (
+              <button
+                key={c.value}
+                ref={c === focusChoice ? confirmRef : undefined}
+                type="button"
+                className={'sp-dialog__choice' + (c.current ? ' is-current' : '') + (c.primary ? ' is-primary' : '')}
+                aria-current={c.current ? 'true' : undefined}
+                onClick={() => dialogs.settle(req.id, c.value)}
+              >
+                {c.swatch && <span className="sp-dialog__swatch" style={{ background: c.swatch }} aria-hidden="true" />}
+                <span className="sp-dialog__choice-label">{c.label}</span>
+                {c.current && <span className="sp-dialog__choice-now"><Icon icon={Check} size="sm" /> 目前</span>}
+              </button>
+            ))}
+          </div>
+        )}
+
         <div className="sp-dialog__actions">
           {cancelLabel !== null && (
             <button type="button" className="sp-dialog__btn sp-dialog__btn--ghost" onClick={cancel}>
@@ -233,7 +257,7 @@ function DialogView({ req }: { req: DialogRequest }) {
             </button>
           )}
           {req.kind === 'choose' ? (
-            req.options.choices.map(c => (
+            listLayout ? null : req.options.choices.map(c => (
               <button
                 key={c.value}
                 ref={c === primary ? confirmRef : undefined}

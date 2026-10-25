@@ -7,6 +7,7 @@ import { Archive, ArrowLeft, BookOpen, Boxes, Cloud, Folder, LogOut, Settings, T
 import HelpModal from './HelpModal';
 import NotificationBell from './NotificationBell';
 import OverflowMenu from './OverflowMenu';
+import AccountMenu, { useAccountEdit } from './AccountMenu';
 import Icon from './Icon';
 import { confirmDialog } from './dialogs';
 import './AdminLayout.css';
@@ -89,16 +90,19 @@ function AdminShell({ children }: AdminLayoutProps) {
 
         <div className="admin-sidebar__footer">
           <div className="admin-sidebar__user">
-            <div
-              className="avatar avatar--sm"
-              style={{ background: user?.avatarColor || '#10c78a' }}
-            >
-              {user?.name?.[0] || '?'}
-            </div>
-            <div className="admin-sidebar__user-info">
-              <div className="admin-sidebar__user-name">{user?.name || '載入中…'}</div>
-              <div className="admin-sidebar__user-role">{user ? ROLE_LABEL[user.role] : ''}</div>
-            </div>
+            {/* 點自己的名字 → 設定頁的「我的帳號」（改名字、換顏色、改登入碼） */}
+            <Link className="admin-sidebar__me" to="/settings" title="我的帳號（改名字、換顏色）" aria-label="我的帳號（改名字、換顏色）">
+              <div
+                className="avatar avatar--sm"
+                style={{ background: user?.avatarColor || '#10c78a' }}
+              >
+                {user?.name?.[0] || '?'}
+              </div>
+              <div className="admin-sidebar__user-info">
+                <div className="admin-sidebar__user-name">{user?.name || '載入中…'}</div>
+                <div className="admin-sidebar__user-role">{user ? ROLE_LABEL[user.role] : ''}</div>
+              </div>
+            </Link>
             {/* 站內通知（@你、新版、被指派…）：側欄在左下角 → 面板往上開 */}
             <NotificationBell placement="up-left" className="admin-sidebar__bell" />
             <button
@@ -137,6 +141,7 @@ function scrollNavIntoView(el: HTMLElement) {
 function MemberLayout({ children }: AdminLayoutProps) {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const account = useAccountEdit();
 
   async function handleLogout() {
     if (!(await confirmDialog({ title: '要登出嗎？', confirmLabel: '登出' }))) return;
@@ -156,10 +161,7 @@ function MemberLayout({ children }: AdminLayoutProps) {
         <a className="member-layout__link ovf-hide-narrow" href={helpUrl()} target="_blank" rel="noopener">使用說明</a>
         <NotificationBell />
         <span className="member-layout__user ovf-hide-narrow">
-          <span className="avatar avatar--sm" style={{ background: user?.avatarColor || '#10c78a' }}>
-            {user?.name?.[0] || '?'}
-          </span>
-          <span className="member-layout__user-name">{user?.name}</span>
+          <AccountMenu nameClassName="member-layout__user-name" />
         </span>
         <button className="member-layout__link ovf-hide-narrow" onClick={handleLogout}>登出</button>
         <OverflowMenu
@@ -167,6 +169,7 @@ function MemberLayout({ children }: AdminLayoutProps) {
           header={user?.name}
           items={[
             { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(), external: true },
+            ...(user ? account.itemsAfterSeparator : []),
             { key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: () => { void handleLogout(); } },
           ]}
         />
