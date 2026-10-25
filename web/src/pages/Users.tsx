@@ -21,12 +21,12 @@ import OpenInvitesList from '../components/OpenInvitesList';
 import LoginCodeDialog from '../components/LoginCodeDialog';
 import LoginCodeSetDialog from '../components/LoginCodeSetDialog';
 import LoginCodeChooser from '../components/LoginCodeChooser';
-import { Check, Copy, FolderPlus, KeyRound, Pencil, Link, LoaderCircle, RefreshCw, Search, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
+import { AVATAR_COLORS, DEFAULT_AVATAR_COLOR, sameAvatarColor } from '../lib/avatarColors';
+import { Check, Copy, FolderPlus, KeyRound, Pencil, Link, LoaderCircle, Palette, RefreshCw, Search, Trash2, TriangleAlert, UserCheck, UserPlus, UserX, X } from 'lucide-react';
 import './Users.css';
 import './UsersFilter.css';
 import { useEscapeClose } from '../lib/useEscapeClose';
 
-const PALETTE = ['#10c78a', '#ffaa44', '#5294ff', '#c264ff', '#ff5470', '#ffd84a'];
 
 /** 剛建立 / 重設的登入碼（只顯示這一次） */
 interface ShownCode { name: string; code: string; shownOnce: boolean; isReset: boolean; custom?: boolean }
@@ -42,6 +42,9 @@ export default function Users() {
   // 以前記的是打開當下的那一份，存好後清單更新了、對話框還是舊的，勾選框和角色會跳回去
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const editingUser = editingUserId ? users.find(u => u.id === editingUserId) ?? null : null;
+  // 「換頭像顏色」對話框（也只記是誰）
+  const [colorUserId, setColorUserId] = useState<string | null>(null);
+  const colorUser = colorUserId ? users.find(u => u.id === colorUserId) ?? null : null;
   const [shownCode, setShownCode] = useState<ShownCode | null>(null);
   // 邀請連結對話框：null = 關著；userId = 先選好的人（某個人旁邊的「邀請連結」）
   const [invite, setInvite] = useState<{ userId?: string } | null>(null);
@@ -125,6 +128,17 @@ export default function Users() {
       toast.success(`已改名為「${name.trim()}」`);
     } catch (e) {
       toast.error('名字沒有改成：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  async function handleChangeColor(u: UserAdmin, avatarColor: string) {
+    try {
+      await api.updateUserAdmin(u.id, { avatarColor });
+      await refresh({ quiet: true });
+      setColorUserId(null);
+      toast.success(`已換「${u.name}」的頭像顏色`);
+    } catch (e) {
+      toast.error('顏色沒有換成：' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -218,6 +232,7 @@ export default function Users() {
 
         <div className="user-row__actions">
           <button onClick={() => void handleRename(u)} title="改名字"><Icon icon={Pencil} /> 改名</button>
+          <button onClick={() => setColorUserId(u.id)} title="換頭像顏色（大家在專案裡看到的頭像）"><Icon icon={Palette} /> 顏色</button>
           <button onClick={() => setEditingUserId(u.id)} title="指派專案"><Icon icon={FolderPlus} /> 指派</button>
           {u.role !== 'admin' && !u.deactivated && (
             <button onClick={() => setInvite({ userId: u.id })} title="傳一個邀請連結給他（例如換了手機、忘記登入碼）">
@@ -358,6 +373,15 @@ export default function Users() {
           onChanged={() => refresh({ quiet: true })}
         />
       )}
+
+      {colorUser && (
+        <AvatarColorDialog
+          key={colorUser.id}
+          user={colorUser}
+          onClose={() => setColorUserId(null)}
+          onPick={(color) => handleChangeColor(colorUser, color)}
+        />
+      )}
     </AdminLayout>
   );
 }
@@ -371,7 +395,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
   useEscapeClose(open, onClose);
   const [name, setName] = useState('');
   const [role, setRole] = useState<UserRole>('animator');
-  const [color, setColor] = useState(PALETTE[0]);
+  const [color, setColor] = useState(DEFAULT_AVATAR_COLOR);
   const [projectIds, setProjectIds] = useState<string[]>([]);
   const [codeChoice, setCodeChoice] = useState<LoginCodeChoice>(EMPTY_CHOICE);
   const [submitting, setSubmitting] = useState(false);
@@ -380,7 +404,7 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
 
   useEffect(() => {
     if (open) {
-      setName(''); setRole('animator'); setColor(PALETTE[0]);
+      setName(''); setRole('animator'); setColor(DEFAULT_AVATAR_COLOR);
       setProjectIds([]); setError(null); setCodeChoice(EMPTY_CHOICE);
     }
   }, [open]);
@@ -456,13 +480,14 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
           <div className="form-row">
             <label>頭像顏色</label>
             <div className="palette">
-              {PALETTE.map(c => (
+              {AVATAR_COLORS.map(c => (
                 <button
-                  type="button" key={c}
-                  className={'palette__swatch' + (color === c ? ' is-active' : '')}
-                  style={{ background: c }}
-                  onClick={() => setColor(c)}
-                  aria-label={c}
+                  type="button" key={c.value}
+                  className={'palette__swatch' + (sameAvatarColor(color, c.value) ? ' is-active' : '')}
+                  style={{ background: c.value }}
+                  onClick={() => setColor(c.value)}
+                  aria-label={c.name}
+                  title={c.name}
                 />
               ))}
             </div>
@@ -475,6 +500,48 @@ function NewUserDialog({ open, allProjects, onClose, onCreated }: {
             </button>
           </footer>
         </form>
+      </div>
+    </div>
+  );
+}
+
+/** 換頭像顏色：點一個顏色就存好、關掉 */
+function AvatarColorDialog({ user, onClose, onPick }: {
+  user: UserAdmin;
+  onClose: () => void;
+  onPick: (color: string) => Promise<void>;
+}) {
+  useEscapeClose(true, onClose);
+  const [busy, setBusy] = useState(false);
+  async function pick(color: string) {
+    if (busy) return;
+    if (sameAvatarColor(color, user.avatarColor)) { onClose(); return; }
+    setBusy(true);
+    try { await onPick(color); } finally { setBusy(false); }
+  }
+  return (
+    <div className="dialog-overlay" onClick={onClose}>
+      <div className="dialog" onClick={(e) => e.stopPropagation()}>
+        <header className="dialog__header">
+          <h2>頭像顏色 — {user.name}</h2>
+          <button className="dialog__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
+        </header>
+        <div className="dialog__body">
+          <div className="palette" role="group" aria-label="頭像顏色">
+            {AVATAR_COLORS.map(c => (
+              <button
+                type="button" key={c.value}
+                className={'palette__swatch' + (sameAvatarColor(user.avatarColor, c.value) ? ' is-active' : '')}
+                style={{ background: c.value }}
+                onClick={() => void pick(c.value)}
+                disabled={busy}
+                aria-label={c.name}
+                title={c.name}
+              />
+            ))}
+          </div>
+          <small className="form-hint">點一個顏色就換好，大家在專案裡看到的頭像會跟著變。</small>
+        </div>
       </div>
     </div>
   );

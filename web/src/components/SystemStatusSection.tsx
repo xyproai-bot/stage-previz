@@ -3,11 +3,62 @@
 import { useCallback, useEffect, useState } from 'react';
 import { CircleCheck, Database, Download, LoaderCircle, RefreshCw, TriangleAlert } from 'lucide-react';
 import Icon from './Icon';
-import { downloadBackup, formatBackupSize, getSystemStatus, type SystemStatus } from '../lib/systemStatusApi';
+import { describeBackup, downloadBackup, formatBackupSize, getSystemStatus, listBackups, type BackupItem, type SystemStatus } from '../lib/systemStatusApi';
 import { formatDateTime, formatRelativeTime } from '../lib/serverTime';
 import { toast } from '../lib/toast';
 import StorageUsagePanel from './StorageUsagePanel';
 import './SystemStatusSection.css';
+
+/**
+ * 「看全部備份」：打開才去讀清單（最近 30 天每天一份 + 每個月第一份），每一份都能下載。
+ * 以前只能下載最近一份；要退回幾天前的樣子就需要舊的那幾份。
+ */
+function BackupList({ count, busy, onDownload }: { count: number; busy: boolean; onDownload: (file: string) => void }) {
+  const [items, setItems] = useState<BackupItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    setError(null);
+    try {
+      setItems(await listBackups());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <details
+      className="sys-status__details sys-status__backups"
+      onToggle={(e) => { if ((e.currentTarget as HTMLDetailsElement).open && items === null && !loading) void load(); }}
+    >
+      <summary>看全部備份（共 {count} 份）</summary>
+      {loading && <p className="settings-row__sub">讀取中…</p>}
+      {error && (
+        <p className="sys-status__warn">
+          <Icon icon={TriangleAlert} /> 讀不到備份清單：{error}
+          <button type="button" className="btn btn--ghost btn--sm" onClick={() => void load()}>重試</button>
+        </p>
+      )}
+      {items && items.length === 0 && <p className="settings-row__sub">目前沒有備份</p>}
+      {items && items.length > 0 && (
+        <ul className="sys-status__backup-list">
+          {items.map(b => (
+            <li key={b.file} className="sys-status__backup">
+              <span>{describeBackup(b)}</span>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={() => onDownload(b.file)} disabled={busy}>
+                <Icon icon={Download} /> 下載
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </details>
+  );
+}
 
 export default function SystemStatusSection() {
   const [data, setData] = useState<SystemStatus | null>(null);
@@ -81,6 +132,8 @@ export default function SystemStatusSection() {
               </button>
             )}
           </div>
+
+          {!!b && b.count > 1 && <BackupList key={rev} count={b.count} busy={downloading} onDownload={(f) => void handleDownload(f)} />}
 
           <StorageUsagePanel key={rev} />
 

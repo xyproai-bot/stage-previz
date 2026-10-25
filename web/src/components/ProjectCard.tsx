@@ -3,10 +3,11 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import type { Project, SongStatus, SongStatusCounts } from '../lib/mockData';
 import { formatRelativeTime } from '../lib/serverTime';
-import { Archive, Copy, Download, Ellipsis, Pencil, Tag, Ticket } from 'lucide-react';
+import { Archive, Copy, Download, Ellipsis, Eye, Pencil, RotateCcw, Tag, Ticket } from 'lucide-react';
 import Icon from './Icon';
 import { useViewAsMenu, VIEW_AS_MENU_LABEL } from './ViewAsMenu';
 import { editorPath } from '../lib/viewAs';
+import { reviewToggle } from '../lib/projectStatus';
 import './ProjectCard.css';
 
 const STATUS_LABELS: Record<Project['status'], { label: string; cls: string }> = {
@@ -36,7 +37,7 @@ const SONG_STATUS_LABEL: Record<SongStatus, string> = {
 };
 
 export default function ProjectCard({
-  project, showName, onDuplicate, onArchive, onExport, onEditTags, onRename,
+  project, showName, onDuplicate, onArchive, onExport, onEditTags, onRename, onToggleReview,
   selected, onToggleSelect, showViewAs,
 }: {
   project: Project;
@@ -47,6 +48,8 @@ export default function ProjectCard({
   onEditTags?: (project: Project) => void;
   /** 改專案名稱和說明 */
   onRename?: (project: Project) => void;
+  /** 進行中 ⇄ 審查中（首頁「審查中」篩選看的就是這個狀態）；封存的專案不會有這一項 */
+  onToggleReview?: (project: Project) => void;
   selected?: boolean;
   onToggleSelect?: (project: Project) => void;
   /** 選單裡加「用其他身分看」：導演畫面 / 動畫師畫面 / 客戶畫面（管理頁給製作用） */
@@ -54,6 +57,7 @@ export default function ProjectCard({
 }) {
   const navigate = useNavigate();
   const status = STATUS_LABELS[project.status];
+  const review = onToggleReview ? reviewToggle(project.status) : null;
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   // 選單放在 body 底下（卡片會裁掉超出的部分、滑鼠移上去還會位移），用按鈕的位置定位
@@ -144,7 +148,7 @@ export default function ProjectCard({
           <div className="project-card__thumb-placeholder">16:9</div>
         )}
         <span className={`project-card__status ${status.cls}`}>{status.label}</span>
-        {(onDuplicate || onArchive || onExport || onRename || showViewAs) && (
+        {(onDuplicate || onArchive || onExport || onRename || onToggleReview || showViewAs) && (
           // 鍵盤（Enter / 空白鍵）按選單不要變成「進入專案」
           <div className={'project-card__menu' + (menuOpen ? ' is-open' : '')} ref={menuRef} onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
             <button
@@ -188,6 +192,12 @@ export default function ProjectCard({
                     className="project-card__menu-item"
                     onClick={() => { setMenuOpen(false); onEditTags(project); }}
                   ><Icon icon={Tag} /> 編輯標籤</button>
+                )}
+                {review && onToggleReview && (
+                  <button
+                    className="project-card__menu-item"
+                    onClick={() => { setMenuOpen(false); onToggleReview(project); }}
+                  ><Icon icon={review.next === 'in_review' ? Eye : RotateCcw} /> {review.menuLabel}</button>
                 )}
                 {onArchive && (
                   <button

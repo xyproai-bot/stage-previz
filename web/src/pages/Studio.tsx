@@ -54,6 +54,7 @@ import LedCompareBadge from '../components/LedCompareBadge';
 import { useNewVersionHint } from '../lib/newVersionHint';
 import { canAddVideo, canModifyVideo, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, getCommentsSummary, retrySongVideo, type CommentSummary, type SongVideo } from '../lib/videoApi';
+import { editVersionNote } from '../lib/editVersionNote';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, videoJobs, type VideoJob } from '../lib/videoJobs';
 import { resumeFileProblem, trackedVideoIds, useStalledUploads } from '../lib/stalledUploads';
 import { songTitle } from '../lib/songCode';
@@ -831,6 +832,10 @@ function StudioInner({ projectId }: { projectId: string }) {
       toast.error('刪除失敗：' + friendlyError(e));
     }
   }
+  async function handleEditNote(item: VersionItem) {
+    if (!selectedSong) return;
+    if (await editVersionNote(projectId, selectedSong.id, item)) await versions.reload();
+  }
   const canModifyPending = (v: SongVideo) => canModifyVideo({ ...videoPerm, item: { kind: 'version', byId: v.createdBy?.id ?? null } });
   async function handleRetryPending(v: SongVideo) {
     if (!selectedSong) return;
@@ -1183,6 +1188,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 onAdd={canAdd ? () => setAddOpen(true) : undefined}
                 canDelete={(it) => canModifyVideo({ ...videoPerm, item: it })}
                 onDelete={handleDeleteVersion}
+                onEditNote={handleEditNote}
                 canModifyPending={canModifyPending}
                 onRetryPending={handleRetryPending}
                 onRemovePending={handleRemovePending}

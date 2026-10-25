@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { CircleAlert, Copy, Film, History, LoaderCircle, Plus, Trash2, TriangleAlert } from 'lucide-react';
+import { CircleAlert, Copy, Film, History, LoaderCircle, Pencil, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
 import PendingVideoRow from './PendingVideoRow';
@@ -33,6 +33,8 @@ interface Props {
   onAdd?: () => void;
   canDelete?: (item: VersionItem) => boolean;
   onDelete?: (item: VersionItem) => void;
+  /** 有給才出現「改說明」；誰能改跟「刪除」同一個條件（canDelete） */
+  onEditNote?: (item: VersionItem) => void;
   /** 還沒好的那一版能不能動（重試 / 拿掉） */
   canModifyPending?: (v: SongVideo) => boolean;
   onRetryPending?: (v: SongVideo) => void;
@@ -88,7 +90,7 @@ function versionTooltip(it: VersionItem): string {
  */
 export default function SongVersionBar({
   status, error, items, selectedKey, onSelect, pending, jobs, onRetryLoad, onAdd,
-  canDelete, onDelete, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
+  canDelete, onDelete, onEditNote, canModifyPending, onRetryPending, onRemovePending, emptyText, extra, newVersion,
   stalled, onResumePending, onRetryFinish, ledCanvas, songTemplate, onShowDeleted, userId,
 }: Props) {
   // 預覽模式（製作用其他身分看）：交影片、刪除、重試…照樣出現但按不下去
@@ -159,6 +161,16 @@ export default function SongVersionBar({
                   ? <span className="vbar__note">「{selected.note}」</span>
                   : <span className="vbar__muted">{selected.kind === 'drive' ? `舊的 Drive 影片 · ${selected.title}` : selected.title}</span>}
               </div>
+            )}
+            {selected && onEditNote && canDelete?.(selected) && (
+              <button
+                type="button"
+                className="vbar__btn"
+                onClick={() => onEditNote(selected)}
+                {...ro(selected.note ? `改 ${selected.label} 的說明` : `幫 ${selected.label} 補上說明`)}
+              >
+                <Icon icon={Pencil} size="sm" /> {selected.note ? '改說明' : '寫說明'}
+              </button>
             )}
             {selected && onDelete && canDelete?.(selected) && (
               <button type="button" className="vbar__btn" onClick={() => onDelete(selected)} {...ro(`刪掉 ${selected.label}`)}>

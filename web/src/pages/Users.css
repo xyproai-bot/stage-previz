@@ -238,6 +238,7 @@
   border-color: white;
   box-shadow: 0 0 0 2px rgba(16, 199, 138, 0.6);
 }
+.palette__swatch:disabled { opacity: 0.5; cursor: wait; }
 
 .mono { font-family: var(--font-mono); }
 

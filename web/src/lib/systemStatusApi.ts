@@ -60,6 +60,20 @@ export async function getSystemStatus(): Promise<SystemStatus> {
   return resp.json() as Promise<SystemStatus>;
 }
 
+/** 全部備份的清單（新的在前）：最近 30 天每天一份 + 最近 12 個月每個月的第一份 */
+export async function listBackups(): Promise<BackupItem[]> {
+  const resp = await fetch(`${apiBase()}/api/admin/backups`, { headers: authHeaders(), credentials: 'include' });
+  if (!resp.ok) throw new Error(await errorMessage(resp));
+  const data = await resp.json() as { backups?: BackupItem[] };
+  return Array.isArray(data.backups) ? data.backups : [];
+}
+
+/** 清單上的一行字：「2026-10-14 · 1.2 MB」，每個月留下來的那份多寫「每月留存」 */
+export function describeBackup(b: Pick<BackupItem, 'day' | 'size' | 'monthly'>): string {
+  const size = formatBackupSize(b.size);
+  return [b.day, size, b.monthly ? '每月留存' : ''].filter(Boolean).join(' · ');
+}
+
 /** 下載一份備份（帶登入狀態拿檔案，再讓瀏覽器存檔） */
 export async function downloadBackup(file: string): Promise<void> {
   const resp = await fetch(`${apiBase()}/api/admin/backups/${encodeURIComponent(file)}`, { headers: authHeaders(), credentials: 'include' });

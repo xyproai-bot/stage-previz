@@ -7,7 +7,8 @@ import type { Project } from '../lib/mockData';
 import type { ShowDetail as ShowDetailT } from '../lib/api';
 import Icon from '../components/Icon';
 import { confirmDialog, promptDialog, toast } from '../components/dialogs';
-import { ArrowLeft, Folder, LoaderCircle, Pencil, Trash2, TriangleAlert } from 'lucide-react';
+import { ArrowLeft, FileText, Folder, LoaderCircle, Pencil, Trash2, TriangleAlert } from 'lucide-react';
+import { editShowDescription } from '../lib/editShowDescription';
 import './Shows.css';
 
 export default function ShowDetail() {
@@ -56,6 +57,11 @@ export default function ShowDetail() {
     }
   }
 
+  async function handleEditDescription() {
+    if (!show) return;
+    if (await editShowDescription(show)) await refresh();
+  }
+
   async function handleDelete() {
     if (!show) return;
     if (projects.length > 0) {
@@ -91,6 +97,7 @@ export default function ShowDetail() {
         </div>
         <div className="admin-topbar__actions">
           <button className="btn btn--ghost" onClick={handleRename} disabled={!show}><Icon icon={Pencil} /> 改名</button>
+          <button className="btn btn--ghost" onClick={handleEditDescription} disabled={!show} title="改這個 Show 的說明（顯示在 Show 頁面上）"><Icon icon={FileText} /> {show?.description ? '改說明' : '寫說明'}</button>
           <button className="show-detail__delete" onClick={handleDelete} disabled={!show}><Icon icon={Trash2} /> 刪除 Show</button>
         </div>
       </header>

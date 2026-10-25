@@ -83,6 +83,11 @@
   overflow-wrap: anywhere;
 }
 
+/* 全部備份清單（每一份都能下載） */
+.sys-status__backups { margin: 4px 0 12px; }
+.sys-status__backup-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow: auto; }
+.sys-status__backup { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); font-size: 12.5px; }
+
 /* 空間用量 / 重複的檔案（StorageUsagePanel.tsx） */
 .storage { display: flex; flex-direction: column; gap: 8px; }
 .storage .sys-status__subtitle { display: flex; align-items: center; gap: 6px; }

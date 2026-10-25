@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as api from '../lib/api';
 import type { ActivityEntry, ActivityAction } from '../lib/api';
 import { parseServerTime } from '../lib/serverTime';
 import { describeActivity } from '../lib/activityText';
+import { ACTIVITY_FIRST, ACTIVITY_MAX, atActivityLimit, canLoadEarlierActivity } from '../lib/activityPaging';
 import {
   Archive, ArrowUpDown, Copy, HistoryIcon, Pencil, Plus, RefreshCw, RotateCcw, Sprout, Target, Trash2, TriangleAlert, Upload, X,
   type LucideIcon,
@@ -39,12 +40,16 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 讀幾筆：一開始 50，按「看更早的」變成後台的上限 200（每 30 秒自動更新也照這個數字）
+  const [limit, setLimit] = useState(ACTIVITY_FIRST);
+  const limitRef = useRef(limit);
+  limitRef.current = limit;
 
-  async function refresh() {
+  async function refresh(nextLimit?: number) {
     setLoading(true);
     setError(null);
     try {
-      const list = await api.listActivity(projectId, 50);
+      const list = await api.listActivity(projectId, nextLimit ?? limitRef.current);
       setEntries(list);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -53,7 +58,20 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
     }
   }
 
-  useEffect(() => { if (open) refresh(); /* eslint-disable-next-line */ }, [open, projectId]);
+  // 打開 / 換專案：回到最近 50 筆
+  useEffect(() => {
+    if (!open) return;
+    limitRef.current = ACTIVITY_FIRST;
+    setLimit(ACTIVITY_FIRST);
+    void refresh(ACTIVITY_FIRST);
+    // eslint-disable-next-line
+  }, [open, projectId]);
+
+  function loadEarlier() {
+    limitRef.current = ACTIVITY_MAX;
+    setLimit(ACTIVITY_MAX);
+    void refresh(ACTIVITY_MAX);
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -65,7 +83,7 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
   // 開啟時自動每 30s 刷一次（避免動到別的東西看不到）
   useEffect(() => {
     if (!open) return;
-    const t = setInterval(refresh, 30000);
+    const t = setInterval(() => { void refresh(); }, 30000);
     return () => clearInterval(t);
     // eslint-disable-next-line
   }, [open, projectId]);
@@ -79,7 +97,7 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
             <h3>最近活動</h3>
             <p className="muted small">操作紀錄不能修改或刪除，重要的操作都會記下來。</p>
           </div>
-          <button className="activity-drawer__refresh" onClick={refresh} disabled={loading} title="重新整理" aria-label="重新整理"><Icon icon={RefreshCw} size="md" /></button>
+          <button className="activity-drawer__refresh" onClick={() => void refresh()} disabled={loading} title="重新整理" aria-label="重新整理"><Icon icon={RefreshCw} size="md" /></button>
           <button className="activity-drawer__close" onClick={onClose} title="關閉" aria-label="關閉"><Icon icon={X} size="md" /></button>
         </header>
 
@@ -91,7 +109,7 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
               <Icon icon={TriangleAlert} size="xl" className="activity-empty__icon" />
               <div>載入失敗</div>
               <small style={{ color: 'var(--warn)' }}>{error}</small>
-              <button className="btn btn--ghost" onClick={refresh} style={{ marginTop: 8 }}>重試</button>
+              <button className="btn btn--ghost" onClick={() => void refresh()} style={{ marginTop: 8 }}>重試</button>
             </div>
           ) : entries.length === 0 ? (
             <div className="activity-empty muted">
@@ -121,6 +139,14 @@ export default function ActivityDrawer({ open, projectId, onClose }: Props) {
                 </li>
               ))}
             </ul>
+          )}
+          {entries.length > 0 && canLoadEarlierActivity(entries.length, limit) && (
+            <button type="button" className="btn btn--ghost activity-drawer__more" onClick={loadEarlier} disabled={loading}>
+              看更早的紀錄（最多 {ACTIVITY_MAX} 筆）
+            </button>
+          )}
+          {atActivityLimit(entries.length, limit) && (
+            <p className="muted small activity-drawer__limit">只列出最近 {ACTIVITY_MAX} 筆，再早的在這裡看不到。</p>
           )}
         </div>
       </aside>

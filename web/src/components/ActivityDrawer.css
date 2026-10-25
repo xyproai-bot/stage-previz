@@ -77,6 +77,16 @@
   padding: 8px 6px 24px;
 }
 
+/* 「看更早的紀錄」：一次讀到後台的上限 */
+.activity-drawer__more {
+  display: block;
+  margin: 12px auto 0;
+}
+.activity-drawer__limit {
+  margin: 12px 12px 0;
+  text-align: center;
+}
+
 .activity-empty {
   display: flex;
   flex-direction: column;

@@ -55,6 +55,7 @@ import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { canAddVideo, canModifyVideo, canPasteVideoLink, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
+import { editVersionNote } from '../lib/editVersionNote';
 import { useVideoJobDone, useVideoJobs, useWarnBeforeUnloadWhileUploading, videoJobs, type VideoJob } from '../lib/videoJobs';
 import { resumeFileProblem, trackedVideoIds, useStalledUploads } from '../lib/stalledUploads';
 import { songTitle } from '../lib/songCode';
@@ -1013,6 +1014,9 @@ function SongDetail({
       toast.error('刪除失敗：' + friendlyError(e));
     }
   }
+  async function handleEditNote(item: VersionItem) {
+    if (await editVersionNote(projectId, song.id, item)) await versions.reload();
+  }
   const canModifyPending = (v: SongVideo) => canModifyVideo({ ...perm, item: { kind: 'version', byId: v.createdBy?.id ?? null, source: v.source } });
   async function handleRetryPending(v: SongVideo) {
     try { await retrySongVideo(projectId, song.id, v.id); await versions.reload(); }
@@ -1081,6 +1085,7 @@ function SongDetail({
             onAdd={canAdd ? () => setAddOpen(true) : undefined}
             canDelete={(it) => canModifyVideo({ ...perm, item: { ...it, source: it.video?.source ?? null } })}
             onDelete={handleDeleteVersion}
+            onEditNote={handleEditNote}
             canModifyPending={canModifyPending}
             onRetryPending={handleRetryPending}
             onRemovePending={handleRemovePending}

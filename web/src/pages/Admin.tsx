@@ -9,6 +9,7 @@ import OverflowMenu from '../components/OverflowMenu';
 import * as api from '../lib/api';
 import { useAuth } from '../lib/auth';
 import type { Project } from '../lib/mockData';
+import { reviewToggle } from '../lib/projectStatus';
 import Icon from '../components/Icon';
 import { confirmDialog, promptDialog, toast } from '../components/dialogs';
 import {
@@ -229,6 +230,19 @@ function ProjectsTab() {
     }
   }
 
+  // 進行中 ⇄ 審查中（只有全站製作；首頁「審查中」篩選看的就是這個）
+  async function handleToggleReview(p: Project) {
+    const t = reviewToggle(p.status);
+    if (!t) return;
+    try {
+      await api.updateProject(p.id, { status: t.next });
+      await refresh();
+      toast.success(t.doneMessage(p.name));
+    } catch (e) {
+      toast.error('狀態沒有改成：' + (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   async function handleEditTags(p: Project) {
     const current = (p.tags || []).join(', ');
     const input = await promptDialog({
@@ -420,6 +434,7 @@ function ProjectsTab() {
                   onExport={handleExport}
                   onEditTags={handleEditTags}
                   onRename={handleRename}
+                  onToggleReview={handleToggleReview}
                   showViewAs
                   selected={selectedIds.has(p.id)}
                   onToggleSelect={toggleSelect}

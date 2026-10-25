@@ -1,11 +1,11 @@
 // 編輯頁歌單上點「影片 V3」打開：這首歌的所有影片版本（新的在前）。
 //   每一版：V 號碼、誰交的、什麼時候、說明、狀態（可以播 / 這台電腦播不了；還沒好的：上傳中 / 複製中 N% / 失敗）
-//   動作：到導演頁播放（新分頁，直接選到這一版）、刪除（號碼不會再用，跟導演頁 / 工作站的版本列同一句確認）
+//   動作：到導演頁播放（新分頁，直接選到這一版）、改說明（誰能改跟刪除同一個條件）、刪除（號碼不會再用，跟導演頁 / 工作站的版本列同一句確認）
 //   還沒好的：重試 / 繼續上傳 / 取消（跟版本列共用 PendingVideoRow）；這個分頁正在交的用 VideoJobRow
 //   ＋ 加影片：開「加影片」視窗，蓋在這個視窗上面（covered 時 Esc 先關上面那個）
 // 權限跟後台一樣（lib/songVersions.ts canModifyVideo）；編輯頁只有製作進得來，製作每一版都能刪。
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CircleAlert, Copy, ExternalLink, Film, History, LoaderCircle, Plus, Trash2, TriangleAlert, X } from 'lucide-react';
+import { CircleAlert, Copy, ExternalLink, Film, History, LoaderCircle, Pencil, Plus, Trash2, TriangleAlert, X } from 'lucide-react';
 import { DeletedVersionsList } from './DeletedVersions';
 import Icon from './Icon';
 import VideoJobRow from './VideoJobRow';
@@ -24,6 +24,7 @@ import { canModifyVideo, deleteVersionMessage, removePendingQuestion, type Versi
 import { songVideoFetcher, useSongVersions } from '../lib/useSongVersions';
 import { resumeFileProblem, trackedVideoIds, useStalledUploads } from '../lib/stalledUploads';
 import { deleteSongVideo, retrySongVideo, VIDEO_ACCEPT, type SongVideo } from '../lib/videoApi';
+import { editVersionNote } from '../lib/editVersionNote';
 import { videoJobs, type VideoJob } from '../lib/videoJobs';
 import { usePlayChecks } from '../lib/versionPlayCheck';
 import { CANNOT_PLAY_TEXT } from '../lib/videoCheck';
@@ -120,6 +121,14 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
       panelRef.current?.focus();
     } catch (e) {
       toast.error('刪除失敗：' + friendlyError(e));
+    } finally {
+      setBusyId(null);
+    }
+  }
+  async function handleEditNote(it: VersionItem) {
+    setBusyId(it.id);
+    try {
+      if (await editVersionNote(projectId, song.id, it)) await versions.reload();
     } finally {
       setBusyId(null);
     }
@@ -256,6 +265,17 @@ export default function SongVideosDialog({ open, onClose, projectId, song, jobs,
                       >
                         <Icon icon={ExternalLink} size="sm" /> 到導演頁播放
                       </a>
+                      {canDelete(it) && (
+                        <button
+                          type="button"
+                          className="songvid-btn"
+                          onClick={() => void handleEditNote(it)}
+                          disabled={busyId === it.id}
+                          title={it.note ? `改 ${it.label} 的說明` : `幫 ${it.label} 補上說明`}
+                        >
+                          <Icon icon={Pencil} size="sm" /> {it.note ? '改說明' : '寫說明'}
+                        </button>
+                      )}
                       {canDelete(it) && (
                         <button
                           type="button"
