@@ -55,6 +55,10 @@ description: Use BEFORE starting or resuming any background agent (Agent tool / 
 
 大改、動資料或權限的先放測試站，並告訴用戶。
 
+**前後台共用的規則檔（改了＝後台也變了）：** 後台直接 import 這些 `web/src/lib/` 檔案，只要動到其中任何一個，**網站和後台一律一起上線**（照下面「後台有改」走完再上網站），不能只上網站，不然兩邊會用兩套規則：
+`stageProps.ts`、`cameraBookmarks.ts`、`review/attachmentRules.ts`、`review/stickerRules.ts`、`loginCodeRules.ts`、`mechanisms/`（`model.ts`、`convert.ts`、`group.ts`、`hoist.ts`、`hoistRig.ts`）、`ledTemplate.ts`、`ledCanvas.ts`、`ledCabinet.ts`、`ledTemplateTimeline.ts`、`videoFingerprint.ts`、`watermark/policy.ts`、`shareSlug.ts`。
+清單會變：上線前用 `grep -rn "from '../web/src/" cf-worker --include=*.mjs --include=*.js` 確認，跟 `git diff --name-only` 比對有沒有交集。派 agent 時把這條寫進 prompt。
+
 **後台有改（cf-worker）：**
 1. 備份 D1 → `C:\Users\phang\stage-previz-backup\`（不要放 Temp，會被清掉）
    `npx wrangler d1 export stage-previz-db --remote --output C:\Users\phang\stage-previz-backup\before-<事>-<日期>.sql`
