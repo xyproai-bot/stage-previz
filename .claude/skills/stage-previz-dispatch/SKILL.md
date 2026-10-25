@@ -44,6 +44,13 @@ description: Use BEFORE starting or resuming any background agent (Agent tool / 
 回報：簡短。做了什麼、部署資訊、哪些沒驗證到。
 ```
 
+## 5.5 找程式先查關係圖（graphify）
+
+- 專案根目錄有 `graphify-out/graph.json`（程式關係圖，只含 web + cf-worker 的程式，不含文件和圖片）。
+- 要找「X 在哪 / 誰呼叫 Y / 改 Z 會影響哪些地方」：先在專案根目錄跑 `graphify query "<問題>"`（或 `graphify path "A" "B"`、`graphify explain "X"`），拿到相關檔案和行號再只讀那幾段，不要一次 grep / 讀一堆檔。派 agent 時在 prompt 的「先讀」加一句：先用 graphify query 找位置。
+- 程式改了很多之後（例如一整批功能上線後），在專案根目錄跑一次 `/graphify . --update`（只重新分析改過的程式檔，不花用量）讓圖保持新鮮。
+- 圖只是地圖：結論還是要用實際程式碼確認。
+
 ## 6. 驗證看大小
 
 - 小修：tsc + 相關測試 + build。
