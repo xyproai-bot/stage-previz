@@ -630,6 +630,8 @@ export function useEditorMechanisms(o: {
     refreshDefs, refreshPositions, sceneProps,
     /** 目前 cue 的機關值（從目前 3D 畫面建立 cue 時一起存） */
     currentValues: pb.targets,
+    /** 機關位置是哪首歌的（換歌後還沒讀到 = 上一首 / null） */
+    positionsSongId: positions?.songId ?? null,
   };
 }
 

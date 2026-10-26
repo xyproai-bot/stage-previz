@@ -94,6 +94,7 @@ import {
 import type { LucideIcon } from 'lucide-react';
 import './ProjectEditor.css';
 import { usePanelWidth } from '../lib/usePanelWidth';
+import { useSongSwitchHold } from '../lib/songSwitchHold';
 
 type RightTab = 'cues' | 'state' | 'mechanisms' | 'proposals' | 'objects' | 'library';
 type LoadStatus = 'loading' | 'ready' | 'error';
@@ -690,6 +691,16 @@ export default function ProjectEditor() {
     () => (previewExcluded ? viewportStates.map(s => (previewExcluded.includes(s.objectId) && s.category === 'led_panel' ? { ...s, category: 'other' as const } : s)) : viewportStates),
     [viewportStates, previewExcluded],
   );
+  // 換歌：新歌的 cue / 物件狀態 / 機關位置都讀到之前畫面停在上一首，讀到了直接跳到這首歌的 cue（不從預設位置走過來）
+  const songSceneReady = !selectedSongId || (cuesSongId === selectedSongId && !statesLoading && mech.positionsSongId === selectedSongId);
+  const songSwitch = useSongSwitchHold(selectedSongId, songSceneReady, {
+    states: sceneStates,
+    cueKey: selectedCueId,
+    crossfadeSeconds: cueTransitionSeconds(selectedCue),
+    mechanismTargets: mech.sceneProps.mechanismTargets,
+    mechanismTimings: mech.sceneProps.mechanismTimings,
+  });
+  const stageScene = songSwitch.scene;
 
   // ── 歌曲影片（＋加影片）：上傳中切到別首歌也會繼續；好了歌單上的「影片 V3」跟著更新 ──
   const [addVideoSongId, setAddVideoSongId] = useState<string | null>(null);
@@ -1839,7 +1850,7 @@ export default function ProjectEditor() {
             <LedTemplateHint hint={ledHint} />
             <StageScene
               onNdiFrameSize={setAeFrameSize}
-              states={sceneStates}
+              states={stageScene.states}
               stageObjects={sceneStageObjects}
               selectedObjectIds={selectedObjectIds}
               onSelect={(id, mode) => {
@@ -1851,12 +1862,15 @@ export default function ProjectEditor() {
                 handleSetState(objId, { position, rotation }).catch(e => { toast.error('位置沒有存到：' + msg(e)); })
               }
               cueName={selectedCue ? selectedCue.name : '（沒選 cue：改的是物件預設位置）'}
-              cueKey={selectedCueId}
-              crossfadeSeconds={cueTransitionSeconds(selectedCue)}
+              cueKey={stageScene.cueKey}
+              crossfadeSeconds={songSwitch.snap ? 0 : stageScene.crossfadeSeconds}
               modelUrl={modelUrl}
               enableNdi
               bookmarkScope={projectId}
               {...mech.sceneProps}
+              mechanismTargets={stageScene.mechanismTargets}
+              mechanismTimings={stageScene.mechanismTimings}
+              mechanismMotion={songSwitch.snap ? 'instant' : mech.sceneProps.mechanismMotion}
               scaleCorrection={view.scaleCorrection}
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
               stageProps={band.stageProps}
