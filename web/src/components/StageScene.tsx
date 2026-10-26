@@ -48,6 +48,7 @@ import { LED_SHARED_UNIFORMS, configureLedMaterial, ndiLedTexels, setLedColorLut
 import { materialsWithOriginalUv, planWantsOriginalUv } from '../lib/stageLook/ledOriginalUv';
 import { createFrameClock, type FrameClock } from '../lib/ledFrameClock';
 import { createSegmentSwitcher, type SegmentObject, type SegmentSwitcher } from '../lib/stageLook/ledTimelineSwitch';
+import { buildCoverageUniforms, coverageRemap } from '../lib/stageLook/ledTemplateCoverage';
 import { segmentIndexAt, timelineSummary, type LedTimeline } from '../lib/ledTemplateTimeline';
 import { ensureOwnLedMaterials } from '../lib/stageLook/ledOwnMaterial';
 import { blackenMaterial, offScreenMeshes, restoreOffMaterials, swapOffMaterials } from '../lib/ledOffPieces';
@@ -2621,10 +2622,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         ledTexture = testPatternTex;
       }
 
-      // LED 畫布版型：這個物件的螢幕放法（對「影片 / 圖片」和 AE 即時收到的那張版型畫布；測試圖、imageUrl 都是整張畫布）
+      // LED 畫布版型：這個物件的螢幕放法（對「影片 / 圖片」和 AE 即時收到的那張版型畫布；imageUrl 是整張畫布）
+      // 還沒有影片、顯示測試圖時：測試圖不搬位置，只有版型放了的螢幕亮、其他黑（手動開的測試圖 / UV 預覽照舊整張）
+      const coverageOnly = ledTexture === testPatternTex && !forceTestPattern && !ledUvPreview;
       let tplData: ReturnType<typeof buildObjectUniforms> | null = null;
       let segPer: SegmentObject['per'] | null = null;
-      if ((timeline || ledTemplate) && isLed && ledTexture && (ledTexture === ledMediaTextureRef.current || ledTexture === ndiLiveTextureRef.current?.texture)) {
+      if ((timeline || ledTemplate) && isLed && ledTexture && (coverageOnly || ledTexture === ledMediaTextureRef.current || ledTexture === ndiLiveTextureRef.current?.texture)) {
         // 手動切的螢幕用自己的範圍；物件裡某個 LED mesh（key = o:<id>~<mesh 名稱>）用那個 mesh 的範圍（找不到 = 不貼）；其他整個物件一塊
         const srcFor = (p: Placement): SrcSpan | null => {
           if (p.uv) return spanFromUv(p.uv);
@@ -2635,15 +2638,15 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         if (timeline) {
           segPer = timeline.segments.map(seg => ({
             plan: seg.plan,
-            data: buildObjectUniforms(seg.plan, id, srcFor),
-            remap: (r: UvRect) => mapUvRectToTemplate(seg.plan, id, srcFor, r),
+            data: coverageOnly ? buildCoverageUniforms(seg.plan, id, srcFor) : buildObjectUniforms(seg.plan, id, srcFor),
+            remap: coverageOnly ? coverageRemap(seg.plan, id, srcFor) : (r: UvRect) => mapUvRectToTemplate(seg.plan, id, srcFor, r),
           }));
           tplData = segPer[startSeg].data;
           ledTemplateRemapRef.current.set(id, segPer[startSeg].remap);
         } else {
           const plan = ledTemplate!;
-          tplData = buildObjectUniforms(plan, id, srcFor);
-          ledTemplateRemapRef.current.set(id, (r) => mapUvRectToTemplate(plan, id, srcFor, r));
+          tplData = coverageOnly ? buildCoverageUniforms(plan, id, srcFor) : buildObjectUniforms(plan, id, srcFor);
+          ledTemplateRemapRef.current.set(id, coverageOnly ? coverageRemap(plan, id, srcFor) : (r) => mapUvRectToTemplate(plan, id, srcFor, r));
         }
       } else {
         ledTemplateRemapRef.current.delete(id);
@@ -2658,7 +2661,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       swapOffMaterials(offMeshes);
       // 舊影片（自動貼 UV 以前做的）：模型存了原本的 UV（uv1）就直接用它取色，一個像素都不差；沒存的材質照舊用版型的長方形
       const curPlan = timeline ? timeline.segments[startSeg].plan : ledTemplate;
-      const wantsOrigAny = segPer ? segPer.some(s => planWantsOriginalUv(s.plan, id)) : !!(ledTemplate && planWantsOriginalUv(ledTemplate, id));
+      const wantsOrigAny = !coverageOnly && (segPer ? segPer.some(s => planWantsOriginalUv(s.plan, id)) : !!(ledTemplate && planWantsOriginalUv(ledTemplate, id)));
       const origAllMats = tplData && wantsOrigAny ? materialsWithOriginalUv(obj) : null;
       const origUvMats = origAllMats && curPlan && planWantsOriginalUv(curPlan, id) ? origAllMats : null;
       const segMats: THREE.MeshStandardMaterial[] = [];
