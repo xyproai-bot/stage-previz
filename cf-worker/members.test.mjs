@@ -522,6 +522,7 @@ test('說明那一行：每一項「能做」「不能做」都對過真的路�
     '機關': ['POST', '/api/projects/p1/mechanisms', {}],
     '版型': ['POST', '/api/projects/p1/led-templates', {}],
     '分享': ['GET', '/api/projects/p1/share-links', undefined],
+    '專案狀態': ['PATCH', '/api/projects/p1', { status: 'in_review' }],
     '成員': ['GET', '/api/projects/p1/members', undefined],
   };
   assert.deepEqual(Object.keys(canProbes).sort(), [...PROJECT_ADMIN_CAN].sort());
@@ -566,7 +567,7 @@ test('說明那一行：每一項「能做」「不能做」都對過真的路�
   for (const item of PROJECT_ADMIN_CAN.filter(x => x !== '成員')) assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes(item), item);
   assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes('管理它的成員'));
   for (const c of PROJECT_ADMIN_CANNOT) assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes(c.phrase.replace(/^(看不到|管|改)/, '')) || PROJECT_ADMIN_SCOPE_TEXT.includes(c.phrase), c.phrase);
-  assert.match(PROJECT_ADMIN_SCOPE_TEXT, /^專案的「製作」可以編輯這個專案（模型、歌單、cue、機關、版型、分享）/);
+  assert.match(PROJECT_ADMIN_SCOPE_TEXT, /^專案的「製作」可以編輯這個專案（模型、歌單、cue、機關、版型、分享、專案狀態）/);
   assert.equal(PROJECT_ADMIN_SCOPE_TEXT.includes('\n'), false);
   assert.ok(PROJECT_ADMIN_SCOPE_TEXT.includes('直接打開導演頁和動畫師工作站'));
 });
@@ -629,4 +630,25 @@ test('專案製作看導演頁 / 工作站要的資料：自己的專案讀得�
   assert.equal((await call(as, 'GET', '/api/invites')).status, 403);
   assert.equal((await call(as, 'PATCH', '/api/projects/p1', { look_settings: {} })).status, 403);
   assert.equal((await call(as, 'PATCH', '/api/projects/p1', { drive_folder_id: 'x' })).status, 403);
+});
+
+test('專案狀態（10-27 放寬）：專案製作可以切進行中 ⇄ 審查中；封存 / 取消封存、導演、別的專案都不行', async () => {
+  const { call } = await setup();
+  const status = async () => (await call('u_admin', 'GET', '/api/projects/p1')).data.project.status;
+  let r = await call('u_pm', 'PATCH', '/api/projects/p1', { status: 'in_review' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(await status(), 'in_review');
+  r = await call('u_pm', 'PATCH', '/api/projects/p1', { status: 'active' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(await status(), 'active');
+  r = await call('u_pm', 'PATCH', '/api/projects/p1', { status: 'archived' });
+  assert.equal(r.status, 403);
+  assert.match(r.data.error, /封存/);
+  assert.equal(await status(), 'active');
+  assert.equal((await call('u_pm', 'PATCH', '/api/projects/p1', { status: 'done' })).status, 400);
+  assert.equal((await call('u_dir', 'PATCH', '/api/projects/p1', { status: 'in_review' })).status, 403);
+  assert.equal((await call('u_ani', 'PATCH', '/api/projects/p1', { status: 'in_review' })).status, 403);
+  assert.equal((await call('u_pm', 'PATCH', '/api/projects/p2', { status: 'in_review' })).status, 403);
+  // 全站製作照舊什麼都能改
+  assert.equal((await call('u_admin', 'PATCH', '/api/projects/p1', { status: 'in_review' })).status, 200);
 });

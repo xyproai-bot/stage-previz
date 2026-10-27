@@ -88,13 +88,14 @@ import PhoneEditNote from '../components/PhoneEditNote';
 import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowRightLeft, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
-  Copy, Eye, EyeOff, HistoryIcon, Import, LayoutGrid, LayoutPanelLeft, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
+  Copy, Eye, EyeOff, Flag, HistoryIcon, Import, LayoutGrid, LayoutPanelLeft, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
   Palette, Pencil, Plus, Redo2, RotateCcw, Ruler, Search, Shapes, Sprout, Trash2, Undo2, Upload, Users, X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import './ProjectEditor.css';
 import { usePanelWidth } from '../lib/usePanelWidth';
 import { useSongSwitchHold } from '../lib/songSwitchHold';
+import { reviewToggle, type ProjectStatusValue } from '../lib/projectStatus';
 
 type RightTab = 'cues' | 'state' | 'mechanisms' | 'proposals' | 'objects' | 'library';
 type LoadStatus = 'loading' | 'ready' | 'error';
@@ -1540,6 +1541,17 @@ export default function ProjectEditor() {
     } catch (e) { toast.error('刪除失敗：' + msg(e)); }
   }
 
+  // 專案狀態：進行中 ⇄ 審查中（全站製作和這個專案的製作都能切；封存另外走，只有全站製作）
+  const statusToggle = editorRole === 'admin' && projectMeta ? reviewToggle(projectMeta.status as ProjectStatusValue) : null;
+  async function toggleProjectStatus() {
+    if (!projectId || !projectMeta || !statusToggle) return;
+    try {
+      await api.updateProject(projectId, { status: statusToggle.next });
+      await refreshProjectMeta();
+      toast.success(statusToggle.doneMessage(projectMeta.name));
+    } catch (e) { toast.error('狀態沒有改成：' + msg(e)); }
+  }
+
   // 上方列的按鈕（寬的時候一顆一顆列出來；手機收進「⋯」選單）
   const topbarActions: { key: string; label: string; menuLabel: string; title: string; icon: LucideIcon; onSelect: () => void; disabled?: boolean; secondary?: boolean }[] = [
     { key: 'storyboard', label: '分鏡', menuLabel: '分鏡（所有 cue 的縮圖）', title: '分鏡：這首歌所有 cue 的縮圖一覽', icon: LayoutGrid, onSelect: () => setStoryboardOpen(true), disabled: !selectedSong || masterCues.length === 0, secondary: true },
@@ -1557,6 +1569,7 @@ export default function ProjectEditor() {
     { key: 'share', label: '分享', menuLabel: '分享連結', title: '建立公開分享連結（外部的人不用登入就能看，只能看不能改）', icon: Link, onSelect: () => setShareOpen(true) },
     // 成員：這個專案有誰（製作 / 導演 / 動畫師）、加人、改角色、移出、邀請連結；全站製作和這個專案的製作都能用
     ...(editorRole !== 'admin' ? [] : [{ key: 'members', label: '成員', menuLabel: '成員', title: '成員：這個專案有誰、加人、改角色、移出專案、邀請連結（傳給對方，點開就加進這個專案）', icon: Users, onSelect: () => setMembersOpen(true) }]),
+    ...(!statusToggle ? [] : [{ key: 'projectStatus', label: statusToggle.menuLabel, menuLabel: statusToggle.menuLabel, title: `專案狀態現在是「${projectMeta?.status === 'in_review' ? '審查中' : '進行中'}」，按一下${statusToggle.menuLabel}（首頁可以用「審查中」篩出來）`, icon: Flag, onSelect: () => { void toggleProjectStatus(); }, secondary: true }]),
     // Drive 來源只有全站製作能設（專案的製作碰不到 Google 帳號）
     ...(!isGlobalAdmin ? [] : [{ key: 'drive', label: 'Drive', menuLabel: projectMeta?.drive_folder_id ? 'Drive 來源（已設定）' : 'Drive 來源', title: 'Drive 來源設定', icon: Cloud, onSelect: () => setDriveOpen(true), secondary: true }]),
     { key: 'activity', label: '最近活動', menuLabel: '最近活動', title: '最近活動', icon: HistoryIcon, onSelect: () => setActivityOpen(true), secondary: true },

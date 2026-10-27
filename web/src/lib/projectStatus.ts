@@ -1,5 +1,5 @@
 // 專案的狀態：進行中 ⇄ 審查中（首頁的篩選按鈕「審查中」看的就是這個）。
-//   後台 PATCH /api/projects/:id { status }：只有全站製作能改；封存要走「封存」，不在這裡切。
+//   後台 PATCH /api/projects/:id { status }：全站製作和這個專案的製作都能在這兩個之間切（10-27 放寬）；封存要走「封存」，只有全站製作。
 //   以前畫面上沒有地方可以改，「審查中」永遠是 0 個。
 
 export type ProjectStatusValue = 'active' | 'in_review' | 'archived';

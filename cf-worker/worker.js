@@ -34,7 +34,7 @@ import { checkCameraBookmarksForSave, parseStoredCameraBookmarks, serializeCamer
 // 權限規則（誰在這個專案能做什麼）— 純判斷，access.test.mjs 有測
 import {
   projectRoleOf, canEditProjectContent, songStatusDecision,
-  describeProjectRoute, roleMeetsNeed, needDeniedMessage, PROJECT_GLOBAL_ADMIN_FIELDS, SONG_CONTENT_FIELDS,
+  describeProjectRoute, roleMeetsNeed, needDeniedMessage, PROJECT_GLOBAL_ADMIN_FIELDS, projectStatusDecision, SONG_CONTENT_FIELDS,
   parseCommentSession, commentSessionFor, commentAuthorRole, canModifyComment,
   scrubActivityPayload, animatorAssignmentDecision, commentSummaryRow, canBrowseSharedAssets, describeNotificationRoute,
 } from './access.mjs';
@@ -824,8 +824,11 @@ async function updateProject(request, env, ctx) {
   if (['drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id'].some(k => k in body) && me?.role !== 'admin') {
     return jsonResp({ error: '只有製作可以設定 Drive 來源' }, 403);
   }
-  if ('status' in body && me?.role !== 'admin') {
-    return jsonResp({ error: '只有製作可以改專案狀態' }, 403);
+  // 專案狀態：全站製作都可以；這個專案的製作只能「進行中 ⇄ 審查中」（access.mjs projectStatusDecision）
+  if ('status' in body) {
+    const cur = await env.DB.prepare(`SELECT status FROM projects WHERE id = ? LIMIT 1`).bind(projectId).first();
+    const d = projectStatusDecision(body.status, cur?.status ?? null, { globalAdmin: me?.role === 'admin', projectRole: ctx.role ?? null });
+    if (!d.ok) return jsonResp({ error: d.error }, d.status);
   }
   if (PROJECT_GLOBAL_ADMIN_FIELDS.some(k => k in body) && me?.role !== 'admin') {
     return jsonResp({ error: '只有製作可以改這個設定' }, 403);

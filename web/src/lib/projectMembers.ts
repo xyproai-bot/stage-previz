@@ -27,7 +27,7 @@ export const MEMBER_ROLE_HINT: Record<MemberRole, string> = {
  * 專案的「製作」能做的事（每一項都有測試去對後端的權限：cf-worker/members.test.mjs）。
  * label 是說明裡寫的字；改這裡也要改測試裡對應的請求。
  */
-export const PROJECT_ADMIN_CAN: readonly string[] = ['模型', '歌單', 'cue', '機關', '版型', '分享', '成員'];
+export const PROJECT_ADMIN_CAN: readonly string[] = ['模型', '歌單', 'cue', '機關', '版型', '分享', '專案狀態', '成員'];
 
 /** 專案的「製作」還能直接打開導演頁和動畫師工作站，用自己的名字操作（上傳 / 刪影片、審片、留言、畫記）（測試：cf-worker/members.test.mjs） */
 export const PROJECT_ADMIN_VIEW_TEXT = '還能直接打開導演頁和動畫師工作站（替任何一首歌交影片、刪版本、決定通過 / 需修改、留言、畫記）';

@@ -581,12 +581,30 @@ export function needDeniedMessage(need) {
   }
 }
 
-// 改專案（PATCH /api/projects/:id）時，只有全站 admin 能動的欄位
+// 改專案（PATCH /api/projects/:id）時，只有全站 admin 能動的欄位（status 另外看 projectStatusDecision）
 export const PROJECT_GLOBAL_ADMIN_FIELDS = [
-  'status',
   'drive_folder_id', 'drive_filename_pattern', 'drive_oauth_token_id',
   'scale_correction', 'look_settings', 'material_overrides', 'home_view', 'led_canvas',
 ];
+
+const PROJECT_STATUSES = ['active', 'in_review', 'archived'];
+
+/**
+ * 改專案狀態（PATCH /api/projects/:id 的 status）誰能改：
+ *   全站製作：都可以。
+ *   這個專案的製作（10-27 用戶同意放寬）：只能在「進行中 ⇄ 審查中」之間切；封存 / 從封存改回來還是只有全站製作。
+ * @param {unknown} next             body 裡的 status
+ * @param {string|null} current      專案現在的狀態
+ * @param {{ globalAdmin: boolean, projectRole: string|null }} who
+ * @returns {{ok: true} | {ok: false, status: number, error: string}}
+ */
+export function projectStatusDecision(next, current, who) {
+  if (!PROJECT_STATUSES.includes(next)) return { ok: false, status: 400, error: '專案狀態不正確' };
+  if (who.globalAdmin) return { ok: true };
+  if (who.projectRole !== 'admin') return { ok: false, status: 403, error: '只有這個專案的製作可以改專案狀態' };
+  if (next === 'archived' || current === 'archived') return { ok: false, status: 403, error: '封存和取消封存只有全站製作可以做' };
+  return { ok: true };
+}
 
 /**
  * 指派動畫師（PATCH songs/:id 的 animator_user_id）：只能指派「這個專案的動畫師」
