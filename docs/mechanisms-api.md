@@ -58,7 +58,8 @@
   "groupIndex": null,           // 這一排裡的第幾個（0 起算）
   "rigId": null,                // v2 第 4 階段（0032）：只有吊點（variant = "hoist"）：屬於哪一組吊掛
   "rigIndex": null,             // 第幾個吊點（0 起算）
-  "attach": null                // 吊點在物件上的位置 { x, y, z }（場景單位，cue 位置的座標）
+  "attach": null,               // 吊點在物件上的位置 { x, y, z }（場景單位，cue 位置的座標）
+  "arcRadius": null             // 0047：只有沿弧形軌道（variant = "arc"）：軌道半徑（公尺）
 }
 ```
 
@@ -71,6 +72,14 @@
   - 對開不能用「轉換 cue 位置」（400「對開的機關不能轉換 cue 位置（兩邊的物件動法不一樣）」）。
 - **翻轉**：`kind: "rotary"`，`axis` / `pivot` 由畫面從帶動物件的外框算好（`hingeFromBox`，`flip.ts`）；`metadata.setup = { hinge: "top" | "bottom" | "left" | "right" | "front" | "back", positive: "first" | "second" }` 只是讓編輯時看得到原本的選擇（後台不看它、舊版前端也照樣存回來）。
 - **舊版前端相容**：讀機關和位置的網址要帶 `?mech=N`（新版畫面一律帶；`GET …/mechanisms`、`…/mechanism-sheet`、`…/songs/:s/mechanism-positions`、分享連結的 `…/data` 和 `…/mechanism-positions`）。**沒帶（最舊的前端）→ 後台只給一般機關（`variant` 是空的）和它們的位置**；`?mech=2`（第 2、3 階段的畫面，看得懂對開）→ 一般 + 對開；`?mech=3`（第 4 階段，看得懂吊掛）→ 全部。看不懂的 variant 後台不給，它們的零件在舊畫面是靜止的，不會往錯的方向動；翻轉是普通的旋轉機關，舊版照樣看得到、會動。新增 / 修改的回應一律給完整的。
+
+### 沿弧形軌道（`variant: "arc"`、`arcRadius`，0047）
+
+- 直線機關多一種移動方式：`variant: "arc"`（只給 `kind: "linear"`）。`pivot` = 軌道圓心（場景單位，跟旋轉機關的轉軸中心一樣）、`axis` = 轉軸（通常垂直；正負決定「值變大往哪邊走」）、`arcRadius` = 軌道半徑（公尺，大於 0、最多 1000）。行程、預設位置、常用位置、每個 cue 的位置**都還是公尺（沿著弧線量）**，舊 cue 存的數字不用改。
+- 畫面算法：角度 θ = 值 ÷ 半徑（弧度）→ 物件繞圓心轉 θ（沿著圓走、面向也跟著轉）；裝在它下面的機關照舊先套，再一起被帶著走（`web/src/lib/mechanisms/pose.ts`）。半徑 0 / 沒填 → 當一般直線。
+- 檢查（400，`field`）：旋轉機關不能選（`variant`「沿弧形軌道只能用在直線機關」）、要設圓心（`pivot`「沿弧形軌道要設圓心」）、半徑要在 0 到 1000 公尺之間（`arcRadius`）。弧形**可以**當別的機關的上層，也可以裝在別的機關上；不能轉換 cue 位置（400「沿弧形軌道的機關不能轉換 cue 位置（走的是圓弧，不是直線）」）。
+- 改回直線：`PATCH { "variant": null }` → `arcRadius` 和圓心清掉。一般直線改成弧形要一起送 `pivot` 和 `arcRadius`。
+- **資料庫怎麼存**：`variant` 欄位有 CHECK（0030）不收 `'arc'`，又不能重建表，所以弧形機關在資料庫裡 `variant` 還是 NULL，用 `arc_radius`（0047，REAL）> 0 加上 `pivot` 表示；後台讀出來才變成 `variant: "arc"`。所以舊版前端（不認得 arc）照樣讀得到它，當一般直線機關，不會壞（只是方向會是轉軸的方向）。複製專案 / 匯出匯入 / 每日備份都帶著 `arc_radius`。
 
 ### 吊掛（`variant: "hoist_rig"` / `"hoist"`、`rigId`、`rigIndex`、`attach`）
 

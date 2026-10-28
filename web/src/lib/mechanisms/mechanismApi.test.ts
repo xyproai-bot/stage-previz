@@ -163,6 +163,19 @@ describe('呼叫後台', () => {
     expect([old.variant, old.rigId, old.rigIndex, old.attach]).toEqual([null, null, null, null]);
   });
 
+  it('沿弧形軌道：要有圓心和大於 0 的半徑才算；缺了 / 舊後台沒有 arcRadius → 當一般直線；旋轉不算', () => {
+    const arc = parseMechanism({ id: 'a', kind: 'linear', variant: 'arc', axis: { x: 0, y: -1, z: 0 }, pivot: { x: 0, y: 0, z: 10 }, arcRadius: 20 });
+    expect([arc.variant, arc.arcRadius, arc.pivot, arc.axis]).toEqual(['arc', 20, { x: 0, y: 0, z: 10 }, { x: 0, y: -1, z: 0 }]);
+    for (const bad of [{ arcRadius: 0 }, { arcRadius: -1 }, { arcRadius: 'x' }, {}, { arcRadius: 20, pivot: null }, { arcRadius: 20, kind: 'rotary' }]) {
+      const m = parseMechanism({ id: 'a', kind: 'linear', variant: 'arc', pivot: { x: 0, y: 0, z: 10 }, ...bad });
+      expect(m.variant === 'arc').toBe(false);
+      expect(m.arcRadius ?? null).toBeNull();
+    }
+    // 沒有 variant（舊後台）→ 一般機關，直線的圓心一樣不理
+    const old = parseMechanism({ id: 'm', kind: 'linear', pivot: { x: 1, y: 2, z: 3 }, arcRadius: 5 });
+    expect([old.variant, old.arcRadius, old.pivot]).toEqual([null, null, null]);
+  });
+
   it('新增整組吊掛：POST 帶 variant 和 hoists', async () => {
     const f = vi.fn(async () => json(201, { mechanism: { id: 'r', variant: 'hoist_rig' }, hoists: [] }));
     vi.stubGlobal('fetch', f);

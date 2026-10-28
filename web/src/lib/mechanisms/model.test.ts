@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  normalizeMechanismInput, blankMechanismInput, parentCheck, parseCueValue,
+  normalizeMechanismInput, blankMechanismInput, mechanismToInput, parentCheck, parseCueValue,
   linearDirectionVector, rotaryAxisVector, matchLinearDirection, matchRotaryAxis, directionWord, audienceRight,
   standardPresets, presetAt, snapToPreset, legacyOffsetsToMechanisms, clampValue,
   MECH_MESSAGES, type MechanismInput, type MechVec3,
@@ -252,5 +252,109 @@ describe('舊的全專案機關滑桿 → 機關', () => {
     const [r2] = legacyOffsetsToMechanisms({ led1: { x: -14 } }, objs);
     expect([r2.travelMin, r2.travelMax]).toEqual([-14, 10]);
     expect(legacyOffsetsToMechanisms(null, objs)).toEqual([]);
+  });
+});
+
+describe('沿弧形軌道（variant arc；圓心用 pivot、轉軸用 axis、半徑 arcRadius 公尺）', () => {
+  // 圓心 (0,0,10)、轉軸朝下、半徑 5：值（公尺）變大沿弧線往 +x 走
+  const arc = (over: Record<string, unknown> = {}) => ({
+    ...lift(), name: '橫移', variant: 'arc', axis: { x: 0, y: -1, z: 0 }, pivot: { x: 0, y: 0, z: 10 }, arcRadius: 5,
+    travelMin: -30, travelMax: 30, ...over,
+  });
+
+  it('直線 + 圓心 + 半徑 → 通過；圓心、轉軸、半徑原樣留著', () => {
+    const v = ok(arc());
+    expect(v.variant).toBe('arc');
+    expect(v.kind).toBe('linear');
+    expect(v.arcRadius).toBe(5);
+    expect(v.pivot).toEqual({ x: 0, y: 0, z: 10 });
+    near(v.axis, { x: 0, y: -1, z: 0 });
+    expect(ok(arc({ arcRadius: '12.5' })).arcRadius).toBe(12.5);
+  });
+
+  it('只能用在直線機關', () => {
+    const r = err(arc({ kind: 'rotary', travelMin: -90, travelMax: 90 }));
+    expect(r.error).toBe('沿弧形軌道只能用在直線機關');
+    expect(r.field).toBe('variant');
+    expect(MECH_MESSAGES.arcKind).toBe('沿弧形軌道只能用在直線機關');
+  });
+
+  it('沒有圓心 → 要設圓心；圓心不是數字 / 太遠 → 轉軸中心的錯誤', () => {
+    const none = err(arc({ pivot: null }));
+    expect(none.error).toBe('沿弧形軌道要設圓心');
+    expect(none.field).toBe('pivot');
+    expect(err({ ...arc(), pivot: undefined }).error).toBe('沿弧形軌道要設圓心');
+    expect(err(arc({ pivot: { x: 'x', y: 0, z: 0 } })).error).toBe('轉軸中心要是數字');
+    expect(err(arc({ pivot: { x: 2e5, y: 0, z: 0 } })).error).toBe('轉軸中心要是數字');
+  });
+
+  it('半徑要大於 0、最多 1000 公尺；不是數字 / 沒填都不行', () => {
+    for (const bad of [0, -3, 1000.5, 'abc', NaN, Infinity, null, '']) {
+      const r = err(arc({ arcRadius: bad }));
+      expect(r.error).toBe('軌道半徑要在 0 到 1000 公尺之間');
+      expect(r.field).toBe('arcRadius');
+    }
+    expect(err({ ...arc(), arcRadius: undefined }).error).toBe('軌道半徑要在 0 到 1000 公尺之間');
+    expect(ok(arc({ arcRadius: 1000 })).arcRadius).toBe(1000);
+    expect(ok(arc({ arcRadius: 0.01 })).arcRadius).toBe(0.01);
+  });
+
+  it('不是弧形的機關帶了半徑 → 整理後是 null（直線、旋轉、對開都一樣）；直線的圓心照舊清掉', () => {
+    expect(ok(lift({ arcRadius: 7 })).arcRadius).toBeNull();
+    expect(ok({ ...lift(), arcRadius: 7, pivot: { x: 1, y: 2, z: 3 } }).pivot).toBeNull();
+    expect(ok({ ...lift(), kind: 'rotary', travelMin: -90, travelMax: 90, arcRadius: 7 }).arcRadius).toBeNull();
+    const split = ok({ ...lift(), variant: 'split', arcRadius: 7 });
+    expect(split.variant).toBe('split');
+    expect(split.arcRadius).toBeNull();
+  });
+
+  it('弧形自己不是對開：帶了 mirror / 物件邊也不留', () => {
+    const v = ok(arc({ mirror: { axis: { x: 1, y: 0, z: 0 }, pivot: null, consoleLabel: null }, objectIds: ['o1'], objectSides: { o1: 'b' } }));
+    expect(v.variant).toBe('arc');
+    expect(v.mirror).toBeNull();
+    expect(v.objectSides).toEqual({});
+  });
+
+  it('修改：只送半徑 → 其他用原本的；改回直線 → 半徑和圓心清掉、軸不動', () => {
+    const existing = ok(arc());
+    const r = ok({ arcRadius: 8 }, { existing });
+    expect(r.variant).toBe('arc');
+    expect(r.arcRadius).toBe(8);
+    expect(r.pivot).toEqual({ x: 0, y: 0, z: 10 });
+    const back = ok({ variant: null }, { existing });
+    expect(back.variant).toBeNull();
+    expect(back.arcRadius).toBeNull();
+    expect(back.pivot).toBeNull();
+    // 一般直線機關改成弧形：要一起送圓心和半徑
+    const plain = lift();
+    expect(err({ variant: 'arc' }, { existing: plain }).error).toBe('沿弧形軌道要設圓心');
+    expect(ok({ variant: 'arc', pivot: { x: 1, y: 0, z: 2 }, arcRadius: 4 }, { existing: plain }).arcRadius).toBe(4);
+  });
+
+  it('弧形可以當別的機關的上層（它只是一個會轉的上層），也可以裝在一般機關上；對開 / 吊掛照舊不能當上層', () => {
+    const sib = [
+      { id: 'arc1', name: '弧形橫移', parentId: null, variant: 'arc' as const },
+      { id: 'sp', name: '對開門', parentId: null, variant: 'split' as const },
+      { id: 'rig', name: '吊掛', parentId: null, variant: 'hoist_rig' as const },
+      { id: 'plain', name: '升降', parentId: null },
+    ];
+    expect(ok(lift({ parentId: 'arc1' }), { siblings: sib }).parentId).toBe('arc1');
+    expect(ok({ ...lift(), kind: 'rotary', travelMin: -90, travelMax: 90, parentId: 'arc1' }, { siblings: sib }).parentId).toBe('arc1');
+    expect(err(lift({ parentId: 'sp' }), { siblings: sib }).error).toBe('對開的機關不能當別的機關的上層');
+    expect(err(lift({ parentId: 'rig' }), { siblings: sib }).error).toBe('吊掛的機關不能當別的機關的上層');
+    // 弧形裝在一般機關上
+    expect(ok(arc({ parentId: 'plain' }), { siblings: sib }).parentId).toBe('plain');
+    // 底下裝著機關的一般機關改成弧形：沒問題（不像對開 / 吊掛）
+    const withKid = [{ id: 'self', name: '自己', parentId: null }, { id: 'kid', name: '孩子', parentId: 'self' }];
+    expect(ok(arc({ name: '自己' }), { siblings: withKid, selfId: 'self' }).variant).toBe('arc');
+  });
+
+  it('mechanismToInput：弧形的半徑和圓心帶著走；不是弧形的一律 null', () => {
+    const v = ok(arc());
+    const back = mechanismToInput({ ...v, arcRadius: v.arcRadius });
+    expect(back.variant).toBe('arc');
+    expect(back.arcRadius).toBe(5);
+    expect(back.pivot).toEqual({ x: 0, y: 0, z: 10 });
+    expect(mechanismToInput({ ...lift(), arcRadius: 9 }).arcRadius).toBeNull();
   });
 });

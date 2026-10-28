@@ -65,6 +65,12 @@ export function rowToMechanism(row, objectIds = [], cueCount = 0, sides = {}) {
     } else variant = null;
     if (mirror && mraw && typeof mraw.consoleLabel === 'string' && mraw.consoleLabel.trim()) mirror.consoleLabel = mraw.consoleLabel.trim();
   }
+  // 沿弧形軌道（0047）：資料庫的 variant 欄位不收 'arc'（0030 的 CHECK），所以是 variant 空 + arc_radius > 0 + 有圓心的直線機關
+  //   半徑 0 / 沒填 / 壞掉、沒有圓心 → 當一般直線機關（不會壞）
+  const arcR = row.arc_radius == null || row.arc_radius === '' ? NaN : Number(row.arc_radius);
+  const arcPivot = !row.variant && !isRotary && Number.isFinite(arcR) && arcR > 0 ? vec(row.pivot, null) : null;
+  const isArc = variant === null && !!arcPivot;
+  if (isArc) variant = 'arc';
   const objectSides = {};
   if (variant === 'split') for (const id of objectIds) objectSides[id] = sides[id] === 'b' ? 'b' : 'a';
   const presets = parseJson(row.presets, []);
@@ -74,7 +80,7 @@ export function rowToMechanism(row, objectIds = [], cueCount = 0, sides = {}) {
     name: row.name,
     kind: row.kind === 'rotary' ? 'rotary' : 'linear',
     axis: vec(row.axis, { x: 0, y: 1, z: 0 }),
-    pivot: row.kind === 'rotary' ? vec(row.pivot, { x: 0, y: 0, z: 0 }) : null,
+    pivot: row.kind === 'rotary' ? vec(row.pivot, { x: 0, y: 0, z: 0 }) : isArc ? arcPivot : null,
     travelMin: Number(row.travel_min),
     travelMax: Number(row.travel_max),
     defaultValue: Number(row.default_value),
@@ -98,6 +104,8 @@ export function rowToMechanism(row, objectIds = [], cueCount = 0, sides = {}) {
     rigId: variant === 'hoist' ? row.rig_id : null,
     rigIndex: variant === 'hoist' && row.rig_index != null && Number.isFinite(Number(row.rig_index)) ? Number(row.rig_index) : null,
     attach: variant === 'hoist' ? attach : null,
+    // 沿弧形軌道（0047）：只有弧形有；舊資料 / 舊後台沒有 → null
+    arcRadius: isArc ? arcR : null,
     // 一排（0031）：舊資料 / 舊後台沒有 → null
     groupId: row.group_id || null,
     groupIndex: Number.isFinite(Number(row.group_index)) && row.group_index !== null ? Number(row.group_index) : null,
@@ -124,7 +132,9 @@ export function inputToColumns(v) {
     name: v.name,
     kind: v.kind,
     axis: JSON.stringify(v.axis),
-    pivot: v.kind === 'rotary' && v.pivot ? JSON.stringify(v.pivot) : null,
+    // 直線只有「沿弧形軌道」才存圓心（pivot）；半徑存 arc_radius，variant 欄位一律不寫 'arc'（0030 的 CHECK 不收，見 0047）
+    pivot: (v.kind === 'rotary' || v.variant === 'arc') && v.pivot ? JSON.stringify(v.pivot) : null,
+    arc_radius: v.variant === 'arc' && v.kind === 'linear' ? v.arcRadius ?? null : null,
     travel_min: v.travelMin,
     travel_max: v.travelMax,
     default_value: v.defaultValue,
@@ -385,10 +395,10 @@ export async function createMechanism(request, env, ctx, log) {
   const stmts = [
     env.DB.prepare(
       `INSERT INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
-                               presets, parent_id, console_label, "order", metadata, variant, mirror, edited_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
+                               presets, parent_id, console_label, "order", metadata, variant, mirror, arc_radius, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))`
     ).bind(id, ctx.projectId, c.name, c.kind, c.axis, c.pivot, c.travel_min, c.travel_max, c.default_value, c.max_speed,
-      c.presets, c.parent_id, c.console_label, order, c.metadata, c.variant, c.mirror),
+      c.presets, c.parent_id, c.console_label, order, c.metadata, c.variant, c.mirror, c.arc_radius),
     ...membershipStatements(env, id, v.objectIds, conflicts, v.variant === 'split' ? v.objectSides : {}),
   ];
   await env.DB.batch(stmts);
@@ -431,11 +441,11 @@ export async function updateMechanism(request, env, ctx, mechId, log) {
   const stmts = [
     env.DB.prepare(
       `UPDATE mechanisms SET name = ?, kind = ?, axis = ?, pivot = ?, travel_min = ?, travel_max = ?, default_value = ?,
-              max_speed = ?, presets = ?, parent_id = ?, console_label = ?, metadata = ?, variant = ?, mirror = ?,
+              max_speed = ?, presets = ?, parent_id = ?, console_label = ?, metadata = ?, variant = ?, mirror = ?, arc_radius = ?,
               edited_at = datetime('now'), updated_at = datetime('now')
         WHERE id = ? AND project_id = ?`
     ).bind(c.name, c.kind, c.axis, c.pivot, c.travel_min, c.travel_max, c.default_value, c.max_speed, c.presets,
-      c.parent_id, c.console_label, c.metadata, c.variant, c.mirror, mechId, ctx.projectId),
+      c.parent_id, c.console_label, c.metadata, c.variant, c.mirror, c.arc_radius, mechId, ctx.projectId),
     ...(touchesObjects ? membershipStatements(env, mechId, v.objectIds, conflicts, v.variant === 'split' ? v.objectSides : {}) : []),
   ];
   await env.DB.batch(stmts);
@@ -943,11 +953,11 @@ export async function importMechanisms(env, projectId, data, objIdMap, cueIdMap,
     const gid = r.groupOld && groupMap.has(r.groupOld) ? groupMap.get(r.groupOld) : null;
     stmts.push(env.DB.prepare(
       `INSERT OR IGNORE INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
-                               presets, parent_id, console_label, "order", metadata, variant, mirror, group_id, group_index, rig_index, attach, legacy_object_id, legacy_axis, edited_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
+                               presets, parent_id, console_label, "order", metadata, variant, mirror, group_id, group_index, rig_index, attach, arc_radius, legacy_object_id, legacy_axis, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'now' THEN datetime('now') ELSE ? END)`
     ).bind(r.id, projectId, r.c.name, r.c.kind, r.c.axis, r.c.pivot, r.c.travel_min, r.c.travel_max, r.c.default_value,
       r.c.max_speed, r.c.presets, r.c.console_label, r.order, r.c.metadata, r.c.variant, r.c.mirror,
-      gid, gid ? r.groupIndex : null, r.c.rig_index, r.c.attach, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
+      gid, gid ? r.groupIndex : null, r.c.rig_index, r.c.attach, r.c.arc_radius, r.legacyObj, r.legacyAxis, r.editedAt, r.editedAt));
   }
   for (const r of rows) {
     const p = r.parentOld ? idMap.get(r.parentOld) : null;
@@ -1087,6 +1097,7 @@ export async function convertCuePositions(request, env, ctx, mechId, log) {
   const [mech] = await loadMechanisms(env, ctx.projectId, mechId);
   if (!mech) return bad('這個專案裡找不到這個機關', 404);
   if (mech.variant === 'split') return bad(MECH_MESSAGES.splitConvert, 400);
+  if (mech.variant === 'arc') return bad(MECH_MESSAGES.arcConvert, 400);
   if (isHoistVariant(mech.variant)) return bad(MECH_MESSAGES.hoistConvert, 400);
   if (mech.cueCount > 0) return bad('這個機關已經有 cue 設了位置，只有還沒在 cue 裡設過位置的機關可以轉', 409);
   if (!mech.objectIds.length) return bad('這個機關還沒有選要帶的物件', 400);

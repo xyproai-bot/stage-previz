@@ -14,8 +14,10 @@ export type MechanismKind = 'linear' | 'rotary';
 /**
  * 機關的變體：沒有 = 一般機關；'split' = 對開（兩邊往反方向動，一個位置）；
  * 吊掛（v2 第 4 階段）：'hoist_rig' = 整組吊掛（帶動物件，自己沒有位置）、'hoist' = 它的一個吊點（直線往上，有自己的位置，沒有物件）
+ * 沿弧形軌道（0047）：'arc' = 直線機關改沿圓弧走（值還是公尺，沿弧線量；圓心 = pivot、轉軸 = axis、半徑 = arcRadius，面向跟著轉）。
+ *   資料庫的 variant 欄位有 CHECK（0030）不收 'arc'，所以後台存成 variant = NULL + arc_radius，讀出來才變成 'arc'（mechanisms.mjs）。
  */
-export type MechanismVariant = 'split' | 'hoist_rig' | 'hoist';
+export type MechanismVariant = 'split' | 'hoist_rig' | 'hoist' | 'arc';
 /** 對開的哪一邊（A 邊 = 機關本來的方向；B 邊 = 鏡像） */
 export type MechanismSide = 'a' | 'b';
 export interface MechanismPreset { name: string; value: number }
@@ -38,7 +40,7 @@ export interface Mechanism {
   kind: MechanismKind;
   /** 單位向量，場景座標（Y 朝上）：直線 = 數字變大往哪；旋轉 = 轉軸 */
   axis: MechVec3;
-  /** 旋轉中心（場景單位，跟 cue 位置同一種單位）；直線 = null */
+  /** 旋轉中心（場景單位，跟 cue 位置同一種單位）；直線 = null；沿弧形軌道（variant 'arc'）的直線 = 軌道圓心 */
   pivot: MechVec3 | null;
   /** 行程（直線：公尺；旋轉：度） */
   travelMin: number;
@@ -78,6 +80,8 @@ export interface Mechanism {
   rigId?: string | null;
   rigIndex?: number | null;
   attach?: MechVec3 | null;
+  /** 0047：只有沿弧形軌道（variant = 'arc'）：軌道半徑（公尺）；其他一律 null，舊後台沒有這欄 → 讀成沒有 */
+  arcRadius?: number | null;
 }
 
 /** 一排機關一次建立時選的選項（編輯時看得到原本選的） */
@@ -140,6 +144,8 @@ export interface MechanismInput {
   rigId?: string | null;
   rigIndex?: number | null;
   attach?: MechVec3 | null;
+  /** 只有沿弧形軌道（variant = 'arc'）；其他一律 null */
+  arcRadius?: number | null;
 }
 
 export const MECH_LIMITS = {
@@ -157,6 +163,8 @@ export const MECH_LIMITS = {
   linearSpeedMax: 100,
   rotarySpeedMax: 3600,
   pivotAbs: 1e5,
+  /** 沿弧形軌道的軌道半徑上限（公尺；要大於 0） */
+  arcRadiusMax: 1000,
   /** 每個 cue 的延遲 / 走幾秒：0 ~ 3600 秒（存到 0.001 秒） */
   timingMaxSec: 3600,
   /** 一排機關：一次最多建立幾個、一次花樣最多寫幾列（一次寫入的上限也是 200） */
@@ -207,7 +215,7 @@ function normalize(v: MechVec3): MechVec3 | null {
 
 export type MechanismField =
   | 'groupName' | 'namePrefix' | 'name' | 'kind' | 'variant' | 'axis' | 'pivot' | 'mirror' | 'travel' | 'maxSpeed' | 'presets' | 'objectIds' | 'parentId'
-  | 'attach' | 'rigId' | 'hoists';
+  | 'attach' | 'rigId' | 'hoists' | 'arcRadius';
 
 export const MECH_MESSAGES = {
   nameEmpty: '機關名稱不能空白',
@@ -263,7 +271,14 @@ export const MECH_MESSAGES = {
   hoistLine: '三個以上的吊點不能排成一直線，請把其中一個移開',
   hoistForeign: '有吊點不是這一組吊掛的',
   hoistObjects: '吊掛要先選好帶動的物件',
+  // 沿弧形軌道（0047）
+  arcKind: '沿弧形軌道只能用在直線機關',
+  arcPivot: '沿弧形軌道要設圓心',
+  arcRadius: '軌道半徑要在 0 到 1000 公尺之間',
+  arcConvert: '沿弧形軌道的機關不能轉換 cue 位置（走的是圓弧，不是直線）',
 } as const;
+
+const isHoistVariant = (v: MechanismVariant | null | undefined) => v === 'hoist_rig' || v === 'hoist';
 
 /** 專案裡其他機關（檢查名稱重複、裝在哪個機關上） */
 export interface MechanismSibling { id: string; name: string; parentId: string | null; variant?: MechanismVariant | null; rigId?: string | null }
@@ -292,7 +307,8 @@ export function mechanismToInput(m: Pick<Mechanism, keyof MechanismInput>): Mech
     travelMin: m.travelMin, travelMax: m.travelMax, defaultValue: m.defaultValue, maxSpeed: m.maxSpeed,
     presets: m.presets.map(p => ({ ...p })), parentId: m.parentId, objectIds: [...m.objectIds],
     consoleLabel: m.consoleLabel, metadata: m.metadata,
-    variant: m.variant === 'split' || m.variant === 'hoist_rig' || m.variant === 'hoist' ? m.variant : null,
+    variant: m.variant === 'split' || m.variant === 'hoist_rig' || m.variant === 'hoist' || m.variant === 'arc' ? m.variant : null,
+    arcRadius: m.variant === 'arc' ? (m.arcRadius ?? null) : null,
     rigId: m.variant === 'hoist' ? (m.rigId ?? null) : null,
     rigIndex: m.variant === 'hoist' ? (m.rigIndex ?? null) : null,
     attach: m.variant === 'hoist' && m.attach ? { ...m.attach } : null,
@@ -309,7 +325,7 @@ export function blankMechanismInput(): MechanismInput {
     name: '', kind: 'linear', axis: { x: 0, y: 1, z: 0 }, pivot: null,
     travelMin: 0, travelMax: 1, defaultValue: 0, maxSpeed: null, presets: [], parentId: null,
     objectIds: [], consoleLabel: null, metadata: null, variant: null, mirror: null, objectSides: {},
-    rigId: null, rigIndex: null, attach: null,
+    rigId: null, rigIndex: null, attach: null, arcRadius: null,
   };
 }
 
@@ -329,12 +345,12 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
   const errors: Partial<Record<MechanismField, string>> = {};
   const fail = (f: MechanismField, m: string) => { if (!errors[f]) errors[f] = m; };
 
-  // 變化類型：對開 / 吊掛（整組）/ 吊點
+  // 變化類型：對開 / 吊掛（整組）/ 吊點 / 沿弧形軌道
   const varRaw = has('variant') ? r.variant : base.variant;
-  const variant: MechanismVariant | null = varRaw === 'split' || varRaw === 'hoist_rig' || varRaw === 'hoist' ? varRaw : null;
+  const variant: MechanismVariant | null = varRaw === 'split' || varRaw === 'hoist_rig' || varRaw === 'hoist' || varRaw === 'arc' ? varRaw : null;
   if (varRaw !== null && varRaw !== undefined && variant === null) fail('variant', MECH_MESSAGES.variant);
   // 吊掛的整組和吊點一定是「往上的直線」；整組自己沒有行程 / 位置 / 速度（只帶物件）；吊點沒有物件、不裝在別的機關上
-  const isRig = variant === 'hoist_rig', isHoist = variant === 'hoist';
+  const isRig = variant === 'hoist_rig', isHoist = variant === 'hoist', isArc = variant === 'arc';
   if (isRig || isHoist) {
     r.kind = 'linear'; r.axis = { x: 0, y: 1, z: 0 }; r.pivot = null; r.mirror = null; r.objectSides = {};
     if (isRig) { r.travelMin = 0; r.travelMax = 1; r.defaultValue = 0; r.maxSpeed = null; r.presets = []; r.consoleLabel = null; }
@@ -352,24 +368,36 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
   const kindRaw = has('kind') ? r.kind : base.kind;
   const kind: MechanismKind = kindRaw === 'rotary' ? 'rotary' : 'linear';
   if (kindRaw !== 'linear' && kindRaw !== 'rotary') fail('kind', MECH_MESSAGES.kind);
+  // 沿弧形軌道只給直線機關（旋轉本來就繞著轉軸中心走）
+  if (isArc && kind === 'rotary') fail('variant', MECH_MESSAGES.arcKind);
 
   // 方向 / 轉軸
   const axisRaw = has('axis') ? vec3(r.axis) : base.axis;
   const axis = axisRaw ? normalize(axisRaw) : null;
   if (!axis) fail('axis', MECH_MESSAGES.axis);
 
-  // 轉軸中心（旋轉才有；直線一律 null）
+  // 轉軸中心（旋轉才有；直線一律 null）。沿弧形軌道的直線 = 軌道圓心：一定要設（不補原點，不然圓心在哪裡不知道）
   let pivot: MechVec3 | null = null;
-  if (kind === 'rotary') {
+  if (kind === 'rotary' || isArc) {
     const p = has('pivot') ? r.pivot : base.pivot;
-    if (p === null || p === undefined) pivot = { x: 0, y: 0, z: 0 };
-    else {
+    if (p === null || p === undefined) {
+      if (isArc) fail('pivot', MECH_MESSAGES.arcPivot);
+      else pivot = { x: 0, y: 0, z: 0 };
+    } else {
       pivot = vec3(p);
       if (!pivot || [pivot.x, pivot.y, pivot.z].some(c => Math.abs(c) > MECH_LIMITS.pivotAbs)) {
         fail('pivot', MECH_MESSAGES.pivot);
         pivot = null;
       }
     }
+  }
+
+  // 沿弧形軌道的半徑（公尺）：要大於 0、最多 1000；不是弧形 → null
+  let arcRadius: number | null = null;
+  if (isArc) {
+    const ar = num(has('arcRadius') ? r.arcRadius : base.arcRadius);
+    if (Number.isFinite(ar) && ar > 0 && ar <= MECH_LIMITS.arcRadiusMax) arcRadius = ar;
+    else fail('arcRadius', MECH_MESSAGES.arcRadius);
   }
 
   // 對開的 B 邊：直線沒給就是反方向；旋轉要給轉軸和轉軸中心（表單用 mirrorForSplit 算）
@@ -470,7 +498,7 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
     else if (check === 'cycle') fail('parentId', MECH_MESSAGES.parentCycle);
     else if (check === 'depth') fail('parentId', MECH_MESSAGES.parentDepth);
     else if (siblings.find(s => s.id === parentId)?.variant === 'split') fail('parentId', MECH_MESSAGES.splitAsParent);
-    else if (siblings.find(s => s.id === parentId)?.variant) fail('parentId', MECH_MESSAGES.hoistAsParent);
+    else if (isHoistVariant(siblings.find(s => s.id === parentId)?.variant)) fail('parentId', MECH_MESSAGES.hoistAsParent);
   }
   if (variant === 'split' && ctx.selfId && (ctx.siblings || []).some(s => s.parentId === ctx.selfId)) {
     fail('variant', MECH_MESSAGES.splitHasChildren);
@@ -503,14 +531,14 @@ export function normalizeMechanismInput(raw: unknown, ctx: NormalizeContext = {}
   const mdRaw = has('metadata') ? r.metadata : base.metadata;
   const metadata = isObj(mdRaw) ? mdRaw : null;
 
-  const order: MechanismField[] = ['name', 'kind', 'variant', 'axis', 'pivot', 'mirror', 'travel', 'maxSpeed', 'presets', 'objectIds', 'parentId', 'rigId', 'attach'];
+  const order: MechanismField[] = ['name', 'kind', 'variant', 'axis', 'pivot', 'arcRadius', 'mirror', 'travel', 'maxSpeed', 'presets', 'objectIds', 'parentId', 'rigId', 'attach'];
   const first = order.find(f => errors[f]);
   if (first) return { ok: false, error: errors[first]!, field: first, errors };
   return {
     ok: true,
     value: {
       name, kind, axis: axis!, pivot, travelMin, travelMax, defaultValue, maxSpeed, presets, parentId,
-      objectIds, consoleLabel, metadata, variant, mirror, objectSides, rigId, rigIndex, attach,
+      objectIds, consoleLabel, metadata, variant, mirror, objectSides, rigId, rigIndex, attach, arcRadius,
     },
   };
 }

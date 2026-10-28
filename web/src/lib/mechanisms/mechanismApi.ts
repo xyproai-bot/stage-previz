@@ -137,12 +137,18 @@ export function parseMechanism(raw: unknown): Mechanism {
     ? { x: attachRaw.x as number, y: attachRaw.y as number, z: attachRaw.z as number } : null;
   if (r.variant === 'hoist_rig') variant = 'hoist_rig';
   else if (r.variant === 'hoist' && attach && typeof r.rigId === 'string' && r.rigId) variant = 'hoist';
+  // 沿弧形軌道（0047）：直線 + 圓心 + 大於 0 的半徑才算；缺了 / 舊後台沒有 → 當一般直線
+  const pivotRaw = r.pivot && typeof r.pivot === 'object' ? r.pivot as Partial<MechVec3> : null;
+  const arcPivot = pivotRaw && [pivotRaw.x, pivotRaw.y, pivotRaw.z].every(c => typeof c === 'number' && Number.isFinite(c))
+    ? { x: pivotRaw.x as number, y: pivotRaw.y as number, z: pivotRaw.z as number } : null;
+  const arcRadius = typeof r.arcRadius === 'number' && Number.isFinite(r.arcRadius) && r.arcRadius > 0 ? r.arcRadius : null;
+  if (r.variant === 'arc' && kind === 'linear' && arcPivot && arcRadius) variant = 'arc';
   return {
     id: String(r.id ?? ''),
     name: typeof r.name === 'string' ? r.name : '',
     kind,
     axis,
-    pivot: kind === 'rotary' ? vec(r.pivot, { x: 0, y: 0, z: 0 }) : null,
+    pivot: kind === 'rotary' ? vec(r.pivot, { x: 0, y: 0, z: 0 }) : variant === 'arc' ? arcPivot : null,
     travelMin,
     travelMax,
     defaultValue: finite(r.defaultValue, 0),
@@ -164,6 +170,7 @@ export function parseMechanism(raw: unknown): Mechanism {
     rigId: variant === 'hoist' ? String(r.rigId) : null,
     rigIndex: variant === 'hoist' && typeof r.rigIndex === 'number' && Number.isFinite(r.rigIndex) ? r.rigIndex : null,
     attach: variant === 'hoist' ? attach : null,
+    arcRadius: variant === 'arc' ? arcRadius : null,
   };
 }
 
