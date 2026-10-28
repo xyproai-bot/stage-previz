@@ -412,9 +412,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const [space, setSpace] = useState<'world' | 'local'>('world');
   // 物件名稱 label 預設關掉（按 L 或工具列打開）
   const [showLabels, setShowLabels] = useState(false);
-  // 大家一打開就是「現場」；只有明確指定 quick 才用快速（舊的 realistic / cinematic 也當現場）；只看模式一律現場
+  // 大家一打開就是「快速」（10-29 用戶：現場不要當預設）；只有明確指定 live 才用現場（舊的 realistic / cinematic 也當現場）；只看模式一律快速
   const [renderMode, setRenderMode] = useState<RenderMode>(
-    defaultRenderMode === 'quick' && !viewer ? 'quick' : 'live',
+    !viewer && (defaultRenderMode === 'live' || defaultRenderMode === 'realistic' || defaultRenderMode === 'cinematic') ? 'live' : 'quick',
   );
   const [lookPanelOpen, setLookPanelOpen] = useState(false);
   const [materialPanelOpen, setMaterialPanelOpen] = useState(false);
@@ -636,10 +636,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   const walkKeysRef = useRef<{ [k: string]: boolean }>({});
   const walkPointerLockRef = useRef(false);
 
-  // 切成只看模式：回到現場、開著的工具 / 面板都收起來
+  // 切成只看模式：回到快速、開著的工具 / 面板都收起來
   useEffect(() => {
     if (!viewer) return;
-    setRenderMode('live');
+    setRenderMode('quick');
     setLookPanelOpen(false);
     setMaterialPanelOpen(false);
     setHomeViewPanelOpen(false);

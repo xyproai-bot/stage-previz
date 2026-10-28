@@ -1219,7 +1219,6 @@ function StudioInner({ projectId }: { projectId: string }) {
                   cueName={selectedCue?.name}
                   modelUrl={modelUrl}
                   readOnly
-                  defaultRenderMode="live"
                   enableNdi={source === 'ndi'}
                   onNdiStatus={setNdiGuide}
                   ndiGuide
