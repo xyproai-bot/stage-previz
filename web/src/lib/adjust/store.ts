@@ -219,6 +219,8 @@ export class AdjustStore {
   }
 
   // ── 值 ──
+  /** 機關定義（清單、一排的成員用） */
+  mechanisms(): Mechanism[] { return this.defs; }
   def(id: string): Mechanism | undefined { return this.byId.get(id); }
   saved(id: string): number {
     const s = this.ctx?.saved[id];
