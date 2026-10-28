@@ -16,7 +16,7 @@ import { computeFrontView, computePresetView, CAMERA_PRESETS, type CameraPreset 
 import { cueMoveProgress } from '../lib/cueTiming';
 import { cueQuaternion, lerpOpacity, type CuePoseMap } from '../lib/cueTimeline';
 import type { Mechanism, MechanismTimings, MechanismValues, MechVec3 } from '../lib/mechanisms/model';
-import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type RigMechanism } from '../lib/mechanisms/pose';
+import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type CompiledRig, type RigMechanism } from '../lib/mechanisms/pose';
 import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
 import { hoistsOfRig } from '../lib/mechanisms/hoist';
 import { stageFrontDirection } from '../lib/stageCamera';
@@ -207,6 +207,10 @@ interface Props {
   sceneQueryRef?: React.MutableRefObject<StageSceneQuery | null>;
   /** 管理頁正在看的機關：3D 畫面上畫出它的行程（直線 / 圓弧，常用位置有刻度） */
   focusedMechanismId?: string | null;
+  /** 導演頁「調整舞台」：每幀機關值算完之後，有回傳就蓋上去（草稿值）；沒給 / 回傳 null = 照舊 */
+  mechanismOverride?: () => MechanismValues | null;
+  /** 導演頁「調整舞台」：交出舞台（scene、鏡頭、物件、機關鏈），把手和框由 components/adjust 自己畫 */
+  adjustHostRef?: React.MutableRefObject<StageAdjustHost | null>;
   /** 測距校準倍率（模型 scene units → 真實公尺），存在專案上全員共用；預設 1 = 未校準 */
   scaleCorrection?: number;
   /** 有傳才顯示「設為已知距離 / 重設」— 只有 admin 能改校準 */
@@ -324,6 +328,25 @@ export interface StageViewApi {
   canvas(): HTMLCanvasElement | null;
 }
 
+/** 導演頁「調整舞台」要的舞台（StageScene 的 adjustHostRef）：都是現在的東西，每次用都重新拿 */
+export interface StageAdjustHost {
+  scene(): THREE.Scene | null;
+  camera(): THREE.PerspectiveCamera | null;
+  canvas(): HTMLCanvasElement | null;
+  /** objectId → 3D 物件 */
+  meshes(): ReadonlyMap<string, THREE.Object3D>;
+  /** 物件的 cue 位置（還沒套機關，場景座標） */
+  basePose(id: string): { pos: THREE.Vector3; quat: THREE.Quaternion } | null;
+  /** 機關鏈（跟畫面同一份，含校準倍率） */
+  rig(): CompiledRig;
+  /** 這一幀畫面上的機關值 */
+  shownValues(): MechanismValues;
+  /** 整個舞台的中心、半徑 */
+  stageBounds(): { center: THREE.Vector3; radius: number };
+  /** 每幀套完機關之後、畫之前呼叫；回傳取消的函式 */
+  onFrame(cb: (nowMs: number) => void): () => void;
+}
+
 /** 設定機關時問舞台的事（StageScene 的 sceneQueryRef） */
 export interface StageSceneQuery {
   /** 舞台正面（水平、指向觀眾）＝ LED 朝的方向 */
@@ -363,7 +386,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, stagePropsHistory, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledTimeline = null, ledTimelineSec = 0, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledOffPieces, ledMapMenu = true, hideDownloads = false, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, stagePropsHistory, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledTimeline = null, ledTimelineSec = 0, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, mechanismOverride, adjustHostRef, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledOffPieces, ledMapMenu = true, hideDownloads = false, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const containerRef = useRef<HTMLDivElement>(null);
@@ -491,6 +514,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   mechTimingsRef.current = mechanismTimings;
   const mechFrameAlwaysRef = useRef(mechanismFrameAlways);
   mechFrameAlwaysRef.current = mechanismFrameAlways;
+  // 調整舞台：草稿值蓋上去；每幀套完機關之後要做的事（把手、框跟著動）
+  const mechOverrideRef = useRef(mechanismOverride);
+  mechOverrideRef.current = mechanismOverride;
+  const frameHooksRef = useRef(new Set<(nowMs: number) => void>());
   /** 套上機關、寫到 mesh（render loop 每幀最後一次；states 換了也馬上一次） */
   const commitPosesRef = useRef<(nowTs: number, timelineActive: boolean) => void>(() => {});
   // 上一次套到舞台的 states：只有 states 換了（換 cue）才平滑移動；選取 / 校準變了照舊直接套
@@ -1200,6 +1227,9 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       }
       for (const k in shown) if (!(k in v)) delete shown[k];
       for (const k in v) shown[k] = v[k];
+      // 調整舞台：草稿值蓋上去（審片時沒給 → 不走這裡）
+      const ov = mechOverrideRef.current?.();
+      if (ov) for (const k in ov) shown[k] = ov[k];
       return shown;
     };
     const commitPoses = (nowTs: number, timelineActive: boolean) => {
@@ -1366,6 +1396,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
       // 機關：這一幀的值（影片時間軸 / 點 cue 走過去）→ 套到每個物件（整個畫面只在這裡寫 mesh 的位置）
       commitPosesRef.current(nowTs, !!framePoses);
+      // 調整舞台：把手、框跟著這一幀的位置（沒有在用 → 空的）
+      for (const hook of frameHooksRef.current) { try { hook(nowTs); } catch (e) { console.warn('[StageScene] frame hook failed:', e); } }
 
       // 中途換版型：這一格畫面是影片的第幾秒 → 換到那一段的排法。跟這一幀要畫的畫面同一幀生效（上傳貼圖在後面的 render），不會閃
       ledSegmentsRef.current?.sync();
@@ -1907,6 +1939,27 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     sceneQueryRef.current = query;
     return () => { if (sceneQueryRef.current === query) sceneQueryRef.current = null; };
   }, [sceneQueryRef]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── 調整舞台：交出舞台給把手 / 框用（components/adjust）──
+  useEffect(() => {
+    if (!adjustHostRef) return;
+    const hooks = frameHooksRef.current;
+    const host: StageAdjustHost = {
+      scene: () => sceneRef.current,
+      camera: () => cameraRef.current,
+      canvas: () => rendererRef.current?.domElement ?? null,
+      meshes: () => meshesRef.current,
+      basePose: (id) => basePoseRef.current.get(id) ?? null,
+      rig: () => rigRef.current,
+      shownValues: () => displayedMechRef.current,
+      stageBounds: () => stageBoundsRef.current,
+      onFrame: (cb) => { hooks.add(cb); return () => { hooks.delete(cb); }; },
+    };
+    adjustHostRef.current = host;
+    return () => {
+      if (adjustHostRef.current === host) adjustHostRef.current = null;
+    };
+  }, [adjustHostRef]);
 
   // ── 審片：目前的視角、飛到留言記住的視角、抓縮圖 ──
   useEffect(() => {

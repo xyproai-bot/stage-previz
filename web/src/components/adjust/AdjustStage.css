@@ -1,0 +1,206 @@
+/* 調整舞台（導演頁）：3D 上的工具列、右邊面板、黃色提示列、審片 / 調整舞台切換 */
+
+/* ── 3D 畫面上 ── */
+.adjust-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+}
+.adjust-overlay > * { pointer-events: auto; }
+.adjust-overlay__top {
+  position: absolute;
+  top: 60px;
+  left: 10px;
+  max-width: calc(100% - 20px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+.adjust-toolbar {
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+  max-width: 100%;
+  background: rgba(20, 22, 27, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  backdrop-filter: blur(6px);
+}
+.adjust-toolbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.85);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adjust-toolbar button:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.adjust-toolbar button.is-on { background: var(--accent-dim); color: var(--accent); border-color: rgba(16, 199, 138, 0.4); }
+.adjust-toolbar__sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.14); margin: 0 2px; }
+.adjust-hint {
+  padding-left: 4px;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.62);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* ── 審片 / 調整舞台切換（上方那一排） ── */
+.adjust-switch {
+  display: inline-flex;
+  padding: 2px;
+  gap: 2px;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  border-radius: 8px;
+  background: var(--bg);
+}
+.adjust-switch button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adjust-switch button:hover { color: var(--text); }
+.adjust-switch button[aria-pressed='true'] { background: var(--accent-dim); color: var(--accent); }
+
+/* ── 右邊面板 ── */
+.adjust-panel {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  font-size: 13px;
+}
+.adjust-panel__head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.adjust-panel__title { font-size: 15px; font-weight: 600; color: var(--text); }
+.adjust-panel__sub { font-size: 12px; color: var(--text-dim); margin-top: 3px; line-height: 1.5; }
+.adjust-panel__hint { font-size: 12px; color: var(--text-dim); line-height: 1.6; }
+.adjust-panel__empty { font-size: 13px; color: var(--text-dim); line-height: 1.6; padding: 8px 0; }
+.adjust-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adjust-chip:hover { color: var(--text); border-color: rgba(255, 255, 255, 0.3); }
+.adjust-chip.is-on { background: var(--accent-dim); color: var(--accent); border-color: rgba(16, 199, 138, 0.45); }
+.adjust-chip.is-changed { border-color: rgba(255, 170, 68, 0.7); color: var(--warn); }
+.adjust-chip.is-changed.is-on { background: var(--warn-dim); }
+.adjust-chip:disabled { opacity: 0.45; cursor: default; }
+.adjust-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.adjust-list__item { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.adjust-list__item:last-child { border-bottom: 0; }
+.adjust-list__name { font-size: 12.5px; color: var(--text); margin-bottom: 6px; display: flex; gap: 6px; align-items: center; }
+.adjust-list__name .adjust-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
+.adjust-ctl {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.adjust-ctl__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.adjust-ctl__name { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 6px; min-width: 0; }
+.adjust-ctl__name.is-changed { color: var(--warn); }
+.adjust-ctl__kind { font-size: 11.5px; font-weight: 400; color: var(--text-muted); }
+.adjust-ctl__label { font-size: 11.5px; color: var(--text-muted); }
+.adjust-slider { display: flex; align-items: center; gap: 8px; }
+.adjust-slider input[type='range'] { flex: 1; min-width: 0; accent-color: var(--accent); }
+.adjust-num { display: inline-flex; align-items: center; gap: 4px; }
+.adjust-num input {
+  width: 74px;
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: right;
+}
+.adjust-num span { font-size: 12px; color: var(--text-dim); }
+.adjust-ctl__range { font-size: 11.5px; color: var(--text-muted); }
+.adjust-ctl__readout { font-size: 12px; color: var(--text-dim); line-height: 1.55; }
+.adjust-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adjust-link-btn:hover { color: var(--text); }
+.adjust-panel__foot { border-top: 1px solid var(--border); padding-top: 12px; }
+
+/* ── 黃色提示列（3D 下面） ── */
+.adjust-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 170, 68, 0.45);
+  border-radius: 10px;
+  background: var(--warn-dim);
+  color: var(--text);
+  font-size: 13px;
+}
+.adjust-bar__text { flex: 1; min-width: 180px; line-height: 1.5; }
+.adjust-bar__text strong { color: var(--warn); }
+.adjust-bar__sub { font-size: 12px; color: var(--text-dim); }
+.adjust-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.2));
+  border-radius: 7px;
+  background: var(--surface-1);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adjust-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 調整舞台時右邊只放面板（留言區還在，只是先藏起來，切回審片原樣回來） */
+.song-detail__side.is-adjust > :not(.adjust-panel):not(.song-detail__sheet-handle) { display: none !important; }
