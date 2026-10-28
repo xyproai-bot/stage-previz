@@ -11,6 +11,7 @@ import type { AdjustStore } from '../../lib/adjust/store';
 import { focusView, stageView, type StageViewKind } from '../../lib/adjust/views';
 import { membersOfGroup, splitHalves } from '../../lib/adjust/scope';
 import type { MechVec3 } from '../../lib/mechanisms/model';
+import { isStageShowActive } from '../../lib/stageShow';
 import { AdjustScene } from './handles';
 import './AdjustStage.css';
 
@@ -59,7 +60,7 @@ export default function AdjustOverlay({ store, hostRef, viewApiRef, sceneQueryRe
       let dragId: number | null = null;
       let pending: { x: number; y: number; id: number } | null = null;
       const onDown = (e: PointerEvent) => {
-        if (e.target !== canvas || e.button !== 0) return;
+        if (e.target !== canvas || e.button !== 0 || isStageShowActive()) return;   // 全螢幕預演：把手藏起來、也拖不到
         const h = adj.pick(e.clientX, e.clientY, e.pointerType === 'touch');
         if (h) {
           // 點到把手：這一下是拖把手，不給鏡頭轉、不給樂手 / 器材拖

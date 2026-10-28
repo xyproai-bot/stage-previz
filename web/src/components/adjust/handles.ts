@@ -20,6 +20,7 @@ import type { MechVec3 } from '../../lib/mechanisms/model';
 import type { AdjustStore } from '../../lib/adjust/store';
 import { angleOnPlane, closestParamOnLine, distToPolyline2D, distToSegment2D, wrapPi, type P2 } from '../../lib/adjust/dragMath';
 import type { StageAdjustHost } from '../StageScene';
+import { isStageShowActive } from '../../lib/stageShow';
 
 const GREEN = 0x22d38a;
 const HOVER = 0xa6ffd6;
@@ -154,6 +155,8 @@ export class AdjustScene {
     const canvas = this.host.canvas();
     if (!scene || !cam || !canvas) return;
     if (this.group.parent !== scene) scene.add(this.group);
+    // 全螢幕預演（給客戶看）：把手、框、虛線框都不畫；機關照草稿的位置
+    this.group.visible = !isStageShowActive();
     const w = Math.max(1, canvas.clientWidth), h = Math.max(1, canvas.clientHeight);
     for (const m of [this.lineMat, this.lineMatHot, this.boxMat]) m.resolution.set(w, h);
     for (const g of this.ghosts.values()) g.mat.resolution.set(w, h);
