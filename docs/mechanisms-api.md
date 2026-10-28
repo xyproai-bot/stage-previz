@@ -126,6 +126,7 @@
 | DELETE | `/api/projects/:p/songs/:s/cues/:c/mechanisms/:m` | | `{ ok, removed }`（回到沿用上一個 cue） |
 | GET | `/api/projects/:p/mechanism-sheet` | | `{ songs: [{ id, name, code, order, cues: [{ id, name, order, videoTimeSec, crossfadeSeconds }] }], positions, mechanisms }`（只有正式 cue；匯出機關總表一次拿完） |
 | POST | `/api/projects/:p/mechanisms/:m/convert-cue-positions` | `{ dryRun?: true }` | `{ ok, converted, skipped: [{ cueId, name, reason }], positions, rowsChanged }`（見下面） |
+| POST | `/api/projects/:p/mechanisms/:m/unsplit` | `{ nameA?, nameB? }`（沒給 = 「原名 A」「原名 B」） | `{ a, b }`（兩個機關的新資料；見「把對開拆成兩個各自動的機關」） |
 
 分享連結（不用登入，只看）：
 
@@ -149,6 +150,8 @@
 | 404 | 網址上的機關不在這個專案 | 「這個專案裡找不到這個機關」 |
 | 404 | 網址上的一排不在這個專案 | 「這個專案裡找不到這一排機關」 |
 | 409 | 要放的物件已經直接放在別的機關（還會帶 `conflicts: [{ objectId, objectName, mechanismId, mechanismName }]`）。畫面問「要把它移到「…」嗎？」，要移就再送一次帶 `moveObjects: true` | 「「LED-1」已經在「升降台」裡，一個物件只能直接放在一個機關」 |
+| 400 | 拆開：不是對開（`field: "variant"`）；名字空白 / 不是文字 / 兩個一樣 / 跟別的機關重複（`field`：nameA / nameB） | 「這個機關不是對開」「機關名稱不能空白」「機關名稱要是文字」「這個專案已經有叫「…」的機關」 |
+| 500 | 拆開時資料庫拒絕了（整個交易退回，什麼都沒改） | 「沒有拆成功，什麼都沒有改：…」 |
 | 409 | 轉換：這個機關已經有 cue 設了位置 | 「這個機關已經有 cue 設了位置，只有還沒在 cue 裡設過位置的機關可以轉」 |
 
 ## 把現有 cue 的位置轉成機關位置
@@ -159,6 +162,20 @@
 - **轉完畫面一模一樣**（每個 cue、每個物件；有測）。沿用前面位置的物件需要的話會在那個 cue 補一筆。
 - 同一個機關裡物件差得不一樣（超過 1 mm / 0.1°）的 cue 不轉；轉出來超出行程的也不轉 → `skipped` 列出來（`reason`：`inconsistent` / `range`）。
 - 只有還沒有任何 cue 設過位置的機關可以轉。先用 `dryRun: true` 看會轉幾個，畫面再問要不要轉；要試的話可以先複製專案在副本上試。
+
+## 把對開拆成兩個各自動的機關
+
+`POST /api/projects/:p/mechanisms/:m/unsplit`（製作；導演 / 動畫師 403；別的專案的機關 404；不是對開 400「這個機關不是對開」）。四片門要各自獨立動的時候用：一個對開機關（A、B 兩邊對稱動）拆成兩個一般機關，之後各自設位置。**一個交易做完**（要嘛全好，要嘛都沒動）：
+
+- **A 邊**留在原機關（id 不變）：`variant`、`mirror` 清掉，物件不再分邊，名字改成 `nameA`（沒給 = 「原名 A」）。方向 / 轉軸 / 行程都不動。
+- **B 邊**變成新機關（新 id）：`kind` 一樣，`axis` / `pivot` = 原本 `mirror` 的，控台編號 = `mirror.consoleLabel`，行程 / 預設位置 / 常用位置 / 最高速度 / `parentId` 照抄，名字 `nameB`（沒給 = 「原名 B」），`order` 排在 A 後面（A 後面的機關往後挪一格）；A 在某一排裡 → B 也放同一排的最後。`metadata` 照抄，但翻轉的設定（`setup`）不抄（B 的轉軸是 `mirror` 的，不能被照外框重新算）。
+- 原本在 B 邊（`side = 'b'`）的物件改掛到 B 機關；A 邊和沒標邊的留在 A。
+- **每個 cue 存的位置和時間都抄一份給 B**（同樣的 `value`、`delaySec`、`durationSec`，Cue 庫的 `carried` 也一樣）：舊路徑每首歌的 cue 含提案（`cue_mechanism_positions`）、Cue 庫的 cue（`library_cue_mechanism_positions`）。拆完每個 cue 的畫面一模一樣（`web/src/lib/mechanisms/unsplit.test.ts` 用 `pose.ts` 比對）。
+- 有 A 邊位置的 Cue 庫 cue `rev` +1：還開著舊畫面的人存檔會被擋下（409「剛剛被別人改過」），不會用沒有 B 的舊內容把 B 的位置蓋掉。
+- 這個專案的常用擺位（`cue_templates`，用機關名稱存）裡原機關那一列換成 A、B 兩列（數字、時間一樣）；全站的常用擺位和別的專案的不動。
+- 記一筆活動紀錄（`update` / `mechanism`，`payload.unsplit = true`，含原名、新名字、B 的 id、抄了幾筆位置）。
+
+拆完不能一鍵合回去（要合就自己重設）。名字檢查跟新增機關一樣（不能空白、最多 40 字、不能跟別的機關重複，也不能兩個一樣）；規則在 `web/src/lib/mechanisms/unsplit.ts`（前端確認框和後台共用）。
 
 ## 跟其他功能
 

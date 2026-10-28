@@ -355,6 +355,11 @@ test('路由：機關（看 = 成員；新增 / 改 / 刪 / 排序 / 每個 cue 
   assert.equal(route('GET', `${p}/mechanisms/m1`).methodNotAllowed, true);
   assert.deepEqual(route('POST', `${p}/mechanisms/m1/convert-cue-positions`), { kind: 'mechanisms.convert', need: 'editor', mechId: 'm1' });
   assert.equal(route('GET', `${p}/mechanisms/m1/convert-cue-positions`).methodNotAllowed, true);
+  // 對開拆成兩個各自動的機關
+  assert.deepEqual(route('POST', `${p}/mechanisms/m1/unsplit`), { kind: 'mechanisms.unsplit', need: 'editor', mechId: 'm1' });
+  assert.equal(route('GET', `${p}/mechanisms/m1/unsplit`).methodNotAllowed, true);
+  assert.equal(route('PATCH', `${p}/mechanisms/m1/unsplit`).methodNotAllowed, true);
+  assert.equal(route('POST', `${p}/mechanisms/m1/unsplit/x`), null);
   assert.equal(route('GET', `${p}/mechanisms/m1/nope`), null);
   assert.deepEqual(route('GET', `${p}/mechanism-sheet`), { kind: 'mechanisms.sheet', need: 'editor' });
   assert.equal(route('POST', `${p}/mechanism-sheet`).methodNotAllowed, true);

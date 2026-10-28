@@ -335,6 +335,10 @@ export function describeProjectRoute(method, segs) {
       if (b === 'convert-cue-positions' && !c) {
         return m === 'POST' ? r('mechanisms.convert', 'editor', { mechId: a }) : bad('mechanisms.convert');
       }
+      // 對開拆成兩個各自動的機關（A 邊留在原機關、B 邊變新機關，每個 cue 的位置抄一份）
+      if (b === 'unsplit' && !c) {
+        return m === 'POST' ? r('mechanisms.unsplit', 'editor', { mechId: a }) : bad('mechanisms.unsplit');
+      }
       return null;
     case 'mechanism-sheet':
       if (a) return null;

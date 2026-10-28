@@ -16,6 +16,7 @@ import { planCueConversion } from '../web/src/lib/mechanisms/convert.ts';
 import { planBatch, planGroupPatch, groupMembers, parseBulkPositions, isNumbering } from '../web/src/lib/mechanisms/group.ts';
 import { planHoistRig } from '../web/src/lib/mechanisms/hoistRig.ts';
 import { hoistGeometryProblem, hoistsOfRig } from '../web/src/lib/mechanisms/hoist.ts';
+import { planUnsplit, UNSPLIT_MESSAGES } from '../web/src/lib/mechanisms/unsplit.ts';
 import * as cueLibW from './cueLibraryWrites.mjs';
 
 const ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
@@ -490,6 +491,120 @@ export async function deleteMechanism(request, env, ctx, mechId, log) {
   const removedPositions = (Number(before.lib) === 1 ? Number(before.ln) || 0 : Number(before.n) || 0) + hoistPositions;
   await log?.('delete', 'mechanism', mechId, { name: before.name, removedPositions, variant: before.variant || undefined });
   return ok({ ok: true, removedPositions });
+}
+
+// ─────────────────────────────────────────────
+// 對開拆成兩個各自動的機關（docs/superpowers/specs/2026-10-29-director-stage-control-design.md 3.4）
+// ─────────────────────────────────────────────
+
+/**
+ * 常用擺位（cue_templates.payload.mechanismPositions，用機關名稱存）：原機關那一列換成 A、B 兩列（數字、時間一樣）。
+ * 沒有用到這個機關 / 壞掉的 payload → null（不用改）。如果同一份裡已經有別的列叫 nameA / nameB，就不重複加。
+ */
+function templatePayloadAfterUnsplit(payloadText, oldName, nameA, nameB) {
+  const p = parseJson(payloadText, null);
+  if (!p || typeof p !== 'object' || Array.isArray(p) || !Array.isArray(p.mechanismPositions)) return null;
+  const key = String(oldName).trim();
+  const list = p.mechanismPositions;
+  const isOld = (e) => e && typeof e === 'object' && String(e.name ?? '').trim() === key;
+  if (!list.some(isOld)) return null;
+  const others = new Set(list.filter(e => !isOld(e) && e && typeof e === 'object').map(e => String(e.name ?? '').trim()));
+  const next = [];
+  for (const e of list) {
+    if (isOld(e)) {
+      for (const name of [nameA, nameB]) if (!others.has(name)) next.push({ ...e, name });
+    } else next.push(e);
+  }
+  return JSON.stringify({ ...p, mechanismPositions: next });
+}
+
+/**
+ * POST /mechanisms/:mechId/unsplit  body: { nameA?, nameB? }（沒給 = 「原名 A」「原名 B」）
+ * 只有對開的機關（不是 → 400）。一個交易做完（要嘛全好，要嘛都沒動）：
+ *   A 邊留在原機關（id 不變）：不再是對開、物件不分邊、改名；
+ *   B 邊是新機關：方向 / 轉軸中心用 mirror 的、控台編號用 mirror 的，行程 / 預設 / 常用位置 / 最高速度 / 上層照抄，
+ *     排在 A 後面（A 在某一排 → B 也在同一排的最後）、帶原本在 B 邊的物件；
+ *   每個 cue 存的位置和時間（舊路徑每首歌的 cue 含提案、Cue 庫的 cue）原樣抄一份給 B → 拆完每個 cue 的畫面一模一樣；
+ *   Cue 庫的 cue 版本號 +1（還開著舊畫面的人存檔會被擋下，不會把 B 的位置蓋掉）；
+ *   這個專案的常用擺位（用機關名稱存）原機關那一列換成 A、B 兩列。
+ * 回 { a, b }（兩個機關的新資料）。拆完不能一鍵合回去。
+ */
+export async function unsplitMechanism(request, env, ctx, mechId, log) {
+  const body = (await readJson(request)) || {};
+  const pid = ctx.projectId;
+  const [existing] = await loadMechanisms(env, pid, mechId);
+  if (!existing) return bad('這個專案裡找不到這個機關', 404);
+  if (existing.variant !== 'split') return bad(UNSPLIT_MESSAGES.notSplit, 400, { field: 'variant' });
+  const facts = await projectFacts(env, pid);
+  const plan = planUnsplit(existing, body, facts.siblings);
+  if (!plan.ok) return bad(plan.error, 400, { field: plan.field });
+  const { nameA, nameB, b } = plan.value;
+
+  const [rowR, cntR, tplR] = await env.DB.batch([
+    env.DB.prepare(`SELECT "order", group_id FROM mechanisms WHERE id = ? AND project_id = ?`).bind(mechId, pid),
+    env.DB.prepare(
+      `SELECT (SELECT COUNT(*) FROM cue_mechanism_positions WHERE mechanism_id = ?) AS n,
+              (SELECT COUNT(*) FROM library_cue_mechanism_positions WHERE mechanism_id = ?) AS ln`
+    ).bind(mechId, mechId),
+    env.DB.prepare(`SELECT id, payload FROM cue_templates WHERE project_id = ?`).bind(pid),
+  ]);
+  const aRow = (rowR.results || [])[0];
+  if (!aRow) return bad('這個專案裡找不到這個機關', 404);
+  const counts = (cntR.results || [])[0] || {};
+  const aOrder = Number(aRow.order) || 0;
+  const groupId = aRow.group_id || null;
+  const bId = newId('mech_');
+  const c = inputToColumns(b);
+
+  const stmts = [
+    // B 排在 A 後面：A 後面的機關往後挪一格
+    env.DB.prepare(`UPDATE mechanisms SET "order" = "order" + 1 WHERE project_id = ? AND "order" > ?`).bind(pid, aOrder),
+    env.DB.prepare(
+      `INSERT INTO mechanisms (id, project_id, name, kind, axis, pivot, travel_min, travel_max, default_value, max_speed,
+                               presets, parent_id, console_label, "order", metadata, variant, mirror, group_id, group_index, edited_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?,
+               CASE WHEN ? IS NULL THEN NULL ELSE (SELECT COALESCE(MAX(group_index), -1) + 1 FROM mechanisms WHERE group_id = ?) END,
+               datetime('now'))`
+    ).bind(bId, pid, c.name, c.kind, c.axis, c.pivot, c.travel_min, c.travel_max, c.default_value, c.max_speed,
+      c.presets, c.parent_id, c.console_label, aOrder + 1, c.metadata, groupId, groupId, groupId),
+    // A：不再是對開（方向 / 轉軸 / 行程都不動），改名
+    env.DB.prepare(
+      `UPDATE mechanisms SET name = ?, variant = NULL, mirror = NULL, edited_at = datetime('now'), updated_at = datetime('now')
+        WHERE id = ? AND project_id = ?`
+    ).bind(nameA, mechId, pid),
+    // 物件：B 邊的改掛到 B，兩邊都不再分邊
+    env.DB.prepare(`UPDATE mechanism_objects SET mechanism_id = ?, side = NULL WHERE mechanism_id = ? AND side = 'b'`).bind(bId, mechId),
+    env.DB.prepare(`UPDATE mechanism_objects SET side = NULL WHERE mechanism_id = ?`).bind(mechId),
+    // 每個 cue 存的位置和時間：抄一份給 B
+    env.DB.prepare(
+      `INSERT INTO cue_mechanism_positions (cue_id, mechanism_id, value, delay_sec, duration_sec, updated_at)
+       SELECT cue_id, ?, value, delay_sec, duration_sec, updated_at FROM cue_mechanism_positions WHERE mechanism_id = ?`
+    ).bind(bId, mechId),
+    env.DB.prepare(
+      `UPDATE library_cues SET rev = rev + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE project_id = ? AND id IN (SELECT library_cue_id FROM library_cue_mechanism_positions WHERE mechanism_id = ?)`
+    ).bind(pid, mechId),
+    env.DB.prepare(
+      `INSERT INTO library_cue_mechanism_positions (library_cue_id, mechanism_id, value, delay_sec, duration_sec, carried, updated_at)
+       SELECT library_cue_id, ?, value, delay_sec, duration_sec, carried, updated_at FROM library_cue_mechanism_positions WHERE mechanism_id = ?`
+    ).bind(bId, mechId),
+  ];
+  // 常用擺位（用機關名稱存）：原機關那一列換成 A、B 兩列
+  for (const t of tplR.results || []) {
+    const next = templatePayloadAfterUnsplit(t.payload, existing.name, nameA, nameB);
+    if (next) stmts.push(env.DB.prepare(`UPDATE cue_templates SET payload = ? WHERE id = ? AND project_id = ? AND payload = ?`).bind(next, t.id, pid, t.payload));
+  }
+  try {
+    await env.DB.batch(stmts);
+  } catch (e) {
+    return bad('沒有拆成功，什麼都沒有改：' + String(e?.message || e).slice(0, 160), 500);
+  }
+  await log?.('update', 'mechanism', mechId, {
+    unsplit: true, name: existing.name, nameA, nameB, bId, positions: Number(counts.n) || 0, libraryPositions: Number(counts.ln) || 0,
+  });
+  const [mechA] = await loadMechanisms(env, pid, mechId);
+  const [mechB] = await loadMechanisms(env, pid, bId);
+  return ok({ a: mechA, b: mechB });
 }
 
 // ─────────────────────────────────────────────

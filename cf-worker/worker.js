@@ -614,6 +614,7 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
         ? mech.updateMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId))
         : mech.deleteMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
     case 'mechanisms.convert':    return mechResp(mech.convertCuePositions(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
+    case 'mechanisms.unsplit':    return mechResp(mech.unsplitMechanism(request, env, ctx, route.mechId, mechLog(request, env, projectId)));
     case 'mechanisms.batch':      return mechResp(mech.createMechanismBatch(request, env, ctx, mechLog(request, env, projectId)));
     case 'mechGroups.item':
       return mechResp(request.method === 'PATCH'
