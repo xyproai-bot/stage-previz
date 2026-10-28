@@ -1,19 +1,21 @@
 // 設定一個機關（新增 / 編輯）：直接展開在機關分頁裡（不是跳出視窗 → 3D 畫面照樣可以轉、可以 Shift 點物件）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeftRight, Bookmark, Crosshair, Layers, MoveVertical, Plus, RotateCw, Ruler, Search, Trash2, Wand2,
+  ArrowLeftRight, Bookmark, Crosshair, Layers, MoveRight, MoveVertical, Plus, RotateCw, Ruler, Search, Spline, Trash2, Wand2,
 } from 'lucide-react';
 import Icon from '../Icon';
 import { confirmDialog } from '../dialogs';
 import type { StageObject } from '../../lib/api';
 import { STAGE_CATEGORY } from '../stageCategories';
 import {
-  LINEAR_DIRECTIONS, MECH_LIMITS, ROTARY_AXES, blankMechanismInput, linearDirectionVector, matchLinearDirection,
+  LINEAR_DIRECTIONS, MECH_LIMITS, MECH_MESSAGES, ROTARY_AXES, blankMechanismInput, linearDirectionVector, matchLinearDirection,
   matchRotaryAxis, mechanismToInput, mirrorForSplit, normalizeMechanismInput, rotaryAxisVector, standardPresets, unitOf,
   type LinearDirection, type Mechanism, type MechanismField, type MechanismInput, type MechanismSide, type MechVec3, type RotaryAxisKind,
 } from '../../lib/mechanisms/model';
 import { FLIP_HINGES, flipSetupOf, hingeFromBox, withFlipSetup, type FlipHinge, type StageBox } from '../../lib/mechanisms/flip';
 import { autoSplitSides, countSides } from '../../lib/mechanisms/split';
+import { arcRadiusFor } from '../../lib/mechanisms/arc';
+import { arcCenterChoices, arcMoveWord, resolveArcAxis } from '../../lib/mechanisms/arcForm';
 import { formatFieldNumber, metersToScene, parseNumberInput, sceneToMeters } from '../../lib/numberField';
 
 export interface SetupFormProps {
@@ -61,6 +63,15 @@ type Draft = {
   hinge: FlipHinge | 'custom';
   /** 翻轉選了「正的角度」的第一個選項 */
   flipFirst: boolean;
+  /** 沿弧形軌道（直線機關的另一種移動方式）：圓心用上面的轉軸中心欄位（pivotM），半徑是公尺 */
+  arc: boolean;
+  arcRadius: string;
+  /** 轉軸正負：手動按過「反過來」或編輯已經存好的弧形才照 arcDown；其他時候照切換時原本直線的方向（arcWant）自動挑 */
+  arcTouched: boolean;
+  arcDown: boolean;
+  arcWant: MechVec3;
+  /** 已經存的弧形轉軸不是垂直 → 原樣留著 */
+  arcKeepAxis: MechVec3 | null;
 };
 
 const num = (s: string) => parseNumberInput(s);
@@ -73,6 +84,7 @@ function initialDraft(m: Mechanism | null, front: MechVec3, scale: number): Draf
   const exact = base.kind === 'linear' ? lin.exact : rot.exact;
   const p = base.pivot ?? { x: 0, y: 0, z: 0 };
   const flip = base.kind === 'rotary' ? flipSetupOf(base.metadata) : null;
+  const isArc = base.variant === 'arc' && base.kind === 'linear';
   return {
     name: base.name,
     kind: base.kind,
@@ -94,6 +106,12 @@ function initialDraft(m: Mechanism | null, front: MechVec3, scale: number): Draf
     consoleLabelB: base.mirror?.consoleLabel ?? '',
     hinge: flip ? flip.hinge : 'custom',
     flipFirst: flip ? flip.positive !== 'second' : true,
+    arc: isArc,
+    arcRadius: isArc && base.arcRadius ? fmt(base.arcRadius) : '',
+    arcTouched: isArc,
+    arcDown: isArc && base.axis.y < 0,
+    arcWant: linearDirectionVector(lin.dir, front),
+    arcKeepAxis: isArc && Math.abs(base.axis.y) < 1 - 1e-6 ? base.axis : null,
   };
 }
 
@@ -121,8 +139,8 @@ export default function MechanismSetupForm({
 
   // 可以裝上去的機關：不是自己、不是裝在自己底下的
   const parentOptions = useMemo(() => {
-    // 對開、吊掛（整組和吊點）的機關不能當別的機關的上層
-    const all = mechanisms.filter(m => !m.variant);
+    // 對開、吊掛（整組和吊點）的機關不能當別的機關的上層；沿弧形軌道的可以（它只是一個會轉的上層）
+    const all = mechanisms.filter(m => !m.variant || m.variant === 'arc');
     if (!editing) return all;
     const below = new Set<string>([editing.id]);
     let grew = true;
@@ -134,6 +152,44 @@ export default function MechanismSetupForm({
   }, [mechanisms, editing]);
   // 已經有機關裝在它上面 → 不能改成對開
   const hasKids = !!editing && mechanisms.some(m => m.parentId === editing.id);
+
+  // 沿弧形軌道：圓心（場景單位）、帶的物件中心、現在的轉軸、「值變大往哪邊走」
+  const arcOn = d.arc && d.kind === 'linear';
+  const centerChoices = useMemo(() => arcCenterChoices(mechanisms, editing?.id ?? null), [mechanisms, editing]);
+  const pmNow = d.pivotM.map(num);
+  const arcPivotNow: MechVec3 | null = arcOn && d.pivotTouched && pmNow.every(v => v !== null)
+    ? { x: metersToScene(pmNow[0]!, scaleCorrection), y: metersToScene(pmNow[1]!, scaleCorrection), z: metersToScene(pmNow[2]!, scaleCorrection) } : null;
+  const arcCenter = arcOn && d.objectIds.length ? groupCenter(d.objectIds) : null;
+  const arcAxisNow = resolveArcAxis({ keepAxis: d.arcKeepAxis, touched: d.arcTouched, down: d.arcDown, want: d.arcWant }, arcPivotNow, arcCenter);
+  const arcWord = arcOn ? arcMoveWord(arcPivotNow, arcAxisNow, arcCenter, front) : null;
+  const centerKey = arcOn
+    ? centerChoices.find(c => [c.pivot.x, c.pivot.y, c.pivot.z].every((v, i) => fmt(sceneToMeters(v, scaleCorrection)) === d.pivotM[i].trim()))?.key ?? ''
+    : '';
+  const switchArc = (on: boolean) => setD(prev => {
+    if (!on) return { ...prev, arc: false };
+    // 切到弧形：轉軸正負照原本直線的方向自動挑（想往右走就挑讓數字變大往右的那一邊）
+    const want = prev.keepAxis && prev.kind === editing?.kind ? prev.keepAxis : linearDirectionVector(prev.dir, front);
+    return { ...prev, arc: true, arcWant: want, arcTouched: false, arcDown: false, arcKeepAxis: null, split: false };
+  });
+  const pickArcCenter = (key: string) => {
+    const c = centerChoices.find(x => x.key === key);
+    if (!c) return;
+    set({
+      pivotM: [fmt(sceneToMeters(c.pivot.x, scaleCorrection)), fmt(sceneToMeters(c.pivot.y, scaleCorrection)), fmt(sceneToMeters(c.pivot.z, scaleCorrection))],
+      pivotTouched: true,
+    });
+  };
+  const flipArc = () => setD(prev => (prev.arcKeepAxis
+    ? { ...prev, arcKeepAxis: { x: -prev.arcKeepAxis.x || 0, y: -prev.arcKeepAxis.y || 0, z: -prev.arcKeepAxis.z || 0 } }
+    : { ...prev, arcTouched: true, arcDown: !(arcAxisNow.y < 0) }));
+  /** 「照物件現在的位置算」：物件中心到圓心的水平距離（公尺） */
+  const calcArcRadius = () => {
+    if (!arcPivotNow || !arcCenter) return;
+    const r = arcRadiusFor(arcPivotNow, arcAxisNow, arcCenter, scaleCorrection);
+    if (!(r >= 0.001)) { setErrors(e => ({ ...e, arcRadius: '物件就在圓心上，算不出半徑，請換一個圓心或自己填' })); return; }
+    setErrors(e => ({ ...e, arcRadius: undefined }));
+    set({ arcRadius: fmt(r) });
+  };
 
   const name = d.name.trim() || '這個機關';
   const toggleObject = async (id: string, on: boolean) => {
@@ -204,11 +260,11 @@ export default function MechanismSetupForm({
   function buildInput(): unknown {
     const hingeGeo = hingeGeometry();
     const keep = editing && editing.kind === 'rotary' && d.hinge !== 'custom' && !hingeGeo ? editing : null;   // 外框找不到：沿用原本存的
-    const axis = keep ? keep.axis : hingeGeo ? hingeGeo.axis : d.kind === 'linear'
+    const axis = arcOn ? arcAxisNow : keep ? keep.axis : hingeGeo ? hingeGeo.axis : d.kind === 'linear'
       ? (d.keepAxis && d.kind === editing?.kind ? d.keepAxis : linearDirectionVector(d.dir, front))
       : (d.keepAxis && d.kind === editing?.kind ? d.keepAxis : rotaryAxisVector(d.rotAxis, d.rotPositiveFirst, front));
     const pm = d.pivotM.map(num);
-    const pivot = d.kind === 'rotary'
+    const pivot = d.kind === 'rotary' || arcOn
       ? (keep ? keep.pivot : hingeGeo ? hingeGeo.pivot
         : pm.every(v => v !== null) ? { x: metersToScene(pm[0]!, scaleCorrection), y: metersToScene(pm[1]!, scaleCorrection), z: metersToScene(pm[2]!, scaleCorrection) } : { x: 'x', y: 0, z: 0 })
       : null;
@@ -236,7 +292,8 @@ export default function MechanismSetupForm({
       objectIds: d.objectIds,
       consoleLabel: d.consoleLabel,
       metadata: withFlipSetup(editing?.metadata, setup),
-      variant: d.split ? 'split' : null,
+      variant: d.split ? 'split' : arcOn ? 'arc' : null,
+      arcRadius: arcOn ? n(d.arcRadius) : null,
       mirror,
       objectSides: d.split ? Object.fromEntries(d.objectIds.map(id => [id, sideOf(id)])) : {},
     };
@@ -246,6 +303,11 @@ export default function MechanismSetupForm({
     // 沿著邊緣翻：要有物件的外框才算得出轉軸（編輯時外框暫時找不到會沿用原本存的）
     if (d.kind === 'rotary' && d.hinge !== 'custom' && !hingeGeometry() && !(editing && editing.kind === 'rotary')) {
       setErrors({ objectIds: '沿著邊緣翻要先選好「帶動的物件」，轉軸會照它們的外框自動算' });
+      return;
+    }
+    // 沿弧形軌道：圓心不能偷偷用預設的原點，一定要挑一個機關的圓心或自己填
+    if (arcOn && !d.pivotTouched) {
+      setErrors({ pivot: MECH_MESSAGES.arcPivot });
       return;
     }
     const r = normalizeMechanismInput(buildInput(), {
@@ -294,23 +356,88 @@ export default function MechanismSetupForm({
           <button type="button" role="radio" aria-checked={d.kind === 'linear'} className={d.kind === 'linear' ? 'is-active' : ''}
             onClick={() => set({ kind: 'linear', keepAxis: null, hinge: 'custom' })}><Icon icon={MoveVertical} /> 直線移動</button>
           <button type="button" role="radio" aria-checked={d.kind === 'rotary'} className={d.kind === 'rotary' ? 'is-active' : ''}
-            onClick={() => set({ kind: 'rotary', keepAxis: null, ...(d.pivotTouched ? {} : pivotFrom(d.objectIds)), ...(d.kind === 'linear' && tMin === 0 && tMax === 1 ? { travelMin: '-180', travelMax: '180' } : {}) })}><Icon icon={RotateCw} /> 旋轉</button>
+            onClick={() => set({ kind: 'rotary', keepAxis: null, arc: false, ...(d.pivotTouched ? {} : pivotFrom(d.objectIds)), ...(d.kind === 'linear' && tMin === 0 && tMax === 1 ? { travelMin: '-180', travelMax: '180' } : {}) })}><Icon icon={RotateCw} /> 旋轉</button>
         </div>
       </div>
 
+      {d.kind === 'linear' && (
+        <div className="mech-form__row">
+          <span className="mech-form__label">移動方式</span>
+          <div className="mech-seg" role="radiogroup" aria-label="移動方式">
+            <button type="button" role="radio" aria-checked={!arcOn} className={!arcOn ? 'is-active' : ''}
+              onClick={() => switchArc(false)}><Icon icon={MoveRight} /> 直線</button>
+            <button type="button" role="radio" aria-checked={arcOn} className={arcOn ? 'is-active' : ''} disabled={d.split}
+              title={d.split ? '對開的機關不能同時沿弧形軌道，先取消勾選「對開」' : '繞著一個圓心沿圓弧走，面向跟著轉'}
+              onClick={() => switchArc(true)}><Icon icon={Spline} /> 沿弧形軌道</button>
+          </div>
+          <small className="muted">{arcOn
+            ? '沿著圓弧走，越往外越靠近圓心那一側；走的時候會跟著轉角度。數字還是沿軌道走幾公尺'
+            : '直線 = 往一個方向走。例：旋轉 LED 要沿著對開門的圓弧橫移，選「沿弧形軌道」'}</small>
+        </div>
+      )}
+
       <div className="mech-form__row">
-        <label className="mech-toggle" title={hasKids ? '有機關裝在它上面，不能改成對開' : '兩邊用同一個數字，往反方向動'}>
-          <input type="checkbox" checked={d.split} disabled={hasKids} onChange={e => toggleSplit(e.target.checked)} />
+        <label className="mech-toggle" title={arcOn ? '沿弧形軌道的機關不能同時對開' : hasKids ? '有機關裝在它上面，不能改成對開' : '兩邊用同一個數字，往反方向動'}>
+          <input type="checkbox" checked={d.split} disabled={hasKids || arcOn} onChange={e => toggleSplit(e.target.checked)} />
           <Icon icon={ArrowLeftRight} size="sm" />
           <span>對開（兩邊往反方向）</span>
         </label>
-        <small className="muted">{hasKids
-          ? '有機關裝在它上面，不能改成對開'
-          : '例：左右兩排 LED 往兩邊打開。A 邊照下面的方向動，B 邊自動往鏡像的方向動，兩邊用同一個數字'}</small>
+        <small className="muted">{arcOn
+          ? '沿弧形軌道的機關不能同時對開（要改的話先把「移動方式」換回直線）'
+          : hasKids
+            ? '有機關裝在它上面，不能改成對開'
+            : '例：左右兩排 LED 往兩邊打開。A 邊照下面的方向動，B 邊自動往鏡像的方向動，兩邊用同一個數字'}</small>
         {err('variant')}
       </div>
 
-      {d.kind === 'linear' ? (
+      {arcOn ? (
+        <>
+          <div className="mech-form__row">
+            <label htmlFor="mech-arc-center">圓心</label>
+            <select id="mech-arc-center" value={centerKey} onChange={e => pickArcCenter(e.target.value)}>
+              <option value="">自己填（下面的 X、Y、Z）</option>
+              {centerChoices.map(c => <option key={c.key} value={c.key}>跟「{c.label}」同一個圓心</option>)}
+            </select>
+            <div className="mech-form__pair">
+              {(['X', 'Y', 'Z'] as const).map((ax, i) => (
+                <label key={ax} className="num-field">
+                  <span className="num-field__axis">{ax}</span>
+                  <input type="text" inputMode="decimal" aria-label={`圓心 ${ax}（m）`} value={d.pivotM[i]}
+                    onChange={e => { const p = [...d.pivotM] as Draft['pivotM']; p[i] = e.target.value; set({ pivotM: p, pivotTouched: true }); }} />
+                  <span className="num-field__unit" aria-hidden="true">m</span>
+                </label>
+              ))}
+            </div>
+            <small className="muted">{centerChoices.length > 0
+              ? '物件繞著這一點走。想跟旋轉 LED 所在的對開門走同一個圓，就選對開門的轉軸中心'
+              : '物件繞著這一點走（這個專案還沒有旋轉 / 對開的機關可以挑，請自己填 X、Y、Z）'}</small>
+            {err('pivot')}
+          </div>
+          <div className="mech-form__row">
+            <span className="mech-form__label">轉軸</span>
+            <div className="mech-form__pair">
+              <span className="small">垂直的轉軸；{arcWord ? <>數字變大時 <strong>{arcWord}</strong> 走</> : '選好帶動的物件和圓心後，這裡會說數字變大時往哪邊走'}</span>
+              <button type="button" className="btn btn--ghost btn--sm" onClick={flipArc} title="讓數字變大時往相反的方向走"><Icon icon={ArrowLeftRight} /> 反過來</button>
+            </div>
+            {arcCenter && arcPivotNow && arcWord === null && <div className="field-error small" role="status">物件就在圓心上，沒辦法繞著圓走，請換一個圓心</div>}
+            {err('axis')}
+          </div>
+          <div className="mech-form__row">
+            <label htmlFor="mech-arc-radius">軌道半徑</label>
+            <div className="mech-form__pair">
+              <label className="num-field">
+                <input id="mech-arc-radius" type="text" inputMode="decimal" value={d.arcRadius} onChange={e => set({ arcRadius: e.target.value })} />
+                <span className="num-field__unit" aria-hidden="true">m</span>
+              </label>
+              <button type="button" className="btn btn--ghost btn--sm" disabled={!arcPivotNow || !arcCenter}
+                title={!arcCenter ? '先選要帶的物件' : !arcPivotNow ? '先填好圓心' : '用帶動的物件現在的中心到圓心的水平距離'}
+                onClick={calcArcRadius}><Icon icon={Crosshair} /> 照物件現在的位置算</button>
+            </div>
+            <small className="muted">物件到圓心的水平距離（公尺）。行程、預設位置、每個 cue 的數字都是沿著弧線走幾公尺</small>
+            {err('arcRadius')}
+          </div>
+        </>
+      ) : d.kind === 'linear' ? (
         <div className="mech-form__row">
           <label htmlFor="mech-dir">數字變大時往</label>
           <select id="mech-dir" value={d.dir} onChange={e => set({ dir: e.target.value as LinearDirection, keepAxis: null })}>
@@ -483,6 +610,7 @@ export default function MechanismSetupForm({
             <input type="text" inputMode="decimal" aria-label={`行程最高（${unit}）`} value={d.travelMax} onChange={e => set({ travelMax: e.target.value })} />
             <span className="num-field__unit" aria-hidden="true">{unit}</span></label>
         </div>
+        {arcOn && <small className="muted">行程是沿著弧線走的距離（公尺），不是角度</small>}
         {split && <small className="muted">行程是每一邊走的{d.kind === 'rotary' ? '角度' : '距離'}{d.kind === 'linear' && tMax !== null && tMax > 0 ? `（每邊最多 ${fmt(tMax)} m，中間最多開 ${fmt(tMax * 2)} m）` : ''}</small>}
         {err('travel')}
       </div>

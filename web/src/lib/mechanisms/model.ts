@@ -777,8 +777,9 @@ export function matchRotaryAxis(axis: MechVec3, front: MechVec3): { kind: Rotary
   return { ...best, exact: bestDot > 1 - 1e-6 };
 }
 
-/** 清單上的方向字：「上下」「左右」「前後」「轉台」「前後翻」「左右翻」 */
-export function directionWord(m: Pick<Mechanism, 'kind' | 'axis'>, front?: MechVec3 | null): string {
+/** 清單上的方向字：「上下」「左右」「前後」「轉台」「前後翻」「左右翻」；沿弧形軌道 = 「弧形」（它的軸是垂直的轉軸，但物件是橫著繞圓走） */
+export function directionWord(m: Pick<Mechanism, 'kind' | 'axis'> & Partial<Pick<Mechanism, 'variant'>>, front?: MechVec3 | null): string {
+  if (m.variant === 'arc') return '弧形';
   const f = horizontalFront(front);
   const right = audienceRight(f);
   const a = m.axis;

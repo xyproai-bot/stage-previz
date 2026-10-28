@@ -131,7 +131,10 @@ export function sheetRows(input: SheetInput): Cell[][] {
 function directionText(m: Mechanism, side: MechanismSide | null, f: MechVec3): string {
   const geo = side ? splitSideGeometry(m, side) : { axis: m.axis, pivot: m.pivot };
   let dir: string;
-  if (m.kind === 'linear') {
+  if (m.variant === 'arc' && m.arcRadius) {
+    // 沿弧形軌道：轉軸是垂直的，說「往上」是錯的；數字還是公尺，沿著弧線量
+    dir = `沿弧形軌道，半徑 ${trimNum(m.arcRadius)} m，0 = cue 裡原本的位置，正的數字是沿著弧線走的公尺數`;
+  } else if (m.kind === 'linear') {
     const d = matchLinearDirection(geo.axis, f).dir;
     const label = LINEAR_DIRECTIONS.find(x => x.key === d)!.label;
     dir = `直線，0 = cue 裡原本的位置，正的數字${label}${d === 'left' || d === 'right' ? '（觀眾看過去）' : ''}`;

@@ -334,7 +334,7 @@ export default function MechanismTab({
       onSave={(input, moving) => save(m, input, moving)}
       onCancel={() => setEditingId(null)}
       onDelete={m ? () => void remove(m) : undefined}
-      onConvert={m && m.variant !== 'split' && m.cueCount === 0 && m.objectIds.length > 0 ? () => void convert(m) : undefined}
+      onConvert={m && m.variant !== 'split' && m.variant !== 'arc' && m.cueCount === 0 && m.objectIds.length > 0 ? () => void convert(m) : undefined}
     />
   );
 
@@ -543,6 +543,7 @@ export default function MechanismTab({
             <span className="muted small">
               {formatMechValue(m.travelMin, m.kind, false)} ~ {formatMechValue(m.travelMax, m.kind)}
               {flipLabel(m.metadata) && ` · ${flipLabel(m.metadata)}`}
+              {m.variant === 'arc' && m.arcRadius ? ` · 沿弧形軌道（半徑 ${formatMechValue(m.arcRadius, 'linear')}）` : ''}
               {m.variant === 'split'
                 ? ` · 對開：A 邊 ${countSides(m.objectIds, m.objectSides ?? {}).a} 個、B 邊 ${countSides(m.objectIds, m.objectSides ?? {}).b} 個 · ${m.cueCount} 個 cue 有設定`
                 : ` · ${m.objectIds.length} 個物件 · ${m.cueCount} 個 cue 有設定`}

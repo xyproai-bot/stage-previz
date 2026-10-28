@@ -113,6 +113,19 @@ describe('機關總表（設計文件的範例當標準答案）', () => {
     expect(sheetLegend([lift, rev, slide]).join('')).not.toMatch(/速度|最高/);
   });
 
+  it('沿弧形軌道的說明：不說「往上」，說沿弧線走幾公尺、半徑多少；數字單位還是公尺', () => {
+    const arc = mech({
+      id: 'a', name: '橫移 1', variant: 'arc', arcRadius: 20, axis: { x: 0, y: -1, z: 0 }, pivot: { x: 0, y: 0, z: 10 },
+      travelMin: -30, travelMax: 30, consoleLabel: 'Axis 9',
+    });
+    const [, , line] = sheetLegend([lift, arc]);
+    expect(line).toContain('橫移 1（Axis 9）：沿弧形軌道，半徑 20 m，0 = cue 裡原本的位置，正的數字是沿著弧線走的公尺數');
+    expect(line).not.toMatch(/往上|往下/);
+    expect(line).toContain('行程 -30 m ~ 30 m');
+    const csv = buildMechanismSheetCsv({ songs: [song], positions: [P('c2', 'a', 12)], mechanisms: [arc], front: null });
+    expect(csv).toContain(',橫移 1,Axis 9,0.000,12.000,m,');
+  });
+
   it('旋轉的說明不會括號疊括號：「旋轉・水平轉（像轉台）」「旋轉・前後翻」「旋轉・左右翻」', () => {
     const tilt = mech({ id: 't', name: '翻板', kind: 'rotary', axis: { x: 1, y: 0, z: 0 }, pivot: { x: 0, y: 0, z: 0 }, travelMin: -90, travelMax: 90 });
     const roll = mech({ id: 'r', name: '側翻', kind: 'rotary', axis: { x: 0, y: 0, z: 1 }, pivot: { x: 0, y: 0, z: 0 }, travelMin: -90, travelMax: 90 });

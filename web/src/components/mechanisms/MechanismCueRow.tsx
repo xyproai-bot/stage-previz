@@ -4,7 +4,7 @@
 //   數字欄位（Enter 或點別的地方就存）、回到沿用上一個 cue；超出行程的提醒、被下一個 cue 接手的說明（灰色）
 //   v2：這個 cue 自己設的「延遲 N 秒、走 N 秒」（空白 = 跟著 cue；只有這個 cue 自己設了位置才有）
 import { useEffect, useRef, useState } from 'react';
-import { CornerDownRight, Info, Move3d, MoveHorizontal, MoveVertical, RotateCcw, RotateCw, TimerReset, TriangleAlert } from 'lucide-react';
+import { CornerDownRight, Info, Move3d, MoveHorizontal, MoveVertical, RotateCcw, RotateCw, Spline, TimerReset, TriangleAlert } from 'lucide-react';
 import Icon from '../Icon';
 import { directionWord, parseTimingSeconds, presetAt, snapToPreset, unitOf, valueDecimals, type Mechanism, type MechanismTiming, type MechVec3 } from '../../lib/mechanisms/model';
 import { sheetTime } from '../../lib/mechanisms/cueSheet';
@@ -111,7 +111,7 @@ export default function MechanismCueRow({
         : <span className="mech-row__source is-inherited">預設位置</span>;
 
   const word = directionWord(mech, front);
-  const kindIcon = mech.kind === 'rotary' ? RotateCw : word === '上下' ? MoveVertical : word === '左右' ? MoveHorizontal : Move3d;
+  const kindIcon = mech.kind === 'rotary' ? RotateCw : mech.variant === 'arc' ? Spline : word === '上下' ? MoveVertical : word === '左右' ? MoveHorizontal : Move3d;
   const fmt = (v: number) => formatMechValue(v, mech.kind);
   // 提醒（橘色）：存的位置超出行程。說明（灰色）：被下一個 cue 接手，預覽時機關在這裡停下來
   const warnings: { key: string; text: string }[] = [];
