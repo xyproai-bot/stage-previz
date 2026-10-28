@@ -198,4 +198,4 @@
 .adjust-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* 調整舞台時右邊只放面板（留言區還在，只是先藏起來，切回審片原樣回來） */
-.song-detail__side.is-adjust > :not(.adjust-panel) { display: none !important; }
+.song-detail__side.is-adjust > :not(.adjust-panel):not(.song-detail__sheet-handle) { display: none !important; }

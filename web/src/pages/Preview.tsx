@@ -10,7 +10,14 @@ import AccountMenu, { useAccountEdit } from '../components/AccountMenu';
 import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
 import { memberWatermarkOn } from '../lib/watermark/policy';
 import { useViewAs, useViewAsUser } from '../lib/viewAsContext';
-import StageScene, { type StageViewApi } from '../components/StageScene';
+import StageScene, { type StageAdjustHost, type StageSceneQuery, type StageViewApi } from '../components/StageScene';
+import AdjustModeSwitch from '../components/adjust/AdjustModeSwitch';
+import AdjustOverlay from '../components/adjust/AdjustOverlay';
+import AdjustPanel from '../components/adjust/AdjustPanel';
+import AdjustBar from '../components/adjust/AdjustBar';
+import { useAdjustStage } from '../components/adjust/useAdjustStage';
+import type { AdjustScene } from '../components/adjust/handles';
+import { canAdjustStage, showAdjustSwitch } from '../lib/adjust/permissions';
 import AnnotationLayer from '../components/AnnotationLayer';
 import { CommentFilterBar, ReviewCompose, readFollow, saveFollow, type StatusFilter } from '../components/ReviewCompose';
 import ExportCommentsDialog from '../components/ExportCommentsDialog';
@@ -927,6 +934,43 @@ function SongDetail({
     projectId, songId: song.id, cues: cuesReady ? cues : EMPTY_CUES, selectedCueId, video: player.video, live,
   });
 
+  // ── 調整舞台（只預覽、不存；components/adjust）：導演、製作才有；Cue 庫模式的專案才出現 ──
+  const adjustHostRef = useRef<StageAdjustHost | null>(null);
+  const adjustQueryRef = useRef<StageSceneQuery | null>(null);
+  const adjustSceneRef = useRef<AdjustScene | null>(null);
+  const canAdjust = showAdjustSwitch({
+    canAdjust: canAdjustStage({ projectRole, accountRole: user?.role ?? null }),
+    mode: mech.mode,
+    hasMechanisms: (mech.mechanisms?.length ?? 0) > 0,
+  });
+  const adjustCue = useMemo(() => {
+    const i = cues.findIndex(c => c.id === selectedCueId);
+    return {
+      cue: i >= 0 ? cues[i] : null,
+      prev: i > 0 ? { id: cues[i - 1].id, name: cues[i - 1].name } : null,
+    };
+  }, [cues, selectedCueId]);
+  const adjust = useAdjustStage({
+    enabled: canAdjust,
+    mechanisms: mech.mechanisms,
+    cueId: selectedCueId,
+    cueName: adjustCue.cue?.name ?? '',
+    saved: mech.sceneProps.mechanismTargets,
+    prevCue: adjustCue.prev,
+    valuesForCue: mech.valuesForCue,
+    timingsForCue: mech.timingsForCue,
+    seconds: cueTransitionSeconds(adjustCue.cue),
+    hostRef: adjustHostRef,
+  });
+  const adjustFront = useCallback(() => {
+    try { return adjustQueryRef.current?.stageFront() ?? { x: 0, y: 0, z: 1 }; } catch { return { x: 0, y: 0, z: 1 }; }
+  }, []);
+  const objectName = useCallback((id: string) => {
+    const s = viewportStates.find(x => x.objectId === id);
+    const o = s ? null : stageObjects.find(x => x.id === id);
+    return s?.displayName || s?.meshName || o?.displayName || o?.meshName || '物件';
+  }, [viewportStates, stageObjects]);
+
   // ── 審片：播放快捷鍵（空白鍵、J / K / L、, / .、I / O、Shift+J / K 切 cue）、區段、打開留言、畫記（lib/review/useReviewSession.ts）──
   const viewApiRef = useRef<StageViewApi | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -940,6 +984,18 @@ function SongDetail({
       : (idx <= 0 ? 0 : idx - 1);
     selectCueByUser(cues[next]);
   }, [cues, selectedCueId, selectCueByUser]);
+  // 調整舞台有改沒存：換 cue、換歌、回總覽都先問「放棄這些改動？」
+  const { guard: adjustGuard } = adjust;
+  const guardedCueStep = useMemo(() => adjustGuard(cueStep), [adjustGuard, cueStep]);
+  const guardedSelectCue = useMemo(() => adjustGuard(selectCueByUser), [adjustGuard, selectCueByUser]);
+  const guardedClose = useMemo(() => adjustGuard(onClose), [adjustGuard, onClose]);
+  const guardedPickSong = useMemo(() => adjustGuard(onPickSong), [adjustGuard, onPickSong]);
+  // 打開調整舞台：影片先停、自動切 cue 停掉（不然 cue 會自己換走）
+  const enterAdjust = useCallback(() => {
+    if (player.playing) player.pause();
+    if (autoStep) onToggleAutoStep();
+    adjust.enter();
+  }, [player, autoStep, onToggleAutoStep, adjust]);
   const focusComposer = useCallback(() => {
     setSheetOpen(true);  // 手機：先把留言面板拉上來，輸入框才看得到
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -961,7 +1017,7 @@ function SongDetail({
   const session = useReviewSession({
     player, videoActive: videoMode, resetKey: song.id, viewApiRef,
     versions: { items: versions.items, currentKey: selected?.key ?? null, select: versions.select },
-    cueId: selectedCueId, onCueStep: cueStep, onFocusComposer: focusComposer,
+    cueId: selectedCueId, onCueStep: guardedCueStep, onFocusComposer: focusComposer,
     // 圖片貼到 3D 畫面上之後：手機把留言面板收下去、3D 畫面捲回來才看得到
     onStickerPlaced: () => { if (isPhoneLayout()) setSheetOpen(false); if (isTouchDevice()) revealStage(stageRef.current); },
   });
@@ -1060,16 +1116,17 @@ function SongDetail({
   return (
     <div className="song-detail">
       <div className="song-detail__sub-top">
-        <button className="link-btn song-detail__back" onClick={onClose} title="回總覽" aria-label="回總覽"><Icon icon={ArrowLeft} /><span className="song-detail__back-label"> 回總覽</span></button>
+        <button className="link-btn song-detail__back" onClick={guardedClose} title="回總覽" aria-label="回總覽"><Icon icon={ArrowLeft} /><span className="song-detail__back-label"> 回總覽</span></button>
         <span className="song-detail__nav">
-          {prev && <button className="link-btn song-detail__step" onClick={() => onPickSong(prev.id)} title={`上一首：${prev.name}`} aria-label={`上一首：${prev.name}`}><Icon icon={ChevronLeft} /><span className="song-detail__step-name">{prev.name}</span></button>}
+          {prev && <button className="link-btn song-detail__step" onClick={() => guardedPickSong(prev.id)} title={`上一首：${prev.name}`} aria-label={`上一首：${prev.name}`}><Icon icon={ChevronLeft} /><span className="song-detail__step-name">{prev.name}</span></button>}
           <span className="song-detail__title">
             {song.code && <span className="song-code" title="歌曲代號">{song.code}</span>}
             {song.name}
           </span>
-          {next && <button className="link-btn song-detail__step" onClick={() => onPickSong(next.id)} title={`下一首：${next.name}`} aria-label={`下一首：${next.name}`}><span className="song-detail__step-name">{next.name}</span><Icon icon={ChevronRight} /></button>}
+          {next && <button className="link-btn song-detail__step" onClick={() => guardedPickSong(next.id)} title={`下一首：${next.name}`} aria-label={`下一首：${next.name}`}><span className="song-detail__step-name">{next.name}</span><Icon icon={ChevronRight} /></button>}
         </span>
         {!decision && <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>}
+        {canAdjust && <AdjustModeSwitch on={adjust.on} onReview={adjust.exit} onAdjust={enterAdjust} />}
         <span className="grow" />
       </div>
 
@@ -1157,6 +1214,10 @@ function SongDetail({
                   transport: videoMode ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay } : undefined,
                 }}
                 {...mech.sceneProps}
+                focusedMechanismId={adjust.on ? adjust.active : null}
+                mechanismOverride={adjust.on ? adjust.override : undefined}
+                adjustHostRef={adjustHostRef}
+                sceneQueryRef={adjustQueryRef}
                 lookSettings={personalLook.effective}
                 onLookSettingsChange={personalLook.set}
                 lookCustomized={personalLook.customized}
@@ -1195,6 +1256,8 @@ function SongDetail({
               </StageScene>
               {/* 比較兩版時，LED 現在放的是哪一版 */}
               <LedCompareBadge compare={compare} />
+              {/* 調整舞台：把手、框、看的角度（只在調整舞台時出現） */}
+              {canAdjust && <AdjustOverlay store={adjust.store} hostRef={adjustHostRef} viewApiRef={viewApiRef} sceneQueryRef={adjustQueryRef} sceneRef={adjustSceneRef} />}
               {/* 小播放器（子母畫面）：可以拖、可以收起來；在 3D 畫面裡面，不會蓋到下面的 cue 列 */}
               {selected && (
                 <MiniPlayer
@@ -1212,6 +1275,8 @@ function SongDetail({
                 />
               )}
             </div>
+            {/* 調整舞台改了東西：黃色提示列（改了 N 個機關、放棄、存回 Cue 庫下一版開放） */}
+            {canAdjust && <AdjustBar store={adjust.store} />}
             {noCues && (
               <div className="song-detail__cuebar">
                 <span className="cuebar-hint">這首歌還沒有 cue，3D 顯示的是物件的預設位置</span>
@@ -1222,6 +1287,7 @@ function SongDetail({
                 <button
                   className={'cuebar-btn' + (autoStep ? ' is-active' : '')}
                   onClick={onToggleAutoStep}
+                  disabled={adjust.on}
                   title={autoStep ? '停止自動播放' : '每 2 秒自動切 cue'}
                   aria-label={autoStep ? '停止自動播放' : '每 2 秒自動切 cue'}
                 ><Icon icon={autoStep ? Pause : Play} size="md" /></button>
@@ -1230,7 +1296,7 @@ function SongDetail({
                     <button
                       key={c.id}
                       className={'cuebar-cue' + (c.id === selectedCueId ? ' is-active' : '')}
-                      onClick={() => selectCueByUser(c)}
+                      onClick={() => guardedSelectCue(c)}
                       title={c.videoTimeSec != null ? `${c.name}（影片 ${formatTimeMS(c.videoTimeSec)}）` : c.name}
                     >
                       <span className="cuebar-cue__num">{i + 1}</span>
@@ -1248,7 +1314,7 @@ function SongDetail({
 
         {/* 手機：留言面板拉開時，上面其餘的畫面壓暗，點一下收回去（電腦、iPad 這個不顯示） */}
         {sheetOpen && <div className="song-detail__scrim" onClick={() => setSheetOpen(false)} aria-hidden="true" />}
-        <aside className={'song-detail__side' + (sheetOpen ? ' is-open' : '')}>
+        <aside className={'song-detail__side' + (sheetOpen ? ' is-open' : '') + (adjust.on ? ' is-adjust' : '')}>
           {/* 手機：面板最上面一條（收起來時只看得到這條）；電腦、iPad 不顯示 */}
           <button
             type="button"
@@ -1258,10 +1324,14 @@ function SongDetail({
             title={sheetOpen ? '收起留言' : '打開留言'}
           >
             <Icon icon={MessageSquareText} size="md" />
-            <span className="song-detail__sheet-title">留言（{rootComments.length}）</span>
-            <span className="song-detail__sheet-sub">{sheetOpen ? '收起' : '打開 / 寫留言'}</span>
+            <span className="song-detail__sheet-title">{adjust.on ? '調整舞台' : `留言（${rootComments.length}）`}</span>
+            <span className="song-detail__sheet-sub">{sheetOpen ? '收起' : adjust.on ? '打開機關面板' : '打開 / 寫留言'}</span>
             <Icon icon={sheetOpen ? ChevronDown : ChevronUp} size="md" className="song-detail__sheet-chev" />
           </button>
+          {/* 調整舞台：右邊換成機關面板（留言區還在、只是藏起來，切回審片原樣回來） */}
+          {adjust.on && (
+            <AdjustPanel store={adjust.store} sceneRef={adjustSceneRef} objectName={objectName} front={adjustFront} sceneToMeters={view.scaleCorrection} />
+          )}
           <div className="song-detail__history">
             <ReviewHistory
               projectId={projectId}

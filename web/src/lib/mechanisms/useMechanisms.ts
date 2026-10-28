@@ -149,7 +149,8 @@ export function useStageMechanisms(o: {
     return row ? valuesOf(row) : null;
   }, [resolved]);
   const timingsForCue = useCallback((cueId: string): MechanismTimings => timings.get(cueId) ?? EMPTY_TIMINGS, [timings]);
-  const mode = positions && positions.songId === songId ? positions.mode : null;
+  // 模式是整個專案的設定：換歌、新的那首還沒讀到時沿用上一首讀到的（調整舞台才不會一換歌就關掉）
+  const mode = positions ? positions.mode : null;
   return { mechanisms, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue };
 }
 
