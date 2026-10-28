@@ -177,3 +177,81 @@ describe('行程的線（管理頁點到機關時畫在 3D 上）', () => {
     expect(gf.path[0].distanceTo(gf.path[gf.path.length - 1])).toBeLessThan(1e-9);
   });
 });
+
+describe('沿弧形軌道（arc）', () => {
+  // 圓心在 (0, 0, 10)，物件在 (0, 0, -10)：半徑 20；轉軸朝下 → 值變大往 +x 走
+  const arc = mech({ id: 'a', kind: 'linear', variant: 'arc', axis: { x: 0, y: -1, z: 0 },
+    pivot: { x: 0, y: 0, z: 10 }, arcRadius: 20, travelMin: -30, travelMax: 30, objectIds: ['led'] });
+  const rig = compileRig([arc], 1);
+  const p0 = v3(0, 0, -10);
+
+  it('值 0 不動', () => { expectVec(scene(rig, 'led', { a: 0 }, p0).pos, p0); });
+  it('值 s：在圓上、走過的弧長 = s、面向轉 s ÷ 半徑', () => {
+    const s = 5, th = s / 20;
+    const r = scene(rig, 'led', { a: s }, p0);
+    expectVec(r.pos, { x: 20 * Math.sin(th), y: 0, z: 10 - 20 * Math.cos(th) });
+    expect(r.pos.distanceTo(v3(0, 0, 10))).toBeCloseTo(20, 9);
+    expectQuat(r.quat, new THREE.Quaternion().setFromAxisAngle(v3(0, -1, 0), th));
+  });
+  it('越往外越靠近觀眾（z 變大），左右對稱', () => {
+    const l = scene(rig, 'led', { a: -8 }, p0).pos, rr = scene(rig, 'led', { a: 8 }, p0).pos;
+    expect(rr.z).toBeGreaterThan(p0.z); expect(l.z).toBeCloseTo(rr.z, 9); expect(l.x).toBeCloseTo(-rr.x, 9);
+  });
+  it('跟裝在下面的自轉疊在一起：先自轉、再沿軌道帶走', () => {
+    const spin = mech({ id: 's', kind: 'rotary', axis: { x: 0, y: 1, z: 0 }, pivot: { x: 0, y: 0, z: -10 },
+      parentId: 'a', travelMin: -360, travelMax: 360, objectIds: ['led2'] });
+    const rig2 = compileRig([{ ...arc, objectIds: [] }, spin], 1);
+    const r = scene(rig2, 'led2', { a: 5, s: 90 }, p0);
+    expect(r.pos.distanceTo(v3(0, 0, 10))).toBeCloseTo(20, 9);
+    const want = new THREE.Quaternion().setFromAxisAngle(v3(0, -1, 0), 5 / 20)
+      .multiply(new THREE.Quaternion().setFromAxisAngle(v3(0, 1, 0), Math.PI / 2));
+    expectQuat(r.quat, want);
+  });
+  it('拖完還原剛好反過來', () => {
+    const q = eul(0, 30, 0), r = scene(rig, 'led', { a: 7 }, p0, q), b = base(rig, 'led', { a: 7 }, r.pos, r.quat);
+    expectVec(b.pos, p0); expectQuat(b.quat, q);
+  });
+  it('跟校準倍率無關（值和半徑都是公尺）', () => {
+    const rig3 = compileRig([{ ...arc, pivot: { x: 0, y: 0, z: 5 } }], 2);   // 場景單位減半：圓心 (0,0,5)、物件 (0,0,-5)
+    const r = scene(rig3, 'led', { a: 5 }, v3(0, 0, -5));
+    expect(r.pos.distanceTo(v3(0, 0, 5))).toBeCloseTo(10, 9);
+    expectQuat(r.quat, new THREE.Quaternion().setFromAxisAngle(v3(0, -1, 0), 5 / 20));
+  });
+  it('半徑 0 / 沒填：當一般直線', () => {
+    const rig4 = compileRig([{ ...arc, arcRadius: null, axis: { x: 1, y: 0, z: 0 } }], 1);
+    expectVec(scene(rig4, 'led', { a: 3 }, p0).pos, { x: 3, y: 0, z: -10 });
+    const rig5 = compileRig([{ ...arc, arcRadius: 0, axis: { x: 1, y: 0, z: 0 } }], 1);
+    expectVec(scene(rig5, 'led', { a: 3 }, p0).pos, { x: 3, y: 0, z: -10 });
+    expect(rig4.byId.get('a')!.arcRadius).toBeUndefined();
+  });
+  it('旋轉機關帶了半徑也不理（只有直線的弧形才走圓）', () => {
+    const rig6 = compileRig([mech({ id: 'r', kind: 'rotary', variant: 'arc', arcRadius: 20, axis: { x: 0, y: 1, z: 0 }, pivot: { x: 0, y: 0, z: 0 }, objectIds: ['led'] })], 1);
+    expect(rig6.byId.get('r')!.arcRadius).toBeUndefined();
+    expectVec(scene(rig6, 'led', { r: 90 }, v3(1, 0, 0)).pos, { x: 0, y: 0, z: -1 });
+  });
+  it('行程線畫成弧線（點都在圓上）', () => {
+    const g = travelGeometry(rig.byId.get('a')!, p0, 1, [0]);
+    expect(g.path.length).toBeGreaterThan(8);
+    for (const p of g.path) expect(p.distanceTo(v3(0, 0, 10))).toBeCloseTo(20, 6);
+  });
+  it('行程線：起點在最低、終點在最高的位置；常用位置的刻度也在圓的徑向上', () => {
+    const m = rig.byId.get('a')!;
+    const g = travelGeometry(m, p0, 1, [10]);
+    expectVec(g.path[0], scene(rig, 'led', { a: -30 }, p0).pos, 6);
+    expectVec(g.path[g.path.length - 1], scene(rig, 'led', { a: 30 }, p0).pos, 6);
+    const [t0, t1] = g.ticks[0];
+    const at10 = scene(rig, 'led', { a: 10 }, p0).pos;
+    // 刻度的兩端跟圓心在同一條線上（徑向），且夾著常用位置 10 m 的點
+    const c = v3(0, 0, 10);
+    expect(t0.clone().sub(c).normalize().dot(t1.clone().sub(c).normalize())).toBeCloseTo(1, 6);
+    expect(t0.clone().add(t1).multiplyScalar(0.5).distanceTo(at10)).toBeLessThan(1e-6);
+    expect(g.ends).toHaveLength(2);
+  });
+  it('行程線：校準倍率 ×2 時路徑一樣在以物件為半徑的圓上，角度還是 行程 ÷ 半徑（公尺）', () => {
+    const rig7 = compileRig([{ ...arc, pivot: { x: 0, y: 0, z: 5 } }], 2);
+    const g = travelGeometry(rig7.byId.get('a')!, v3(0, 0, -5), 1, []);
+    for (const p of g.path) expect(p.distanceTo(v3(0, 0, 5))).toBeCloseTo(10, 6);
+    const ang = (p: THREE.Vector3) => Math.atan2(p.x, -(p.z - 5));
+    expect(ang(g.path[g.path.length - 1]) - ang(g.path[0])).toBeCloseTo(60 / 20, 6);
+  });
+});

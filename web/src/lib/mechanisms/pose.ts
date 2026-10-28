@@ -11,6 +11,8 @@
 // 「B 零件」（用 mirror 的方向 / 轉軸中心）；其他的跟一般機關一樣，所以還原（basePoseFromScene）也剛好反過來。
 // 吊掛（v2 第 4 階段）：整組吊掛是鏈裡的一個「吊掛零件」，由它的每個吊點的高度算出一個姿勢（繞著吊點重心轉 + 往上平移，hoist.ts），
 // 一個姿勢套在整組的每個物件上；還原（basePoseFromScene）先扣掉平移、再反方向轉回來，剛好反過來。
+// 沿弧形軌道（0047，直線機關的 variant 'arc'）：值還是公尺（沿弧線量），物件繞圓心（pivot）轉 θ = 值 ÷ 半徑（弧度，半徑也是公尺，
+// 所以跟校準倍率無關）；跟旋轉機關走同一套「繞軸轉」的算法，面向也跟著轉，還原（basePoseFromScene）一樣剛好反過來。
 // 直線：公尺 → 場景單位（÷ 測距校準倍率，跟 numberField.metersToScene 一樣）；旋轉：度，轉軸中心是場景單位。
 // 角度不繞回：0 → 720° 就是轉兩圈（值是一個數字在等速變，不是兩個角度之間走近路）。
 
@@ -34,6 +36,8 @@ export interface RigMechanism {
   side?: 'b';
   /** 整組吊掛（它自己沒有位置，姿勢由每個吊點的高度算）；其他 = undefined */
   hoist?: HoistNode;
+  /** 沿弧形軌道（variant 'arc'）：軌道半徑（公尺）；只有直線且大於 0 才有，圓心 = pivot、轉軸 = axis；其他 = undefined（照一般直線 / 旋轉算） */
+  arcRadius?: number;
 }
 
 /** 整組吊掛的零件：吊點的解、每個吊點的機關（讀它的值）、上一次算的姿勢（高度沒變就不重算） */
@@ -64,7 +68,7 @@ export const EMPTY_RIG: CompiledRig = { mechanisms: [], byId: new Map(), mirrors
 const MAX_DEPTH = 4;
 
 type RigInput = Pick<Mechanism, 'id' | 'kind' | 'axis' | 'pivot' | 'defaultValue' | 'travelMin' | 'travelMax' | 'maxSpeed' | 'parentId' | 'objectIds'>
-  & Partial<Pick<Mechanism, 'name' | 'variant' | 'mirror' | 'objectSides' | 'rigId' | 'rigIndex' | 'attach'>>;
+  & Partial<Pick<Mechanism, 'name' | 'variant' | 'mirror' | 'objectSides' | 'rigId' | 'rigIndex' | 'attach' | 'arcRadius'>>;
 
 /** 定義或校準倍率變了才重算 */
 export function compileRig(mechs: RigInput[] | null | undefined, scaleCorrection: number): CompiledRig {
@@ -87,6 +91,8 @@ export function compileRig(mechs: RigInput[] | null | undefined, scaleCorrection
       defaultValue: m.defaultValue, travelMin: m.travelMin, travelMax: m.travelMax,
       maxSpeed: m.maxSpeed, parentId: m.parentId,
     };
+    // 沿弧形軌道：半徑 0 / 沒填 / 不是直線 → 照一般機關算（不會壞）
+    if (m.variant === 'arc' && m.kind === 'linear' && typeof m.arcRadius === 'number' && Number.isFinite(m.arcRadius) && m.arcRadius > 0) rm.arcRadius = m.arcRadius;
     byId.set(m.id, rm);
     list.push(rm);
     // 對開：B 邊零件（同一個 id、同一個位置，方向 / 轉軸中心用 mirror 的）
@@ -192,10 +198,11 @@ export function applyChain(
     if (m.hoist) { applyHoist(m.hoist, values, outPos, outQuat, false); continue; }
     const v = rigValue(m, values);
     if (v === 0) continue;
-    if (m.kind === 'linear') {
+    if (m.kind === 'linear' && m.arcRadius === undefined) {
       outPos.addScaledVector(m.axis, v * m.linearSceneScale);
     } else {
-      tq.setFromAxisAngle(m.axis, THREE.MathUtils.degToRad(v));
+      // 旋轉：值 = 度；沿弧形軌道：值 = 公尺，角度 = 值 ÷ 半徑（弧度）
+      tq.setFromAxisAngle(m.axis, m.arcRadius === undefined ? THREE.MathUtils.degToRad(v) : v / m.arcRadius);
       tv.subVectors(outPos, m.pivot).applyQuaternion(tq);
       outPos.copy(m.pivot).add(tv);
       outQuat.premultiply(tq);
@@ -216,10 +223,10 @@ export function basePoseFromScene(
     if (m.hoist) { applyHoist(m.hoist, values, outPos, outQuat, true); continue; }
     const v = rigValue(m, values);
     if (v === 0) continue;
-    if (m.kind === 'linear') {
+    if (m.kind === 'linear' && m.arcRadius === undefined) {
       outPos.addScaledVector(m.axis, -v * m.linearSceneScale);
     } else {
-      tq.setFromAxisAngle(m.axis, THREE.MathUtils.degToRad(-v));
+      tq.setFromAxisAngle(m.axis, m.arcRadius === undefined ? THREE.MathUtils.degToRad(-v) : -v / m.arcRadius);
       tv.subVectors(outPos, m.pivot).applyQuaternion(tq);
       outPos.copy(m.pivot).add(tv);
       outQuat.premultiply(tq);
@@ -232,7 +239,7 @@ export function basePoseFromScene(
 // ─────────────────────────────────────────────
 
 export interface TravelGeometry {
-  /** 行程的線（直線兩點；旋轉 = 圓弧上的點） */
+  /** 行程的線（直線兩點；旋轉 / 沿弧形軌道 = 圓弧上的點） */
   path: THREE.Vector3[];
   /** 常用位置的刻度（每個兩點） */
   ticks: [THREE.Vector3, THREE.Vector3][];
@@ -246,7 +253,7 @@ export interface TravelGeometry {
  */
 export function travelGeometry(m: RigMechanism, center: THREE.Vector3, size: number, presetValues: number[]): TravelGeometry {
   const tick = Math.max(size * 0.12, 0.05);
-  if (m.kind === 'linear') {
+  if (m.kind === 'linear' && m.arcRadius === undefined) {
     const at = (v: number) => center.clone().addScaledVector(m.axis, v * m.linearSceneScale);
     // 刻度方向：跟方向垂直的一個方向
     const side = new THREE.Vector3(0, 1, 0).cross(m.axis);
@@ -262,7 +269,10 @@ export function travelGeometry(m: RigMechanism, center: THREE.Vector3, size: num
       ends: [mark(m.travelMin, 2), mark(m.travelMax, 2)],
     };
   }
-  // 旋轉：在跟轉軸垂直、通過物件中心的平面上，以轉軸為圓心
+  // 旋轉 / 沿弧形軌道：在跟轉軸垂直、通過物件中心的平面上，以轉軸（圓心）為圓心
+  // toDeg：機關的值 → 圓上的角度（旋轉 = 度本身；弧形 = 公尺 ÷ 半徑 → 弧度 → 度）
+  const arcR = m.arcRadius;
+  const toDeg = arcR === undefined ? (v: number) => v : (v: number) => THREE.MathUtils.radToDeg(v / arcR);
   const rel = center.clone().sub(m.pivot);
   rel.addScaledVector(m.axis, -rel.dot(m.axis));
   if (rel.length() < size * 0.25) {
@@ -277,12 +287,13 @@ export function travelGeometry(m: RigMechanism, center: THREE.Vector3, size: num
     q.setFromAxisAngle(m.axis, THREE.MathUtils.degToRad(deg));
     return planeCenter.clone().add(rel.clone().multiplyScalar(scale).applyQuaternion(q));
   };
-  const span = Math.min(m.travelMax - m.travelMin, 360);
+  const startDeg = toDeg(m.travelMin);
+  const span = Math.min(toDeg(m.travelMax) - startDeg, 360);
   const steps = Math.max(8, Math.ceil(span / 5));
   const path: THREE.Vector3[] = [];
-  for (let i = 0; i <= steps; i++) path.push(at(m.travelMin + (span * i) / steps));
+  for (let i = 0; i <= steps; i++) path.push(at(startDeg + (span * i) / steps));
   const k = Math.min(tick / rel.length(), 0.3);
-  const mark = (deg: number, mul = 1): [THREE.Vector3, THREE.Vector3] => [at(deg, 1 - k * mul), at(deg, 1 + k * mul)];
+  const mark = (v: number, mul = 1): [THREE.Vector3, THREE.Vector3] => [at(toDeg(v), 1 - k * mul), at(toDeg(v), 1 + k * mul)];
   return {
     path,
     ticks: presetValues.map(v => mark(v)),
