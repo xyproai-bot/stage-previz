@@ -1994,7 +1994,7 @@ export default function ProjectEditor() {
                 stageObjects={stageObjects}
                 selectedObjectIds={selectedObjectIds}
                 scaleCorrection={view.scaleCorrection}
-                onStatesChanged={() => { void refreshCueStates(); }}
+                onStatesChanged={() => { void refreshCueStates(); void lookDraftRef.current?.loadBase(); }}
               />
             ) : rightTab === 'library' && libMode ? (
               <CueLibraryTab
@@ -2027,7 +2027,7 @@ export default function ProjectEditor() {
                     stageObjects={stageObjects}
                     selectedObjectIds={selectedObjectIds}
                     scaleCorrection={view.scaleCorrection}
-                    onStatesChanged={() => { void refreshCueStates(); }}
+                    onStatesChanged={() => { void refreshCueStates(); void lookDraftRef.current?.loadBase(); }}
                     library={{ label: libShown.label, name: libShown.name }}
                   />
                 ) : null}

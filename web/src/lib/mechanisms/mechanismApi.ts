@@ -384,6 +384,15 @@ export function convertCuePositions(projectId: string, mechId: string, dryRun: b
   return call(`${base(projectId)}/mechanisms/${enc(mechId)}/convert-cue-positions`, { method: 'POST', body: JSON.stringify({ dryRun }) });
 }
 
+/**
+ * 對開拆成兩個各自動的機關：A 邊留在原機關（id 不變）、B 邊變新機關，每個 cue 的位置和時間抄一份給 B（畫面不變）。
+ * 名字沒給 = 「原名 A」「原名 B」。拆完不能一鍵合回去。
+ */
+export async function unsplitMechanism(projectId: string, mechId: string, names: { nameA?: string; nameB?: string } = {}): Promise<{ a: Mechanism; b: Mechanism }> {
+  const d = await call<{ a: unknown; b: unknown }>(`${base(projectId)}/mechanisms/${enc(mechId)}/unsplit`, { method: 'POST', body: JSON.stringify(names) });
+  return { a: parseMechanism(d.a), b: parseMechanism(d.b) };
+}
+
 // ─── 分享連結（不用登入，只看正式 cue） ───
 
 function shareApiPath(ref: ShareRef): string {

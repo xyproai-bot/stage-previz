@@ -11,6 +11,13 @@ describe('describeActivity（最近活動的一句話）', () => {
     expect(describeActivity(e('create', 'mechanism', { name: '旋轉舞台' }))).toBe('新增機關「旋轉舞台」');
     expect(describeActivity(e('update', 'drive_file', {}))).toBe('修改 Drive 檔案');
   });
+  it('對開拆成兩個機關：寫原名和拆成哪兩個，沒有名字也不會出現 undefined', () => {
+    expect(describeActivity(e('update', 'mechanism', { unsplit: true, name: '側面 LED', nameA: '側面 LED A', nameB: '側面 LED B', bId: 'x', positions: 4, libraryPositions: 3 })))
+      .toBe('把對開機關「側面 LED」拆成兩個機關「側面 LED A」「側面 LED B」');
+    expect(describeActivity(e('update', 'mechanism', { unsplit: true }))).toBe('把對開機關拆成兩個機關');
+    // 一般的修改機關不受影響
+    expect(describeActivity(e('update', 'mechanism', { name: '升降台' }))).toBe('修改機關「升降台」');
+  });
   it('一排機關：一次建立、改共用設定、解散、刪除都是白話', () => {
     expect(describeActivity(e('bulk_create', 'mechanism', { name: 'LED 升降', count: 8 }))).toBe('一次建立 8 個機關「LED 升降」');
     expect(describeActivity(e('update', 'mechanism_group', { name: 'LED 升降', shared: true }))).toBe('修改一排機關「LED 升降」的共用設定');

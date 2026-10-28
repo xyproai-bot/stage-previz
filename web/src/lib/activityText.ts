@@ -149,6 +149,11 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
     const count = num(p.count);
     return count != null ? `重新排序 ${count} ${join("個", target)}` : join("重新排序", target);
   }
+  // 對開拆成兩個各自動的機關
+  if (type === 'mechanism' && action === 'update' && p.unsplit === true) {
+    const a = str(p.nameA), b = str(p.nameB);
+    return `把對開機關${quoted(name)}拆成兩個機關${a && b ? `${quoted(a)}${quoted(b)}` : ''}`;
+  }
   // 一排機關（機關 v2 第 3 階段）
   if (type === 'mechanism' && action === 'bulk_create') {
     const count = num(p.count);

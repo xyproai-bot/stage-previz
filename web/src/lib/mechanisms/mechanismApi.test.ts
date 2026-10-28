@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import {
   parseMechanism, parsePositions, listMechanisms, createMechanism, updateMechanism, setCuePosition,
   getShareSongPositions, getMechanismSheet, convertCuePositions, createMechanismBatch, updateMechanismGroup, deleteMechanismGroup,
-  setCuePositionsBulk, listMechanismsAndGroups,
+  setCuePositionsBulk, listMechanismsAndGroups, unsplitMechanism,
 } from './mechanismApi';
 
 const json = (status: number, body: unknown) =>
@@ -174,6 +174,27 @@ describe('呼叫後台', () => {
     // 沒有 variant（舊後台）→ 一般機關，直線的圓心一樣不理
     const old = parseMechanism({ id: 'm', kind: 'linear', pivot: { x: 1, y: 2, z: 3 }, arcRadius: 5 });
     expect([old.variant, old.arcRadius, old.pivot]).toEqual([null, null, null]);
+  });
+
+  it('對開拆成兩個機關：POST …/unsplit 帶兩個名字，回 { a, b }；後台的中文錯誤原樣丟出來', async () => {
+    const f = vi.fn(async () => json(200, {
+      a: { id: 'm', name: '門 A', kind: 'linear', objectIds: ['o1'] },
+      b: { id: 'mb', name: '門 B', kind: 'linear', axis: { x: 1, y: 0, z: 0 }, objectIds: ['o2'] },
+    }));
+    vi.stubGlobal('fetch', f);
+    const r = await unsplitMechanism('p 1', 'm/1', { nameA: '門 A', nameB: '門 B' });
+    expect([r.a.id, r.a.name, r.b.id, r.b.name, r.b.variant]).toEqual(['m', '門 A', 'mb', '門 B', null]);
+    expect(r.b.axis).toEqual({ x: 1, y: 0, z: 0 });
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://proxy.haimiaan.com/api/projects/p%201/mechanisms/m%2F1/unsplit');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ nameA: '門 A', nameB: '門 B' });
+    // 沒給名字 = 空物件（後台用「原名 A」「原名 B」）
+    await unsplitMechanism('p', 'm');
+    expect(JSON.parse(((f.mock.calls as unknown as [string, RequestInit][])[1][1]).body as string)).toEqual({});
+
+    vi.stubGlobal('fetch', vi.fn(async () => json(400, { error: '這個機關不是對開', field: 'variant' })));
+    await expect(unsplitMechanism('p', 'm')).rejects.toMatchObject({ status: 400, message: '這個機關不是對開' });
   });
 
   it('新增整組吊掛：POST 帶 variant 和 hoists', async () => {

@@ -20,6 +20,7 @@ import { toast } from '../../lib/toast';
 import { confirmDialog } from '../dialogs';
 import MechanismCueRow from './MechanismCueRow';
 import MechanismSetupForm from './MechanismSetupForm';
+import { askUnsplitNames } from './MechanismUnsplitDialog';
 import MechanismBatchForm from './MechanismBatchForm';
 import MechanismGroupForm from './MechanismGroupForm';
 import MechanismHoistForm from './MechanismHoistForm';
@@ -224,6 +225,24 @@ export default function MechanismTab({
     }
   }
 
+  /** 對開拆成兩個各自動的機關：先問（說明 + 兩個名字可以改），再一次拆好，重新讀機關清單和位置 */
+  async function unsplit(m: Mechanism) {
+    const names = await askUnsplitNames(m, mechanisms);
+    if (!names) return;
+    setBusy(true);
+    try {
+      await mapi.unsplitMechanism(projectId, m.id, names);
+      await Promise.all([mech.refreshDefs(), mech.refreshPositions()]);
+      onStatesChanged();
+      setEditingId(null);
+      toast.success('已拆成兩個機關');
+    } catch (e) {
+      toast.error('拆開失敗：' + msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** 清單上的一項（一個機關或一整排）上移 / 下移一格；一整排一起移，不會被拆開 */
   function move(index: number, dir: -1 | 1) {
     const ids = moveLayoutItem(layout, index, dir);
@@ -335,6 +354,7 @@ export default function MechanismTab({
       onCancel={() => setEditingId(null)}
       onDelete={m ? () => void remove(m) : undefined}
       onConvert={m && m.variant !== 'split' && m.variant !== 'arc' && m.cueCount === 0 && m.objectIds.length > 0 ? () => void convert(m) : undefined}
+      onUnsplit={m && m.variant === 'split' ? () => void unsplit(m) : undefined}
     />
   );
 

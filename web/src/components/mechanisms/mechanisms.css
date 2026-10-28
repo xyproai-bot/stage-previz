@@ -220,6 +220,11 @@
 }
 .mech-form__convert .btn { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px; }
 
+/* 「拆成兩個各自動的機關」確認框裡的內容（確認框在 App 最外層，樣式是全域的） */
+.mech-unsplit { display: flex; flex-direction: column; gap: 10px; white-space: normal; }
+.mech-unsplit p { margin: 0; }
+.mech-unsplit__sides { color: var(--text-muted); font-size: 12.5px; }
+
 /* 物件狀態分頁：這個物件在機關上 */
 .mech-object-hint {
   font-size: 11.5px;

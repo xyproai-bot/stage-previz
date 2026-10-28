@@ -1,7 +1,7 @@
 // 設定一個機關（新增 / 編輯）：直接展開在機關分頁裡（不是跳出視窗 → 3D 畫面照樣可以轉、可以 Shift 點物件）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArrowLeftRight, Bookmark, Crosshair, Layers, MoveRight, MoveVertical, Plus, RotateCw, Ruler, Search, Spline, Trash2, Wand2,
+  ArrowLeftRight, Bookmark, Crosshair, Layers, MoveRight, MoveVertical, Plus, RotateCw, Ruler, Search, Spline, Split, Trash2, Wand2,
 } from 'lucide-react';
 import Icon from '../Icon';
 import { confirmDialog } from '../dialogs';
@@ -36,6 +36,8 @@ export interface SetupFormProps {
   onDelete?: () => void;
   /** 把現有 cue 的位置轉成機關位置（只有編輯、還沒有 cue 設過位置、有帶物件的時候） */
   onConvert?: () => void;
+  /** 對開拆成兩個各自動的機關（只有編輯一個已經存好的對開機關時） */
+  onUnsplit?: () => void;
 }
 
 type Draft = {
@@ -116,7 +118,7 @@ function initialDraft(m: Mechanism | null, front: MechVec3, scale: number): Draf
 }
 
 export default function MechanismSetupForm({
-  editing, mechanisms, stageObjects, selectedObjectIds, scaleCorrection, front, groupCenter, groupBox, busy, onSave, onCancel, onDelete, onConvert,
+  editing, mechanisms, stageObjects, selectedObjectIds, scaleCorrection, front, groupCenter, groupBox, busy, onSave, onCancel, onDelete, onConvert, onUnsplit,
 }: SetupFormProps) {
   const [d, setD] = useState<Draft>(() => initialDraft(editing, front, scaleCorrection));
   // 進階（轉軸 / 轉軸中心）：自己設轉軸時展開；沿著邊緣翻時收起來（照外框自動算）
@@ -673,6 +675,12 @@ export default function MechanismSetupForm({
         <span className="grow" />
         {onDelete && <button type="button" className="btn btn--ghost btn--sm mech-danger" onClick={onDelete} disabled={busy}><Icon icon={Trash2} /> 刪除機關</button>}
       </div>
+      {onUnsplit && (
+        <div className="mech-form__convert">
+          <button type="button" className="btn btn--ghost btn--sm" onClick={onUnsplit} disabled={busy}><Icon icon={Split} /> 拆成兩個各自動的機關</button>
+          <small className="muted">A 邊、B 邊變成兩個機關，之後可以各自設位置（例：四片門各自獨立動）。每個 cue 現在的位置會原樣抄過去，畫面不會變；拆完不能一鍵合回去</small>
+        </div>
+      )}
       {onConvert && (
         <div className="mech-form__convert">
           <button type="button" className="btn btn--ghost btn--sm" onClick={onConvert} disabled={busy}><Icon icon={Wand2} /> 把現有 cue 的位置轉成機關位置</button>
