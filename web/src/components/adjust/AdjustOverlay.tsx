@@ -157,19 +157,21 @@ export default function AdjustOverlay({ store, hostRef, viewApiRef, sceneQueryRe
   if (!state.on) return null;
   return (
     <div className="adjust-overlay">
-      <div className="adjust-toolbar" role="toolbar" aria-label="調整舞台：看的角度">
-        <button type="button" onClick={() => fly('audience')} title="從觀眾席看舞台"><Icon icon={Armchair} /> 觀眾看</button>
-        <button type="button" onClick={() => fly('top')} title="從正上方往下看"><Icon icon={ArrowDownToLine} /> 正上方</button>
-        <button type="button" onClick={() => fly('side')} title="從側面看"><Icon icon={ArrowRightToLine} /> 側面</button>
-        <span className="adjust-toolbar__sep" aria-hidden="true" />
-        <button
-          type="button"
-          className={state.playing ? 'is-on' : undefined}
-          onClick={() => store.play()}
-          title="從上一個 cue 用轉場秒數走到現在的樣子，看一次怎麼動"
-        ><Icon icon={Play} /> 播轉場</button>
+      <div className="adjust-overlay__top">
+        <div className="adjust-toolbar" role="toolbar" aria-label="調整舞台：看的角度">
+          <button type="button" onClick={() => fly('audience')} title="從觀眾席看舞台"><Icon icon={Armchair} /> 觀眾看</button>
+          <button type="button" onClick={() => fly('top')} title="從正上方往下看"><Icon icon={ArrowDownToLine} /> 正上方</button>
+          <button type="button" onClick={() => fly('side')} title="從側面看"><Icon icon={ArrowRightToLine} /> 側面</button>
+          <span className="adjust-toolbar__sep" aria-hidden="true" />
+          <button
+            type="button"
+            className={state.playing ? 'is-on' : undefined}
+            onClick={() => store.play()}
+            title="從上一個 cue 用轉場秒數走到現在的樣子，看一次怎麼動"
+          ><Icon icon={Play} /> 播轉場</button>
+        </div>
+        <div className="adjust-hint">點物件選取 · 拖綠色把手調整 · 按住 Alt 不對齊 · 拖空白處轉視角</div>
       </div>
-      <div className="adjust-hint">點物件選取 · 拖綠色把手調整 · 按住 Alt 不對齊 · 拖空白處轉視角</div>
     </div>
   );
 }

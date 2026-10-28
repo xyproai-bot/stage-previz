@@ -205,16 +205,16 @@ function MechControl({ store, def, alt, sceneRef, front, sceneToMeters }: {
     ...(halves && halves.left.length && halves.right.length ? [{ key: 'left' as const, n: halves.left.length }, { key: 'right' as const, n: halves.right.length }] : []),
   ] : [];
   // 讀數
-  let readout: string | null = null;
+  const readout: string[] = [];
   if (def.kind === 'rotary' && Math.abs(def.axis.y) > 0.7) {
     const cue = store.cue();
     const prev = store.prevValue(def.id);
-    readout = spinFromPrevText({ prevName: cue?.prevName ?? null, prev, cur: v, axisY: def.axis.y });
-    if (Math.abs(v - prev) >= 90) readout += ` ${ADJUST_TEXT.playHint}`;
+    readout.push(spinFromPrevText({ prevName: cue?.prevName ?? null, prev, cur: v, axisY: def.axis.y }));
+    if (Math.abs(v - prev) >= 90) readout.push(ADJUST_TEXT.playHint);
   } else if (def.variant === 'arc' && def.pivot && def.arcRadius && def.arcRadius > 0) {
     const obj = store.objectFor(def.id);
     const c = obj ? sceneRef.current?.baseCenter(obj) : null;
-    if (c) readout = arcReadoutText(arcReadout({ pivot: def.pivot, axis: def.axis, radiusM: def.arcRadius, center: c, front: front(), sceneToMeters, value: v }));
+    if (c) readout.push(arcReadoutText(arcReadout({ pivot: def.pivot, axis: def.axis, radiusM: def.arcRadius, center: c, front: front(), sceneToMeters, value: v })));
   }
   return (
     <div className="adjust-ctl">
@@ -238,7 +238,7 @@ function MechControl({ store, def, alt, sceneRef, front, sceneToMeters }: {
       )}
       <ValueRow store={store} def={def} alt={alt} />
       {ids.length > 1 && <div className="adjust-ctl__readout">{togetherHint(ids.length)}</div>}
-      {readout && <div className="adjust-ctl__readout">{readout}</div>}
+      {readout.map(t => <div key={t} className="adjust-ctl__readout">{t}</div>)}
     </div>
   );
 }

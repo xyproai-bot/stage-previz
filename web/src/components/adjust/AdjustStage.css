@@ -8,16 +8,25 @@
   z-index: 6;
 }
 .adjust-overlay > * { pointer-events: auto; }
-.adjust-toolbar {
+.adjust-overlay__top {
   position: absolute;
   top: 60px;
   left: 10px;
+  max-width: calc(100% - 20px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  pointer-events: none;
+}
+.adjust-toolbar {
+  pointer-events: auto;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 4px;
   padding: 5px;
-  max-width: calc(100% - 20px);
+  max-width: 100%;
   background: rgba(20, 22, 27, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 10px;
@@ -42,14 +51,10 @@
 .adjust-toolbar button.is-on { background: var(--accent-dim); color: var(--accent); border-color: rgba(16, 199, 138, 0.4); }
 .adjust-toolbar__sep { width: 1px; height: 18px; background: rgba(255, 255, 255, 0.14); margin: 0 2px; }
 .adjust-hint {
-  position: absolute;
-  left: 12px;
-  bottom: 10px;
-  max-width: calc(100% - 24px);
+  padding-left: 4px;
   font-size: 11.5px;
   color: rgba(255, 255, 255, 0.62);
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
-  pointer-events: none !important;
 }
 
 /* ── 審片 / 調整舞台切換（上方那一排） ── */
