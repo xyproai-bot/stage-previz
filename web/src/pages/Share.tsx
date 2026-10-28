@@ -25,6 +25,8 @@ import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { toast } from '../lib/toast';
 import { cueTransitionSeconds } from '../lib/cueTiming';
+import { useStageFullscreen } from '../lib/useStageFullscreen';
+import { buildCueNav, buildSongNav } from '../lib/stageShow';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useShareMechanisms } from '../lib/mechanisms/useMechanisms';
 import { shareVersionFetcher, useSongVersions, type VersionFetcher } from '../lib/useSongVersions';
@@ -439,6 +441,9 @@ export default function Share() {
   const activeCommentId = versionVideoMode && allowComments ? playheadCommentId(guestRoots, local.time) : null;
   const openedComment = session.selectedId ? guestComments.find(c => c.id === session.selectedId) ?? null : null;
   const stageRef = useRef<HTMLDivElement>(null);
+  // 全螢幕預演（給客戶看的簡報畫面）：全螢幕套在 3D 舞台外面這一層，不是 3D 舞台自己——
+  // 換歌時 3D 舞台（key 是歌的 id）會整個重建，套在它身上的全螢幕會被瀏覽器退出；外層不會被換掉，所以換歌後還在全螢幕
+  const stageShowCtl = useStageFullscreen(stageRef, true);
   const openComment = useCallback((c: SongComment) => {
     void session.open(c);
     revealStage(stageRef.current);
@@ -609,6 +614,10 @@ export default function Share() {
                 stageShow={{
                   title: (() => { const s = data.songs.find(x => x.id === selectedSongId); return s ? songTitle(s) : undefined; })(),
                   transport: videoMode ? { playing: local.playing, time: local.time, duration: local.duration, onTogglePlay: local.togglePlay } : undefined,
+                  controller: stageShowCtl,
+                  // 連結只開放一首歌（restrictedToSongId）或只有一首 → 沒有換歌
+                  songNav: data.restrictedToSongId ? undefined : buildSongNav(data.songs.map(s => ({ id: s.id, label: songTitle(s) })), selectedSongId, setSelectedSongId),
+                  cueNav: buildCueNav(cuesSongId === selectedSongId ? cues : [], selectedCueId, cueStep),
                 }}
                 {...mech.sceneProps}
                 lookSettings={projectLook}

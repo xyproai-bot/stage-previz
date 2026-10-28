@@ -1,18 +1,42 @@
-/* 全螢幕預演（lib/useStageFullscreen.ts）：3D 舞台那一塊（.stage-scene）加上 is-show，除了畫面和小條，其他全部藏起來 */
+/* 全螢幕預演（lib/useStageFullscreen.ts）= 給客戶看的簡報畫面。
+   3D 舞台那一塊（.stage-scene）加上 is-show，只留：3D 畫面、物件名稱（工具列「名稱」，使用者自己開關）、浮水印、下方的小條。
+   其他（工具列和所有面板、留言圖釘、畫記、鎖頭、各種提示文字 / 徽章 / 說明、VR 按鈕…）一律不顯示。
+   以後 3D 舞台裡新增的任何浮層，預設就是藏起來（只有下面列的幾個例外會留著）。 */
 .stage-scene.is-show { background: #000; }
-.stage-scene.is-show > :not(canvas):not(.stage-show-bar):not(.wm-overlay) { display: none !important; }
+.stage-scene.is-show > :not(canvas):not(.stage-show-bar):not(.wm-overlay):not(.stage-scene__labels) { display: none !important; }
 .stage-scene.is-show.is-bar-hidden { cursor: none; }
+/* 物件名稱照使用者自己開的留著，但只剩名字：選到的綠底、改過的橘框、鎖頭都是工作用的標示，簡報畫面不要 */
+.stage-scene.is-show .stage-scene__label.is-selected,
+.stage-scene.is-show .stage-scene__label.has-override:not(.is-selected) {
+  background: rgba(0, 0, 0, 0.65);
+  color: var(--text);
+  font-weight: 400;
+  border-color: transparent;
+}
+.stage-scene.is-show .stage-scene__label .ui-icon { display: none; }
+
+/* 被拉成全螢幕的元素（data-stage-show-host，useStageFullscreen 貼的）。
+   導演頁、分享連結是把 3D 舞台外面那個不會被換掉的外層拉成全螢幕（換歌時 3D 舞台重建也不會退出全螢幕）：
+   外層裡 3D 舞台以外的東西（小播放器、比較版本的徽章…）全部藏起來 */
+[data-stage-show-host]:not(.stage-scene) { background: #000; }
+[data-stage-show-host]:not(.stage-scene) > :not(.stage-scene) { display: none !important; }
+[data-stage-show-host]:not(.stage-scene) > .stage-scene { width: 100%; height: 100%; }
 
 /* 瀏覽器不能全螢幕（iPhone Safari）：用 CSS 蓋滿整個視窗 */
-.stage-scene.is-show--css {
+[data-stage-show-host="css"] {
   position: fixed !important;
   inset: 0;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
+  margin: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  height: 100dvh !important;
+  flex: none !important;
+  order: 0 !important;
   z-index: 900;
 }
 html.stage-show-lock, html.stage-show-lock body { overflow: hidden; }
+/* 頁面上的提示（右下角的小通知…）在簡報畫面上也不出現 */
+html[data-stage-show="1"] .toast-container { display: none !important; }
 
 /* 小條：平常不顯示（沒有 is-visible），不佔位置、點不到 */
 .stage-show-bar {
@@ -21,13 +45,16 @@ html.stage-show-lock, html.stage-show-lock body { overflow: hidden; }
   bottom: max(18px, env(safe-area-inset-bottom));
   transform: translateX(-50%) translateY(8px);
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  gap: 6px 12px;
+  width: max-content;
   max-width: calc(100% - 32px);
-  padding: 6px 8px 6px 10px;
+  padding: 6px 8px;
   background: rgba(14, 16, 20, 0.62);
   border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 999px;
+  border-radius: 26px;
   backdrop-filter: blur(10px);
   color: var(--text, #e8eaed);
   font-size: 13px;
@@ -41,6 +68,13 @@ html.stage-show-lock, html.stage-show-lock body { overflow: hidden; }
   transform: translateX(-50%);
   pointer-events: auto;
 }
+/* 同一組的按鈕（換歌、播放、換 cue）挨在一起，換行的時候不拆開 */
+.stage-show-bar__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
 .stage-show-bar__time { font-variant-numeric: tabular-nums; color: var(--text-muted, #aab); white-space: nowrap; }
 .stage-show-bar__title {
   min-width: 0;
@@ -50,15 +84,38 @@ html.stage-show-lock, html.stage-show-lock body { overflow: hidden; }
   white-space: nowrap;
   font-weight: 600;
 }
-.stage-show-bar__btn,
-.stage-show-bar__exit {
+.stage-show-bar__cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 22ch;
+}
+.stage-show-bar__cue-num {
+  flex: none;
+  min-width: 22px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.stage-show-bar__cue-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-show-bar__btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 6px;
   min-width: 40px;
   min-height: 40px;
-  padding: 0 12px;
+  padding: 0;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid transparent;
   border-radius: 999px;
@@ -67,11 +124,54 @@ html.stage-show-lock, html.stage-show-lock body { overflow: hidden; }
   cursor: pointer;
   white-space: nowrap;
 }
-.stage-show-bar__btn { padding: 0; }
-.stage-show-bar__btn:hover,
-.stage-show-bar__exit:hover { background: rgba(255, 255, 255, 0.18); }
-/* 手機窄螢幕：歌名縮短，放得下播放鈕、時間、離開 */
-@media (max-width: 480px) {
-  .stage-show-bar { gap: 8px; }
-  .stage-show-bar__title { max-width: 12ch; }
+.stage-show-bar__btn--wide { padding: 0 12px; }
+.stage-show-bar__btn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.18); }
+.stage-show-bar__btn.is-active { background: rgba(255, 255, 255, 0.26); }
+.stage-show-bar__btn:disabled { opacity: 0.35; cursor: default; }
+.stage-show-bar__btn:focus-visible { outline: 2px solid var(--accent, #10c78a); outline-offset: 1px; }
+
+/* 視角選單：開在小條上方，跟小條一樣置中；只能點了切換，不能存 / 改 / 刪 */
+.stage-show-bar__menu {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(50vh, 320px);
+  overflow-y: auto;
+  padding: 8px 10px 10px;
+  background: rgba(14, 16, 20, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  text-align: left;
+}
+.stage-show-bar__menu-group + .stage-show-bar__menu-group { margin-top: 8px; }
+.stage-show-bar__menu-title { margin-bottom: 4px; font-size: 11.5px; color: var(--text-muted, #aab); }
+.stage-show-bar__menu-items { display: flex; flex-wrap: wrap; gap: 6px; }
+.stage-show-bar__menu-item {
+  max-width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.stage-show-bar__menu-item:hover { background: rgba(255, 255, 255, 0.2); }
+.stage-show-bar__menu-item:focus-visible { outline: 2px solid var(--accent, #10c78a); outline-offset: 1px; }
+
+/* 手機窄螢幕：按鈕只留圖示、歌名 / cue 名縮短，一排放不下就換成兩排 */
+@media (max-width: 640px) {
+  .stage-show-bar { gap: 6px 8px; padding: 6px; }
+  .stage-show-bar__label { display: none; }
+  .stage-show-bar__btn--wide { padding: 0; }
+  .stage-show-bar__title { max-width: 14ch; }
+  .stage-show-bar__cue { max-width: 12ch; }
 }

@@ -73,7 +73,7 @@ import type { CameraBookmark } from '../lib/cameraBookmarks';
 import { Maximize, Axis3d } from 'lucide-react';
 import StageShowBar from './StageShowBar';
 import { useStageFullscreen } from '../lib/useStageFullscreen';
-import { isStageShowActive, type StageShowInfo } from '../lib/stageShow';
+import { isStageShowActive, type StageShowInfo, type StageShowViewGroup } from '../lib/stageShow';
 import { toast } from '../lib/toast';
 import StageToolbar, { type ToolDef, type ToolMenuEntry, type ToolMenuSection } from './StageToolbar';
 import WatermarkOverlay from './WatermarkOverlay';
@@ -180,7 +180,10 @@ interface Props {
   onAddAnchoredComment?: (anchor: import('../lib/api').CommentAnchor) => void;
   /** 有給（專案 id）才有工具列的「視角」：常用看台視角 + 專案共用的視角書籤；不傳則停用功能 */
   bookmarkScope?: string;
-  /** 有給才有「全螢幕預演」（F 或工具列）：3D 舞台佔滿整個螢幕、操作介面全藏起來，小條上有播放 / 時間 / 歌名 / 離開（lib/stageShow.ts） */
+  /**
+   * 有給才有「全螢幕預演」（F 或工具列）：給客戶看的簡報畫面——3D 舞台佔滿整個螢幕、操作介面和各種提示全藏起來，
+   * 只留下方的小條（上一首 / 下一首歌、播放 / 時間、上一個 / 下一個 cue、視角、離開；lib/stageShow.ts）
+   */
   stageShow?: StageShowInfo;
   /** 專案共用的視角書籤（lib/cameraBookmarks.ts；每個人都能點了飛過去） */
   cameraBookmarks?: CameraBookmark[];
@@ -363,8 +366,12 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   /** 錄影中固定的畫面大小（null = 跟視窗一樣大） */
   const recordSizeRef = useRef<{ width: number; height: number } | null>(null);
   const applyQualityRef = useRef<(() => void) | null>(null);
-  // 全螢幕預演：3D 舞台這一塊拉滿整個螢幕；預演中一律唯讀（不選物件、不拖 gizmo）
-  const show = useStageFullscreen(containerRef, !!stageShow);
+  // 全螢幕預演：預設是 3D 舞台這一塊拉滿整個螢幕；頁面有給 stageShow.controller（換歌時 3D 舞台會整個重建的導演頁、分享連結）
+  // 就用頁面自己的（全螢幕套在不會被換掉的外層）。預演中一律唯讀（不選物件、不拖 gizmo）
+  const ownShow = useStageFullscreen(containerRef, !!stageShow && !stageShow.controller);
+  const show = stageShow?.controller ?? ownShow;
+  const showActiveRef = useRef(show.active);
+  showActiveRef.current = show.active;
   const readOnly = readOnlyProp || viewer || show.active;
   const viewerRef = useRef(viewer);
   viewerRef.current = viewer;
@@ -665,6 +672,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     setMeasureMode(false);
     setAddPinMode(false);
     setSelectedPropId(null);
+    // 量到一半的測距線也收掉（畫在 3D 裡面，不是 DOM，CSS 藏不到）
+    measurePointsRef.current = [];
+    setMeasureDistance(null);
+    if (measureLineRef.current) (measureLineRef.current.geometry as THREE.BufferGeometry).setFromPoints([]);
   }, [show.active]);
   function loadBookmark(bm: CameraBookmark) {
     flyCamera(new THREE.Vector3(...bm.position), new THREE.Vector3(...bm.target), bm.fov);
@@ -1983,6 +1994,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   useEffect(() => {
     const scene = sceneRef.current;
     if (!scene) return;
+    if (show.active) return;  // 全螢幕預演（簡報畫面）不畫這條工作用的線
     const focusedDef = focusedMechanismId ? (mechanisms || []).find(x => x.id === focusedMechanismId) : undefined;
     // 吊掛：點到整組 = 畫每個吊點的行程；點到一個吊點 = 畫那一個（都從吊點在物件上的位置往上畫）
     const hoistDefs = focusedDef?.variant === 'hoist_rig' ? hoistsOfRig(mechanisms || [], focusedDef.id)
@@ -2035,7 +2047,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       tickMat.dispose();
       if (travelRef.current?.group === group) travelRef.current = null;
     };
-  }, [focusedMechanismId, rig, mechanisms, states, modelVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [focusedMechanismId, rig, mechanisms, states, modelVersion, show.active]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── 選取外框：選到的物件框一個亮綠色方框（穿過別的東西也看得到），唯讀模式不畫 ──
   useEffect(() => {
@@ -2241,6 +2253,11 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     floorReflRef.current?.setSettings(look.floorReflection, look.reflectionSharpness);
     floorReflRef.current?.setEnabled(live && qualityRef.current.reflectionScale > 0);
   }, [renderMode, lookSettings]);
+  // 全螢幕預演（簡報畫面）：原點的紅綠藍座標軸是工作用的，不畫（地板格線是畫面的一部分，照舊）
+  useEffect(() => {
+    const h = helpersRef.current;
+    if (h) h.axes.visible = renderMode !== 'live' && !show.active;
+  }, [renderMode, show.active]);
 
   // 切現場 / 快速：要畫的東西不一樣了 → 前 3 秒（編 shader）不算，之前判定太重的等級可以再試
   useEffect(() => {
@@ -3174,7 +3191,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         return hit ? { fig: hit.object as THREE.Sprite, distance: hit.distance } : null;
       };
       const propAt = (e: PointerEvent): { id: string; distance: number; handle: boolean } | null => {
-        if (!scalePartsRef.current.props || !onStagePropsChangeRef.current) return null;
+        // 全螢幕預演（給客戶看）時不能抓：不小心拖到會改到全專案共用的擺放
+        if (!scalePartsRef.current.props || !onStagePropsChangeRef.current || showActiveRef.current) return null;
         aim(e.clientX, e.clientY);
         const h = selectedPropRef.current ? layer.pickHandle(ray) : null;   // 圈圈上的轉動把手優先
         if (h) return { ...h, handle: true };
@@ -3657,12 +3675,27 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   };
 
   // 「全螢幕預演」：頁面有給 stageShow 才有（F 也一樣）
-  const showTitle = '全螢幕預演（按 F）：3D 舞台佔滿整個螢幕、藏起所有操作介面；滑鼠一動會出現播放和離開';
+  const showTitle = '全螢幕預演（按 F）：給別人看的乾淨畫面，操作介面和各種提示都藏起來；滑鼠一動會出現下方的小條（換歌、播放、換 cue、視角、離開）';
   const showTool: ToolDef = {
     id: 'show', group: 'show', priority: 5,
     render: (l) => toolBtn({ icon: Maximize, label: '全螢幕預演', title: showTitle, labeled: l, onClick: show.enter }),
     menu: { icon: Maximize, label: '全螢幕預演', shortcut: 'F', hint: showTitle, onSelect: show.enter },
   };
+
+  // 全螢幕預演小條的「視角」選單：常用看台視角 + 專案存的視角，只能點了切換（存 / 改 / 刪在工具列的「視角」面板）
+  const showViews: StageShowViewGroup[] | undefined = show.active && stageShow && bookmarkScope ? [
+    {
+      title: '常用看台視角',
+      items: CAMERA_PRESETS.map(p => ({
+        id: p.id, label: p.label, hint: p.hint,
+        onSelect: () => { const v = computePresetViewHelper(p.id); if (v) flyCamera(v.position, v.target, DEFAULT_FOV); },
+      })),
+    },
+    {
+      title: `專案的視角${cameraBookmarks.length > 0 ? `（${cameraBookmarks.length}）` : ''}`,
+      items: cameraBookmarks.map(bm => ({ id: bm.id, label: bm.name, onSelect: () => loadBookmark(bm) })),
+    },
+  ] : undefined;
 
   const tools: ToolDef[] = [];
   if (!readOnly) {
@@ -3880,7 +3913,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
 
   return (
     <div
-      className={'stage-scene' + (show.active ? ' is-show' + (show.mode === 'css' ? ' is-show--css' : '') + (show.barVisible ? '' : ' is-bar-hidden') : '')}
+      className={'stage-scene' + (show.active ? ' is-show' + (show.barVisible ? '' : ' is-bar-hidden') : '')}
       ref={containerRef}
     >
       <StageToolbar
@@ -4169,7 +4202,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       )}
       {/* 全螢幕預演的小條（滑鼠一動出現 2.5 秒） */}
       {stageShow && show.active && (
-        <StageShowBar visible={show.barVisible} info={stageShow} fallbackTitle={cueName ?? projectName} onExit={show.exit} />
+        <StageShowBar visible={show.barVisible} info={stageShow} fallbackTitle={cueName ?? projectName} views={showViews} onHold={show.holdBar} onExit={show.exit} />
       )}
       {/* 選到哪個物件：名字寫在左下角（只有手把看不出選到誰） */}
       {!readOnly && selectedObjectIds.length > 0 && (

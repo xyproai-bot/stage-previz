@@ -50,6 +50,8 @@ import { canEditStageProps } from '../lib/stageProps';
 import { useCameraBookmarks } from '../lib/useCameraBookmarks';
 import { canEditCameraBookmarks } from '../lib/cameraBookmarks';
 import { cueTransitionSeconds } from '../lib/cueTiming';
+import { useStageFullscreen } from '../lib/useStageFullscreen';
+import { buildCueNav, buildSongNav } from '../lib/stageShow';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
@@ -972,6 +974,9 @@ function SongDetail({
 
   // 打開一則留言：換版本、跳到那一格、攝影機飛過去、疊上畫記、區段循環；清單捲過去閃一下
   const stageRef = useRef<HTMLDivElement>(null);
+  // 全螢幕預演（給藝人 / 客戶看的簡報畫面）：全螢幕套在 3D 舞台外面這一層，不是 3D 舞台自己——
+  // 換歌時 3D 舞台（key 是歌的 id）會整個重建，套在它身上的全螢幕會被瀏覽器退出；外層不會被換掉，所以換歌後還在全螢幕
+  const stageShowCtl = useStageFullscreen(stageRef, true);
   const openComment = useCallback((c: SongComment) => {
     void session.open(c);
     // 手機：留言面板收下去，才看得到跳過去的那一格、3D 視角和畫記
@@ -1155,6 +1160,9 @@ function SongDetail({
                 stageShow={{
                   title: songTitle(song),
                   transport: videoMode ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay } : undefined,
+                  controller: stageShowCtl,
+                  songNav: buildSongNav(songs.map(s => ({ id: s.id, label: songTitle(s) })), song.id, onPickSong),
+                  cueNav: buildCueNav(cuesReady ? cues : EMPTY_CUES, selectedCueId, cueStep),
                 }}
                 {...mech.sceneProps}
                 lookSettings={personalLook.effective}

@@ -1,6 +1,10 @@
-// 全螢幕預演：把 3D 舞台那一塊（containerRef）拉到整個螢幕、藏起所有操作介面。規則（純函式）在 stageShow.ts。
+// 全螢幕預演：把 containerRef 那一塊拉到整個螢幕、藏起所有操作介面。規則（純函式）在 stageShow.ts。
 //
-//   - 瀏覽器有 Fullscreen API 就用它；沒有（iPhone Safari）或被擋掉，改用 CSS 蓋滿整個視窗（.stage-scene.is-show--css）
+//   - 平常 containerRef 就是 3D 舞台自己（StageScene 裡面呼叫）。導演頁、分享連結會自己呼叫一份，containerRef 給 3D 舞台外面
+//     那個不會被換掉的外層，再用 stageShow.controller 交給 StageScene：換歌時 3D 舞台整個重建，被拉成全螢幕的外層還在，
+//     瀏覽器就不會退出全螢幕（也不用再要一次全螢幕——那得在使用者操作裡呼叫，換歌後已經不是了）
+//   - 被拉成全螢幕的那個元素會貼上 data-stage-show-host="api|css"（StageShow.css 靠它排版、藏掉外層裡 3D 舞台以外的東西）
+//   - 瀏覽器有 Fullscreen API 就用它；沒有（iPhone Safari）或被擋掉，改用 CSS 蓋滿整個視窗（data-stage-show-host="css"）
 //   - F 進入 / 離開；Esc 離開（真的全螢幕時瀏覽器自己處理 Esc，我們靠 fullscreenchange 知道）
 //   - 滑鼠一動或手指一點，小條出現 2.5 秒
 //   - 影片、AE 即時照樣在播（影片元素本來就放在頁面上，這裡不動它）
@@ -9,7 +13,8 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 import {
-  chooseFullscreenMode, isStageShowActive, markStageShow, SHOW_BAR_HIDE_MS, showKeyAction,
+  chooseFullscreenMode, isStageShowActive, markStageShow, SHOW_BAR_HIDE_MS, showKeyAction, STAGE_SHOW_HOST_ATTR,
+  type StageFullscreen,
 } from './stageShow';
 
 type FsElement = HTMLElement & {
@@ -20,17 +25,7 @@ type FsDocument = Document & {
   webkitExitFullscreen?: () => Promise<void> | void;
 };
 
-export interface StageFullscreen {
-  /** 現在是不是全螢幕預演 */
-  active: boolean;
-  /** 'api' = 真的全螢幕；'css' = 用 CSS 蓋滿視窗 */
-  mode: 'api' | 'css' | null;
-  /** 小條現在要不要顯示 */
-  barVisible: boolean;
-  enter: () => void;
-  exit: () => void;
-  toggle: () => void;
-}
+export type { StageFullscreen };
 
 const CSS_LOCK_CLASS = 'stage-show-lock';
 /** 要求全螢幕之後，等多久還沒進去就改用 CSS 蓋滿 */
@@ -47,14 +42,21 @@ export function useStageFullscreen(containerRef: RefObject<HTMLElement | null>, 
   const [mode, setMode] = useState<'api' | 'css' | null>(null);
   const modeRef = useRef<'api' | 'css' | null>(null);
   modeRef.current = mode;
-  const [barVisible, setBarVisible] = useState(false);
+  const [timerOn, setTimerOn] = useState(false);
+  // 小條上有東西開著（視角選單）或滑鼠停在小條上：小條不收
+  const [held, setHeld] = useState(false);
   const barTimer = useRef<number | null>(null);
 
   const poke = useCallback(() => {
-    setBarVisible(true);
+    setTimerOn(true);
     if (barTimer.current !== null) window.clearTimeout(barTimer.current);
-    barTimer.current = window.setTimeout(() => { barTimer.current = null; setBarVisible(false); }, SHOW_BAR_HIDE_MS);
+    barTimer.current = window.setTimeout(() => { barTimer.current = null; setTimerOn(false); }, SHOW_BAR_HIDE_MS);
   }, []);
+
+  const holdBar = useCallback((on: boolean) => {
+    setHeld(on);
+    if (!on && modeRef.current !== null) poke();  // 放開之後再留 2.5 秒
+  }, [poke]);
 
   const fsElement = useCallback((): Element | null => {
     const d = document as FsDocument;
@@ -135,9 +137,10 @@ export function useStageFullscreen(containerRef: RefObject<HTMLElement | null>, 
   // 預演中：標記、CSS 模式鎖住頁面捲動、滑鼠 / 手指一動就叫出小條
   const active = mode !== null;
   useEffect(() => {
-    if (!active) return;
+    if (!active || !mode) return;
     const el = containerRef.current;
     markStageShow(document, true);
+    el?.setAttribute(STAGE_SHOW_HOST_ATTR, mode);
     if (mode === 'css') document.documentElement.classList.add(CSS_LOCK_CLASS);
     poke();
     el?.addEventListener('pointermove', poke);
@@ -146,7 +149,9 @@ export function useStageFullscreen(containerRef: RefObject<HTMLElement | null>, 
       el?.removeEventListener('pointermove', poke);
       el?.removeEventListener('pointerdown', poke);
       if (barTimer.current !== null) { window.clearTimeout(barTimer.current); barTimer.current = null; }
-      setBarVisible(false);
+      setTimerOn(false);
+      setHeld(false);
+      el?.removeAttribute(STAGE_SHOW_HOST_ATTR);
       markStageShow(document, false);
       document.documentElement.classList.remove(CSS_LOCK_CLASS);
     };
@@ -159,9 +164,10 @@ export function useStageFullscreen(containerRef: RefObject<HTMLElement | null>, 
       const d = document as FsDocument;
       try { void (d.exitFullscreen ? d.exitFullscreen() : d.webkitExitFullscreen?.()); } catch { /* 算了 */ }
     }
+    containerRef.current?.removeAttribute(STAGE_SHOW_HOST_ATTR);
     markStageShow(document, false);
     document.documentElement.classList.remove(CSS_LOCK_CLASS);
-  }, [fsElement]);
+  }, [fsElement, containerRef]);
 
-  return { active, mode, barVisible, enter, exit, toggle };
+  return { active, mode, barVisible: timerOn || held, enter, exit, toggle, holdBar };
 }
