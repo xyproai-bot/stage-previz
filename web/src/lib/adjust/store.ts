@@ -210,6 +210,8 @@ export class AdjustStore {
     if (linked) delete unlinked[rigId]; else unlinked[rigId] = true;
     this.set({ unlinked });
   }
+  /** 這一排的左半 / 右半（分不出來 → null） */
+  halvesOf(groupId: string): Halves | null { return this.halvesFn(groupId); }
   isLinked(rigId: string): boolean {
     return !this.state.unlinked[rigId];
   }
