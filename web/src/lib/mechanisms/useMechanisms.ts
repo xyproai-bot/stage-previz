@@ -142,7 +142,15 @@ export function useStageMechanisms(o: {
   const sceneProps: MechanismSceneProps = useMemo(() => ({
     mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame, mechanismTimings: pb.selectedTimings,
   }), [mechanisms, pb.targets, pb.mechanismAtFrame, pb.selectedTimings]);
-  return { mechanisms, sceneProps, timeline: pb.timeline };
+  // 調整舞台用：是不是 Cue 庫模式、某個 cue 的機關值（播轉場從上一個 cue 走過來）、每個 cue 自己設的時間
+  const { resolved, timings } = pb;
+  const valuesForCue = useCallback((cueId: string): MechanismValues | null => {
+    const row = resolved.get(cueId);
+    return row ? valuesOf(row) : null;
+  }, [resolved]);
+  const timingsForCue = useCallback((cueId: string): MechanismTimings => timings.get(cueId) ?? EMPTY_TIMINGS, [timings]);
+  const mode = positions && positions.songId === songId ? positions.mode : null;
+  return { mechanisms, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue };
 }
 
 const EMPTY_POSITIONS: CueMechanismPosition[] = [];
