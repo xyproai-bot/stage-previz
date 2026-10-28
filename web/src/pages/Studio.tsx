@@ -1238,6 +1238,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                   onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
                   stageProps={band.stageProps}
                   onStagePropsChange={band.onStagePropsChange}
+                  stagePropsHistory={band.history}
                   cameraBookmarks={camBm.bookmarks}
                   onCameraBookmarksChange={camBm.onChange}
                   stageShow={{

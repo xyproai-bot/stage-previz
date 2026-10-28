@@ -74,3 +74,11 @@
 .sp-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(86px, 1fr)); gap: 4px; }
 .sp-chip { justify-content: center; white-space: nowrap; }
 .sp-hint { margin: 6px 0 4px; color: var(--text-muted); line-height: 1.5; }
+/* 復原：勾選框下面一行，右邊寫還能退幾步 */
+.sp-undo { display: flex; align-items: center; gap: 8px; margin: 6px 0 2px; }
+.sp-undo small { color: var(--text-muted); }
+/* 一次清掉：三顆，窄的時候換行 */
+.sp-clear { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--border); }
+.sp-clear__row { display: flex; flex-wrap: wrap; gap: 4px; }
+.sp-clear__btn small { margin-left: 2px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.sp-clear__btn:disabled { opacity: 0.45; }

@@ -1888,6 +1888,7 @@ export default function ProjectEditor() {
               onScaleCorrectionChange={view.canEdit ? view.setScaleCorrection : undefined}
               stageProps={band.stageProps}
               onStagePropsChange={band.onStagePropsChange}
+              stagePropsHistory={band.history}
               cameraBookmarks={camBm.bookmarks}
               onCameraBookmarksChange={camBm.onChange}
               stageShow={{ title: selectedSong ? songTitle(selectedSong) : undefined }}

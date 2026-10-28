@@ -27,6 +27,8 @@ import {
   riserTopAt, sanitizeStagePropItem, stagePropSpec, type StagePropItem, type StagePropType,
 } from '../lib/stageProps';
 import { createStagePropsLayer } from '../lib/stagePropsScene';
+import { countInScope } from '../lib/stagePropsHistory';
+import type { StagePropsHistory } from '../lib/useStageProps';
 import ScalePropsPanel, { type ScalePart } from './ScalePropsPanel';
 import { createFadeWarmup, endObjectFade, getObjectOpacity, setObjectOpacity, suspendObjectFade, type FadeWarmup } from '../lib/stageLook/objectFade';
 import type { HomeView } from '../lib/homeView';
@@ -213,6 +215,8 @@ interface Props {
   stageProps?: StagePropItem[];
   /** 有傳才能新增 / 拖動 / 轉 / 刪除 — 只有製作、導演；沒傳 = 只能看 */
   onStagePropsChange?: (next: StagePropItem[]) => void;
+  /** 比例尺面板的「復原」和「一次清掉」（lib/useStageProps.ts 的 history）；跟 onStagePropsChange 一起給，沒給 = 面板沒有這兩個 */
+  stagePropsHistory?: StagePropsHistory;
   /** 現場模式設定（專案預設 + 自己調過的）；沒傳用預設 */
   lookSettings?: LookSettings;
   /** 有傳才顯示「🎚 設定」面板（每個人都可以調自己的） */
@@ -359,7 +363,7 @@ type Mode = 'translate' | 'rotate';
 
 const DEFAULT_FOV = 50;
 
-export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledTimeline = null, ledTimelineSec = 0, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledOffPieces, ledMapMenu = true, hideDownloads = false, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
+export default function StageScene({ states, stageObjects, selectedObjectIds, onSelect, onTransform, cueName, modelUrl, readOnly: readOnlyProp = false, defaultRenderMode, enableNdi = false, ndiUrl, onNdiStatus, onNdiFrameSize, ndiGuide: showNdiGuide = false, ndiGuideHint, crossfadeSeconds = 0, cueKey, showScaleButton = true, snapshotApiRef, comments, onCommentPinClick, onAddAnchoredComment, bookmarkScope, stageShow, cameraBookmarks = NO_CAMERA_BOOKMARKS, onCameraBookmarksChange, scaleCorrection = 1, onScaleCorrectionChange, stageProps = NO_STAGE_PROPS, onStagePropsChange, stagePropsHistory, lookSettings = DEFAULT_LOOK_SETTINGS, onLookSettingsChange, lookCustomized = false, onLookReset, onLookSaveAsDefault, materialOverrides, onMaterialOverrideChange, homeView = null, onHomeViewChange, ledVideo, ledImage, ledTemplate = null, ledTimeline = null, ledTimelineSec = 0, ledPreviewCanvas = null, ledPreviewVersion = 0, poseAtFrame, toolbarMode = 'full', mechanisms, mechanismTargets, mechanismAtFrame, mechanismTimings, mechanismFrameAlways = false, mechanismMotion = 'transition', sceneQueryRef, focusedMechanismId = null, projectName, ledCanvas = null, onLedCanvasChange, ledUvPreview = null, ledOffPieces, ledMapMenu = true, hideDownloads = false, ledSongTemplate = null, helpHref, viewApiRef, transportKeys = false, children }: Props) {
   // 只看模式（動畫師）：工具列只剩 🎥、一律唯讀
   const viewer = toolbarMode === 'viewer';
   const containerRef = useRef<HTMLDivElement>(null);
@@ -3936,6 +3940,10 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             onAdd={(t) => propsHostRef.current?.add(t)}
             onRotate={rotateSelectedProp}
             onDelete={deleteSelectedProp}
+            undoDepth={stagePropsHistory?.undoDepth ?? 0}
+            onUndo={stagePropsHistory?.undo}
+            onClear={stagePropsHistory?.clear}
+            counts={{ all: stageProps.length, person: countInScope(stageProps, 'person'), gear: countInScope(stageProps, 'gear') }}
             onClose={() => setScalePanelOpen(false)}
             onTurnOff={() => setShowScaleRef(false)}
           />
