@@ -1699,7 +1699,7 @@ function AnimatorChapter() {
         <ul className="help-list">
           <li>① <strong>歌曲</strong>：「<Ui>我的</Ui>」= 指派給你的歌，「<Ui>全部</Ui>」= 整個專案。歌名旁邊的小圓點是狀態，「有新版」= 導演還沒看過的版本，留言圖示的數字 = 新留言。</li>
           <li>② <strong>LED 畫面來源</strong>：影片 / AE 即時 / 本地檔案（下一段）。</li>
-          <li>③ <strong>這首歌的影片</strong>：V2、V1…和「<Ui>＋ 加影片</Ui>」。</li>
+          <li>③ <strong>這首歌的影片</strong>：V2、V1…和「<Ui>＋ 加影片</Ui>」。放影片的時候旁邊有「<Ui>錄成影片</Ui>」：把 3D 舞台和 LED 上的影片播一遍錄成影片檔（選畫質、範圍、視角），可以直接傳給導演；AE 即時不能錄。</li>
           <li>④ <strong>小播放器</strong>：播放、暫停、拉時間、循環、聲音、比較。按住上面那條可以拖到別的地方，右上角可以收起來。</li>
           <li>⑤ <strong>cue 列</strong>：點一個 cue 看那個舞台畫面（有放影片的話，影片跳到那個 cue 的時間）。</li>
           <li>⑥ 右邊：<strong>Cue</strong> 清單、<strong>審查 / 留言</strong>、<strong>活動</strong>（專案最近的修改）。</li>

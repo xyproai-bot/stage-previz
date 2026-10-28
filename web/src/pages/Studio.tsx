@@ -1207,6 +1207,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 newVersion={source === 'version' ? newVersion : null}
                 ledCanvas={view.ledCanvas}
                 songTemplate={songTplPlan}
+                extra={videoMode ? recordButton('vbar__btn', true) : undefined}
               />
               <div className="studio-stage__scene" ref={stageRef}>
                 <StageScene
