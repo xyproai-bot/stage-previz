@@ -444,7 +444,12 @@ function PreviewInner({ projectId }: { projectId: string }) {
   return (
     <div className="preview">
       <header className="preview-top">
-        <button className="preview-top__back" onClick={() => navigate('/preview')} title="所有專案" aria-label="所有專案"><Icon icon={ArrowLeft} size="md" /></button>
+        {/* 看一首歌時，最上面的返回只回總覽（10-29 用戶：常常誤按這顆、一下跳出整個專案）；在總覽才回所有專案 */}
+        {selectedSongId ? (
+          <button className="preview-top__back" onClick={() => setSelectedSongId(null)} title="回總覽" aria-label="回總覽"><Icon icon={ArrowLeft} size="md" /></button>
+        ) : (
+          <button className="preview-top__back" onClick={() => navigate('/preview')} title="所有專案" aria-label="所有專案"><Icon icon={ArrowLeft} size="md" /></button>
+        )}
         <span className="preview-top__role">導演</span>
         <span className="preview-top__project" title={projectName || undefined}>
           {projectName ? <span className="preview-top__name">{projectName}</span> : (nameStatus === 'error' && !goneMessage ? (
@@ -1129,7 +1134,6 @@ function SongDetail({
                 cueName={noCues ? '預設位置（還沒有 cue）' : cueName}
                 modelUrl={modelUrl}
                 readOnly
-                defaultRenderMode="live"
                 cueKey={selectedCueId}
                 crossfadeSeconds={cueTransitionSeconds(cues.find(c => c.id === selectedCueId))}
                 comments={comments}

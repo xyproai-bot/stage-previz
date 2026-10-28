@@ -862,6 +862,26 @@
 .song-detail__step,
 .song-detail__back { display: inline-flex; align-items: center; gap: 2px; min-width: 0; white-space: nowrap; }
 .song-detail__nav > .song-detail__step { flex-shrink: 2; min-width: 28px; }
+/* 回總覽 / 上一首 / 下一首做成看得出來的按鈕（10-29 用戶：這排太不明顯，常常誤按最上面的返回） */
+.song-detail__sub-top .song-detail__back,
+.song-detail__sub-top .song-detail__step {
+  height: 30px;
+  padding: 0 10px;
+  gap: 4px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  text-decoration: none;
+}
+.song-detail__sub-top .song-detail__back:hover,
+.song-detail__sub-top .song-detail__step:hover { color: var(--text); border-color: var(--border-strong); }
+.song-detail__sub-top .song-detail__title { font-size: 17px; }
+@media (max-width: 640px) {
+  .song-detail__sub-top .song-detail__title { font-size: 14px; }
+  .song-detail__sub-top .song-detail__back,
+  .song-detail__sub-top .song-detail__step { padding: 0 8px; }
+}
 .song-detail__step-name {
   max-width: 160px;
   overflow: hidden;
