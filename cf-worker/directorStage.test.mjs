@@ -677,6 +677,35 @@ test('複製專案 / 匯出：Cue 庫跟著走，記「誰改的」的欄位不�
   assert.equal(exp.data.libraryCues.length, 2);
 });
 
+test('分享連結的訪客碰不到：分享網址底下沒有這幾條路（404 / 405），資料不動', async () => {
+  const { db, env, dir, m1, lc30, c1, c2 } = await setup();
+  const link = await dir('POST', `${P}/share-links`, {});
+  assert.equal(link.status, 201, JSON.stringify(link.data));
+  const token = link.data.token;
+  const snap = everything(db);
+  const good = withValues(db, lc30, { [m1]: 2 });
+  const visit = async (method, path, body) => {
+    const r = await worker.fetch(new Request(BASE + path, { method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }), env);
+    return r.status;
+  };
+  for (const root of [`/api/share/${token}`, `/api/s/${token}`]) {
+    for (const [m, path, body] of [
+      ['PUT', `library-cues/${lc30}/mechanism-positions`, { ifRev: 0, mechanisms: good }],
+      ['POST', `library-cues/${lc30}/stage-save-as`, { mechanisms: good, songId: 's1', cueId: c1 }],
+      ['POST', `library-cues/${lc30}/stage-copy`, {}],
+      ['PATCH', `library-cues/${lc30}/stage`, { name: 'x' }],
+      ['PUT', `songs/s2/cues/${c2}/stage-crossfade`, { crossfadeSeconds: 2 }],
+    ]) {
+      const status = await visit(m, `${root}/${path}`, body);
+      assert.ok(status === 404 || status === 405 || status === 401 || status === 403, `${m} ${root}/${path} → ${status}`);
+    }
+  }
+  // 帶著專案網址、只有分享連結的 token（沒有登入）→ 401
+  assert.equal(await visit('PUT', `${P}/library-cues/${lc30}/mechanism-positions`, { ifRev: 0, mechanisms: good }), 401);
+  assert.equal(everything(db), snap);
+  assert.equal(db.raw.prepare(`SELECT COUNT(*) n FROM notifications`).get().n, 0);
+});
+
 test('成員面板上寫的導演能做的事，每一項後端真的會過；寫的不能做的後端真的會擋', async () => {
   const { DIRECTOR_STAGE_TEXT, MEMBER_ROLE_HINT } = await import('../web/src/lib/projectMembers.ts');
   assert.ok(MEMBER_ROLE_HINT.director.includes(DIRECTOR_STAGE_TEXT));

@@ -135,6 +135,15 @@ describe('存回 Cue 庫', () => {
 });
 
 describe('衝突：存的時候這個 cue 剛剛被別人改過', () => {
+  it('提示列已經說「被別人改過」（stale）→ 不用再問「要存嗎」，直接問後台是誰改的、跳說明', async () => {
+    const { flows, api, ui, store } = setup();
+    (store as unknown as { getState: () => { draft: Record<string, number>; stale: boolean } }).getState = () => ({ draft: { m1: 2.5 }, stale: true });
+    api.saveStagePositions.mockRejectedValueOnce(conflictError());
+    await flows.saveBack();
+    expect(api.getLibraryCueUsage).not.toHaveBeenCalled();
+    expect(ui.confirm).not.toHaveBeenCalled();
+    expect((ui.choose.mock.calls[0][0] as { title: string }).title).toBe('這個 cue 剛剛被 王導 改過');
+  });
   it('跳說明（寫是被誰改的）；重新載入 = 放棄草稿、讀最新的', async () => {
     const { flows, api, ui, store, reloadPositions } = setup();
     api.saveStagePositions.mockRejectedValueOnce(conflictError());

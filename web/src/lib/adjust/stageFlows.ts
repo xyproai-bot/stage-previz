@@ -38,7 +38,7 @@ export interface StageFlowUi {
   notice(text: string | null, undo?: () => Promise<void>): void;
 }
 
-type StoreLike = Pick<AdjustStore, 'saveTarget' | 'changedCount' | 'discardAll'> & { getState(): { draft: Draft } };
+type StoreLike = Pick<AdjustStore, 'saveTarget' | 'changedCount' | 'discardAll'> & { getState(): { draft: Draft; stale?: boolean } };
 
 export interface StageFlowDeps {
   projectId: string;
@@ -125,15 +125,17 @@ export function createStageFlows(getDeps: () => StageFlowDeps) {
     if (t.baseRev === null) { d.ui.toast.warn(STAGE_SAVE_TEXT.oldBackend); return; }
     const lcId = t.libraryCueId;
     const label = t.libraryLabel ?? t.cueName;
-    // 先列出哪些歌會一起變
-    let songs: StageSong[];
-    try {
-      songs = usageSongs(await d.api.getLibraryCueUsage(d.projectId, lcId));
-    } catch { d.ui.toast.error(STAGE_SAVE_TEXT.usageFailed); return; }
-    const sure = await d.ui.confirm({
-      title: STAGE_SAVE_TEXT.saveBackTitle(label), message: saveBackMessage(songs, changed), confirmLabel: STAGE_SAVE_TEXT.saveBackConfirm,
-    });
-    if (!sure) return;
+    // 先列出哪些歌會一起變。開始調之後這個 cue 已經被別人改過（stale）→ 反正後台會擋下來，直接去問後台「被誰改過」，不用再問「要存嗎」
+    if (!d.store.getState().stale) {
+      let songs: StageSong[];
+      try {
+        songs = usageSongs(await d.api.getLibraryCueUsage(d.projectId, lcId));
+      } catch { d.ui.toast.error(STAGE_SAVE_TEXT.usageFailed); return; }
+      const sure = await d.ui.confirm({
+        title: STAGE_SAVE_TEXT.saveBackTitle(label), message: saveBackMessage(songs, changed), confirmLabel: STAGE_SAVE_TEXT.saveBackConfirm,
+      });
+      if (!sure) return;
+    }
     // 問的時候資料也許又更新過：版本要用「開始調的那一刻」的（有人搶先改過，後台就會擋下來）；位置列和草稿用現在的
     const now = getDeps();
     const baseRev = now.store.saveTarget().baseRev;
