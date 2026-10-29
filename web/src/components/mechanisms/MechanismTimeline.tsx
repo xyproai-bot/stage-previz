@@ -3,6 +3,7 @@
 //   拖整條 = 改延遲；拖右邊 = 改走幾秒；按住 Alt 不吸到 0.1 秒；鍵盤：← → 延遲、↑ ↓ 走幾秒（Shift 一次 1 秒）
 //   虛線（灰色）= 還沒走完就被下一個 cue 接手
 //   上面是 cue 的記號（GO → 到位）；點時間尺 / 播放 → 3D 畫面的機關跟著時間軸動（物件停在目前選的 cue）
+//   還沒設影片時間的正式 cue 也在上面：暫排在前一個 cue 動完之後，記號畫成空心虛線（算法在 lib/provisionalCues.ts，只算在畫面上、不存）
 // 每幀不重畫 React：播放頭、時間字直接改 DOM；機關位置 StageScene 每幀問 mech.previewTimeRef
 // 導演頁也用這一份（readOnly：只能看，色塊拖不動、鍵盤改不了；有影片時 clock = 影片，播放頭跟著影片、點時間尺讓影片跳過去）
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -19,7 +20,7 @@ import { STAGE_TIMELINE_TEXT, editHandlers, timelineEditing, timelineLength, typ
 
 interface Props {
   mech: TimelineMech;
-  /** 這首歌的 cue（正式 + 提案；只畫正式、有影片時間的） */
+  /** 這首歌的 cue（正式 + 提案；只畫正式的：有影片時間的照設的，沒設的是暫排——要傳原本的 cue，不是填過暫排時間的） */
   cues: Cue[];
   selectedCueId: string | null;
   onSelectCue: (id: string) => void;
@@ -60,7 +61,12 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
   const masters = useMemo(() => sortMasters(cues), [cues]);
   const cueNo = useMemo(() => new Map<string, string | number>(masters.map((c, i) => [c.id, single ? single.label : i + 1])), [masters, single]);
   const cueById = useMemo(() => new Map(cues.map(c => [c.id, c])), [cues]);
-  const untimed = single ? 0 : masters.filter(c => c.videoTimeSec == null).length;
+  // 暫排的 cue = 正式 cue 裡沒設影片時間的（時間軸給的位置是 lib/provisionalCues.ts 排的）
+  const provisionalIds = useMemo(
+    () => new Set(single ? [] : masters.filter(c => c.videoTimeSec == null).map(c => c.id)),
+    [masters, single],
+  );
+  const untimed = provisionalIds.size;
   const scrollRef = useRef<HTMLDivElement>(null);
   const headRef = useRef<HTMLDivElement>(null);
   const rulerHeadRef = useRef<HTMLDivElement>(null);
@@ -277,7 +283,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
             ? (readOnly ? STAGE_TIMELINE_TEXT.noMechanisms : '還沒有機關：先在右邊「機關」分頁新增機關')
             : single ? '這個 cue 還沒有可以畫的機關'
             : readOnly ? STAGE_TIMELINE_TEXT.noCueTimes
-            : '這首歌的 cue 還沒有設「對應影片時間」：設了之後機關就會排在時間軸上'}
+            : '這首歌還沒有正式的 cue：新增 cue 之後機關就會排在時間軸上'}
         </div>
       </section>
     );
@@ -327,7 +333,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
       {header}
       <div className="mech-tl__body">
         <div className="mech-tl__labels" style={{ width: LABEL_W }}>
-          <div className="mech-tl__ruler-pad">{untimed > 0 ? <span className="muted small" title="沒設影片時間的 cue 不在時間軸上">{untimed} 個 cue 沒設時間</span> : null}</div>
+          <div className="mech-tl__ruler-pad">{untimed > 0 ? <span className="muted small" title={STAGE_TIMELINE_TEXT.provisionalTip}>{untimed} {STAGE_TIMELINE_TEXT.provisionalCount}</span> : null}</div>
           {rows.map(row => (row.kind === 'group' ? (
             <button key={row.key} type="button" className={'mech-tl__label mech-tl__label--group' + (row.members.some(m => m.id === mech.focusedId) ? ' is-focused' : '')}
               aria-expanded={!row.collapsed} onClick={() => toggleGroup(row.group.id)}
@@ -346,13 +352,16 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
             {ticks.map(t => (
               <span key={t} className="mech-tl__tick" style={{ left: 8 + t * scale }}>{sheetTime(t).replace(/\.0$/, '')}</span>
             ))}
-            {tl.windows.filter(w => w.cueId !== LIB_START_ID).map(w => (
-              <span key={w.cueId}>
-                {w.arrive > w.start && <span className="mech-tl__go" style={{ left: 8 + w.start * scale, width: (w.arrive - w.start) * scale }} />}
-                <span className={'mech-tl__cue' + (w.cueId === selectedCueId ? ' is-selected' : '')} style={{ left: 8 + w.arrive * scale }}
-                  title={`${cueLabel(w.cueId)}：${sheetTime(w.start)} GO、${sheetTime(w.arrive)} 到位`}>{cueNo.get(w.cueId)}</span>
-              </span>
-            ))}
+            {tl.windows.filter(w => w.cueId !== LIB_START_ID).map(w => {
+              const prov = provisionalIds.has(w.cueId);
+              return (
+                <span key={w.cueId}>
+                  {w.arrive > w.start && <span className={'mech-tl__go' + (prov ? ' is-provisional' : '')} style={{ left: 8 + w.start * scale, width: (w.arrive - w.start) * scale }} />}
+                  <span className={'mech-tl__cue' + (w.cueId === selectedCueId ? ' is-selected' : '') + (prov ? ' is-provisional' : '')} style={{ left: 8 + w.arrive * scale }}
+                    title={`${cueLabel(w.cueId)}：${sheetTime(w.start)} GO、${sheetTime(w.arrive)} 到位${prov ? `（暫排）\n${STAGE_TIMELINE_TEXT.provisionalTip}` : ''}`}>{cueNo.get(w.cueId)}</span>
+                </span>
+              );
+            })}
             <div ref={rulerHeadRef} className="mech-tl__head" style={{ display: 'none' }} aria-hidden="true" />
           </div>
             </div>

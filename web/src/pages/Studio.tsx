@@ -662,8 +662,13 @@ function StudioInner({ projectId }: { projectId: string }) {
     }
     return p;
   }, [projectId, selectedSongId]);
+  // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
+  const mech = useStageMechanisms({
+    projectId, songId: selectedSongId, cues: cuesFor === selectedSongId ? masterCues : EMPTY_CUES, selectedCueId, video: player.video, live,
+  });
+  // 還沒設時間的正式 cue 用暫排的時間（跟機關同一份，lib/provisionalCues.ts）
   const { poseAtFrame, selectCueByUser } = useVideoCueTimeline({
-    cues: cuesFor === selectedSongId ? masterCues : EMPTY_CUES,
+    cues: mech.plannedCues,
     statesFor,
     resetKey: selectedSongId,
     active: videoMode,
@@ -673,10 +678,6 @@ function StudioInner({ projectId }: { projectId: string }) {
     selectedCueId,
     onSelectCue: setSelectedCueId,
     seek: player.seek,
-  });
-  // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
-  const mech = useStageMechanisms({
-    projectId, songId: selectedSongId, cues: cuesFor === selectedSongId ? masterCues : EMPTY_CUES, selectedCueId, video: player.video, live,
   });
   /** 點 cue（cue 列、右邊清單、Shift+J/K）：有在放影片的話影片跳到那個 cue 的時間 */
   const selectCueById = useCallback((id: string) => {

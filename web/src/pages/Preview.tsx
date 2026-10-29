@@ -64,6 +64,7 @@ import { buildCueNav, buildSongNav } from '../lib/stageShow';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
+import { provisionalCueTitle } from '../lib/provisionalCues';
 import MechanismTimeline from '../components/mechanisms/MechanismTimeline';
 import { useStageTimeline } from '../lib/mechanisms/useStageTimeline';
 import { STAGE_TIMELINE_TEXT, showTimeline, showTimelineButton, timelineSource, type TimelineClock } from '../lib/mechanisms/stageTimeline';
@@ -938,9 +939,14 @@ function SongDetail({
     }
     return p;
   }, [projectId, song.id]);
+  // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
+  const mech = useStageMechanisms({
+    projectId, songId: song.id, cues: cuesReady ? cues : EMPTY_CUES, selectedCueId, video: player.video, live,
+  });
   // 舞台、cue 列跟著影片時間走（cue 在「對應影片時間」到位，提前「轉場」秒數等速出發）
+  // 還沒設時間的正式 cue 用暫排的時間（跟機關同一份，lib/provisionalCues.ts）
   const { poseAtFrame, selectCueByUser } = useVideoCueTimeline({
-    cues: cuesReady ? cues : EMPTY_CUES,
+    cues: mech.plannedCues,
     statesFor,
     resetKey: song.id,
     active: videoMode,
@@ -950,10 +956,6 @@ function SongDetail({
     selectedCueId,
     onSelectCue,
     seek: player.seek,
-  });
-  // 機關（製作在管理頁設的；這裡只看）：點 cue 照機器速度走、放影片時跟著影片時間；25 秒自動更新
-  const mech = useStageMechanisms({
-    projectId, songId: song.id, cues: cuesReady ? cues : EMPTY_CUES, selectedCueId, video: player.video, live,
   });
 
   // ── 調整舞台（只預覽、不存；components/adjust）：導演、製作才有；Cue 庫模式的專案才出現 ──
@@ -1373,7 +1375,7 @@ function SongDetail({
                       key={c.id}
                       className={'cuebar-cue' + (c.id === selectedCueId ? ' is-active' : '')}
                       onClick={() => guardedSelectCue(c)}
-                      title={c.videoTimeSec != null ? `${c.name}（影片 ${formatTimeMS(c.videoTimeSec)}）` : c.name}
+                      title={c.videoTimeSec != null ? `${c.name}（影片 ${formatTimeMS(c.videoTimeSec)}）` : provisionalCueTitle(c.name, mech.provisional.get(c.id))}
                     >
                       <span className="cuebar-cue__num">{i + 1}</span>
                       <CueNumBadge cue={c} /><span className="cuebar-cue__name">{c.name}</span>

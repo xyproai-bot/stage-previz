@@ -386,8 +386,14 @@ export default function Share() {
   // cue 在「對應影片時間」剛好到位，提前「轉場」秒數等速出發；暫停就停在半路、拉時間軸就跟著退。
   // 手動點了沒設時間的 cue → 舞台照那個 cue，留到影片走進下一段才回到時間軸（規則在 videoCueSync）
   const statesFor = useCallback((id: string) => cueStatesCacheRef.current.get(id) ?? null, []);
+  // 機關：定義跟著 /data 來，每首歌的位置抓一次；播影片時跟著影片時間（只看，沒有提醒）
+  const mech = useShareMechanisms({
+    shareRef, mechanisms: (data as { mechanisms?: unknown } | null)?.mechanisms, songId: selectedSongId, accessToken,
+    cues, selectedCueId, refreshKey: cueRefresh, video: local.video,
+  });
+  // 還沒設時間的正式 cue 用暫排的時間（跟機關同一份，lib/provisionalCues.ts）
   const { poseAtFrame, selectCueByUser: selectCue } = useVideoCueTimeline({
-    cues,
+    cues: mech.plannedCues,
     statesFor,
     refreshKey: cueRefresh,
     resetKey: selectedSongId,
@@ -398,11 +404,6 @@ export default function Share() {
     selectedCueId,
     onSelectCue: setSelectedCueId,
     seek: local.seek,
-  });
-  // 機關：定義跟著 /data 來，每首歌的位置抓一次；播影片時跟著影片時間（只看，沒有提醒）
-  const mech = useShareMechanisms({
-    shareRef, mechanisms: (data as { mechanisms?: unknown } | null)?.mechanisms, songId: selectedSongId, accessToken,
-    cues, selectedCueId, refreshKey: cueRefresh, video: local.video,
   });
 
   // ── 審片的播放控制（空白鍵、J / K / L、逐格、速度、時間碼）；製作打開「允許看的人留言」→ 還有留言、區段、畫記 ──

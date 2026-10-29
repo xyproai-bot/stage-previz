@@ -20,6 +20,7 @@ import * as mapi from './mechanismApi';
 import type { StageSceneQuery } from '../../components/StageScene';
 import type { DraftMech } from '../lookDraft';
 import { buildLibraryView } from './libraryView';
+import { planProvisionalTimes, withProvisionalTimes } from '../provisionalCues';
 
 export interface MechanismSceneProps {
   mechanisms: Mechanism[] | null;
@@ -40,10 +41,10 @@ type CueLike = MotionCue & { name?: string };
 export const PREVIEW_CUE_ID = '__library_preview__';
 
 /** 位置清單 + 定義 + cue → 每個 cue 的位置、目前 cue 的目標、影片時間軸 */
-function usePlayback(
+function usePlayback<C extends CueLike>(
   mechanisms: Mechanism[] | null,
   positions: CueMechanismPosition[],
-  cues: CueLike[],
+  cues: C[],
   selectedCueId: string | null,
   video?: HTMLVideoElement | null,
   mode?: PositionsMode,
@@ -66,15 +67,27 @@ function usePlayback(
     () => (selectedCueId && timings.get(selectedCueId)) || EMPTY_TIMINGS, [timings, selectedCueId],
   );
 
-  // 影片時間軸（只有正式 cue、有設影片時間的）；每幀 StageScene 問 mechanismAtFrame
+  // 暫排：正式 cue 還沒設影片時間 → 先排在前一個 cue 的機關全部停下之後（只算在畫面上，不存；規則在 lib/provisionalCues.ts）
+  //（沒有機關的專案不暫排：沒設時間的 cue 跟以前一樣，只有手動點；Cue 庫預覽的假 cue 只存在畫面上，也不排）
+  const provisional = useMemo(() => (axes && axes.length > 0
+    ? planProvisionalTimes(cues.filter(c => c.id !== PREVIEW_CUE_ID), {
+      mechs: axes,
+      valuesFor: id => { const row = resolved.get(id); return row ? valuesOf(row) : null; },
+      ownFor: ownMoveFor(resolved, timings),
+    })
+    : new Map<string, number>()), [axes, cues, resolved, timings]);
+  /** 填好暫排時間的 cue 清單：機關時間軸、跟著影片切物件 / 機關都用這一份（不能拿去存） */
+  const plannedCues = useMemo(() => withProvisionalTimes(cues, provisional), [cues, provisional]);
+
+  // 影片時間軸（只有正式 cue；有設影片時間的照設的，沒設的用暫排的）；每幀 StageScene 問 mechanismAtFrame
   const timeline = useMemo<MechanismTimeline | null>(() => {
     if (!axes || axes.length === 0) return null;
-    const masters = sortMasters(cues);
+    const masters = sortMasters(plannedCues);
     return buildMechanismTimeline(axes, masters, id => {
       const row = resolved.get(id);
       return row ? valuesOf(row) : null;
     }, ownMoveFor(resolved, timings));
-  }, [axes, cues, resolved, timings]);
+  }, [axes, plannedCues, resolved, timings]);
   const timelineRef = useRef(timeline);
   timelineRef.current = timeline;
   const videoRef = useRef(video);
@@ -84,7 +97,7 @@ function usePlayback(
     const v = videoRef.current;
     return tl && v ? tl.valuesAt(v.currentTime) : null;
   }, []);
-  return { axes, resolved, selectedRow, targets, timings, selectedTimings, timeline, timelineRef, mechanismAtFrame };
+  return { axes, resolved, selectedRow, targets, timings, selectedTimings, timeline, timelineRef, mechanismAtFrame, provisional, plannedCues };
 }
 
 const EMPTY_TIMINGS: MechanismTimings = {};
@@ -93,10 +106,10 @@ const EMPTY_TIMINGS: MechanismTimings = {};
 // 導演頁 / 動畫師工作站（只看）
 // ─────────────────────────────────────────────
 
-export function useStageMechanisms(o: {
+export function useStageMechanisms<C extends CueLike = CueLike>(o: {
   projectId: string | undefined;
   songId: string | null;
-  cues: CueLike[];
+  cues: C[];
   selectedCueId: string | null;
   /** 播影片時的 <video>（跟著影片時間）；沒有就只照點 cue 走 */
   video?: HTMLVideoElement | null;
@@ -159,7 +172,11 @@ export function useStageMechanisms(o: {
   const mode = positions ? positions.mode : null;
   // 調整舞台存回 Cue 庫用：這首歌讀到的位置列（每個 slot 一份）、每個 Cue 庫的 cue 的版本、存完重新讀
   const libraryRevs = positions && positions.songId === songId ? positions.revs : undefined;
-  return { mechanisms, groups, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue, positionRows: list, libraryRevs, reloadPositions: loadPositions };
+  // plannedCues = 填好暫排時間的 cue（頁面拿去跟著影片切物件，才會跟機關同一個時間）；provisional = 哪些 cue 是暫排、排在幾秒
+  return {
+    mechanisms, groups, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue, positionRows: list, libraryRevs, reloadPositions: loadPositions,
+    plannedCues: pb.plannedCues, provisional: pb.provisional,
+  };
 }
 
 const EMPTY_POSITIONS: CueMechanismPosition[] = [];
@@ -168,13 +185,13 @@ const EMPTY_POSITIONS: CueMechanismPosition[] = [];
 // 分享連結（只看正式 cue）
 // ─────────────────────────────────────────────
 
-export function useShareMechanisms(o: {
+export function useShareMechanisms<C extends CueLike = CueLike>(o: {
   shareRef: ShareRef | null;
   /** 分享頁 /data 回傳的 mechanisms（舊後台沒有 → undefined → 沒有機關） */
   mechanisms: unknown;
   songId: string | null;
   accessToken: string | null;
-  cues: CueLike[];
+  cues: C[];
   selectedCueId: string | null;
   /** 分頁切回來重抓時 +1 */
   refreshKey?: unknown;
@@ -199,7 +216,7 @@ export function useShareMechanisms(o: {
   const sceneProps: MechanismSceneProps = useMemo(() => ({
     mechanisms, mechanismTargets: pb.targets, mechanismAtFrame: pb.mechanismAtFrame, mechanismTimings: pb.selectedTimings,
   }), [mechanisms, pb.targets, pb.mechanismAtFrame, pb.selectedTimings]);
-  return { mechanisms, sceneProps, timeline: pb.timeline };
+  return { mechanisms, sceneProps, timeline: pb.timeline, plannedCues: pb.plannedCues, provisional: pb.provisional };
 }
 
 // ─────────────────────────────────────────────

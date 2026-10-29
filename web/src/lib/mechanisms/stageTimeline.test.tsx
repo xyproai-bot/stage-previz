@@ -105,7 +105,7 @@ describe('導演頁機關時間軸：只能看（拖不動、鍵盤改不了）'
     for (const label of ['播放', '停止預覽', '縮小', '放大', '整首放進來', '收起機關時間軸']) expect(html).toContain(`aria-label="${label}"`);
     expect(html).toContain('點一下 / 拖：3D 畫面的機關跟著這個時間');
   });
-  it('導演頁沒有 cue 設影片時間：寫給導演看的說明（不叫人去編輯頁的分頁）', () => {
+  it('導演頁這首歌沒有任何正式 cue（時間軸是空的）：寫給導演看的說明（不叫人去編輯頁的分頁）；沒設時間的 cue 會暫排，不會落到這裡', () => {
     const html = render({ readOnly: true, mech: mechOf({ timeline: null }) });
     expect(html).toContain(STAGE_TIMELINE_TEXT.noCueTimes);
     expect(html).not.toContain('先在右邊');

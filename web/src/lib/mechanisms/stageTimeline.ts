@@ -40,7 +40,12 @@ export const STAGE_TIMELINE_TEXT = {
   pauseVideoTitle: '暫停影片',
   /** 空的時候 */
   noMechanisms: '這個專案還沒有機關',
-  noCueTimes: '這首歌的 cue 還沒有設「對應影片時間」，機關排不上時間軸（要設定請找製作）',
+  /** 沒有任何正式 cue 的時候（沒設「對應影片時間」的正式 cue 會暫排，不會讓時間軸空掉） */
+  noCueTimes: '這首歌還沒有正式的 cue，機關排不上時間軸（要新增 cue 請找製作）',
+  /** 沒設影片時間的正式 cue 暫排在時間軸上（只算在畫面上，不存）：時間尺上的記號、左上的字的提示 */
+  provisionalTip: '還沒設時間，先暫排在前一個 cue 動完之後；製作設了時間就照設的',
+  /** 左上「N 個 cue 暫排」的 N 後面 */
+  provisionalCount: '個 cue 暫排',
 } as const;
 
 // ─────────────────────────────────────────────

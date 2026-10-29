@@ -6,6 +6,7 @@
 //
 //   timelineFrame — 這一幀舞台要擺在哪（純函式，videoCueSync.test.ts 有測）
 //   cueSeekTime   — 手動點 cue → 影片跳到幾秒
+//   （還沒設時間的正式 cue：頁面把 lib/provisionalCues.ts 排好暫排時間的 cue 清單傳進來，下面全部照暫排時間走，跟機關同一個時間）
 //   useVideoCueTimeline — 頁面用：給 StageScene 的 poseAtFrame、cue 列亮哪個、點 cue 跳時間
 
 import { useCallback, useEffect, useRef } from 'react';
@@ -124,10 +125,13 @@ export function useVideoCueTimeline<C extends TimelineCue>(o: VideoCueTimelineOp
   }, [video]);
 
   // 手動點 cue → 有在放影片的話跳到那個 cue 的時間
+  //（頁面傳進來的可能是還沒暫排的 cue；時間要用 o.cues 裡填好暫排時間的那一份，沒設時間的 cue 才會跳到它的暫排時間）
+  const cuesRef = useRef(o.cues);
+  cuesRef.current = o.cues;
   const { seek } = o;
   const selectCueByUser = useCallback((cue: C) => {
     onSelectCue(cue.id);
-    const t = cueSeekTime(cue, stateRef.current.active);
+    const t = cueSeekTime(cuesRef.current.find(c => c.id === cue.id) ?? cue, stateRef.current.active);
     if (t != null) {
       lastAutoCueRef.current = cue.id;
       seek(t);

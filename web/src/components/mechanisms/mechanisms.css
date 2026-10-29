@@ -283,6 +283,10 @@
   background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: 3px; padding: 0 4px; line-height: 14px;
 }
 .mech-tl__cue.is-selected { border-color: var(--accent); color: var(--accent); }
+/* 暫排的 cue（還沒設影片時間，先排在前一個 cue 動完之後）：空心 + 虛線；GO → 到位那條也只畫外框 */
+.mech-tl__cue.is-provisional { background: transparent; border-style: dashed; color: var(--text-muted); }
+.mech-tl__cue.is-provisional.is-selected { color: var(--accent); }
+.mech-tl__go.is-provisional { background: transparent; border: 1px dashed rgba(255, 255, 255, 0.28); }
 .mech-tl__row { position: relative; height: 28px; border-bottom: 1px solid var(--border); }
 .mech-tl__row.is-focused { background: rgba(255, 170, 68, 0.05); }
 .mech-tl__gridline { position: absolute; top: 0; bottom: 0; border-left: 1px dashed rgba(255, 255, 255, 0.1); }
