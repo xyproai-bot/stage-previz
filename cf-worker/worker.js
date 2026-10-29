@@ -95,6 +95,8 @@ import * as cueLib from './cueLibraryRoutes.mjs';
 import * as cueLibW from './cueLibraryWrites.mjs';
 import * as cueLibBake from './cueLibraryBake.mjs';
 import * as cueLibCrud from './cueLibraryCrud.mjs';
+// 導演頁「調整舞台」存起來（存回 / 另存 / 複製 / 改名 / 轉場秒數；導演和製作都可以）
+import * as cueLibStage from './cueLibraryStage.mjs';
 import { rearrangeSlots } from './cueLibrary.mjs';
 import * as ledTpl from './ledTemplates.mjs';
 // 自動貼 UV：新模型版本 + 畫布 + 舊版面一次換好、模型版本搭配的畫布
@@ -605,6 +607,12 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'libraryCues.lookPut':   return mechResp(cueLibCrud.putLook(request, env, ctx, route.libId, mechLog(request, env, projectId)));
     case 'libraryCues.states':    return mechResp(cueLibCrud.getLibraryStates(env, ctx, route.libId));
     case 'libraryCues.usage':     return mechResp(cueLibCrud.libraryCueUsage(env, ctx, route.libId));
+    // 導演頁「調整舞台」存起來（cueLibraryStage.mjs）：權限是 directorStage，handler 裡再檢查只動了允許的欄位
+    case 'libraryCues.stagePositions': return mechResp(cueLibStage.putStagePositions(request, env, ctx, route.libId, mechLog(request, env, projectId)));
+    case 'libraryCues.stageSaveAs':    return mechResp(cueLibStage.stageSaveAs(request, env, ctx, route.libId, mechLog(request, env, projectId)));
+    case 'libraryCues.stageCopy':      return mechResp(cueLibStage.stageCopy(request, env, ctx, route.libId, mechLog(request, env, projectId)));
+    case 'libraryCues.stagePatch':     return mechResp(cueLibStage.stagePatch(request, env, ctx, route.libId, mechLog(request, env, projectId)));
+    case 'cues.stageCrossfade':        return mechResp(cueLibStage.putStageSlotCrossfade(request, env, ctx, songId, cueId, mechLog(request, env, projectId)));
 
     case 'mechanisms.list':       return mechResp(mech.listMechanisms(env, ctx, { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) }));
     case 'mechanisms.create':     return mechResp(mech.createMechanism(request, env, ctx, mechLog(request, env, projectId)));

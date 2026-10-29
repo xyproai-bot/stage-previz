@@ -104,6 +104,7 @@ export const HELP_ANCHORS = {
   dirDecide: 'dir-decide',
   dirHistory: 'dir-history',
   dirCompare: 'dir-compare',
+  dirAdjust: 'dir-adjust',
   dirAnnotate: 'dir-annotate',
   dirOpen: 'dir-open',
   dirPlayer: 'dir-player',

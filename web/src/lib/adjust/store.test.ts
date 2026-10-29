@@ -225,6 +225,76 @@ describe('換 cue、播轉場', () => {
   });
 });
 
+describe('存回：拿到存的值的時候的版本、被別人搶先改過', () => {
+  const lib = (over: Partial<AdjustCueContext> = {}) => cue({ libraryCueId: 'lc_30', libraryLabel: '30', rev: 3, ...over });
+  function setupLib() {
+    const r = setup();
+    r.s.setCue(lib());
+    return r;
+  }
+  it('存回要的資料：哪個 cue、Cue 庫的 cue、編號、版本', () => {
+    const { s } = setupLib();
+    expect(s.saveTarget()).toEqual({ cueId: 'c2', cueName: '2', libraryCueId: 'lc_30', libraryLabel: '30', baseRev: 3 });
+    // 後台沒給版本（舊後台）→ null，畫面就不讓存
+    s.setCue(lib({ rev: null }));
+    expect(s.saveTarget().baseRev).toBeNull();
+  });
+  it('沒有草稿的時候版本一直跟著最新的；一開始調就停在那一刻', () => {
+    const { s } = setupLib();
+    s.setCue(lib({ rev: 4 }));
+    expect(s.saveTarget().baseRev).toBe(4);
+    s.setValue('lift', 2);
+    expect(s.saveTarget().baseRev).toBe(4);
+    expect(s.getState().stale).toBe(false);
+    // 調的時候別人存了（自動更新拿到新版本）→ 版本停在 4，現在是 5 → stale
+    s.setCue(lib({ rev: 5, saved: { ...saved, r0: 10 } }));
+    expect(s.saveTarget().baseRev).toBe(4);
+    expect(s.getState().stale).toBe(true);
+    expect(s.value('lift')).toBe(2);        // 草稿還在
+    // 放棄改動 → 回到最新的版本、不再 stale
+    s.discardAll();
+    expect(s.saveTarget().baseRev).toBe(5);
+    expect(s.getState().stale).toBe(false);
+  });
+  it('自己存完：位置讀回來，跟草稿一樣的自動不算改了、版本換成新的，畫面的值不跳', () => {
+    const { s, clock } = setupLib();
+    s.setValue('lift', 2);
+    s.setValue('r0', 45);
+    clock.set(1500);
+    const before = s.override()!;
+    // 後台存好了，位置讀回來：lift、r0 就是剛存的，版本 4
+    s.setCue(lib({ rev: 4, saved: { ...saved, lift: 2, r0: 45 } }));
+    expect(s.changedCount()).toBe(0);
+    expect(s.saveTarget().baseRev).toBe(4);
+    expect(s.getState().stale).toBe(false);
+    expect(s.override()).toEqual(before);
+  });
+  it('存完以後又多調了一個：只剩那個，版本換成新的前先停著（它是在新版本上調的）', () => {
+    const { s } = setupLib();
+    s.setValue('lift', 2);
+    s.setCue(lib({ rev: 4, saved: { ...saved, lift: 2 } }));
+    expect(s.changedCount()).toBe(0);
+    s.setValue('r1', 30);
+    expect(s.saveTarget().baseRev).toBe(4);
+    expect(s.getState().stale).toBe(false);
+  });
+  it('換 cue → 草稿丟掉、版本換成新 cue 的', () => {
+    const { s } = setupLib();
+    s.setValue('lift', 2);
+    s.setCue(lib({ cueId: 'c3', cueName: '3', libraryCueId: 'lc_31', libraryLabel: '31', rev: 9, saved: { ...saved, lift: 1 } }));
+    expect(s.saveTarget()).toEqual({ cueId: 'c3', cueName: '3', libraryCueId: 'lc_31', libraryLabel: '31', baseRev: 9 });
+    expect(s.getState().stale).toBe(false);
+  });
+  it('關掉調整舞台 → 不再是 stale', () => {
+    const { s } = setupLib();
+    s.setValue('lift', 2);
+    s.setCue(lib({ rev: 9 }));
+    expect(s.getState().stale).toBe(true);
+    s.exit();
+    expect(s.getState().stale).toBe(false);
+  });
+});
+
 describe('訂閱', () => {
   it('有變才通知；狀態是新的物件', () => {
     const { s } = setup();

@@ -25,6 +25,10 @@ export interface UseAdjustStageOptions {
   /** 這個 cue 的轉場秒數 */
   seconds: number;
   hostRef: MutableRefObject<StageAdjustHost | null>;
+  /** 這個 cue 指到的 Cue 庫的 cue、編號、拿到存的值的時候的版本（存回用；後台沒給版本 → null，存不了） */
+  libraryCueId?: string | null;
+  libraryLabel?: string | null;
+  rev?: number | null;
 }
 
 const NO_TIMINGS: MechanismTimings = {};
@@ -32,6 +36,7 @@ const NO_TIMINGS: MechanismTimings = {};
 export function useAdjustStage(o: UseAdjustStageOptions) {
   const store = useMemo(() => new AdjustStore(), []);
   const { enabled, mechanisms, cueId, cueName, saved, prevCue, valuesForCue, timingsForCue, seconds, hostRef } = o;
+  const libraryCueId = o.libraryCueId ?? null, libraryLabel = o.libraryLabel ?? null, rev = o.rev ?? null;
 
   useEffect(() => { store.setDefs(mechanisms); }, [store, mechanisms]);
 
@@ -44,10 +49,10 @@ export function useAdjustStage(o: UseAdjustStageOptions) {
   }, [prevCue, valuesForCue, mechanisms]);
   const timings = cueId ? timingsForCue(cueId) : NO_TIMINGS;
   useEffect(() => {
-    const r = store.setCue({ cueId, cueName, saved, prevName: prevCue?.name ?? null, prevValues, seconds, timings });
+    const r = store.setCue({ cueId, cueName, saved, prevName: prevCue?.name ?? null, prevValues, seconds, timings, libraryCueId, libraryLabel, rev });
     // 沒經過「放棄嗎？」就換了 cue（影片在播、自動更新、通知點進來）→ 講一聲
     if (r.dropped > 0) toast.warn(ADJUST_TEXT.dropped(r.dropped));
-  }, [store, cueId, cueName, saved, prevCue?.name, prevValues, seconds, timings]);
+  }, [store, cueId, cueName, saved, prevCue?.name, prevValues, seconds, timings, libraryCueId, libraryLabel, rev]);
 
   useEffect(() => {
     if (!enabled && store.getState().on) store.exit();

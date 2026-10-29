@@ -43,7 +43,7 @@ export interface SongReview {
   createdAt: string;
 }
 
-export type NotificationKind = 'mention' | 'needs_changes' | 'new_version' | 'assigned' | 'approved' | 'reply' | 'guest_comment' | 'director_video';
+export type NotificationKind = 'mention' | 'needs_changes' | 'new_version' | 'assigned' | 'approved' | 'reply' | 'guest_comment' | 'director_video' | 'director_stage';
 
 /** 一則站內通知 */
 export interface AppNotification {

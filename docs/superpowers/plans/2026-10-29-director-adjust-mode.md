@@ -192,3 +192,18 @@ Task 1–8 都做完。全部 `npx vitest run` 192 個檔 / 2621 個測試過；
 
 **下一段（存回 Cue 庫）要接的地方：** `AdjustStore.getState().draft`（只有改過的機關）、`store.cue()`（cue id / 名字）；
 `AdjustBar` 的「存回 Cue 庫」按鈕目前 disabled。
+
+---
+
+## 第 3 段：存起來（2026-10-29）
+
+後台：`cf-worker/cueLibraryStage.mjs`（權限 `directorStage`、migration 0048、通知 `director_stage`）；前端：`lib/adjust/stageApi.ts`、`saveBack.ts`、`stageFlows.ts`、`components/adjust/useStageSave.ts`、`AdjustBar.tsx`、`AdjustCueTools.tsx`。API 說明在 `docs/mechanisms-api.md`「導演在『調整舞台』存起來」。
+
+**跟規格 / 交代不一樣或補充的地方：**
+- 「我拿到的時候的版本」用 Cue 庫的 cue 現成的 `rev`（沒有另外加版本號）；機關位置的 GET 多回 `libraryRevs`（先讀版本再讀位置，版本只會比位置舊）。「被誰改過」記在 0048 的 `updated_by_user_id` / `updated_by_rev`；舊網址（沒記人的寫入）改過就說「被別人改過」，不亂指名。還沒跑 0048 的資料庫照樣能存。
+- 開始調之後這個 cue 又被別人改過（自動更新拿到新版本）：提示列馬上多一行說明 +「重新載入」，按「存回」會直接問後台是誰改的（不再問「要存嗎」）。
+- 另存成新 cue 不帶 `ifRev`：被搶先的時候可以先另存把自己調的留下來。
+- 復原也會通知（「復原了 cue 30 的舞台調整」）；複製、改名不通知。只有「存回」有復原，另存沒有。
+- 「這首歌自己設的轉場秒數」只能改本來就另外設過的；沒另外設的後台回 409，畫面改問 Cue 庫的秒數。
+- 通知點開：動畫師開自己負責的那首、製作開導演現在看的那首。
+- 沒有瀏覽器實測（交給用戶）；上線前要先套 migration 0048。

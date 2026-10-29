@@ -201,6 +201,38 @@
   white-space: nowrap;
 }
 .adjust-bar button:disabled { opacity: 0.5; cursor: not-allowed; }
+.adjust-bar .adjust-bar__primary { background: var(--accent); border-color: var(--accent); color: #000; font-weight: 600; }
+.adjust-bar .adjust-bar__primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+.adjust-bar__warn { font-size: 12px; color: var(--warn); }
+.adjust-bar .adjust-bar__link { height: auto; padding: 0 2px; border: 0; background: none; color: var(--text); font-size: 12px; text-decoration: underline; }
+/* 存完的綠色提示（有復原） */
+.adjust-bar--saved { border-color: rgba(16, 199, 138, 0.45); background: var(--accent-dim); }
+.adjust-bar--saved .adjust-bar__text strong { color: var(--accent); }
+.adjust-bar .adjust-bar__x { width: 30px; padding: 0; justify-content: center; }
+
+/* cue 列上選到的 cue 旁邊：複製 / 改名 / 轉場秒數 */
+.adjust-cue-tools { display: inline-flex; gap: 4px; flex-shrink: 0; }
+.adjust-cue-tools button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.adjust-cue-tools button:hover:not(:disabled) { color: var(--text); border-color: rgba(255, 255, 255, 0.3); }
+.adjust-cue-tools button:disabled { opacity: 0.45; cursor: not-allowed; }
+@media (max-width: 760px) {
+  .adjust-cue-tools__label { display: none; }
+  .adjust-cue-tools button { min-width: 36px; height: 36px; justify-content: center; }
+}
 
 /* 調整舞台時右邊只放面板（留言區還在，只是先藏起來，切回審片原樣回來） */
 .song-detail__side.is-adjust > :not(.adjust-panel):not(.song-detail__sheet-handle) { display: none !important; }

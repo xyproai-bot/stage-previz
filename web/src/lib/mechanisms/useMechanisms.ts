@@ -107,7 +107,8 @@ export function useStageMechanisms(o: {
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
   // 一排一排的分組（導演頁的機關時間軸要照排畫；舊後台沒有 → 空的）
   const [groups, setGroups] = useState<MechanismGroup[]>(EMPTY_GROUPS);
-  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[]; mode: PositionsMode } | null>(null);
+  // revs = Cue 庫模式：這首歌用到的每個 Cue 庫的 cue 的版本（調整舞台存回時帶）
+  const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[]; mode: PositionsMode; revs?: Record<string, number> } | null>(null);
   const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
   /** 回 true = 專案看不到了（404 / 403），自動更新可以停了 */
@@ -123,12 +124,14 @@ export function useStageMechanisms(o: {
       return isProjectGoneError(e);
     }
   }, [projectId]);
-  const loadPositions = useCallback(async () => {
-    if (!projectId || !songId) return;
+  /** 回 true = 讀到了（調整舞台存完要確定畫面換成最新的） */
+  const loadPositions = useCallback(async (): Promise<boolean> => {
+    if (!projectId || !songId) return false;
     try {
-      const { positions: list, mode } = await mapi.listSongPositionsWithMode(projectId, songId);
-      setPositions(prev => (prev && prev.songId === songId && prev.mode === mode && sameJson(prev.list, list) ? prev : { songId, list, mode }));
-    } catch { /* 下次自動更新再試 */ }
+      const { positions: list, mode, libraryRevs: revs } = await mapi.listSongPositionsWithMode(projectId, songId);
+      setPositions(prev => (prev && prev.songId === songId && prev.mode === mode && sameJson(prev.list, list) && sameJson(prev.revs, revs) ? prev : { songId, list, mode, revs }));
+      return true;
+    } catch { return false; /* 下次自動更新再試 */ }
   }, [projectId, songId]);
 
   useEffect(() => { setMechanisms(null); void loadDefs(); }, [loadDefs]);
@@ -154,7 +157,9 @@ export function useStageMechanisms(o: {
   const timingsForCue = useCallback((cueId: string): MechanismTimings => timings.get(cueId) ?? EMPTY_TIMINGS, [timings]);
   // 模式是整個專案的設定：換歌、新的那首還沒讀到時沿用上一首讀到的（調整舞台才不會一換歌就關掉）
   const mode = positions ? positions.mode : null;
-  return { mechanisms, groups, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue };
+  // 調整舞台存回 Cue 庫用：這首歌讀到的位置列（每個 slot 一份）、每個 Cue 庫的 cue 的版本、存完重新讀
+  const libraryRevs = positions && positions.songId === songId ? positions.revs : undefined;
+  return { mechanisms, groups, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue, positionRows: list, libraryRevs, reloadPositions: loadPositions };
 }
 
 const EMPTY_POSITIONS: CueMechanismPosition[] = [];

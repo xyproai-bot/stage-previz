@@ -26,7 +26,8 @@ const EXCERPT_MAX = 140;
 
 // guest_comment = 分享連結的訪客留言了（0026）
 // director_video = 導演貼連結交了一版（通知這首歌的動畫師和製作；kind 欄位沒有限制，不用 migration）
-export const NOTIFICATION_KINDS = ['mention', 'needs_changes', 'new_version', 'assigned', 'approved', 'reply', 'guest_comment', 'director_video'];
+// director_stage = 導演在調整舞台存了 cue 的機關位置 / 另存 / 改轉場秒數（通知製作和用到這個 cue 的歌的動畫師；excerpt 放「改了 cue 30 的舞台（S05、S12 會一起變）」這句話，cueLibraryStage.mjs）
+export const NOTIFICATION_KINDS = ['mention', 'needs_changes', 'new_version', 'assigned', 'approved', 'reply', 'guest_comment', 'director_video', 'director_stage'];
 export const REVIEW_STATUSES = ['approved', 'needs_changes'];
 
 const ok = (body, status = 200) => ({ status, body });

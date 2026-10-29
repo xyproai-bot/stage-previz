@@ -25,6 +25,12 @@ export interface AdjustCueContext {
   seconds: number;
   /** 這個 cue 自己設的延遲 / 走幾秒 */
   timings: MechanismTimings;
+  /** 這個 cue 指到的 Cue 庫的 cue（存回用）；沒有 / 沒給 → null */
+  libraryCueId?: string | null;
+  /** Cue 庫的編號（「30」），畫面上寫 cue 30 */
+  libraryLabel?: string | null;
+  /** 拿到這些存的值的時候，Cue 庫的 cue 的版本（存回時帶，被別人搶先改過就會 409）；後台沒給 → null（存不了） */
+  rev?: number | null;
 }
 
 export interface AdjustSelection { objectId: string; mechId: string }
@@ -47,9 +53,11 @@ export interface AdjustState {
   playing: boolean;
   /** 正在調的機關（3D 畫它的行程線） */
   active: string | null;
+  /** 開始調之後，這個 cue 又被別人改過（存回會被擋下來，要重新載入） */
+  stale: boolean;
 }
 
-const INITIAL: AdjustState = { on: false, cueId: null, draft: {}, selection: null, scope: {}, unlinked: {}, playing: false, active: null };
+const INITIAL: AdjustState = { on: false, cueId: null, draft: {}, selection: null, scope: {}, unlinked: {}, playing: false, active: null, stale: false };
 const MAX_HIGHLIGHT = 64;
 
 export class AdjustStore {
@@ -64,6 +72,8 @@ export class AdjustStore {
   private drag: { mechId: string; ids: string[]; start: MechanismValues } | null = null;
   private halvesFn: (groupId: string) => Halves | null = () => null;
   private controlsCache: { sel: AdjustSelection | null; defs: Mechanism[]; list: AdjustControl[] } | null = null;
+  /** 開始調的那一刻，這個 cue 的版本（存回帶這個；沒有草稿的時候一直跟著最新的） */
+  private baseRev: number | null = null;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -118,7 +128,27 @@ export class AdjustStore {
       this.set({ draft });
       this.retarget(false);
     }
+    this.trackBase();
     return { dropped };
+  }
+
+  /**
+   * 存回要帶的版本：沒有草稿的時候一直跟著最新的；一開始調（有草稿了）就停在那一刻。
+   * 之後 cue 的版本又變了 = 開始調之後被別人改過 → stale（存回會被後台擋下來）
+   */
+  private trackBase() {
+    const rev = this.ctx?.rev ?? null;
+    const has = changedIds(this.state.draft).length > 0;
+    if (!has) this.baseRev = rev;
+    this.set({ stale: has && this.baseRev !== null && rev !== null && rev !== this.baseRev });
+  }
+
+  /** 存回 / 另存用：要存哪個 cue、開始調的時候這個 cue 的版本（null = 後台沒給，存不了） */
+  saveTarget(): { cueId: string | null; cueName: string; libraryCueId: string | null; libraryLabel: string | null; baseRev: number | null } {
+    return {
+      cueId: this.state.cueId, cueName: this.ctx?.cueName ?? '',
+      libraryCueId: this.ctx?.libraryCueId ?? null, libraryLabel: this.ctx?.libraryLabel ?? null, baseRev: this.baseRev,
+    };
   }
 
   /** 左半 / 右半怎麼分（要物件位置，3D 那邊給） */
@@ -134,11 +164,12 @@ export class AdjustStore {
     this.tweener.setCurrent(shown, this.now());
     this.set({ on: true, draft: {}, selection: null, playing: false, active: null });
     this.retarget(false);
+    this.trackBase();
   }
   /** 關掉：草稿丟掉（要不要放棄由畫面先問） */
   exit() {
     this.drag = null;
-    this.set({ on: false, draft: {}, selection: null, playing: false, active: null });
+    this.set({ on: false, draft: {}, selection: null, playing: false, active: null, stale: false });
   }
 
   /** StageScene 每幀問：開著 = 每個機關的值；關著 = null */
@@ -344,6 +375,7 @@ export class AdjustStore {
     if (sameValues(draft, this.state.draft)) { this.set(extra); return; }
     this.set({ ...extra, draft, playing: false });
     this.retarget(false);
+    this.trackBase();
   }
   /** 改值 → 全部直接跳到草稿值；換 cue → 照轉場走 */
   private retarget(animate: boolean) {
