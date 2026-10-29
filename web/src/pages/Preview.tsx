@@ -62,6 +62,9 @@ import { buildCueNav, buildSongNav } from '../lib/stageShow';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
+import MechanismTimeline from '../components/mechanisms/MechanismTimeline';
+import { useStageTimeline } from '../lib/mechanisms/useStageTimeline';
+import { STAGE_TIMELINE_TEXT, showTimeline, showTimelineButton, timelineSource, type TimelineClock } from '../lib/mechanisms/stageTimeline';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { canAddVideo, canModifyVideo, canPasteVideoLink, deleteVersionMessage, removePendingQuestion, versionChoiceStorageKey, versionKey, type VersionItem } from '../lib/songVersions';
 import { deleteSongVideo, retrySongVideo, type SongVideo } from '../lib/videoApi';
@@ -78,7 +81,7 @@ import {
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleHelp, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin,
+  ArrowLeft, ChartGantt, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, CircleHelp, Film, HistoryIcon, Inbox, ListMusic, LoaderCircle, LogOut, MapPin,
   MessageSquareText, Pause, Play, Plus, RefreshCw, Square, X,
 } from 'lucide-react';
 import './Preview.css';
@@ -1033,6 +1036,31 @@ function SongDetail({
   // 全螢幕預演（給藝人 / 客戶看的簡報畫面）：全螢幕套在 3D 舞台外面這一層，不是 3D 舞台自己——
   // 換歌時 3D 舞台（key 是歌的 id）會整個重建，套在它身上的全螢幕會被瀏覽器退出；外層不會被換掉，所以換歌後還在全螢幕
   const stageShowCtl = useStageFullscreen(stageRef, true);
+
+  // ── 機關時間軸（只能看；3D 畫面下面）：看每個機關什麼時候動、走幾秒。製作在管理頁改，這裡改不了 ──
+  //   審片時才有；切到調整舞台就收起來（3D 機關回到調整舞台要的位置）；全螢幕預演（給客戶看）時不出現
+  //   有影片：播放頭跟影片、點時間尺讓影片跳過去（3D 本來就跟著影片，時間軸不去搶）；沒有影片：時間軸自己播，3D 的機關跟著它
+  const [tlOpen, setTlOpen] = useState(false);
+  const hasMechanisms = (mech.mechanisms?.length ?? 0) > 0;
+  const tlButton = showTimelineButton({ hasMechanisms, adjustOn: adjust.on });
+  const tlShown = showTimeline({ open: tlOpen, hasMechanisms, adjustOn: adjust.on, fullscreen: stageShowCtl.active });
+  const tlSource = timelineSource({ videoMode, videoReady: player.ready });
+  useEffect(() => { if (adjust.on) setTlOpen(false); }, [adjust.on]);
+  const stageTl = useStageTimeline({
+    mechanisms: mech.mechanisms, groups: mech.groups, timeline: mech.timeline, freeActive: tlShown && tlSource === 'free',
+  });
+  const playerVideoRef = useRef(player.video);
+  playerVideoRef.current = player.video;
+  const { playing: playerPlaying, togglePlay: playerToggle, seek: playerSeek, duration: playerDuration } = player;
+  const tlClock = useMemo<TimelineClock | null>(() => (tlSource === 'video' ? {
+    now: () => playerVideoRef.current.currentTime,
+    playing: playerPlaying, toggle: playerToggle, seek: playerSeek, duration: playerDuration,
+  } : null), [tlSource, playerPlaying, playerToggle, playerSeek, playerDuration]);
+  const onTimelineSelectCue = useCallback((id: string) => {
+    const c = cues.find(x => x.id === id);
+    if (c) selectCueByUser(c);
+  }, [cues, selectCueByUser]);
+
   const openComment = useCallback((c: SongComment) => {
     void session.open(c);
     // 手機：留言面板收下去，才看得到跳過去的那一格、3D 視角和畫記
@@ -1132,6 +1160,18 @@ function SongDetail({
         </span>
         {!decision && <span className={'status-pill status-pill--' + song.status}>{STATUS_LABEL[song.status]}</span>}
         {canAdjust && <AdjustModeSwitch on={adjust.on} onReview={adjust.exit} onAdjust={enterAdjust} />}
+        {tlButton && (
+          <button
+            type="button"
+            className="song-detail__tl-btn"
+            aria-pressed={tlOpen}
+            aria-label={STAGE_TIMELINE_TEXT.button}
+            onClick={() => setTlOpen(o => !o)}
+            title={tlOpen ? STAGE_TIMELINE_TEXT.buttonCloseTitle : STAGE_TIMELINE_TEXT.buttonOpenTitle}
+          >
+            <Icon icon={ChartGantt} /><span className="song-detail__tl-btn-label"> {STAGE_TIMELINE_TEXT.button}</span>
+          </button>
+        )}
         <span className="grow" />
       </div>
 
@@ -1223,6 +1263,7 @@ function SongDetail({
                   cueNav: buildCueNav(cuesReady ? cues : EMPTY_CUES, selectedCueId, cueStep),
                 }}
                 {...mech.sceneProps}
+                {...stageTl.sceneProps}
                 focusedMechanismId={adjust.on ? adjust.active : null}
                 mechanismOverride={adjust.on ? adjust.override : undefined}
                 adjustHostRef={adjustHostRef}
@@ -1317,6 +1358,19 @@ function SongDetail({
                   <kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd>
                 </div>
               </div>
+            )}
+            {/* 機關時間軸（只能看）：排在 3D 畫面和 cue 列下面；調整舞台、全螢幕預演時不出現 */}
+            {tlShown && (
+              <MechanismTimeline
+                key={`${song.id}:${tlSource}`}
+                mech={stageTl.timelineMech}
+                cues={cuesReady ? cues : EMPTY_CUES}
+                selectedCueId={selectedCueId}
+                onSelectCue={onTimelineSelectCue}
+                onClose={() => setTlOpen(false)}
+                readOnly
+                clock={tlClock}
+              />
             )}
           </div>
         </main>

@@ -252,6 +252,26 @@
   flex: 1;
   min-height: 0;
 }
+/* 機關時間軸（只能看）：排在 cue 列下面；3D 畫面會讓出位置，但不讓它吃掉太多（樣式在 components/mechanisms/mechanisms.css） */
+.song-detail__stage > .mech-tl { max-height: 38%; }
+/* 上面那條的「機關時間軸」按鈕（跟旁邊的「審片 / 調整舞台」切換同一個樣子） */
+.song-detail__tl-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong, rgba(255, 255, 255, 0.16));
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.song-detail__tl-btn:hover { color: var(--text); }
+.song-detail__tl-btn[aria-pressed='true'] { background: var(--accent-dim); color: var(--accent); }
 
 /* 歌曲代號（S01…） */
 .song-code {
@@ -896,6 +916,8 @@
   .song-detail__sub-top { padding: 8px 12px; row-gap: 6px; }
   .song-detail__step-name,
   .song-detail__back-label { display: none; }
+  .song-detail__tl-btn-label { display: none; }
+  .song-detail__tl-btn { padding: 0 9px; }
   .song-detail__step,
   .song-detail__back { justify-content: center; min-width: 34px; min-height: 34px; padding: 4px 6px; }
   .song-detail__sub-top > .grow { display: none; }

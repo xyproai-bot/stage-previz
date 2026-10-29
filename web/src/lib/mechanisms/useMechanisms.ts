@@ -105,6 +105,8 @@ export function useStageMechanisms(o: {
 }) {
   const { projectId, songId, live = true } = o;
   const [mechanisms, setMechanisms] = useState<Mechanism[] | null>(null);
+  // 一排一排的分組（導演頁的機關時間軸要照排畫；舊後台沒有 → 空的）
+  const [groups, setGroups] = useState<MechanismGroup[]>(EMPTY_GROUPS);
   const [positions, setPositions] = useState<{ songId: string; list: CueMechanismPosition[]; mode: PositionsMode } | null>(null);
   const sameJson = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -112,8 +114,9 @@ export function useStageMechanisms(o: {
   const loadDefs = useCallback(async (): Promise<boolean> => {
     if (!projectId) return false;
     try {
-      const list = await mapi.listMechanisms(projectId);
+      const { mechanisms: list, groups: gs } = await mapi.listMechanismsAndGroups(projectId);
       setMechanisms(prev => (prev && sameJson(prev, list) ? prev : list));
+      setGroups(prev => (sameJson(prev, gs) ? prev : gs));
       return false;
     } catch (e) {
       setMechanisms(prev => prev ?? []);  // 讀不到（舊後台 / 網路）→ 沒有機關，畫面照舊
@@ -151,7 +154,7 @@ export function useStageMechanisms(o: {
   const timingsForCue = useCallback((cueId: string): MechanismTimings => timings.get(cueId) ?? EMPTY_TIMINGS, [timings]);
   // 模式是整個專案的設定：換歌、新的那首還沒讀到時沿用上一首讀到的（調整舞台才不會一換歌就關掉）
   const mode = positions ? positions.mode : null;
-  return { mechanisms, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue };
+  return { mechanisms, groups, sceneProps, timeline: pb.timeline, mode, valuesForCue, timingsForCue };
 }
 
 const EMPTY_POSITIONS: CueMechanismPosition[] = [];

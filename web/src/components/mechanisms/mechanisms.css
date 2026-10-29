@@ -298,6 +298,8 @@
 .mech-tl__cutrest { position: absolute; top: 0; bottom: 0; right: 0; background: var(--surface-1); border-left: 2px dashed var(--text-muted); opacity: 0.85; pointer-events: none; }
 .mech-tl__head { position: absolute; top: 0; bottom: 0; left: 8px; width: 2px; margin-left: -1px; background: var(--accent); pointer-events: none; }
 .mech-tl__drag { position: absolute; right: 10px; bottom: 6px; background: var(--surface-2); border-radius: 4px; padding: 2px 8px; }
+/* 只能看（導演頁）：色塊不能拖 → 游標是一般的點擊，手指在色塊上也可以照常捲動 */
+.mech-tl--readonly .mech-tl__move { cursor: pointer; touch-action: auto; }
 
 /* 一排機關（v2 第 3 階段） */
 .mech-group { list-style: none; border: 1px solid var(--border-strong); border-radius: var(--radius-md); background: rgba(0, 0, 0, 0.1); padding: 4px 6px 6px; display: flex; flex-direction: column; gap: 6px; }

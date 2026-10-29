@@ -4,19 +4,21 @@
 //   虛線（灰色）= 還沒走完就被下一個 cue 接手
 //   上面是 cue 的記號（GO → 到位）；點時間尺 / 播放 → 3D 畫面的機關跟著時間軸動（物件停在目前選的 cue）
 // 每幀不重畫 React：播放頭、時間字直接改 DOM；機關位置 StageScene 每幀問 mech.previewTimeRef
+// 導演頁也用這一份（readOnly：只能看，色塊拖不動、鍵盤改不了；有影片時 clock = 影片，播放頭跟著影片、點時間尺讓影片跳過去）
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, Pause, Play, Square, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
 import Icon from '../Icon';
+import './mechanisms.css';
 import type { Cue } from '../../lib/api';
-import type { EditorMechanisms } from '../../lib/mechanisms/useMechanisms';
 import type { Mechanism, MechanismGroup } from '../../lib/mechanisms/model';
 import { layoutMechanisms } from '../../lib/mechanisms/group';
 import { formatMechValue, formatSeconds, sortMasters, type TimelineMove } from '../../lib/mechanisms/motion';
 import { sheetTime } from '../../lib/mechanisms/cueSheet';
 import { LIB_START_ID } from '../../lib/mechanisms/libraryView';
+import { STAGE_TIMELINE_TEXT, editHandlers, timelineEditing, timelineLength, type TimelineClock, type TimelineMech } from '../../lib/mechanisms/stageTimeline';
 
 interface Props {
-  mech: EditorMechanisms;
+  mech: TimelineMech;
   /** 這首歌的 cue（正式 + 提案；只畫正式、有影片時間的） */
   cues: Cue[];
   selectedCueId: string | null;
@@ -27,6 +29,13 @@ interface Props {
    * 時間軸只畫這個 cue 從開始轉場（0 秒）到最後一個機關停下，沒有別的 cue
    */
   single?: { label: string; name: string } | null;
+  /**
+   * 只能看（導演頁）：色塊拖不動、鍵盤改不了、滑鼠移上去不是可以拖的游標；
+   * 播放、暫停、點時間尺、縮放、收合一排照舊。編輯頁不給 = 跟以前完全一樣
+   */
+  readOnly?: boolean;
+  /** 播放頭跟著這個時間走（導演頁放影片時是影片）：播放鍵控制它、點時間尺讓它跳過去，時間軸不自己播也不去搶 3D；不給 = 時間軸自己播 */
+  clock?: TimelineClock | null;
 }
 
 const LABEL_W = 132;
@@ -41,9 +50,13 @@ type TlRow =
   | { key: string; kind: 'mech'; mech: Mechanism; member: boolean }
   | { key: string; kind: 'group'; group: MechanismGroup; members: Mechanism[]; collapsed: boolean };
 
-export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectCue, onClose, single = null }: Props) {
+export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectCue, onClose, single = null, readOnly = false, clock = null }: Props) {
   const tl = mech.timeline;
   const mechanisms = mech.mechanisms;
+  const edit = timelineEditing(readOnly);
+  const timeClock = clock;
+  const timeClockRef = useRef(timeClock);
+  timeClockRef.current = timeClock;
   const masters = useMemo(() => sortMasters(cues), [cues]);
   const cueNo = useMemo(() => new Map<string, string | number>(masters.map((c, i) => [c.id, single ? single.label : i + 1])), [masters, single]);
   const cueById = useMemo(() => new Map(cues.map(c => [c.id, c])), [cues]);
@@ -61,7 +74,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
   dragRef.current = drag;
   const [playing, setPlaying] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const total = single ? Math.max(4, (tl?.endTime ?? 0) + 1.5) : Math.max(10, (tl?.endTime ?? 0) + 4);
+  const total = timelineLength({ endTime: tl?.endTime ?? 0, single: !!single, clockDuration: timeClock?.duration });
   // 一排機關：標題行可以收起來（預設展開）；一排的成員接在標題行後面
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const rows = useMemo<TlRow[]>(() => {
@@ -119,7 +132,19 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     showHead(t);
     setPreviewing(t !== null);
   };
-  useEffect(() => { showHead(mech.previewTimeRef.current); syncRuler(); }); // 縮放後播放頭跟著
+  useEffect(() => { showHead(timeClockRef.current ? timeClockRef.current.now() : mech.previewTimeRef.current); syncRuler(); }); // 縮放後播放頭跟著
+  // 跟著別人的時間（導演頁的影片）：播放頭每幀讀它的時間，只改 DOM
+  useEffect(() => {
+    if (!timeClock) return;
+    let raf = 0;
+    const step = () => {
+      const c = timeClockRef.current;
+      showHead(c ? c.now() : null);
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [!!timeClock, scale]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { mech.setPreviewTime(null); }, [mech.setPreviewTime]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!playing) return;
@@ -142,17 +167,23 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     const r = el.getBoundingClientRect();
     return Math.max(0, Math.min(total, (clientX - r.left + el.scrollLeft - 8) / scale));
   };
+  // 點 / 拖時間尺：跟著影片時 → 讓影片跳過去（3D 本來就跟著影片）；自己播時 → 3D 的機關跟著這個時間
+  const scrub = (t: number) => {
+    const c = timeClockRef.current;
+    if (c) { c.seek(t); showHead(t); } else setTime(t);
+  };
   const onRulerDown = (e: React.PointerEvent) => {
     e.currentTarget.setPointerCapture(e.pointerId);
-    setPlaying(false);
-    setTime(timeAtX(e.clientX));
+    if (!timeClockRef.current) setPlaying(false);
+    scrub(timeAtX(e.clientX));
   };
   const onRulerMove = (e: React.PointerEvent) => {
-    if (e.buttons & 1) setTime(timeAtX(e.clientX));
+    if (e.buttons & 1) scrub(timeAtX(e.clientX));
   };
 
   // ── 拖色塊 ──
   const startDrag = (e: React.PointerEvent, mv: TimelineMove, mode: Drag['mode']) => {
+    if (readOnly) return;
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
     select(mv);
@@ -172,8 +203,8 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     const d = dragRef.current;
     setDrag(null);
     if (!d || !d.moved) return;
-    if (d.mode === 'move' && d.delay !== d.delay0) void mech.commitTiming(d.cueId, d.mechId, { delaySec: d.delay });
-    if (d.mode === 'resize' && d.dur !== d.dur0) void mech.commitTiming(d.cueId, d.mechId, { durationSec: d.dur });
+    if (d.mode === 'move' && d.delay !== d.delay0) void mech.commitTiming?.(d.cueId, d.mechId, { delaySec: d.delay });
+    if (d.mode === 'resize' && d.dur !== d.dur0) void mech.commitTiming?.(d.cueId, d.mechId, { durationSec: d.dur });
   };
   const select = (mv: TimelineMove) => {
     if (mv.cueId !== selectedCueId) onSelectCue(mv.cueId);
@@ -182,6 +213,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
   };
   // 鍵盤：先改草稿，放開再存（像滑桿）
   const onBarKey = (e: React.KeyboardEvent, mv: TimelineMove) => {
+    if (readOnly) return;
     const step = e.shiftKey ? 1 : 0.1;
     const cur = dragRef.current && dragRef.current.cueId === mv.cueId && dragRef.current.mechId === mv.mechId ? dragRef.current : null;
     const base: Drag = cur ?? { cueId: mv.cueId, mechId: mv.mechId, mode: 'move', x0: 0, delay0: mv.delay, dur0: mv.duration, delay: mv.delay, dur: mv.duration, moved: false };
@@ -200,7 +232,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     const patch: { delaySec?: number; durationSec?: number } = {};
     if (d.delay !== d.delay0) patch.delaySec = d.delay;
     if (d.dur !== d.dur0) patch.durationSec = d.dur;
-    if (Object.keys(patch).length) void mech.commitTiming(d.cueId, d.mechId, patch);
+    if (Object.keys(patch).length) void mech.commitTiming?.(d.cueId, d.mechId, patch);
   };
 
   // 時間尺的刻度
@@ -212,14 +244,23 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
     <div className="mech-tl__bar">
       <strong className="mech-tl__title">{single ? `Cue ${single.label} 的機關時間軸` : '機關時間軸'}</strong>
       <span className="muted small mech-tl__hint" title={single ? '0 秒 = 這個 cue 開始轉場；預覽從預設位置開始動，在歌裡會從前一個 cue 的位置開始' : undefined}>
-        {single ? '0 秒 = 開始轉場。拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）' : '拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）'}
+        {readOnly
+          ? (timeClock ? STAGE_TIMELINE_TEXT.readOnlyHintVideo : STAGE_TIMELINE_TEXT.readOnlyHint)
+          : single ? '0 秒 = 開始轉場。拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）' : '拖整條改延遲、拖右邊改走幾秒（按住 Alt 不吸附）'}
       </span>
       <span className="grow" />
       <span ref={clockRef} className="mech-tl__clock" aria-live="off" />
-      <button type="button" className="mech-icon-btn" disabled={!tl} onClick={() => { if (playing) setPlaying(false); else { if (mech.previewTimeRef.current === null || mech.previewTimeRef.current >= total) setTime(0); setPreviewing(true); setPlaying(true); } }}
-        title={playing ? '暫停' : '播放（3D 畫面的機關跟著時間軸動）'} aria-label={playing ? '暫停' : '播放'}><Icon icon={playing ? Pause : Play} /></button>
-      <button type="button" className="mech-icon-btn" disabled={!previewing} onClick={() => { setPlaying(false); setTime(null); }}
-        title="停止預覽（機關回到目前選的 cue）" aria-label="停止預覽"><Icon icon={Square} /></button>
+      <button type="button" className="mech-icon-btn" disabled={!tl}
+        onClick={() => {
+          if (timeClock) { timeClock.toggle(); return; }
+          if (playing) setPlaying(false); else { if (mech.previewTimeRef.current === null || mech.previewTimeRef.current >= total) setTime(0); setPreviewing(true); setPlaying(true); }
+        }}
+        title={timeClock ? (timeClock.playing ? STAGE_TIMELINE_TEXT.pauseVideoTitle : STAGE_TIMELINE_TEXT.playVideoTitle) : (playing ? '暫停' : '播放（3D 畫面的機關跟著時間軸動）')}
+        aria-label={(timeClock ? timeClock.playing : playing) ? '暫停' : '播放'}><Icon icon={(timeClock ? timeClock.playing : playing) ? Pause : Play} /></button>
+      {!timeClock && (
+        <button type="button" className="mech-icon-btn" disabled={!previewing} onClick={() => { setPlaying(false); setTime(null); }}
+          title="停止預覽（機關回到目前選的 cue）" aria-label="停止預覽"><Icon icon={Square} /></button>
+      )}
       <button type="button" className="mech-icon-btn" onClick={() => setPps(p => Math.max(MIN_PPS, (p ?? 10) * 0.8))} title="縮小" aria-label="縮小"><Icon icon={ZoomOut} /></button>
       <button type="button" className="mech-icon-btn" onClick={() => setPps(p => Math.min(MAX_PPS, (p ?? 10) * 1.25))} title="放大" aria-label="放大"><Icon icon={ZoomIn} /></button>
       <button type="button" className="mech-icon-btn" onClick={fit} title="整首放進來" aria-label="整首放進來"><Icon icon={Maximize2} /></button>
@@ -229,12 +270,13 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
 
   if (!tl || mechanisms.length === 0) {
     return (
-      <section className="mech-tl" aria-label="機關時間軸">
+      <section className={'mech-tl' + (readOnly ? ' mech-tl--readonly' : '')} aria-label="機關時間軸">
         {header}
         <div className="mech-tl__empty muted small">
           {mechanisms.length === 0
-            ? '還沒有機關：先在右邊「機關」分頁新增機關'
+            ? (readOnly ? STAGE_TIMELINE_TEXT.noMechanisms : '還沒有機關：先在右邊「機關」分頁新增機關')
             : single ? '這個 cue 還沒有可以畫的機關'
+            : readOnly ? STAGE_TIMELINE_TEXT.noCueTimes
             : '這首歌的 cue 還沒有設「對應影片時間」：設了之後機關就會排在時間軸上'}
         </div>
       </section>
@@ -270,7 +312,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
           return (
             <button key={cueId} type="button" className={'mech-tl__gmove' + (sel ? ' is-selected' : '')}
               style={{ left: 8 + b.start * scale, width: Math.max(4, (b.end - b.start) * scale) }}
-              title={`${label}\n展開這一排可以拖每一個機關的色塊`}
+              title={readOnly ? label : `${label}\n展開這一排可以拖每一個機關的色塊`}
               aria-label={label} onClick={() => select(b.first)}>
               {(b.end - b.start) * scale > 46 && <span className="mech-tl__movelabel">{cueNo.get(cueId)}</span>}
             </button>
@@ -281,7 +323,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
   };
 
   return (
-    <section className="mech-tl" aria-label="機關時間軸">
+    <section className={'mech-tl' + (readOnly ? ' mech-tl--readonly' : '')} aria-label="機關時間軸">
       {header}
       <div className="mech-tl__body">
         <div className="mech-tl__labels" style={{ width: LABEL_W }}>
@@ -300,7 +342,7 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
         <div className="mech-tl__main">
           <div className="mech-tl__rulerwrap" ref={rulerWrapRef}>
             <div style={{ width }}>
-          <div className="mech-tl__ruler" onPointerDown={onRulerDown} onPointerMove={onRulerMove} title="點一下 / 拖：3D 畫面的機關跟著這個時間">
+          <div className="mech-tl__ruler" onPointerDown={onRulerDown} onPointerMove={onRulerMove} title={timeClock ? STAGE_TIMELINE_TEXT.rulerTipVideo : '點一下 / 拖：3D 畫面的機關跟著這個時間'}>
             {ticks.map(t => (
               <span key={t} className="mech-tl__tick" style={{ left: 8 + t * scale }}>{sheetTime(t).replace(/\.0$/, '')}</span>
             ))}
@@ -338,21 +380,23 @@ export default function MechanismTimeline({ mech, cues, selectedCueId, onSelectC
                         type="button"
                         className={'mech-tl__move' + (sel ? ' is-selected' : '') + (cutAt !== null ? ' is-cut' : '') + (d ? ' is-dragging' : '')}
                         style={{ left: 8 + start * scale, width: Math.max(4, dur * scale) }}
-                        title={`${label}${cutTxt}\n拖整條改延遲、拖右邊改走幾秒`}
+                        title={`${label}${cutTxt}\n${edit.drag ? '拖整條改延遲、拖右邊改走幾秒' : STAGE_TIMELINE_TEXT.barTip}`}
                         aria-label={label}
-                        onPointerDown={(e) => startDrag(e, mv, 'move')}
-                        onPointerMove={onDragMove}
-                        onPointerUp={endDrag}
-                        onPointerCancel={() => setDrag(null)}
-                        onKeyDown={(e) => onBarKey(e, mv)}
-                        onKeyUp={onBarKeyUp}
+                        {...editHandlers(readOnly, {
+                          onPointerDown: (e: React.PointerEvent) => startDrag(e, mv, 'move'),
+                          onPointerMove: onDragMove,
+                          onPointerUp: endDrag,
+                          onPointerCancel: () => setDrag(null),
+                          onKeyDown: (e: React.KeyboardEvent) => onBarKey(e, mv),
+                          onKeyUp: onBarKeyUp,
+                        })}
                         onClick={() => select(mv)}
                       >
                         {cutAt !== null && cutAt < start + dur && (
                           <span className="mech-tl__cutrest" style={{ left: Math.max(0, (cutAt - start) * scale) }} aria-hidden="true" />
                         )}
                         {dur * scale > 46 && <span className="mech-tl__movelabel">{cueNo.get(mv.cueId)}</span>}
-                        <span className="mech-tl__handle" onPointerDown={(e) => startDrag(e, mv, 'resize')} aria-hidden="true" />
+                        {edit.resize && <span className="mech-tl__handle" onPointerDown={(e) => startDrag(e, mv, 'resize')} aria-hidden="true" />}
                       </button>
                     </span>
                   );
