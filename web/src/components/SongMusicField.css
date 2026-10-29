@@ -1,0 +1,66 @@
+/* 一首歌的「音樂」那一行（編輯頁的歌單、導演頁的影片版本列下面）：小字、一行放得下就一行，放不下換行 */
+.song-music {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  min-width: 0;
+  font-family: var(--font-ui);
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: default;
+}
+.song-music__row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; min-width: 0; }
+.song-music__label { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; flex-shrink: 0; }
+.song-music__name {
+  color: var(--text);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.song-music__meta { color: var(--text-dim); white-space: nowrap; font-family: var(--font-mono); }
+.song-music__none { color: var(--text-muted); white-space: nowrap; }
+.song-music__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.song-music__btn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.song-music__btn--danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+.song-music__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.song-music__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.song-music__progress {
+  position: relative;
+  flex: 1 1 60px;
+  min-width: 60px;
+  max-width: 160px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.song-music__progress-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); transition: width 0.15s linear; }
+.song-music__pct { color: var(--text-dim); white-space: nowrap; font-family: var(--font-mono); }
+.song-music__note { color: var(--text-muted); line-height: 1.4; }
+.song-music__error { white-space: normal; line-height: 1.4; }
+
+/* 導演頁：影片版本列下面獨立的一條 */
+.song-music--bar {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 6px 12px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}

@@ -208,7 +208,9 @@ export function sameSongs(a: readonly Song[], b: readonly Song[]): boolean {
   if (a.length !== b.length) return false;
   // 最近一次通過 / 需修改：看時間和版本就知道有沒有換
   const review = (s: Song) => s.lastReview ? `${s.lastReview.at}|${s.lastReview.status}|${s.lastReview.version ?? ''}` : '';
-  return a.every((s, i) => SONG_KEYS.every(k => s[k] === b[i][k]) && review(s) === review(b[i]));
+  // 音樂（換了就是另一個 id；沒有 = ''）：別人換了 / 移除了音樂，這邊自動更新要看得到
+  const music = (s: Song) => s.music?.id ?? '';
+  return a.every((s, i) => SONG_KEYS.every(k => s[k] === b[i][k]) && review(s) === review(b[i]) && music(s) === music(b[i]));
 }
 
 const COMMENT_KEYS = ['id', 'text', 'status', 'resolvedBy', 'resolvedAt', 'time', 'author', 'resolvedVersion', 'parentId', 'videoVersion'] as const;

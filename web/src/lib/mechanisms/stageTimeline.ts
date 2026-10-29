@@ -10,7 +10,7 @@ export type TimelineMech =
   Pick<EditorMechanisms, 'timeline' | 'mechanisms' | 'groups' | 'focusedId' | 'setFocusedId' | 'setPreviewTime' | 'previewTimeRef'>
   & Partial<Pick<EditorMechanisms, 'commitTiming'>>;
 
-/** 播放頭跟著別人的時間走（導演頁放影片時是影片）；不給 = 時間軸自己播 */
+/** 播放頭跟著別人的時間走（導演頁放影片時是影片；沒影片、有音樂的歌是音樂，介面跟影片一樣：lib/useMusicPlayer.ts）；不給 = 時間軸自己播 */
 export interface TimelineClock {
   /** 現在是第幾秒（每幀讀） */
   now: () => number;
@@ -30,14 +30,14 @@ export const STAGE_TIMELINE_TEXT = {
   buttonCloseTitle: '收起機關時間軸',
   /** 時間軸上面的說明列（只能看時） */
   readOnlyHint: '只能看，要改機關的時間請找製作。點一下時間尺可以跳到那個時間',
-  readOnlyHintVideo: '只能看，要改機關的時間請找製作。點一下時間尺，影片和 3D 畫面會跳到那個時間',
+  readOnlyHintVideo: '只能看，要改機關的時間請找製作。點一下時間尺，影片（沒影片的歌是音樂）和 3D 畫面會跳到那個時間',
   /** 色塊的提示最後一行 */
   barTip: '點一下跳到這個 cue',
   /** 時間尺的提示 */
-  rulerTipVideo: '點一下 / 拖：影片和 3D 畫面跳到這個時間',
+  rulerTipVideo: '點一下 / 拖：影片（沒影片的歌是音樂）和 3D 畫面跳到這個時間',
   /** 播放鈕的提示（跟著影片時） */
-  playVideoTitle: '播放影片（機關跟著影片時間動）',
-  pauseVideoTitle: '暫停影片',
+  playVideoTitle: '播放影片（沒影片的歌是音樂）；機關跟著它的時間動',
+  pauseVideoTitle: '暫停影片（沒影片的歌是音樂）',
   /** 空的時候 */
   noMechanisms: '這個專案還沒有機關',
   /** 沒有任何正式 cue 的時候（沒設「對應影片時間」的正式 cue 會暫排，不會讓時間軸空掉） */

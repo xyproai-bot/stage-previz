@@ -11,6 +11,7 @@ import { normalizeStageProps, type StagePropItem } from './stageProps';
 import { normalizeCameraBookmarks, type CameraBookmark } from './cameraBookmarks';
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
 import type { SongReviewFields } from './reviewApi';
+import type { SongMusicFields } from './musicApi';
 import { friendlyError } from './songReview';
 import type { Annotation } from './review/annotations';
 
@@ -431,8 +432,8 @@ export async function importProject(payload: object & { newName?: string }): Pro
 
 // ─── Songs ────────────────────────────────
 
-/** 歌單上的一首歌；code（歌曲代號 S01…）、latestVideoId / latestVideoVersion（最新可播的影片版本）見 videoApi.ts */
-export interface Song extends SongVideoFields, Partial<SongReviewFields> {
+/** 歌單上的一首歌；code（歌曲代號 S01…）、latestVideoId / latestVideoVersion（最新可播的影片版本）見 videoApi.ts；hasMusic / music（這首歌的音樂，舊的後台沒有）見 musicApi.ts */
+export interface Song extends SongVideoFields, Partial<SongReviewFields>, Partial<SongMusicFields> {
   id: string;
   name: string;
   order: number;

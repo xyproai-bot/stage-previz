@@ -1,0 +1,66 @@
+/* 音樂播放列：3D 畫面下面一條（沒有影片、有音樂的歌）。編輯頁多「設在現在這一秒」，導演頁沒有 */
+.music-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 6px 10px;
+  background: var(--surface-1);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 0;
+}
+.music-bar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+.music-bar__btn:hover:not(:disabled) { background: var(--surface-2); color: var(--text); }
+.music-bar__btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.music-bar__btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.music-bar__play { border-color: var(--border-strong); color: var(--text); }
+.music-bar__play:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.music-bar__time {
+  font-family: var(--font-mono);
+  color: var(--text);
+  white-space: nowrap;
+  min-width: 7.5em;
+}
+.music-bar__total { color: var(--text-muted); }
+.music-bar__seek {
+  flex: 1 1 140px;
+  min-width: 100px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+  --music-pos: 0%;
+}
+.music-bar__seek:disabled { cursor: not-allowed; opacity: 0.5; }
+.music-bar__name {
+  max-width: 220px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+}
+.music-bar__setnow { display: inline-flex; align-items: center; gap: 8px; min-width: 0; margin-left: auto; }
+.music-bar__setnow-btn { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.music-bar__cue { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-bar__error { flex-basis: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.music-bar__error .link-btn { display: inline-flex; align-items: center; gap: 3px; }
+
+@media (max-width: 720px) {
+  .music-bar__name { display: none; }
+  .music-bar__setnow { margin-left: 0; flex-basis: 100%; }
+}

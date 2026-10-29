@@ -11,7 +11,7 @@ const SONG_STATUS_LABEL: Record<string, string> = {
 
 const TARGET_LABEL: Record<string, string> = {
   project: '專案', song: '歌曲', cue: 'cue', library_cue: 'Cue 庫的 cue', cue_state: '物件位置', song_cue_states: '物件位置', stage_object: '物件', model: '模型',
-  song_video: '影片', mechanism: '機關', mechanism_group: '一排機關', drive_file: 'Drive 檔案', cue_template: '常用擺位', invite: '邀請連結',
+  song_video: '影片', song_music: '音樂', mechanism: '機關', mechanism_group: '一排機關', drive_file: 'Drive 檔案', cue_template: '常用擺位', invite: '邀請連結',
   share_link: '分享連結', comment: '留言', member: '成員',
 };
 
@@ -133,6 +133,15 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
     if (action === 'create') return `交了影片${label ? ` ${label}` : ''}${quoted(title)}`;
     if (action === 'delete') return `刪除影片${label ? ` ${label}` : ''}${quoted(title)}`;
     if (action === 'restore') return `從最近刪除救回影片${label ? ` ${label}` : ''}${quoted(title)}`;
+  }
+  // 歌曲的音樂（cf-worker/songMusic.mjs）：上傳 / 換 / 移除（payload 有歌名和檔名）
+  if (type === 'song_music') {
+    const song = str(p.songName);
+    const file = str(p.filename);
+    const of = song ? `「${song}」的` : '這首歌的';
+    if (action === 'upload') return `上傳了${of}音樂${quoted(file)}`;
+    if (action === 'update') return `換了${of}音樂${file ? `，改成${quoted(file)}` : ''}`;
+    if (action === 'delete') return `移除了${of}音樂${quoted(file)}`;
   }
   // 專案結束清影片（storage.mjs）
   if (type === 'project' && p.wrapUp === true) {

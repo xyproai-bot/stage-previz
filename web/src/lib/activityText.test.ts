@@ -11,6 +11,13 @@ describe('describeActivity（最近活動的一句話）', () => {
     expect(describeActivity(e('create', 'mechanism', { name: '旋轉舞台' }))).toBe('新增機關「旋轉舞台」');
     expect(describeActivity(e('update', 'drive_file', {}))).toBe('修改 Drive 檔案');
   });
+  it('歌曲的音樂：上傳 / 換 / 移除都是白話，沒有歌名 / 檔名也不會出現 undefined 或後台的代號', () => {
+    expect(describeActivity(e('upload', 'song_music', { songName: '開場', filename: 'S01.mp3' }))).toBe('上傳了「開場」的音樂「S01.mp3」');
+    expect(describeActivity(e('update', 'song_music', { songName: '開場', filename: 'S01-v2.wav', replaced: true }))).toBe('換了「開場」的音樂，改成「S01-v2.wav」');
+    expect(describeActivity(e('delete', 'song_music', { songName: '開場', filename: 'S01.mp3' }))).toBe('移除了「開場」的音樂「S01.mp3」');
+    expect(describeActivity(e('upload', 'song_music', {}))).toBe('上傳了這首歌的音樂');
+    expect(describeActivity(e('delete', 'song_music', {}))).toBe('移除了這首歌的音樂');
+  });
   it('對開拆成兩個機關：寫原名和拆成哪兩個，沒有名字也不會出現 undefined', () => {
     expect(describeActivity(e('update', 'mechanism', { unsplit: true, name: '側面 LED', nameA: '側面 LED A', nameB: '側面 LED B', bId: 'x', positions: 4, libraryPositions: 3 })))
       .toBe('把對開機關「側面 LED」拆成兩個機關「側面 LED A」「側面 LED B」');

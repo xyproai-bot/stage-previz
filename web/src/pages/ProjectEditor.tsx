@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useContext, useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../lib/api';
 import type { Song, Cue, CueState, StageObject, StageObjectCategory, MaterialProps, LedProps } from '../lib/api';
@@ -8,7 +8,8 @@ import { useMemberWatermark } from '../lib/watermark/useMemberWatermark';
 import { memberWatermarkOn } from '../lib/watermark/policy';
 import StageScene from '../components/StageScene';
 import MechanismTab from '../components/mechanisms/MechanismTab';
-import MechanismTimeline from '../components/mechanisms/MechanismTimeline';
+// 音樂是這首歌的時間（沒影片、有音樂）時，播放頭跟著音樂走（其他情況跟 MechanismTimeline 一樣）
+import MechanismTimeline from '../components/mechanisms/MechanismTimelineClocked';
 import MechanismObjectHint, { MechanismHintProvider, MechanismLockNote, useMechanismMounts } from '../components/mechanisms/MechanismObjectHint';
 import { mountedNames, stageLockMessage } from '../lib/stageLock';
 import { useEditorMechanisms } from '../lib/mechanisms/useMechanisms';
@@ -88,7 +89,7 @@ import Icon from '../components/Icon';
 import PhoneEditNote from '../components/PhoneEditNote';
 import { STAGE_CATEGORY } from '../components/stageCategories';
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowRightLeft, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Cloud, Columns2,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowRightLeft, ArrowUp, Bookmark, BookmarkPlus, Camera, Check, ChevronDown, Clapperboard, Clock, Cloud, Columns2,
   Copy, Eye, EyeOff, Flag, HistoryIcon, Import, LayoutGrid, LayoutPanelLeft, Library, Lightbulb, Link, Lock, LockOpen, MousePointerClick, Music,
   Palette, Pencil, Plus, Redo2, RotateCcw, Ruler, Search, Shapes, Sprout, Trash2, Undo2, Upload, Users, X,
 } from 'lucide-react';
@@ -97,6 +98,12 @@ import './ProjectEditor.css';
 import { usePanelWidth } from '../lib/usePanelWidth';
 import { useSongSwitchHold } from '../lib/songSwitchHold';
 import { reviewToggle, type ProjectStatusValue } from '../lib/projectStatus';
+import SongMusicField from '../components/SongMusicField';
+import MusicBar from '../components/MusicBar';
+import { useSongMusic } from '../lib/useSongMusic';
+import { useMusicHotkeys, useMusicPreviewFeed, useMusicTimelineClock } from '../lib/musicClock';
+import { EditorMusicContext, type EditorMusicValue } from '../lib/editorMusicContext';
+import { MUSIC_TEXT, canEditMusic, canSetCueTimeFromMusic, cueTimeChanged, cueTimeFromMusic, formatMusicClock, musicSummaryOf, setNowToast } from '../lib/songMusic';
 
 type RightTab = 'cues' | 'state' | 'mechanisms' | 'proposals' | 'objects' | 'library';
 type LoadStatus = 'loading' | 'ready' | 'error';
@@ -1079,6 +1086,48 @@ export default function ProjectEditor() {
     } catch (e) { toast.error('cue 沒有存到：' + msg(e)); }
   }
 
+  // ── 音樂（沒有影片的歌，用音樂當歌的時間）──
+  // 製作可以上傳 / 換 / 移除；有音樂、沒影片時，3D 下面有一條播放列，機關時間軸的播放頭和 3D 的機關跟著音樂走；
+  // 邊聽邊按：把選中的 cue 的「對應影片時間」設成音樂現在的時間（取到 0.1 秒，可以復原）。規則在 lib/songMusic.ts
+  const songMusic = useSongMusic({ projectId, song: selectedSong, hasVideo: !!selectedSong?.latestVideoId, videosLoaded: true });
+  const musicClock = useMusicTimelineClock(songMusic.player, songMusic.musicMode);
+  const { stop: stopMusic } = useMusicPreviewFeed({ enabled: songMusic.musicMode, video: songMusic.player.video, setPreviewTime: mech.setPreviewTime });
+  const [setNowBusy, setSetNowBusy] = useState(false);
+  const cueTitle = (c: Cue) => (c.libraryCue ? `Cue ${c.libraryCue.label}「${c.libraryCue.name}」` : `「${c.name}」`);
+  const canSetNow = canSetCueTimeFromMusic(editorRole) && songMusic.musicMode;
+  async function setCueToMusicNow() {
+    const cue = selectedCue;
+    if (!canSetNow || !projectId || !selectedSongId || !cue) return;
+    if (cue.status !== 'master') { toast.info('提案的 cue 不能設時間，請先選正式的 cue'); return; }
+    const t = cueTimeFromMusic(songMusic.player.video.currentTime);
+    const before = cue.videoTimeSec;
+    if (!cueTimeChanged(before, t)) { toast.info(`${cueTitle(cue)} 本來就設在 ${formatMusicClock(t)}`); return; }
+    const pid = projectId, sid = selectedSongId, scope = historyScope(selectedCueId);
+    setSetNowBusy(true);
+    try {
+      await api.updateCue(pid, sid, cue.id, { videoTimeSec: t });
+      historyRef.current.push(scope, {
+        undo: async () => { await api.updateCue(pid, sid, cue.id, { videoTimeSec: before }); await refreshCues(); },
+        redo: async () => { await api.updateCue(pid, sid, cue.id, { videoTimeSec: t }); await refreshCues(); },
+      });
+      bumpHistory();
+      await refreshCues();
+      toast.success(setNowToast(cueTitle(cue), t) + '（可以按「復原」改回來）');
+    } catch (e) { toast.error('cue 的時間沒有存到：' + msg(e)); }
+    finally { setSetNowBusy(false); }
+  }
+  const setNowRef = useRef(setCueToMusicNow);
+  setNowRef.current = setCueToMusicNow;
+  useMusicHotkeys({
+    enabled: songMusic.musicMode,
+    onToggle: songMusic.player.togglePlay,
+    onMark: canSetNow ? () => { void setNowRef.current(); } : null,
+  });
+  const musicCtx = useMemo<EditorMusicValue>(() => ({
+    clock: musicClock,
+    setNow: canSetNow ? { cueLabel: selectedCue && selectedCue.status === 'master' ? cueTitle(selectedCue) : null, busy: setNowBusy, run: () => { void setNowRef.current(); } } : null,
+  }), [musicClock, canSetNow, selectedCue, setNowBusy]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Cue 庫：還沒存的改動 → 另存 / 更新 / 放棄 / 換 cue 時的提醒 ──
   const refreshLibCues = useCallback(async () => {
     if (!projectId || !libMode) { setLibCues([]); return; }
@@ -1577,6 +1626,7 @@ export default function ProjectEditor() {
   ];
 
   return (
+    <EditorMusicContext.Provider value={musicCtx}>
     <div className="editor">
       {/* Top */}
       <header className="editor-topbar">
@@ -1763,6 +1813,20 @@ export default function ProjectEditor() {
                         onAdd={() => setAddVideoSongId(s.id)}
                         onOpenVersions={() => setVersionsSongId(s.id)}
                       />
+                      {/* 後台還沒有音樂這一功能（舊版後台的歌單沒有 hasMusic）→ 先不顯示，免得按了上傳才發現不能用 */}
+                      {projectId && s.hasMusic !== undefined && (
+                        <SongMusicField
+                          projectId={projectId}
+                          songId={s.id}
+                          music={s.music ?? null}
+                          canEdit={canEditMusic(editorRole)}
+                          hasVideo={!!s.latestVideoId}
+                          onChange={(m) => {
+                            setSongs(list => list.map(x => (x.id === s.id ? { ...x, hasMusic: !!m, music: m ? musicSummaryOf(m) : null } : x)));
+                            if (s.id === selectedSongId) songMusic.apply(m);
+                          }}
+                        />
+                      )}
                       <label className="song-item__assign" onClick={(e) => e.stopPropagation()}>
                         <span>負責動畫師</span>
                         <select
@@ -1915,6 +1979,17 @@ export default function ProjectEditor() {
               ledPreviewVersion={tplPattern.version}
             />
             </>
+          )}
+          {/* 音樂播放列：沒有影片、有音樂的歌。播的時候機關時間軸的播放頭和 3D 的機關跟著音樂走；「設在現在這一秒」= 邊聽邊設選中的 cue 的時間 */}
+          {songMusic.musicMode && songMusic.summary && (
+            <MusicBar
+              player={songMusic.player}
+              label={songMusic.summary.filename}
+              onStop={stopMusic}
+              onReload={songMusic.reload}
+              loadError={songMusic.error}
+              setNow={musicCtx.setNow ? { cueLabel: musicCtx.setNow.cueLabel, busy: musicCtx.setNow.busy, onClick: musicCtx.setNow.run } : null}
+            />
           )}
           {/* 機關時間軸：開「機關」分頁時排在 3D 畫面下面（右邊欄太窄） */}
           {rightTab === 'mechanisms' && mech.timelineOpen && mech.mechanisms.length > 0 && selectedSongId && stageObjects.length > 0 && (
@@ -2448,6 +2523,7 @@ export default function ProjectEditor() {
           : '會套進這個 cue 還沒存的改動，不會新增 cue；之後可以另存、更新或放棄。') : undefined}
       />
     </div>
+    </EditorMusicContext.Provider>
   );
 }
 
@@ -3106,6 +3182,8 @@ function CueMetaEditor({
   const [crossfade, setCrossfade] = useState(String(cue.crossfadeSeconds));
   const [videoTime, setVideoTime] = useState<string>(savedVideoTime);
   const [error, setError] = useState<string | null>(null);
+  // 音樂是這首歌的時間（沒影片、有音樂）：製作可以邊聽邊按，把這個 cue 設在音樂現在的時間
+  const { setNow } = useContext(EditorMusicContext);
 
   // 各欄位分開同步：存好一個欄位時，不要把另一個正在打的欄位洗掉
   useEffect(() => { setName(cue.name); }, [cue.id, cue.name]);
@@ -3186,6 +3264,11 @@ function CueMetaEditor({
           onKeyDown={enterToBlur}
           placeholder="例：15.5 或 1:23"
         />
+        {setNow && cue.status === 'master' && (
+          <button type="button" className="btn btn--sm btn--ghost cue-meta-editor__setnow" onClick={setNow.run} disabled={setNow.busy} title={MUSIC_TEXT.setNowHint}>
+            <Icon icon={Clock} /> {MUSIC_TEXT.setNow}
+          </button>
+        )}
         <small className="muted">
           {!parsedVideoTime.ok
             ? '格式：秒數（15.5）或 分:秒（1:23）'

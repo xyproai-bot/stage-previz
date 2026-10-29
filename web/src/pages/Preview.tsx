@@ -63,6 +63,11 @@ import { useStageFullscreen } from '../lib/useStageFullscreen';
 import { buildCueNav, buildSongNav } from '../lib/stageShow';
 import { useLocalVideo } from '../lib/localVideo';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
+import SongMusicField from '../components/SongMusicField';
+import MusicBar from '../components/MusicBar';
+import { useSongMusic } from '../lib/useSongMusic';
+import { useMusicHotkeys } from '../lib/musicClock';
+import { canEditMusic } from '../lib/songMusic';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { provisionalCueTitle } from '../lib/provisionalCues';
 import MechanismTimeline from '../components/mechanisms/MechanismTimeline';
@@ -926,6 +931,13 @@ function SongDetail({
     targetDoneRef.current();
   }, [target, versions, selected?.key, song.id]);
 
+  // ── 音樂（沒有影片的歌，用音樂當歌的時間）──
+  // 有影片 → 放影片（影片自己的聲音），不放音樂；沒影片才放音樂。音樂播放器的介面跟影片播放器一樣（lib/useMusicPlayer.ts），
+  // 所以舞台、cue 列、機關時間軸跟著音樂走的方式跟跟著影片一樣。製作和導演可以上傳 / 換 / 移除；動畫師只能聽
+  const songMusic = useSongMusic({ projectId, song, hasVideo: !!selected || !!song.latestVideoId, videosLoaded: versions.loadedSongId === song.id });
+  const musicMode = songMusic.musicMode;
+  const musicPlayer = songMusic.player;
+
   // 影片時間軸要每個 cue 的位置（放影片時才抓；抓過的留著）
   const statesCacheRef = useRef(new Map<string, Promise<CueState[]>>());
   useEffect(() => { statesCacheRef.current = new Map(); }, [song.id]);
@@ -949,14 +961,19 @@ function SongDetail({
     cues: mech.plannedCues,
     statesFor,
     resetKey: song.id,
-    active: videoMode,
-    ready: player.ready,
-    video: player.video,
-    time: player.time,
+    active: videoMode || musicMode,
+    ready: musicMode ? musicPlayer.ready : player.ready,
+    video: musicMode ? musicPlayer.video : player.video,
+    time: musicMode ? musicPlayer.time : player.time,
     selectedCueId,
     onSelectCue,
-    seek: player.seek,
+    seek: musicMode ? musicPlayer.seek : player.seek,
   });
+
+  // 音樂是歌的時間：3D 的機關跟著音樂的時間走（上面的 useStageMechanisms 讀的是影片）
+  const musicTimelineRef = useRef(mech.timeline);
+  musicTimelineRef.current = mech.timeline;
+  const musicMechAtFrame = useCallback(() => musicTimelineRef.current?.valuesAt(musicPlayer.video.currentTime) ?? null, [musicPlayer.video]);
 
   // ── 調整舞台（只預覽、不存；components/adjust）：導演、製作才有；Cue 庫模式的專案才出現 ──
   const adjustHostRef = useRef<StageAdjustHost | null>(null);
@@ -1026,9 +1043,12 @@ function SongDetail({
   // 打開調整舞台：影片先停、自動切 cue 停掉（不然 cue 會自己換走）
   const enterAdjust = useCallback(() => {
     if (player.playing) player.pause();
+    if (musicPlayer.playing) musicPlayer.pause();
     if (autoStep) onToggleAutoStep();
     adjust.enter();
-  }, [player, autoStep, onToggleAutoStep, adjust]);
+  }, [player, musicPlayer, autoStep, onToggleAutoStep, adjust]);
+  // 音樂當歌的時間時：空白鍵播放 / 暫停（有影片時空白鍵是影片的，在 useReviewSession）
+  useMusicHotkeys({ enabled: musicMode && !adjust.on, onToggle: musicPlayer.togglePlay });
   const focusComposer = useCallback(() => {
     setSheetOpen(true);  // 手機：先把留言面板拉上來，輸入框才看得到
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -1072,14 +1092,16 @@ function SongDetail({
   const hasMechanisms = (mech.mechanisms?.length ?? 0) > 0;
   const tlButton = showTimelineButton({ hasMechanisms, adjustOn: adjust.on });
   const tlShown = showTimeline({ open: tlOpen, hasMechanisms, adjustOn: adjust.on, fullscreen: stageShowCtl.active });
-  const tlSource = timelineSource({ videoMode, videoReady: player.ready });
+  const tlSource = timelineSource({ videoMode: videoMode || musicMode, videoReady: musicMode ? musicPlayer.ready : player.ready });
   useEffect(() => { if (adjust.on) setTlOpen(false); }, [adjust.on]);
   const stageTl = useStageTimeline({
     mechanisms: mech.mechanisms, groups: mech.groups, timeline: mech.timeline, freeActive: tlShown && tlSource === 'free',
   });
-  const playerVideoRef = useRef(player.video);
-  playerVideoRef.current = player.video;
-  const { playing: playerPlaying, togglePlay: playerToggle, seek: playerSeek, duration: playerDuration } = player;
+  // 播放頭跟誰走：有影片是影片，沒影片、有音樂是音樂
+  const clockPlayer = musicMode ? musicPlayer : player;
+  const playerVideoRef = useRef(clockPlayer.video);
+  playerVideoRef.current = clockPlayer.video;
+  const { playing: playerPlaying, togglePlay: playerToggle, seek: playerSeek, duration: playerDuration } = clockPlayer;
   const tlClock = useMemo<TimelineClock | null>(() => (tlSource === 'video' ? {
     now: () => playerVideoRef.current.currentTime,
     playing: playerPlaying, toggle: playerToggle, seek: playerSeek, duration: playerDuration,
@@ -1250,6 +1272,19 @@ function SongDetail({
             songLabel={songTitle(song)}
             onRestored={() => { void versions.reload(); }}
           />
+          {/* 音樂：沒有影片的歌用音樂當歌的時間。製作和導演可以上傳 / 換 / 移除，動畫師只能聽（後台還沒有音樂這一功能 = 歌單沒有 hasMusic → 先不顯示） */}
+          {song.hasMusic !== undefined && (
+            <SongMusicField
+              projectId={projectId}
+              songId={song.id}
+              music={songMusic.summary}
+              canEdit={canEditMusic(projectRole) && !va.readOnly}
+              hasVideo={!!selected || !!song.latestVideoId}
+              onChange={songMusic.apply}
+              guard={va.guard}
+              variant="bar"
+            />
+          )}
 
           <div className="song-detail__stage">
             <div className="song-detail__scene" ref={stageRef}>
@@ -1292,6 +1327,7 @@ function SongDetail({
                 }}
                 {...mech.sceneProps}
                 {...stageTl.sceneProps}
+                {...(musicMode ? { mechanismAtFrame: musicMechAtFrame } : null)}
                 focusedMechanismId={adjust.on ? adjust.active : null}
                 mechanismOverride={adjust.on ? adjust.override : undefined}
                 adjustHostRef={adjustHostRef}
@@ -1355,6 +1391,10 @@ function SongDetail({
             </div>
             {/* 調整舞台改了東西：黃色提示列（改了 N 個機關、放棄改動、另存成新 cue、存回 Cue 庫）；存完是綠色的（有復原） */}
             {canAdjust && <AdjustBar store={adjust.store} save={stageSave} />}
+            {/* 音樂播放列（沒有影片、有音樂）：播放 / 暫停、拖時間；機關時間軸、cue 列、3D 跟著音樂走。導演頁沒有設 cue 時間 */}
+            {musicMode && songMusic.summary && (
+              <MusicBar player={musicPlayer} label={songMusic.summary.filename} onReload={songMusic.reload} loadError={songMusic.error} />
+            )}
             {noCues && (
               <div className="song-detail__cuebar">
                 <span className="cuebar-hint">這首歌還沒有 cue，3D 顯示的是物件的預設位置</span>

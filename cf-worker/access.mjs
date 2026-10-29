@@ -30,6 +30,8 @@
 //   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
 //   歌曲影片：貼連結交一版                                                    上面的人 + 這個專案的導演（videos.mjs videoLinkDecision）
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
+//   歌曲的音樂（0049，songs/:s/music）：看、播放                                專案成員（分享連結的訪客碰不到：分享連結走另一組網址，沒有這幾條）
+//   歌曲的音樂：上傳 / 換 / 移除                                               admin、導演（need = musicEditor，規則 canEditStage）；動畫師 403、不是成員 403、封存的專案 409
 //   比例尺的樂手和器材（0033，stage-props）：看                                所有成員（分享連結：只看）
 //   比例尺的樂手和器材：新增 / 移動 / 轉 / 刪除                                admin、導演（canEditStageProps，規則在 web/src/lib/stageProps.ts）
 //   視角書籤（0035，camera-bookmarks）：看                                   所有成員（分享連結：只看）
@@ -218,6 +220,7 @@ export function songStatusDecision({ role, userId, song, to, expected, hasReadyV
  *   'memberManager' 全站 admin 或這個專案的 admin（role === 'admin'）：管這個專案的成員和邀請連結
  *   'cameraBookmarks' admin 或導演（canEditCameraBookmarks）：存 / 改名 / 刪 / 排視角書籤
  *   'directorStage'  admin 或導演（canEditStage）：導演頁「調整舞台」存回 / 另存 / 複製 / 改名 / 轉場秒數（handler 裡再檢查欄位，cueLibraryStage.mjs）
+ *   'musicEditor'   上傳 / 換 / 移除歌曲的音樂：admin 或導演（canEditStage）；動畫師只能聽（member）
  *   'songPatch'    改歌：只改狀態看 songStatusDecision，改其他欄位要 editor（handler 裡判斷）
  *   'projectPatch' 改專案：一般欄位 editor，Drive / 狀態 / 3D 檢視設定要全站 admin（handler 裡判斷）
  *   'videoUploader' 交影片：admin 或動畫師先放行，handler 裡再看這首歌指派給誰 / 這一版是誰交的（videos.mjs）
@@ -454,6 +457,21 @@ export function describeProjectRoute(method, segs) {
         return null;
       }
       if (b === 'videos') return describeVideoRoute(m, read, songId, c, d, e);
+      // 歌曲的音樂（0049）：一首歌最多一首；成員看 / 聽，製作和導演上傳 / 換 / 移除（songMusic.mjs，API 文件 docs/music-api.md）
+      //   GET music            這首歌的音樂（含播放網址）  成員
+      //   PUT music            上傳 / 換                  製作、導演
+      //   DELETE music         移除                       製作、導演
+      //   GET|HEAD music/stream 播放（要登入 header）       成員（<audio> 用 /api/music/:musicId/stream?pass=）
+      if (b === 'music') {
+        if (!c) {
+          if (read) return r('music.get', 'member', { songId });
+          if (m === 'PUT') return r('music.put', 'musicEditor', { songId });
+          if (m === 'DELETE') return r('music.delete', 'musicEditor', { songId });
+          return bad('music');
+        }
+        if (c === 'stream' && !d) return read ? r('music.stream', 'member', { songId }) : bad('music.stream');
+        return null;
+      }
       // 審片紀錄（V2 需修改、V3 已通過…），新的在前
       if (b === 'reviews' && !c) return read ? r('reviews.list', 'member', { songId }) : bad('reviews.list');
       if (b === 'mechanism-positions' && !c) {
@@ -560,6 +578,7 @@ export function roleMeetsNeed(need, { role, globalRole }) {
     case 'cameraBookmarks':
       return canEditCameraBookmarks(role);
     case 'directorStage':
+    case 'musicEditor':
       return canEditStage(role);
     case 'videoUploader':
       return role === 'admin' || role === 'animator';
@@ -597,6 +616,8 @@ export function needDeniedMessage(need) {
       return CAMERA_BOOKMARKS_DENIED_MESSAGE;
     case 'directorStage':
       return '只有導演或製作可以調整舞台';
+    case 'musicEditor':
+      return '只有製作或導演可以上傳、換或移除音樂；動畫師可以聽';
     case 'videoUploader':
       return '導演可以貼連結交一版；上傳檔案請找負責的動畫師或製作';
     case 'videoLinker':
