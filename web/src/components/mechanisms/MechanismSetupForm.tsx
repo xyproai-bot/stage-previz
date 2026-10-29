@@ -374,7 +374,7 @@ export default function MechanismSetupForm({
           </div>
           <small className="muted">{arcOn
             ? '沿著圓弧走，越往外越靠近圓心那一側；走的時候會跟著轉角度。數字還是沿軌道走幾公尺'
-            : '直線 = 往一個方向走。例：旋轉 LED 要沿著對開門的圓弧橫移，選「沿弧形軌道」'}</small>
+            : '直線 = 往一個方向走。例：旋轉 LED 要沿著天上的弧形軌道橫移，選「沿弧形軌道」'}</small>
         </div>
       )}
 
@@ -411,7 +411,7 @@ export default function MechanismSetupForm({
               ))}
             </div>
             <small className="muted">{centerChoices.length > 0
-              ? '物件繞著這一點走。想跟旋轉 LED 所在的對開門走同一個圓，就選對開門的轉軸中心'
+              ? '物件繞著這一點走。想跟某個旋轉機關（例：側面 LED）走同一個圓，就選它的轉軸中心'
               : '物件繞著這一點走（這個專案還沒有旋轉 / 對開的機關可以挑，請自己填 X、Y、Z）'}</small>
             {err('pivot')}
           </div>
