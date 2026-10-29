@@ -70,7 +70,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.prodProject, label: '建立專案' },
       { id: A.prodModel, label: '匯入 3D 模型', children: [{ id: A.prodNaming, label: '物件怎麼命名' }] },
       { id: A.prodCalibrate, label: '測距校準', children: [{ id: A.prodScaleProps, label: '比例尺：加樂手和器材' }] },
-      { id: A.prodSongs, label: '歌曲和歌曲代號', children: [{ id: A.prodVideos, label: '影片版本（看、刪除）' }, { id: A.prodDrive, label: 'Google Drive 資料夾' }] },
+      { id: A.prodSongs, label: '歌曲和歌曲代號', children: [{ id: A.prodVideos, label: '影片版本（看、刪除）' }, { id: A.prodMusic, label: '音樂（沒有影片的歌用音樂當時間）' }, { id: A.prodDrive, label: 'Google Drive 資料夾' }] },
       { id: A.prodAssign, label: '指派負責動畫師' },
       {
         id: A.prodCues, label: 'cue：位置和轉場', children: [
@@ -164,6 +164,7 @@ export const HELP_CHAPTERS: HelpChapter[] = [
       { id: A.dirBoard, label: '總覽和狀態' },
       { id: A.dirPlay, label: '在 LED 上看某一版' },
       { id: A.dirAddLink, label: '貼連結加影片' },
+      { id: A.dirMusic, label: '音樂（沒有影片的歌）' },
       { id: A.dirComment, label: '留言、@ 提及' },
       { id: A.dirAttach, label: '參考圖片、影片連結' },
       { id: A.dirAnnotate, label: '畫記、記住視角、區段' },
@@ -1133,6 +1134,22 @@ function ProducerChapter() {
             <li>清單上寫「<Ui>跟 V2 重複</Ui>」的那一版，檔案跟 V2 一模一樣（佔兩份空間），不需要的話可以刪掉。</li>
             <li>沒交成功或卡住的：貼連結的可以「<Ui>重試</Ui>」，上傳停住的可以「<Ui>繼續上傳</Ui>」（選同一個檔案），不要了按「<Ui>取消</Ui>」或「<Ui>拿掉</Ui>」，號碼不會被佔走。</li>
             <li>下面的「<Ui>加影片</Ui>」跟歌單上的「<Ui>＋ 加影片</Ui>」一樣。還沒有影片的歌，歌單上寫「還沒有影片」。</li>
+          </ul>
+        </Section>
+
+        <Section id={A.prodMusic} level={3} title="音樂（沒有影片的歌用音樂當時間）">
+          <p>動畫還沒做好、沒有影片的歌，可以先放一首音樂。<strong>音樂就是這首歌的時間</strong>：機關時間軸的播放頭、3D 的機關、cue 都跟著音樂的時間走，跟有影片的時候一樣。</p>
+          <ol className="help-steps">
+            <li>編輯頁左邊每首歌有一行「<Ui>音樂</Ui>」，按「<Ui>上傳音樂</Ui>」選檔案。收 <strong>MP3、WAV、M4A、AAC、FLAC</strong>，最大 90 MB（4 分鐘左右的 WAV 放得下）。傳的時候有進度，不想傳了按「<Ui>取消</Ui>」。</li>
+            <li>傳好了這一行會寫檔名、長度、大小。要換按「<Ui>換音樂</Ui>」，不要了按「<Ui>移除</Ui>」；兩個都會先問一次，舊的檔案會刪掉，<strong>救不回來</strong>。</li>
+            <li>沒有影片、有音樂的歌，3D 畫面下面會有一條音樂播放列：播放 / 暫停、停止、拖時間、聲音。播的時候機關時間軸的播放頭和 3D 的機關跟著音樂動；點機關時間軸的時間尺，音樂跳到那一秒。</li>
+          </ol>
+          <ul className="help-list">
+            <li><strong>誰可以</strong>：製作和這個專案的導演可以上傳、換、移除；動畫師只能聽。分享連結的客戶這一版聽不到音樂。</li>
+            <li><strong>有影片時聽哪個</strong>：有影片的歌放影片（影片自己的聲音），<strong>音樂不會播</strong>，歌單上那一行會註明。沒有影片才放音樂。之後動畫師交了影片就自動改成影片，音樂還留著（不要了可以移除）。</li>
+            <li><strong>邊聽邊按，設 cue 的時間</strong>：①點右邊清單選一個 cue；②放音樂，聽到想要的那一秒；③按播放列上的「<Ui>設在現在這一秒</Ui>」（或鍵盤 <kbd>M</kbd>），這個 cue 的「對應影片時間」就變成音樂現在的時間（取到 0.1 秒），右下角跳出提示。「物件狀態」分頁的「對應影片時間」旁邊也有同一顆按鈕。設錯了按「<Ui>復原</Ui>」改回來，也可以直接在欄位打數字微調。</li>
+            <li><strong>空白鍵</strong> = 播放 / 暫停音樂（在打字的欄位裡不會動）。</li>
+            <li>換音樂不會改 cue 已經設好的時間；新的音樂如果長度不一樣，請自己對一下。複製專案不會帶音樂。</li>
           </ul>
         </Section>
 
@@ -2266,6 +2283,16 @@ function DirectorChapter() {
           <li>你貼的那一版<strong>不會改歌的狀態</strong>（需修改還是需修改），也不會通知其他導演；會通知這首歌的動畫師和製作。</li>
           <li>還在複製或失敗的那一版，你可以取消或重試；好了之後你可以刪掉自己貼的那一版。別人交的版本只有交的人和製作可以刪。</li>
           <li>不收：資料夾、Google 文件、YouTube / Vimeo、WeTransfer。瀏覽器播不了的格式（例如 ProRes）複製好了也播不出來，版本會變紅（看 <Go to={A.animAeExport}>AE 輸出設定</Go>）。</li>
+        </ul>
+      </Section>
+
+      <Section id={A.dirMusic} title="音樂（沒有影片的歌）">
+        <p>動畫還沒交的歌，可以先放一首音樂當時間，先看 cue 和機關的時間對不對。製作和你（導演）都可以放；動畫師只能聽。</p>
+        <ul className="help-list">
+          <li>打開那首歌，影片版本列下面有一行「<Ui>音樂</Ui>」：按「<Ui>上傳音樂</Ui>」選檔案（MP3、WAV、M4A、AAC、FLAC，最大 90 MB）。要換按「<Ui>換音樂</Ui>」，不要了按「<Ui>移除</Ui>」，兩個都會先問一次，舊的檔案會刪掉。</li>
+          <li>沒有影片、有音樂的歌，3D 畫面下面有一條音樂播放列（播放 / 暫停、拖時間、聲音；空白鍵也可以播放 / 暫停）。播的時候 cue 列、機關時間軸、3D 的機關都跟著音樂的時間走；點機關時間軸的時間尺或某個 cue，音樂就跳到那一秒。操作跟有影片的時候一樣。</li>
+          <li><strong>有影片的歌聽影片的聲音</strong>，音樂不會播；沒有影片才放音樂。</li>
+          <li>cue 的時間點是製作設的（導演頁沒有「設在現在這一秒」）。分享連結的客戶聽不到音樂。</li>
         </ul>
       </Section>
 

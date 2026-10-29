@@ -34,6 +34,7 @@ crons = ["*/5 * * * *"]
 # 歌曲影片版本（docs/videos-api.md）
 #   VIDEO_MAX_BYTES        單一影片上限（bytes），4 GB
 #   VIDEO_COPY_PART_BYTES  後台複製每段多大（可不填，預設 32 MiB；5 MiB～95 MiB）
+#   MUSIC_MAX_BYTES        歌曲音樂上限（bytes）。可不填，預設 90 MiB；最多 95 MiB（Cloudflare 一個請求最多 100 MB）（docs/music-api.md）
 [vars]
 VIDEO_MAX_BYTES = "4294967296"
 # 刪掉超過 30 天的版本要不要真的清 R2 的檔案："on" = 清；其他（"dry-run"）= 只記錄會清哪些，不刪（storage.mjs）

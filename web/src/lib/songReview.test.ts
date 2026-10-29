@@ -156,6 +156,14 @@ describe('自動更新的比對', () => {
     expect(sameSongs([s('a', 'todo')], [s('a', 'in_review')])).toBe(false);
     expect(sameSongs([s('a', 'todo')], [s('a', 'todo'), s('b', 'todo')])).toBe(false);
   });
+  it('sameSongs：別人換了 / 移除了音樂（音樂 id 變了）也算不一樣；舊後台沒有音樂欄位照樣能比', () => {
+    const withMusic = (id: string): Song => ({ ...s('a', 'todo'), hasMusic: true, music: { id, filename: 'x.mp3', mime: 'audio/mpeg', sizeBytes: 1, durationSec: 1, uploadedAt: '' } });
+    expect(sameSongs([withMusic('sm_1')], [withMusic('sm_1')])).toBe(true);
+    expect(sameSongs([withMusic('sm_1')], [withMusic('sm_2')])).toBe(false);
+    expect(sameSongs([s('a', 'todo')], [withMusic('sm_1')])).toBe(false);
+    expect(sameSongs([withMusic('sm_1')], [{ ...s('a', 'todo'), hasMusic: false, music: null }])).toBe(false);
+    expect(sameSongs([{ ...s('a', 'todo'), music: null }], [s('a', 'todo')])).toBe(true);
+  });
   const c = (id: string, authorUserId: string, extra: Partial<SongComment> = {}): SongComment => ({
     id, time: 0, x: 0.5, y: 0.5, text: 't', author: authorUserId, email: null, role: 'director',
     createdAt: '2026-10-14T00:00:00Z', authorUserId, ...extra,

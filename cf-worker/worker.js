@@ -89,6 +89,7 @@ import {
 } from './invites.mjs';
 // 專案成員（「成員」面板：加進專案 / 改角色 / 移出專案 / 找現有用戶）
 import * as members from './members.mjs';
+import * as songMusic from './songMusic.mjs';
 // 機關（升降台、轉台…）：定義、每個 cue 的位置、總表、複製 / 匯出 / 舊滑桿同步（docs/mechanisms-api.md）
 import * as mech from './mechanisms.mjs';
 import * as cueLib from './cueLibraryRoutes.mjs';
@@ -318,6 +319,12 @@ async function routeRequest(request, env) {
     if (parts.length === 4 && parts[3] === 'stream') return handleMemberVideoStream(request, env, url, parts[2]);
     return jsonResp({ error: 'Not found' }, 404);
   }
+  // 歌曲音樂播放（成員）：/api/music/:musicId/stream?pass=<通行證>（分享連結沒有這條：訪客拿不到音樂）
+  if (url.pathname.startsWith('/api/music/') && (request.method === 'GET' || request.method === 'HEAD')) {
+    const parts = url.pathname.split('/').filter(Boolean);  // [api, music, id, stream]
+    if (parts.length === 4 && parts[3] === 'stream') return handleMemberMusicStream(request, env, url, parts[2]);
+    return jsonResp({ error: 'Not found' }, 404);
+  }
   if (url.pathname === '/api/projects' || url.pathname.startsWith('/api/projects/')) {
     return handleProjectsRouter(request, env, url);
   }
@@ -351,6 +358,7 @@ async function routeRequest(request, env) {
 //   /api/projects/:id/model[/use-asset|/versions[/activate|/:ts.glb]]
 //   /api/projects/:id/songs[/reorder|/:songId[/import-cues|/cues[/reorder|/:cueId[/reset|/states[/:objId]]]]]
 //   /api/projects/:id/songs/:songId/videos[/uploads|/link|/:videoId[/parts/:n|/complete|/abort|/retry|/stream]]
+//   /api/projects/:id/songs/:songId/music[/stream]
 //   /api/projects/:id/activity | duplicate | restore | export | cue-templates | drive/... | share-links[/:token]
 async function handleProjectsRouter(request, env, url) {
   if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
@@ -537,6 +545,15 @@ async function dispatchProjectRoute(request, env, url, ctx, route, segs) {
     case 'songs.importCues':      return importCuesFromSong(request, env, projectId, songId);
     case 'songs.templateTimeline': return mechResp(ledTpl.putSongTimeline(request, env, ctx, songId, mechLog(request, env, projectId)));
     case 'reviews.list':          return reviewsResp(reviews.listSongReviews(env.DB, songId));
+
+    // 歌曲的音樂（songMusic.mjs；權限 musicEditor = 製作 + 導演，路由表和 handler 各檢查一次）
+    case 'music.get':             return mechResp(songMusic.getSongMusic(env, ctx, { secret: getAuthSecret(env) }));
+    case 'music.put':             return mechResp(songMusic.putSongMusic(request, env, ctx, { secret: getAuthSecret(env), log: mechLog(request, env, projectId) }));
+    case 'music.delete':          return mechResp(songMusic.deleteSongMusic(env, ctx, { log: mechLog(request, env, projectId) }));
+    case 'music.stream': {
+      const m = await songMusic.loadSongMusicForStream(env, songId);
+      return m ? serveR2Video(request, env, m, { noun: '音樂' }) : jsonResp({ error: '這首歌還沒有音樂' }, 404);
+    }
 
     case 'videos.list':           return listSongVideos(request, env, ctx);
     case 'videos.get':            return getSongVideo(request, env, ctx);
@@ -1801,6 +1818,8 @@ async function listSongs(env, projectId) {
   const reviewed = await reviews.reviewSummaryBySong(env.DB, projectId);
   // 每首歌中途換版型的點（0039；沒有 = 空陣列）
   const switchesBy = await ledTpl.loadSwitchesByProject(env, projectId).catch(() => new Map());
+  // 每首歌的音樂（0049；沒有 = null）。表還沒建（migration 還沒套）→ 空的
+  const musicBy = await songMusic.loadMusicSummaries(env, projectId);
 
   return jsonResp({ songs: (r.results || []).map(s => ({
     id: s.id, name: s.name, order: s.order,
@@ -1815,6 +1834,9 @@ async function listSongs(env, projectId) {
     // 最新可以播的影片版本（沒有 = null）；版本清單：GET /songs/:id/videos
     latestVideoId: latest.get(s.id)?.id || null,
     latestVideoVersion: latest.get(s.id)?.version ?? null,
+    // 這首歌的音樂（0049）：有沒有、檔名 / 長度 / 大小；播放網址要另外 GET /songs/:id/music
+    hasMusic: musicBy.has(s.id),
+    music: musicBy.get(s.id) || null,
     lastReview: reviewed.get(s.id)?.lastReview ?? null,
     reviewedVersion: reviewed.get(s.id)?.reviewedVersion ?? null,
   })) });
@@ -1871,7 +1893,8 @@ async function createSong(request, env, projectId) {
 async function getSong(env, projectId, songId) {
   const row = await env.DB.prepare(`SELECT * FROM songs WHERE id = ? AND project_id = ? LIMIT 1`).bind(songId, projectId).first();
   if (!row) return jsonResp({ error: 'Not found' }, 404);
-  return jsonResp({ song: row });
+  const music = (await songMusic.loadMusicSummaries(env, projectId)).get(songId) || null;
+  return jsonResp({ song: row, music });
 }
 
 // 改歌：
@@ -2039,8 +2062,17 @@ async function deleteSong(request, env, projectId, songId) {
   ).bind(songId).all().catch(() => ({ results: [] }))).results || []).map(r => r.thumb_key);
   // 留言的參考圖片（0028，含還沒送出的）
   const imageKeys = await attachments.songAttachmentKeys(env.DB, songId);
-  const result = await env.DB.prepare(`DELETE FROM songs WHERE id = ? AND project_id = ?`).bind(songId, projectId).run();
+  // 歌的音樂（0049）：資料跟著歌一起刪（ON DELETE CASCADE），R2 檔案的位置先記進 r2_pending_deletes（同一批），再試著刪
+  const musicKeys = (await env.DB.prepare(`SELECT r2_key FROM song_music WHERE song_id = ? AND project_id = ?`).bind(songId, projectId).all()
+    .catch(() => ({ results: [] }))).results?.map(r => r.r2_key) || [];
+  const result = musicKeys.length
+    ? (await env.DB.batch([
+        env.DB.prepare(`INSERT OR IGNORE INTO r2_pending_deletes (r2_key, created_at) SELECT r2_key, ? FROM song_music WHERE song_id = ? AND project_id = ?`).bind(nowIso(), songId, projectId),
+        env.DB.prepare(`DELETE FROM songs WHERE id = ? AND project_id = ?`).bind(songId, projectId),
+      ]))[1]
+    : await env.DB.prepare(`DELETE FROM songs WHERE id = ? AND project_id = ?`).bind(songId, projectId).run();
   if (!result.meta.changes) return jsonResp({ error: 'Not found' }, 404);
+  if (musicKeys.length) runInBackground(request, songMusic.discardR2Files(env, musicKeys));
   // 歌的影片版本跟著歌一起刪（資料庫那邊 ON DELETE CASCADE），R2 的檔案也清掉
   if (videoFiles.length) runInBackground(request, cleanupSongVideoFiles(env, videoFiles));
   if (thumbKeys.length) runInBackground(request, reviews.deleteCommentThumbs(env.MODELS, thumbKeys));
@@ -6073,7 +6105,9 @@ async function queueDriveVideoVersions(env, proj, pairs) {
 // ── 播放（R2，支援 Range）──
 
 // playback.noStore：分享連結「禁止下載」的影片不讓瀏覽器 / 快取存起來
+// playback.noun：錯誤訊息裡的「影片」（歌曲音樂播放也走這裡，寫「音樂」）
 async function serveR2Video(request, env, v, playback = {}) {
+  const noun = playback.noun || '影片';
   if (!env.MODELS) return jsonResp({ error: 'R2 not configured' }, 500);
   const isHead = request.method === 'HEAD';
   const size = Number(v.size_bytes);
@@ -6089,9 +6123,9 @@ async function serveR2Video(request, env, v, playback = {}) {
     obj = isHead ? await env.MODELS.head(v.r2_key) : await env.MODELS.get(v.r2_key, opts);
   } catch (e) {
     console.warn('[video stream]', v.id, String(e?.message || e).slice(0, 200));
-    return jsonResp({ error: '讀影片檔失敗，請再試一次' }, 502);
+    return jsonResp({ error: `讀${noun}檔失敗，請再試一次` }, 502);
   }
-  if (!obj) return jsonResp({ error: '找不到這個影片檔' }, 404);
+  if (!obj) return jsonResp({ error: `找不到這個${noun}檔` }, 404);
   const headers = new Headers(corsHeaders());
   headers.set('Content-Type', v.mime || obj.httpMetadata?.contentType || 'video/mp4');
   headers.set('Accept-Ranges', 'bytes');
@@ -6149,6 +6183,26 @@ async function handleMemberVideoStream(request, env, url, videoId) {
   if (!role) return jsonResp({ error: '沒有權限存取此專案' }, 403);
   if (row.project_status === 'archived' && row.user_role !== 'admin') return jsonResp({ error: '找不到這一版影片' }, 404);
   return serveR2Video(request, env, row);
+}
+
+// /api/music/:musicId/stream?pass=<通行證>（歌曲音樂的 streamUrl）；沒帶通行證也可以用登入身分
+async function handleMemberMusicStream(request, env, url, musicId) {
+  if (!env.DB) return jsonResp({ error: 'D1 not configured' }, 500);
+  if (!ID_RE.test(musicId || '')) return jsonResp({ error: '找不到這首音樂' }, 404);
+  const pass = url.searchParams.get('pass');
+  let userId = pass ? await songMusic.verifyMusicPass(getAuthSecret(env), pass, { musicId }) : null;
+  if (!userId) {
+    const me = await getCurrentUser(request, env);
+    userId = me?.id || null;
+  }
+  if (!userId) {
+    return jsonResp(pass
+      ? { error: '播放網址過期了，請重新整理頁面', passExpired: true }
+      : { error: '未登入' }, 401);
+  }
+  const found = await songMusic.loadMusicForStream(env, musicId, userId);
+  if (!found.row) return jsonResp({ error: found.error }, found.status);
+  return serveR2Video(request, env, found.row, { noun: '音樂' });
 }
 
 // 刪歌時：那首歌的影片（R2 檔案、還沒傳完的分段）一起清掉
