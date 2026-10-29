@@ -16,10 +16,16 @@ export const MEMBER_ROLE_NAME: Record<MemberRole, string> = {
   animator: '動畫師',
 };
 
+/**
+ * 導演在「調整舞台」能做的事（每一項都有測試去對後端的權限：cf-worker/directorStage.test.mjs）。
+ * 物件的顯示 / 位置、刪 cue、改編號、設定機關這些導演還是不能做（後端會擋）。
+ */
+export const DIRECTOR_STAGE_TEXT = '調整舞台（調機關位置、存回 Cue 庫、另存成新 cue、複製、改名、轉場秒數）';
+
 /** 每個角色在這個專案能做什麼（選角色時的小字） */
 export const MEMBER_ROLE_HINT: Record<MemberRole, string> = {
   admin: '可以編輯這個專案、管理成員',
-  director: '進審片頁：看影片、留言、通過或要求修改',
+  director: `進審片頁：看影片、留言、通過或要求修改；也能${DIRECTOR_STAGE_TEXT}`,
   animator: '進工作站：交影片、看導演的留言',
 };
 

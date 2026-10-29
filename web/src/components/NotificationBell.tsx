@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AtSign, Bell, BellOff, CheckCheck, CircleCheck, CornerDownRight, Film, Link2, MessageSquareText, RotateCcw, UserPlus, X } from 'lucide-react';
+import { AtSign, Bell, BellOff, CheckCheck, CircleCheck, CornerDownRight, Film, Link2, MessageSquareText, RotateCcw, SlidersHorizontal, UserPlus, X } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import Icon from './Icon';
 import EmptyState from './EmptyState';
@@ -32,6 +32,7 @@ const KIND_ICON: Record<NotificationKind, LucideIcon> = {
   assigned: UserPlus,
   guest_comment: MessageSquareText,
   director_video: Link2,
+  director_stage: SlidersHorizontal,
 };
 
 interface Props {

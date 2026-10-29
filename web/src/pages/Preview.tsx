@@ -15,7 +15,9 @@ import AdjustModeSwitch from '../components/adjust/AdjustModeSwitch';
 import AdjustOverlay from '../components/adjust/AdjustOverlay';
 import AdjustPanel from '../components/adjust/AdjustPanel';
 import AdjustBar from '../components/adjust/AdjustBar';
+import AdjustCueTools from '../components/adjust/AdjustCueTools';
 import { useAdjustStage } from '../components/adjust/useAdjustStage';
+import { useStageSave } from '../components/adjust/useStageSave';
 import type { AdjustScene } from '../components/adjust/handles';
 import { canAdjustStage, showAdjustSwitch } from '../lib/adjust/permissions';
 import AnnotationLayer from '../components/AnnotationLayer';
@@ -296,6 +298,18 @@ function PreviewInner({ projectId }: { projectId: string }) {
   }, [projectId, selectedSongId]);
 
   const cuesReady = !!selectedSongId && cuesFor === selectedSongId;
+
+  // 調整舞台存完（另存 / 改名 / 改轉場秒數）：重讀這首歌的 cue，名字、編號、秒數才會更新；選到哪個 cue 不變
+  const selectedSongRef = useRef(selectedSongId);
+  selectedSongRef.current = selectedSongId;
+  const reloadCues = useCallback(async () => {
+    const sid = selectedSongRef.current;
+    if (!sid) return;
+    try {
+      const list = await api.listCues(projectId, sid);
+      if (selectedSongRef.current === sid) setCues(list);
+    } catch { /* 下次再試 */ }
+  }, [projectId]);
 
   useEffect(() => {
     // 還在讀這首歌的 cue 時不要拿上一首的 cue id 去問
@@ -598,6 +612,7 @@ function PreviewInner({ projectId }: { projectId: string }) {
           target={target && target.songId === selectedSongId ? target : null}
           onTargetDone={() => setTarget(null)}
           live={live}
+          onReloadCues={reloadCues}
         />
       ) : (
         <StatusBoard
@@ -740,7 +755,7 @@ function StatusBoard({
 function SongDetail({
   projectId, song, cues, cuesReady, selectedCueId, onSelectCue, autoStep, onToggleAutoStep,
   stageObjects, viewportStates, modelUrl, cueName, user, projectRole, onChangeStatus, onClose, onPickSong, songs, members,
-  target, onTargetDone, projectName, live,
+  target, onTargetDone, projectName, live, onReloadCues,
 }: {
   projectId: string;
   song: Song;
@@ -770,6 +785,8 @@ function SongDetail({
   onTargetDone: () => void;
   /** 自動更新（留言、機關）要不要開：專案已封存 → false */
   live: boolean;
+  /** 調整舞台存完之後重讀這首歌的 cue（名字、編號、轉場秒數） */
+  onReloadCues: () => Promise<void>;
 }) {
   const va = useViewAs();
   // 校準倍率、現場設定、LED 畫布大小（製作在管理頁設的，導演這邊只看）
@@ -966,6 +983,15 @@ function SongDetail({
     timingsForCue: mech.timingsForCue,
     seconds: cueTransitionSeconds(adjustCue.cue),
     hostRef: adjustHostRef,
+    // 存回 Cue 庫用：這個 cue 指到的 Cue 庫的 cue、編號、讀到存的值的時候它的版本
+    libraryCueId: adjustCue.cue?.libraryCueId ?? null,
+    libraryLabel: adjustCue.cue?.libraryCue?.label ?? null,
+    rev: adjustCue.cue?.libraryCueId ? mech.libraryRevs?.[adjustCue.cue.libraryCueId] ?? null : null,
+  });
+  // 存起來（存回 Cue 庫 / 另存成新 cue / 復原 / 複製 / 改名 / 轉場秒數）：導演和製作；「用其他身分看」時擋住
+  const stageSave = useStageSave({
+    store: adjust.store, projectId, song, cue: adjustCue.cue,
+    positionRows: mech.positionRows, reloadPositions: mech.reloadPositions, reloadCues: onReloadCues, guard: va.guard,
   });
   const adjustFront = useCallback(() => {
     try { return adjustQueryRef.current?.stageFront() ?? { x: 0, y: 0, z: 1 }; } catch { return { x: 0, y: 0, z: 1 }; }
@@ -1325,8 +1351,8 @@ function SongDetail({
                 />
               )}
             </div>
-            {/* 調整舞台改了東西：黃色提示列（改了 N 個機關、放棄、存回 Cue 庫下一版開放） */}
-            {canAdjust && <AdjustBar store={adjust.store} />}
+            {/* 調整舞台改了東西：黃色提示列（改了 N 個機關、放棄改動、另存成新 cue、存回 Cue 庫）；存完是綠色的（有復原） */}
+            {canAdjust && <AdjustBar store={adjust.store} save={stageSave} />}
             {noCues && (
               <div className="song-detail__cuebar">
                 <span className="cuebar-hint">這首歌還沒有 cue，3D 顯示的是物件的預設位置</span>
@@ -1354,6 +1380,8 @@ function SongDetail({
                     </button>
                   ))}
                 </div>
+                {/* 調整舞台：選到的 cue 可以複製 / 改名 / 改轉場秒數 */}
+                {adjust.on && <AdjustCueTools save={stageSave} enabled={!!adjustCue.cue?.libraryCueId} />}
                 <div className="cuebar-hint" title="下一個 / 上一個 cue">
                   <kbd>Shift</kbd>+<kbd>J</kbd>/<kbd>K</kbd>
                 </div>

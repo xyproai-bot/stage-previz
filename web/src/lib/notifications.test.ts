@@ -24,6 +24,21 @@ describe('通知文字', () => {
     expect(notificationDetail(n({ kind: 'needs_changes' }))).toBe('原因：第二段太亮');
     expect(notificationDetail(n({ excerpt: '' }))).toBe('');
   });
+  it('導演在調整舞台存了舞台：「導演 ○○ 改了 cue 30 的舞台（S05、S12、S17 會一起變）」，整句在標題裡、下面不再重複', () => {
+    const stage = n({ kind: 'director_stage', actorName: '王導', excerpt: '改了 cue 30 的舞台（S05、S12、S17 會一起變）' });
+    expect(notificationTitle(stage)).toBe('導演 王導 改了 cue 30 的舞台（S05、S12、S17 會一起變）');
+    expect(notificationDetail(stage)).toBe('');
+    expect(notificationTitle(n({ kind: 'director_stage', actorName: '王導', excerpt: '另存了 cue 30-1（從 cue 30），S05 改用新的' })))
+      .toBe('導演 王導 另存了 cue 30-1（從 cue 30），S05 改用新的');
+    // 舊資料 / 沒有內容也不會出現 undefined
+    expect(notificationTitle(n({ kind: 'director_stage', actorName: '王導', excerpt: '' }))).toBe('導演 王導 改了舞台');
+    expect(notificationTitle(n({ kind: 'director_stage', actorName: '', excerpt: '' }))).toBe('導演 有人 改了舞台');
+  });
+  it('點了開那首歌：動畫師 → 工作站、製作 / 導演 → 導演頁', () => {
+    const stage = n({ kind: 'director_stage', videoId: null, commentId: null });
+    expect(notificationHref(stage)).toBe('/studio/p1?song=s1');
+    expect(notificationHref({ ...stage, projectRole: 'admin' })).toBe('/preview/p1?song=s1');
+  });
 });
 
 describe('點了去哪裡', () => {

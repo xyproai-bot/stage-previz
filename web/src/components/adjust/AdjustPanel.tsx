@@ -53,7 +53,7 @@ export default function AdjustPanel(p: AdjustPanelProps) {
           <button type="button" className="adjust-chip" onClick={() => store.discardAll()}><Icon icon={Undo2} /> {ADJUST_TEXT.discardAll}</button>
         </div>
       )}
-      <div className="adjust-panel__hint">{ADJUST_TEXT.previewOnly}</div>
+      <div className="adjust-panel__hint">{ADJUST_TEXT.unsavedHint}</div>
     </div>
   );
 }

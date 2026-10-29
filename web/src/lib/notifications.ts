@@ -22,6 +22,8 @@ export function notificationTitle(n: AppNotification): string {
     case 'guest_comment': return `${who} 在${songOf(n)}${v(n)} 留言`;
     // 導演貼連結交了一版（通知這首歌的動畫師和製作）
     case 'director_video': return `導演 ${who} 貼了一版影片${v(n)} 到${songOf(n)}`;
+    // 導演在調整舞台存了 cue 的機關位置 / 另存 / 改轉場秒數：後台寫好整句（excerpt = 「改了 cue 30 的舞台（S05、S12 會一起變）」）
+    case 'director_stage': return n.excerpt ? `導演 ${who} ${n.excerpt}` : `導演 ${who} 改了舞台`;
     default: return `${songOf(n)}有新動態`;
   }
 }
@@ -29,6 +31,7 @@ export function notificationTitle(n: AppNotification): string {
 /** 第二行的小字（留言內容 / 需修改的原因 / 版本說明） */
 export function notificationDetail(n: AppNotification): string {
   if (!n.excerpt) return '';
+  if (n.kind === 'director_stage') return '';   // 整句已經在標題裡
   if (n.kind === 'needs_changes') return `原因：${n.excerpt}`;
   return n.excerpt;
 }

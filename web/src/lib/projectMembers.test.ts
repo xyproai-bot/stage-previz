@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MEMBER_ROLE_NAME, MEMBER_ROLE_ORDER, PROJECT_ADMIN_CAN, PROJECT_ADMIN_CANNOT, PROJECT_ADMIN_SCOPE_TEXT, groupMembersByRole, groupTitle, memberRowLock,
+  DIRECTOR_STAGE_TEXT, MEMBER_ROLE_HINT, MEMBER_ROLE_NAME, MEMBER_ROLE_ORDER, PROJECT_ADMIN_CAN, PROJECT_ADMIN_CANNOT, PROJECT_ADMIN_SCOPE_TEXT, groupMembersByRole, groupTitle, memberRowLock,
 } from './projectMembers';
 
 describe('專案成員：分組', () => {
@@ -37,5 +37,17 @@ describe('專案的製作能做什麼：說明文字', () => {
     expect(PROJECT_ADMIN_SCOPE_TEXT).toContain('管全站用戶');
     for (const c of PROJECT_ADMIN_CANNOT) expect(PROJECT_ADMIN_SCOPE_TEXT).toContain(c.phrase);
     for (const c of PROJECT_ADMIN_CAN.filter(x => x !== '成員')) expect(PROJECT_ADMIN_SCOPE_TEXT).toContain(c);
+  });
+});
+
+describe('導演能做什麼：成員面板上的說明', () => {
+  it('導演的說明寫出可以調整舞台、存回 Cue 庫（後端權限對過：cf-worker/directorStage.test.mjs）', () => {
+    expect(MEMBER_ROLE_HINT.director).toContain('通過或要求修改');
+    expect(MEMBER_ROLE_HINT.director).toContain(DIRECTOR_STAGE_TEXT);
+    for (const w of ['調整舞台', '存回 Cue 庫', '另存成新 cue', '轉場秒數']) expect(DIRECTOR_STAGE_TEXT).toContain(w);
+    expect(MEMBER_ROLE_HINT.director).not.toContain('\n');
+    // 動畫師、製作的說明不變
+    expect(MEMBER_ROLE_HINT.animator).toBe('進工作站：交影片、看導演的留言');
+    expect(MEMBER_ROLE_HINT.admin).toBe('可以編輯這個專案、管理成員');
   });
 });

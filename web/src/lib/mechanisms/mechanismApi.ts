@@ -320,11 +320,27 @@ export async function setCuePositionsBulk(projectId: string, songId: string, cue
 // ─── 每個 cue 的位置 ───
 
 const parseMode = (m: unknown): PositionsMode => (m === 'library' ? 'library' : 'legacy');
-export interface SongPositions { mode: PositionsMode; positions: CueMechanismPosition[] }
+export interface SongPositions {
+  mode: PositionsMode;
+  positions: CueMechanismPosition[];
+  /** Cue 庫模式：這首歌用到的每個 Cue 庫的 cue 的版本（rev）；導演頁「調整舞台」存回時帶，被別人搶先改過就會 409。舊後台沒有 */
+  libraryRevs?: Record<string, number>;
+}
+
+/** { 'lc_…': 3 } → 只留版本是整數的 */
+export function parseLibraryRevs(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === 'number' && Number.isInteger(v) && v >= 0) out[id] = v;
+  }
+  return out;
+}
 
 export async function listSongPositionsWithMode(projectId: string, songId: string): Promise<SongPositions> {
-  const d = await call<{ mode?: unknown; positions: unknown }>(`${base(projectId)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}&${CUE_LIB}`);
-  return { mode: parseMode(d.mode), positions: parsePositions(d.positions) };
+  const d = await call<{ mode?: unknown; positions: unknown; libraryRevs?: unknown }>(`${base(projectId)}/songs/${enc(songId)}/mechanism-positions?${MECH_V2}&${CUE_LIB}`);
+  const libraryRevs = parseLibraryRevs(d.libraryRevs);
+  return { mode: parseMode(d.mode), positions: parsePositions(d.positions), ...(libraryRevs ? { libraryRevs } : {}) };
 }
 export async function listSongPositions(projectId: string, songId: string): Promise<CueMechanismPosition[]> {
   return (await listSongPositionsWithMode(projectId, songId)).positions;

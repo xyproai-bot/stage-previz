@@ -37,6 +37,18 @@ describe('describeActivity（最近活動的一句話）', () => {
     expect(describeActivity(e('update', 'library_cue', { kind: 'rename', label: '12', fromName: 'A', toName: '新名字' }))).toBe('把「12」改名成「新名字」');
     expect(describeActivity(e('update', 'library_cue', { kind: 'relabel', name: '副歌', fromLabel: '12', toLabel: '3-1' }))).toBe('把「12 副歌」的編號改成 3-1');
     expect(describeActivity(e('delete', 'library_cue', { label: '12', name: '副歌' }))).toBe('刪除 Cue 庫的「12 副歌」');
+    // 導演在調整舞台存起來
+    expect(describeActivity(e('update', 'library_cue', { kind: 'stage_save', label: '30', name: '副歌全開', changed: 2, songCount: 2, songs: ['S05', 'S12'] })))
+      .toBe('在調整舞台存回 Cue 庫的「30 副歌全開」（改了 2 個機關，S05、S12 會一起變）');
+    expect(describeActivity(e('update', 'library_cue', { kind: 'stage_save', label: '30', name: '副歌全開', changed: 1, songs: [] })))
+      .toBe('在調整舞台存回 Cue 庫的「30 副歌全開」（改了 1 個機關）');
+    expect(describeActivity(e('update', 'library_cue', { kind: 'stage_save', label: '30', name: '副歌全開' }))).toBe('在調整舞台存回 Cue 庫的「30 副歌全開」');
+    expect(describeActivity(e('update', 'library_cue', { kind: 'stage_undo', label: '30', name: '副歌全開', changed: 1, songs: ['S05'] })))
+      .toBe('復原 Cue 庫的「30 副歌全開」的舞台調整（改了 1 個機關，S05 會一起變）');
+    expect(describeActivity(e('create', 'library_cue', { kind: 'stage_save_as', label: '30-1', name: '副歌全開（導演改）', basedOnLabel: '30', basedOnName: '副歌全開', songName: '開場曲', placed: 'replace' })))
+      .toBe('在調整舞台從「30 副歌全開」另存成「30-1 副歌全開（導演改）」，歌曲「開場曲」改用它');
+    expect(describeActivity(e('create', 'library_cue', { kind: 'stage_copy', label: '30-2', name: '副歌全開（複製）', basedOnLabel: '30', basedOnName: '副歌全開' })))
+      .toBe('從「30 副歌全開」複製成「30-2 副歌全開（複製）」');
     expect(describeActivity(e('create', 'cue', { songName: 'X', videoTimeSec: 45, libraryLabel: '12', libraryName: '副歌' }))).toBe('在歌曲「X」0:45 加上「12 副歌」');
     expect(describeActivity(e('update', 'cue', { kind: 'repoint', songName: 'X', videoTimeSec: 83, libraryLabel: '13', libraryName: 'B' }))).toBe('把歌曲「X」1:23 的 cue 換成「13 B」');
     expect(describeActivity(e('update', 'cue', { kind: 'retime', songName: 'X', fromTimeSec: 83, toTimeSec: 90, libraryLabel: '13', libraryName: 'B' }))).toBe('把歌曲「X」1:23 的 cue 時間改成 1:30');

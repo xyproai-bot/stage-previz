@@ -56,6 +56,12 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
     const full = (l: string | undefined, n: string | undefined) => quoted([l, n].filter(Boolean).join(' '));
     if (action === 'create') {
       const bl = str(p.basedOnLabel), bn = str(p.basedOnName);
+      // 導演在調整舞台複製 / 另存（另存會把這首歌的這個 cue 換成新的）
+      if (p.kind === 'stage_copy' && (bl || bn)) return `從${full(bl, bn)}複製成${full(lab, name)}`;
+      if (p.kind === 'stage_save_as' && (bl || bn)) {
+        const song = str(p.songName);
+        return `在調整舞台從${full(bl, bn)}另存成${full(lab, name)}${song ? `，歌曲${quoted(song)}改用它` : ''}`;
+      }
       return bl || bn ? `從${full(bl, bn)}另存成${full(lab, name)}` : `新增 Cue 庫的 cue${full(lab, name)}`;
     }
     if (action === 'delete') return `刪除 Cue 庫的${full(lab, name)}`;
@@ -69,6 +75,18 @@ export function describeActivity(e: Pick<ActivityEntry, 'action' | 'targetType' 
       if (p.kind === 'look') {
         const songs = num(p.songCount);
         return `更新 Cue 庫的${full(lab, name)}${songs ? `（${songs} 首歌在用）` : ''}`;
+      }
+      // 導演在調整舞台把機關位置存回 Cue 庫 / 復原（用到這個 cue 的歌一起變）
+      if (p.kind === 'stage_save' || p.kind === 'stage_undo') {
+        const changed = num(p.changed);
+        const songs = Array.isArray(p.songs) ? p.songs.filter((x): x is string => typeof x === 'string' && x.trim() !== '') : [];
+        const total = num(p.songCount);
+        const list = total != null && total > songs.length ? `${songs.join('、')} 等 ${total} 首` : songs.join('、');
+        const together = songs.length > 0 ? `${changed != null ? '，' : ''}${list} 會一起變` : '';
+        const inner = `${changed != null ? `改了 ${changed} 個機關` : ''}${together}`;
+        return p.kind === 'stage_undo'
+          ? `復原 Cue 庫的${full(lab, name)}的舞台調整${inner ? `（${inner}）` : ''}`
+          : `在調整舞台存回 Cue 庫的${full(lab, name)}${inner ? `（${inner}）` : ''}`;
       }
     }
   }
