@@ -9,7 +9,8 @@ import { memberWatermarkOn } from '../lib/watermark/policy';
 import StageScene from '../components/StageScene';
 import MechanismTab from '../components/mechanisms/MechanismTab';
 import MechanismTimeline from '../components/mechanisms/MechanismTimeline';
-import MechanismObjectHint, { MechanismHintProvider } from '../components/mechanisms/MechanismObjectHint';
+import MechanismObjectHint, { MechanismHintProvider, MechanismLockNote, useMechanismMounts } from '../components/mechanisms/MechanismObjectHint';
+import { mountedNames, stageLockMessage } from '../lib/stageLock';
 import { useEditorMechanisms } from '../lib/mechanisms/useMechanisms';
 import { withMechanismSnapshot } from '../lib/mechanisms/mechanismApi';
 import { valuesOf } from '../lib/mechanisms/track';
@@ -2948,7 +2949,7 @@ function NumberField({
 }
 
 /** 多選 panel — 填的欄位才套到全部，沒填就不動；按 Enter 或點別的地方就套用 */
-function ObjectAttributePanelMulti({
+export function ObjectAttributePanelMulti({
   selectedStates, scaleCorrection, unitsReady, onSet, onReset, onUpdateMaterial,
 }: {
   selectedStates: CueState[];
@@ -2961,6 +2962,11 @@ function ObjectAttributePanelMulti({
   const [color, setColor] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  // 選到的有一個裝在機關上 → 位置 / 角度整組都不能改（只能用機關的滑桿）；材質顏色、重置照舊
+  const { mounts, loading: mountsLoading } = useMechanismMounts();
+  const lockNote = stageLockMessage(mountedNames(selectedStates.map(s => s.objectId), mounts), selectedStates.length);
+  const poseLocked = lockNote !== null || mountsLoading;
+  const poseLockedTitle = lockNote ?? '載入機關資料中…';
 
   // 切換選中物件時清空輸入（避免上一次的殘留）
   const idsKey = selectedStates.map(s => s.objectId).join(',');
@@ -3022,8 +3028,8 @@ function ObjectAttributePanelMulti({
               step={0.1}
               value={null}
               placeholder="—"
-              disabled={!unitsReady}
-              disabledTitle="載入專案設定中…"
+              disabled={!unitsReady || poseLocked}
+              disabledTitle={poseLocked ? poseLockedTitle : '載入專案設定中…'}
               onInvalid={invalid}
               onCommit={(meters) => {
                 const v = metersToScene(meters, scaleCorrection);
@@ -3045,12 +3051,15 @@ function ObjectAttributePanelMulti({
               step={1}
               value={null}
               placeholder="—"
+              disabled={poseLocked}
+              disabledTitle={poseLockedTitle}
               onInvalid={invalid}
               onCommit={(deg) => applyToAll(cur => ({ rotation: { ...cur.rotation, [axis.key]: deg } }))}
             />
           ))}
         </div>
       </div>
+      {lockNote && <MechanismLockNote text={lockNote} />}
       <div className="form-row">
         <label>材質顏色（套到全部）</label>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -3191,7 +3200,7 @@ function CueMetaEditor({
   );
 }
 
-function ObjectAttributePanel({
+export function ObjectAttributePanel({
   state, stageObject, scaleCorrection, unitsReady, onSet, onReset, onUpdateMaterial, onUpdateLed,
 }: {
   state: CueState;
@@ -3205,6 +3214,11 @@ function ObjectAttributePanel({
 }) {
   const [busy, setBusy] = useState(false);
   const [fieldError, setFieldError] = useState<string | null>(null);
+  // 裝在機關上的物件：位置 / 角度不能直接改（只能用機關的滑桿，那邊卡得住上下限）；顯示 / 隱藏、重置、材質照舊
+  const { mounts, loading: mountsLoading } = useMechanismMounts();
+  const lockNote = stageLockMessage(mountedNames([state.objectId], mounts), 1);
+  const poseLocked = lockNote !== null || mountsLoading;
+  const poseLockedTitle = lockNote ?? '載入機關資料中…';
   const cat = CATEGORY_INFO[state.category];
   const hasOverride = !!state.override;
   const eff = state.effective;
@@ -3248,8 +3262,8 @@ function ObjectAttributePanel({
                   unit="m"
                   step={0.1}
                   value={sceneToMeters(eff.position[axis], scaleCorrection)}
-                  disabled={!unitsReady}
-                  disabledTitle="載入專案設定中…"
+                  disabled={!unitsReady || poseLocked}
+                  disabledTitle={poseLocked ? poseLockedTitle : '載入專案設定中…'}
                   onInvalid={invalid}
                   onCommit={(m) => {
                     const v = metersToScene(m, scaleCorrection);
@@ -3270,13 +3284,17 @@ function ObjectAttributePanel({
                   unit="°"
                   step={1}
                   value={eff.rotation[axis.key]}
+                  disabled={poseLocked}
+                  disabledTitle={poseLockedTitle}
                   onInvalid={invalid}
                   onCommit={(deg) => save(cur => ({ rotation: { ...cur.rotation, [axis.key]: deg } }))}
                 />
               ))}
             </div>
           </div>
-          <div className="muted small">改完按 Enter 或點別的地方就會存；Esc 取消；↑↓ 微調（按住 Shift 一次 10 倍）</div>
+          {lockNote
+            ? <MechanismLockNote text={lockNote} />
+            : <div className="muted small">改完按 Enter 或點別的地方就會存；Esc 取消；↑↓ 微調（按住 Shift 一次 10 倍）</div>}
           {fieldError && <div className="field-error small" role="alert">{fieldError}</div>}
           <MechanismObjectHint objectId={state.objectId} />
           {hasOverride && (

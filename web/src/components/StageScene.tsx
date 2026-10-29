@@ -19,6 +19,7 @@ import type { Mechanism, MechanismTimings, MechanismValues, MechVec3 } from '../
 import { applyChain, basePoseFromScene, compileRig, EMPTY_RIG, travelGeometry, type CompiledRig, type RigMechanism } from '../lib/mechanisms/pose';
 import { MechanismTweener, type MechanismMotion } from '../lib/mechanisms/motion';
 import { hoistsOfRig } from '../lib/mechanisms/hoist';
+import { gizmoBlockedByMechanism, mountedNames, objectMountMap, stageLockMessage } from '../lib/stageLock';
 import { stageFrontDirection } from '../lib/stageCamera';
 import { FIGURE_HEIGHT_M, FIGURE_LABEL, MAX_STAND_ABOVE_DECK_M, canStandOnCategory, deckFootprint, defaultFigureSpots, figureSpotsFromExtent, findDeckLevel, frontAxes, gridCenter, pickFigureSpots } from '../lib/scaleReference';
 import { buildWalkMesh, disposeWalkMesh, extractUpFaces, standingYAt, surfaceSignature } from '../lib/scaleReferenceScene';
@@ -66,7 +67,7 @@ import { detectFloorPlane } from '../lib/stageLook/floorPlane';
 import {
   BookOpen, Box, Camera, ChevronDown, CircleHelp, Download, ExternalLink, FileBraces, FileCode, FileSpreadsheet, Footprints, Globe, Grid3x3, ImageDown,
   MapPin, MonitorCheck, Move, Palette, Pause, PersonStanding, Ratio, RefreshCw, Rotate3d, Ruler, SlidersHorizontal, Sparkles,
-  Tag, Target, Video, X, Zap, type LucideIcon,
+  Cog, Tag, Target, Video, X, Zap, type LucideIcon,
 } from 'lucide-react';
 import Icon from './Icon';
 import { promptDialog } from './dialogs';
@@ -500,6 +501,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
   );
   const rigRef = useRef(rig);
   rigRef.current = rig;
+  // 裝在機關上的物件（objectId → 機關名字）：不能用移動 / 旋轉箭頭去動（機關有上下限，拖物件會拉過頭），要動只能用機關的滑桿
+  const mountMap = useMemo(() => objectMountMap(mechanisms), [mechanisms]);
+  const mountMapRef = useRef(mountMap);
+  mountMapRef.current = mountMap;
+  const lockNote = useMemo(() => stageLockMessage(mountedNames(selectedObjectIds, mountMap), selectedObjectIds.length), [selectedObjectIds, mountMap]);
+  // 選到的有一個是 → 整組都不出現箭頭；機關清單還在讀（null）時先不出現（讀到之前分不出來）
+  const gizmoLocked = gizmoBlockedByMechanism(selectedObjectIds, mountMap, mechanisms === null);
   const mechTweenerRef = useRef(new MechanismTweener());
   // 這一幀畫面上用的機關值（拖完存檔要用「放手那一幀」的值）
   const displayedMechRef = useRef<MechanismValues>({});
@@ -990,7 +998,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             m.getWorldQuaternion(wquat);
             const id = m.userData.objectId as string | undefined;
             scene.attach(m); // 拿回 scene（保留 world matrix）
-            if (id) {
+            // 裝在機關上的物件不存拖出來的位置（箭頭本來就不會出現在它們身上，這是最後一道保險）
+            if (id && !mountMapRef.current.has(id)) {
               const pose = toCuePose(id, wpos, wquat);
               onTransformRef.current(id, pose.position, pose.rotation);
             }
@@ -1003,7 +1012,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
         } else {
           // ── 單選
           const id = obj.userData.objectId as string | undefined;
-          if (!id) return;
+          if (!id || mountMapRef.current.has(id)) return;
           const pose = toCuePose(id, obj.position, obj.quaternion);
           onTransformRef.current(id, pose.position, pose.rotation);
         }
@@ -2160,8 +2169,8 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
       }
     };
 
-    // 唯讀模式、或使用者把「把手」關掉：永遠 detach（不顯示 gizmo）
-    if (readOnly || !gizmoOn) {
+    // 唯讀模式、使用者把「把手」關掉、或選到的物件裡有裝在機關上的：永遠 detach（不顯示 gizmo）
+    if (readOnly || !gizmoOn || gizmoLocked) {
       transform.detach();
       releaseOrbit();
       return;
@@ -2200,7 +2209,7 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
     multiPivotRef.current = pivot;
     meshes.forEach(m => pivot.attach(m));
     transform.attach(pivot);
-  }, [selectedObjectIds, states.length, pivotVersion, readOnly, modelVersion, gizmoOn]);
+  }, [selectedObjectIds, states.length, pivotVersion, readOnly, modelVersion, gizmoOn, gizmoLocked]);
 
   // ── Mode / space ──
   useEffect(() => { transformRef.current?.setMode(mode); }, [mode]);
@@ -4272,6 +4281,13 @@ export default function StageScene({ states, stageObjects, selectedObjectIds, on
             ? (() => { const o = (stageObjects || []).find(x => x.id === selectedObjectIds[0]); return o ? (o.displayName || o.meshName) : '1 個物件'; })()
             : `${selectedObjectIds.length} 個物件`}
           <span className="stage-scene__selected-hint">Esc 取消</span>
+        </div>
+      )}
+      {/* 選到的物件裝在機關上：不出現移動 / 旋轉箭頭，寫一句為什麼（寫在「已選」那條的上面） */}
+      {!readOnly && gizmoOn && lockNote && (
+        <div className={'stage-scene__lock-note' + (qualityLevel !== 'high' ? ' stage-scene__lock-note--raised' : '')} role="note" data-testid="stage-lock-note">
+          <Icon icon={Cog} size="sm" />
+          <span>{lockNote}</span>
         </div>
       )}
       {/* Help overlay */}
