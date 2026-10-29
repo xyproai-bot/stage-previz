@@ -134,7 +134,7 @@ function parseMechRows(list) {
 /**
  * 整份機關位置的檢查：格式 → 都是這個專案的機關（validateLook）→ 改過的值沒超出行程。
  * 沒改的列（跟現在存的一樣）不檢查行程，舊資料裡本來就超出行程的不會讓整個存不了。
- * @param {object[]} prevRows 現在存的列（資料表格式）；另存成新 cue 沒有「現在」→ 傳 null，每一列都要在行程內
+ * @param {object[]|null} prevRows 現在存的列（資料表格式；另存時是原本那個 cue 的列）；傳 null = 每一列都要在行程內
  */
 async function checkMechRows(env, projectId, list, prevRows) {
   const parsed = parseMechRows(list);
@@ -352,7 +352,8 @@ export async function stageSaveAs(request, env, ctx, lcId, log) {
   if (!slot) return bad('這個專案裡找不到這首歌的這個 cue', 404);
   if (slot.library_cue_id !== lcId) return bad('這首歌的這個 cue 剛剛換成別的 cue 了，請重新載入再另存', 409, { conflict: true });
 
-  const checked = await checkMechRows(env, ctx.projectId, body.mechanisms, null);
+  // 跟原本的 cue 一樣的列不檢查行程（舊資料裡本來就超出行程的不會讓整個存不了），導演改過的才檢查
+  const checked = await checkMechRows(env, ctx.projectId, body.mechanisms, await readMechRows(env, lcId));
   if (!checked.ok) return bad(checked.error, 400, { field: checked.field });
   const uid = uidOf(ctx);
 

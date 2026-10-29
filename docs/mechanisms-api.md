@@ -28,6 +28,7 @@
 |---|---|
 | 看機關、看每首歌每個 cue 的機關位置 | 專案成員（製作 / 導演 / 動畫師）；分享連結只看正式 cue |
 | 新增 / 修改 / 刪除 / 排序機關、設定每個 cue 的位置、機關總表、轉換舊位置 | 這個專案的製作（`editor`）。導演 / 動畫師 403 |
+| 導演頁「調整舞台」把機關位置存回 Cue 庫、另存成新 cue、複製、改名、轉場秒數（下面「導演在『調整舞台』存起來」） | 這個專案的導演，或能編輯這個專案的人（`directorStage`）。動畫師 403；導演仍然不能改機關設定、物件、編號 |
 
 封存的專案：只能看，寫入一律 409。
 
@@ -190,6 +191,27 @@
 | 重置 cue | 這個 cue 自己存的機關位置也清掉（回應多 `removedMechanismPositions`） |
 | 清除所有物件（上傳新模型時） | 409 的 `willDelete` 多 `mechanismObjects`，說明多一句「也會清掉 N 個機關裡選的物件」；機關的設定和每個 cue 的位置留著 |
 | 刪物件 / cue / 歌 / 專案 | 資料庫一起清（ON DELETE CASCADE） |
+
+## 導演在「調整舞台」存起來（Cue 庫模式，0048）
+
+導演頁的「調整舞台」可以把調好的機關位置存回 Cue 庫。權限是 `directorStage`（這個專案的導演、專案的製作、全站製作；動畫師 403，分享連結的訪客沒有），
+導演仍然不能用製作那條「整個畫面一次換掉 / 改物件」的 `PUT library-cues/:lc/look`。每一條都只收下面列的欄位，多送別的（物件、編號、備註…）= **400**，資料不動。程式在 `cf-worker/cueLibraryStage.mjs`，測試 `cf-worker/directorStage.test.mjs`。
+
+| 方法 | 網址 | body | 回傳 |
+|---|---|---|---|
+| GET | `/api/projects/:p/songs/:s/mechanism-positions?cuelib=1` | | 多一個 `libraryRevs: { 'lc_…': rev }`（這首歌用到的每個 Cue 庫的 cue 的版本；先讀版本再讀位置，所以版本只會比位置舊）。分享連結沒有 |
+| PUT | `/api/projects/:p/library-cues/:lc/mechanism-positions` | `{ ifRev, mechanisms: [{ mechanismId, value, delaySec, durationSec, carried }], songId?, undo? }` | `{ ok, rev, previous: { rev, mechanisms }, songs, changed, notified }`；整份機關位置換掉，物件一個都不動；跟現在存的一樣 → `{ ok, unchanged: true }` 不加 rev |
+| POST | `…/library-cues/:lc/stage-save-as` | `{ name?, mechanisms, songId, cueId }` | 201 `{ libraryCue, slot, song, notified }`；編號自動給下一個（`30` → `30-1`，已有 → `30-2`），物件設定照抄，機關位置用送來的；只把這首歌的這個 cue 換成新的 |
+| POST | `…/library-cues/:lc/stage-copy` | `{ name? }` | 201 `{ libraryCue }`；複製一個新的放進 Cue 庫，不放進任何歌 |
+| PATCH | `…/library-cues/:lc/stage` | `{ name?, crossfadeSeconds?, songId? }` | `{ libraryCue, notified }`；只改名字（編號不動）和 Cue 庫的轉場秒數（用 Cue 庫秒數的歌的 cue 跟著變） |
+| PUT | `/api/projects/:p/songs/:s/cues/:c/stage-crossfade` | `{ crossfadeSeconds }` | `{ ok, notified }`；只能改「這首歌自己另外設的」秒數，沒另外設的 409 |
+
+- **衝突**：存回帶 `ifRev`（拿到這些位置的時候的 rev）。現在的 rev 不一樣 → **409** `{ error: '這個 cue 剛剛被 王導 改過', conflict: true, rev, changedBy: { id, name } | null }`，什麼都沒寫（每個寫入陳述式都綁在舊的 rev 上，最後一個才 rev + 1）。`changedBy` 看 `library_cues.updated_by_user_id` / `updated_by_rev`（0048）：最後一次寫入沒記人（舊版前端的舊網址、拆開對開…）就是 `null`，訊息寫「被別人改過」，不亂指名。還沒跑 0048 的資料庫照樣能存，只是不記人。
+- **復原** = 把 `previous.mechanisms` 用新的 `rev` 再存一次（`undo: true`），一樣走衝突檢查。
+- **只動機關位置**：機關必須是這個專案的、不能是吊掛骨架；改過的值要在行程內（沒改的列不檢查，舊資料裡超出行程的不會擋住整個存）；沿用（`carried`）的不能有時間。
+- **通知**（`kind = director_stage`，不用 migration）：這個專案的製作（含全站製作）+ 用到這個 cue 的歌的負責動畫師，不含自己、同一人一則（動畫師點了開自己的歌，製作開導演現在這首）；`excerpt` 放整句「改了 cue 30 的舞台（S05、S12 會一起變）」。存回 / 復原 / 另存 / 改 Cue 庫的秒數 / 改這首歌自己的秒數會通知，複製、改名不通知。
+- **活動紀錄**：`library_cue` 的 `update`（`kind = stage_save` / `stage_undo`）、`create`（`kind = stage_save_as` / `stage_copy`）；改名、改秒數沿用原本的紀錄。
+- 匯出 / 匯入 / 複製專案不帶 `updated_by_*`（換了專案，用戶 id 沒有意義）；整個資料庫的備份是照 `sqlite_master`，欄位自然一起在裡面。
 
 ## 舊的「全專案機關滑桿」（`projects.mechanism_offsets`）
 

@@ -508,6 +508,10 @@ test('另存的壞情況：名稱空白 / 太長會截、機關不對、這首�
   const long = await dir('POST', `${P}/library-cues/${lc31}/stage-save-as`, { name: '長'.repeat(150), mechanisms: [], songId: 's3', cueId: c3 });
   assert.equal(long.status, 201);
   assert.equal([...long.data.libraryCue.name].length, 100);
+  // 原本的 cue 裡本來就超出行程的列（舊資料）：沒改的不擋，另存得了
+  db.raw.prepare(`UPDATE library_cue_mechanism_positions SET value = 9 WHERE library_cue_id = ? AND mechanism_id = ?`).run(lc30, m1);
+  const legacy = await dir('POST', `${P}/library-cues/${lc30}/stage-save-as`, { mechanisms: withValues(db, lc30, {}), songId: 's1', cueId: c1 });
+  assert.equal(legacy.status, 201, JSON.stringify(legacy.data));
 });
 
 test('複製：從現有 cue 複製一個新的放進 Cue 庫（不放進任何歌）；物件和機關位置都照抄；原本的不動', async () => {
@@ -671,6 +675,23 @@ test('複製專案 / 匯出：Cue 庫跟著走，記「誰改的」的欄位不�
   const exp = await admin('GET', `${P}/export`);
   assert.equal(exp.status, 200);
   assert.equal(exp.data.libraryCues.length, 2);
+});
+
+test('成員面板上寫的導演能做的事，每一項後端真的會過；寫的不能做的後端真的會擋', async () => {
+  const { DIRECTOR_STAGE_TEXT, MEMBER_ROLE_HINT } = await import('../web/src/lib/projectMembers.ts');
+  assert.ok(MEMBER_ROLE_HINT.director.includes(DIRECTOR_STAGE_TEXT));
+  const { db, dir, m1, lc30, c1, c2 } = await setup();
+  // 調整舞台（調機關位置、存回 Cue 庫、另存成新 cue、複製、改名、轉場秒數）
+  assert.equal((await dir('PUT', `${P}/library-cues/${lc30}/mechanism-positions`, { ifRev: 0, mechanisms: withValues(db, lc30, { [m1]: 2 }) })).status, 200);
+  assert.equal((await dir('POST', `${P}/library-cues/${lc30}/stage-save-as`, { mechanisms: withValues(db, lc30, { [m1]: 2 }), songId: 's1', cueId: c1 })).status, 201);
+  assert.equal((await dir('POST', `${P}/library-cues/${lc30}/stage-copy`, {})).status, 201);
+  assert.equal((await dir('PATCH', `${P}/library-cues/${lc30}/stage`, { name: '新名字', crossfadeSeconds: 2 })).status, 200);
+  assert.equal((await dir('PUT', `${P}/songs/s2/cues/${c2}/stage-crossfade`, { crossfadeSeconds: 2 })).status, 200);
+  // 說明裡「還是不能」的：物件、刪 cue、改編號、設定機關
+  assert.equal((await dir('PUT', `${P}/library-cues/${lc30}/look`, { objects: [], mechanisms: [] })).status, 403);
+  assert.equal((await dir('DELETE', `${P}/library-cues/${lc30}`)).status, 403);
+  assert.equal((await dir('PATCH', `${P}/library-cues/${lc30}`, { label: '99' })).status, 403);
+  assert.equal((await dir('PATCH', `${P}/mechanisms/${m1}`, { travelMax: 9 })).status, 403);
 });
 
 test('還沒跑 0048 的資料庫（沒有記人的欄位）：照樣能存、能復原，衝突時說「被別人改過」', async () => {
