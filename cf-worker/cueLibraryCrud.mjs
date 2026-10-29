@@ -238,12 +238,21 @@ export async function putLook(request, env, ctx, lcId, log) {
   if (!v.ok) return bad(v.error);
 
   const previous = await readLook(env, lcId);
-  const stmts = [
+  // 順便記「最後改的人」（0048；導演頁存舞台被搶先時要說被誰改過）。還沒跑 0048 的資料庫 → 照舊不記
+  const buildStmts = (stamp) => [
     ...writeLookStmts(env, lcId, rows, expect, { replace: true }),
-    env.DB.prepare(`UPDATE library_cues SET rev = rev + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND rev = ?`).bind(lcId, expect),
+    stamp
+      ? env.DB.prepare(`UPDATE library_cues SET rev = rev + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), updated_by_user_id = ?, updated_by_rev = ? WHERE id = ? AND rev = ?`)
+        .bind(ctx.me?.id ?? ctx.userId ?? null, expect + 1, lcId, expect)
+      : env.DB.prepare(`UPDATE library_cues SET rev = rev + 1, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ? AND rev = ?`).bind(lcId, expect),
   ];
   let res;
-  try { res = await env.DB.batch(stmts); } catch (e) { return bad('沒有存進去（資料庫拒絕了）：' + String(e?.message || e).slice(0, 160)); }
+  try {
+    try { res = await env.DB.batch(buildStmts(true)); } catch (e) {
+      if (!/no such column/i.test(String(e?.message || e))) throw e;
+      res = await env.DB.batch(buildStmts(false));
+    }
+  } catch (e) { return bad('沒有存進去（資料庫拒絕了）：' + String(e?.message || e).slice(0, 160)); }
   if (!Number(res[res.length - 1]?.meta?.changes)) {
     const cur = await getRow(env, ctx.projectId, lcId);
     return bad('這個 cue 剛剛被別人改過', 409, { rev: cur ? Number(cur.rev) : null });

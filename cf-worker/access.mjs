@@ -39,6 +39,10 @@
 //   一首歌所有 cue 的物件位置：一次看 / 一次清（回到預設位置）/ 一次寫回（復原）    admin（cue-object-states，cueStatesBatch.mjs）
 //   機關：看定義、每首歌每個 cue 的機關位置                                所有成員（分享連結：只看）
 //   機關：新增 / 改 / 刪 / 排序、設定每個 cue 的機關位置、機關總表資料        admin（這個專案的 admin）
+//   導演頁「調整舞台」存起來（need = directorStage，規則 canEditStage）：      這個專案的導演，或能編輯這個專案的人（專案的製作、全站製作）；動畫師 403
+//                   存回 Cue 庫（只換這個 cue 的機關位置，帶 ifRev 衝突檢查）、另存成新 cue（物件設定照抄）、複製、改名、轉場秒數、
+//                   改「這首歌的這個 cue 自己設的」轉場秒數。每個 handler 自己再檢查只動了允許的欄位（多送別的 = 400），
+//                   導演仍然不能用製作那條「整個畫面一次換掉 / 改物件」的路（library-cues/:lc/look 的 PUT 還是 editor）（cueLibraryStage.mjs）
 //   歌曲影片：最近刪除、救回來（30 天內）                                      admin（這個專案的 admin）
 //   專案成員（0041，members.mjs）：看成員、加進專案 / 改角色 / 移出專案、找現有用戶、邀請連結（建立 / 清單 / 撤銷，
 //                   可以邀製作 / 導演 / 動畫師）                                  admin（全站製作，或「這個專案」的製作；memberManager）
@@ -77,6 +81,14 @@ export function projectRoleOf(globalRole, memberRole) {
 
 export function canEditProjectContent(role) {
   return role === 'admin';
+}
+
+/**
+ * 導演頁「調整舞台」能不能存：這個專案的導演，或能編輯這個專案的人（專案的製作、全站製作 = role 'admin'）。
+ * 動畫師、不是成員 → 不行。物件顯示 / 位置、刪 cue、改編號、設定機關這些仍然只有 canEditProjectContent。
+ */
+export function canEditStage(role) {
+  return role === 'admin' || role === 'director';
 }
 
 export function canManageShareLinks(role) {
@@ -205,6 +217,7 @@ export function songStatusDecision({ role, userId, song, to, expected, hasReadyV
  *   'stageProps'   admin 或導演（canEditStageProps）：改比例尺的樂手和器材
  *   'memberManager' 全站 admin 或這個專案的 admin（role === 'admin'）：管這個專案的成員和邀請連結
  *   'cameraBookmarks' admin 或導演（canEditCameraBookmarks）：存 / 改名 / 刪 / 排視角書籤
+ *   'directorStage'  admin 或導演（canEditStage）：導演頁「調整舞台」存回 / 另存 / 複製 / 改名 / 轉場秒數（handler 裡再檢查欄位，cueLibraryStage.mjs）
  *   'songPatch'    改歌：只改狀態看 songStatusDecision，改其他欄位要 editor（handler 裡判斷）
  *   'projectPatch' 改專案：一般欄位 editor，Drive / 狀態 / 3D 檢視設定要全站 admin（handler 裡判斷）
  *   'videoUploader' 交影片：admin 或動畫師先放行，handler 裡再看這首歌指派給誰 / 這一版是誰交的（videos.mjs）
@@ -395,6 +408,11 @@ export function describeProjectRoute(method, segs) {
       }
       if (b === 'states') return read ? r('libraryCues.states', 'member', { libId: a }) : bad('libraryCues.states');
       if (b === 'usage') return read ? r('libraryCues.usage', 'member', { libId: a }) : bad('libraryCues.usage');
+      // 導演頁「調整舞台」（cueLibraryStage.mjs）：導演和製作都可以，handler 裡再檢查只動了允許的欄位
+      if (b === 'mechanism-positions') return m === 'PUT' ? r('libraryCues.stagePositions', 'directorStage', { libId: a }) : bad('libraryCues.stagePositions');
+      if (b === 'stage-save-as') return m === 'POST' ? r('libraryCues.stageSaveAs', 'directorStage', { libId: a }) : bad('libraryCues.stageSaveAs');
+      if (b === 'stage-copy') return m === 'POST' ? r('libraryCues.stageCopy', 'directorStage', { libId: a }) : bad('libraryCues.stageCopy');
+      if (b === 'stage') return m === 'PATCH' ? r('libraryCues.stagePatch', 'directorStage', { libId: a }) : bad('libraryCues.stagePatch');
       return null;
 
     case 'cue-templates':
@@ -457,6 +475,8 @@ export function describeProjectRoute(method, segs) {
         return bad('cues.item');
       }
       if (d === 'reset' && !e) return m === 'POST' ? r('cues.reset', 'editor', { songId, cueId }) : bad('cues.reset');
+      // 導演頁「調整舞台」：改這首歌的這個 cue 自己設的轉場秒數（導演和製作都可以；cueLibraryStage.mjs）
+      if (d === 'stage-crossfade' && !e) return m === 'PUT' ? r('cues.stageCrossfade', 'directorStage', { songId, cueId }) : bad('cues.stageCrossfade');
       if (d === 'states') {
         if (!e) return read ? r('states.list', 'member', { songId, cueId }) : bad('states.list');
         if (m === 'PUT' || m === 'DELETE') return r('states.item', 'editor', { songId, cueId, objId: e });
@@ -539,6 +559,8 @@ export function roleMeetsNeed(need, { role, globalRole }) {
       return canEditStageProps(role);
     case 'cameraBookmarks':
       return canEditCameraBookmarks(role);
+    case 'directorStage':
+      return canEditStage(role);
     case 'videoUploader':
       return role === 'admin' || role === 'animator';
     case 'videoLinker':
@@ -573,6 +595,8 @@ export function needDeniedMessage(need) {
       return STAGE_PROPS_DENIED_MESSAGE;
     case 'cameraBookmarks':
       return CAMERA_BOOKMARKS_DENIED_MESSAGE;
+    case 'directorStage':
+      return '只有導演或製作可以調整舞台';
     case 'videoUploader':
       return '導演可以貼連結交一版；上傳檔案請找負責的動畫師或製作';
     case 'videoLinker':

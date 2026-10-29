@@ -307,6 +307,23 @@ export function suggestLabel(existing) {
   return String(max + 1);
 }
 
+/**
+ * 另存 / 複製時自動給的編號：原編號後面加 -1、-2…，挑第一個沒人用的（30 → 30-1 已有 → 30-2）。
+ * 原編號本身已經是「30-1」這種 → 從「30」往下找（30-1 是自己、30-2…），不會變成 30-1-1。
+ * 太長（超過 16 個字）放不下 → 退回建議編號（最大的開頭整數 + 1）。
+ */
+export function nextVariantLabel(baseLabel, existing = []) {
+  const taken = new Set((existing || []).map(l => String(l ?? '').trim().toLowerCase()));
+  const base = String(baseLabel ?? '').trim();
+  const root = base.replace(/-\d+$/, '') || base;
+  for (let n = 1; n < 1000; n++) {
+    const cand = `${root}-${n}`;
+    if ([...cand].length > LABEL_MAX) break;
+    if (!taken.has(cand.toLowerCase())) return cand;
+  }
+  return suggestLabel(existing);
+}
+
 function runs(s) {
   return String(s ?? '').trim().toLowerCase().match(/\d+|\D+/g) || [];
 }

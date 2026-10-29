@@ -133,10 +133,23 @@ export async function songPositionsRoute(env, projectId, songId, { cuelib = fals
     const r = await legacyFn();
     return cuelib && r.status === 200 ? { status: r.status, body: { ...r.body, mode: 'legacy' } } : r;
   }
+  // 導演頁「調整舞台」存回時要帶「拿到的時候的 rev」：這首歌用到的每個 Cue 庫的 cue 的 rev。
+  // 先讀 rev 再讀位置：中間剛好有人改了，rev 會比位置舊 → 之後存的時候拿到 409（安全的那一邊），不會拿舊位置蓋掉別人的
+  // 分享連結（masterOnly）不給
+  const libraryRevs = cuelib && !masterOnly ? await songLibraryRevs(env, songId) : null;
   const positions = await librarySlotPositions(env, {
     where: `c.song_id = ?${masterOnly ? ` AND c.status = 'master'` : ''}`, binds: [songId], cuelib, mech2, mech3,
   });
-  return { status: 200, body: cuelib ? { mode: 'library', positions } : { positions } };
+  return { status: 200, body: cuelib ? { mode: 'library', positions, ...(libraryRevs ? { libraryRevs } : {}) } : { positions } };
+}
+
+/** 這首歌的 cue 指到的每個 Cue 庫的 cue 的 rev：{ libraryCueId: rev } */
+async function songLibraryRevs(env, songId) {
+  const rows = await all(env.DB,
+    `SELECT DISTINCT l.id, l.rev FROM cues c JOIN library_cues l ON l.id = c.library_cue_id WHERE c.song_id = ?`, songId);
+  const out = {};
+  for (const r of rows) out[r.id] = Number(r.rev);
+  return out;
 }
 
 /**
