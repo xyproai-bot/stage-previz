@@ -676,3 +676,30 @@
   color: var(--text-muted);
   font-size: 11px;
 }
+
+/* 選到的物件裝在機關上：寫在「已選」那條的上面（箭頭不會出現，說一下為什麼） */
+.stage-scene__lock-note {
+  position: absolute;
+  left: 12px;
+  bottom: 70px;
+  max-width: calc(100% - 200px);
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: var(--warn-dim);
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-size: 12px;
+  line-height: 1.45;
+  pointer-events: none;
+  z-index: 3;
+}
+.stage-scene__lock-note .ui-icon { margin-top: 2px; flex-shrink: 0; }
+/* 「畫質自動調低」那行字出現時，「已選」往上讓了一格，這條也跟著讓 */
+.stage-scene__lock-note--raised { bottom: 88px; }
+@container stage-scene (max-width: 480px) {
+  .stage-scene__lock-note { max-width: calc(100% - 24px); }
+  .stage-scene__lock-note--raised { bottom: 66px; }
+}
