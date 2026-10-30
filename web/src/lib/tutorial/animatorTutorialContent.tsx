@@ -505,7 +505,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
       },
       {
         id: 'stuck-ask', title: '還是不行',
-        lead: '還是不行，找邀請你進來的製作。把畫面截圖傳給他，會最快。',
+        lead: '還是不行，找邀請你進來的製作。把畫面截圖傳給對方，問題最快解決。',
       },
     ],
   },
