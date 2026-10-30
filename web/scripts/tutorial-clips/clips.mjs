@@ -177,7 +177,8 @@ export const CLIPS = {
       await clip.click(page.getByRole('button', { name: '重置攝影機' }).first(), { ms: 800 });
       await clip.pause(2000);
     },
-    encode: { posterAt: 5.5 },
+    // 只留 3D 畫面：上面「AE 即時」旁的「沒有偵測到小程序」切掉（新手會以為壞了）
+    encode: { crop: { x: 240, y: 204, w: 700, h: 458 }, posterAt: 5.5 },
   },
 
   // ─────────────────────────────────────────────
@@ -206,7 +207,8 @@ export const CLIPS = {
       await clip.click(page.locator('.studio-cuebar__cue').nth(3), { ms: 900 });
       await clip.pause(3400);
     },
-    encode: { posterAt: 7.5 },
+    // 只留 3D 畫面、音樂播放列和 cue 列（理由同 test-pattern）
+    encode: { crop: { x: 240, y: 204, w: 700, h: 516 }, posterAt: 7.5 },
   },
 
   // ─────────────────────────────────────────────

@@ -5,7 +5,7 @@
 //   --grid-dir <資料夾>             6 格縮圖放哪裡（預設：系統暫存資料夾 / stage-previz-clips；不放進 repo）
 //
 // 輸出（進 repo）：web/public/help/tutorial/<id>.mp4（H.264、yuv420p、faststart、沒有聲音）和 <id>.jpg（封面）
-// 每段的裁切放大、封面時間點寫在 record.mjs 的 CLIPS 表裡（crop 用 CSS 像素，要 16:9）。
+// 每段的裁切放大、封面時間點寫在 clips.mjs 的 CLIPS 表裡（crop 用 CSS 像素；沒寫 h 就是 16:9）。
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,8 +25,9 @@ function gridDirFromArgs() {
 
 /**
  * @param {string} id
- * @param {{ crop?: {x:number,y:number,w:number}, trimStart?: number, trimEnd?: number, posterAt?: number, gridDir?: string, outDir?: string }} opt
- *   crop：要放大的區域（CSS 像素，左上角 x,y 和寬 w；高 = w × 9/16，長寬比固定 16:9）
+ * @param {{ crop?: {x:number,y:number,w:number,h?:number}, trimStart?: number, trimEnd?: number, posterAt?: number, gridDir?: string, outDir?: string }} opt
+ *   crop：要放大的區域（CSS 像素，左上角 x,y 和寬 w）。沒寫 h：高 = w × 9/16，放大成 1280×720。
+ *         寫了 h（不是 16:9，例：只留 3D 畫面、把上面的工具列切掉）：不放大，照 w×h（CSS 像素）輸出。
  *   trimStart / trimEnd：頭尾各剪掉幾秒；posterAt：封面取第幾秒（剪完以後算）
  */
 export function encodeClip(id, opt = {}) {
@@ -57,15 +58,17 @@ export function encodeClip(id, opt = {}) {
   const c = opt.crop;
   const filters = ['fps=30'];
   if (c) {
-    const ch = (c.w * 9) / 16;
+    const ch = c.h ?? (c.w * 9) / 16;
     if (c.x < 0 || c.y < 0 || c.x + c.w > meta.viewport.width || c.y + ch > meta.viewport.height) {
       throw new Error(`${id}：裁切範圍超出畫面（x ${c.x}、y ${c.y}、寬 ${c.w}、高 ${ch.toFixed(0)}；畫面 ${meta.viewport.width}×${meta.viewport.height}）`);
     }
-    const w = Math.round(c.w * scale), h = Math.round((c.w * 9 / 16) * scale);
+    const w = Math.round(c.w * scale), h = Math.round(ch * scale);
     filters.push(`crop=${w}:${h}:${Math.round(c.x * scale)}:${Math.round(c.y * scale)}`);
   }
   // 畫格是 JPEG（全範圍、BT.601）→ 轉成一般影片用的 yuv420p（有限範圍、BT.709）並標好，播放器顏色才對
-  filters.push(`scale=${OUT_W}:${OUT_H}:flags=lanczos+accurate_rnd:in_range=full:out_range=limited:in_color_matrix=bt601:out_color_matrix=bt709`, 'format=yuv420p');
+  const even = (n) => Math.round(n / 2) * 2;
+  const [outW, outH] = c?.h ? [even(c.w), even(c.h)] : [OUT_W, OUT_H];
+  filters.push(`scale=${outW}:${outH}:flags=lanczos+accurate_rnd:in_range=full:out_range=limited:in_color_matrix=bt601:out_color_matrix=bt709`, 'setsar=1', 'format=yuv420p');  // setsar=1：裁切不是剛好 16:9 時，像素還是正方形（不然瀏覽器會顯示成 1282 寬）
   const vf = filters.join(',');
 
   let crf = 23;

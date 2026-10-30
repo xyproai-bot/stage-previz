@@ -2,9 +2,21 @@
 import { describe, expect, it } from 'vitest';
 import { createElement, Fragment, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, readFileSync } from 'node:fs';
 import { ANIMATOR_TUTORIAL, ANIMATOR_TUTORIAL_VIDEO, type TutorialStep } from './animatorTutorialContent';
 import { HELP_ANCHORS } from '../helpLinks';
+
+/** mp4 的畫面寬高：讀影片軌 tkhd 最後的寬、高（16.16 定點數） */
+function mp4Size(url: URL): [number, number] {
+  const b = new Uint8Array(readFileSync(url));
+  const tag = [0x74, 0x6b, 0x68, 0x64]; // 'tkhd'
+  let i = -1;
+  for (let k = 0; k + 4 <= b.length && i < 0; k++) if (tag.every((t, j) => b[k + j] === t)) i = k;
+  if (i < 0) throw new Error('找不到 tkhd');
+  const at = i + 4 + (b[i + 4] === 1 ? 88 : 76);
+  const dv = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  return [dv.getUint32(at) >>> 16, dv.getUint32(at + 4) >>> 16];
+}
 
 const allSteps: TutorialStep[] = ANIMATOR_TUTORIAL.flatMap(s => s.steps);
 const text = (n: ReactNode) => renderToStaticMarkup(createElement(Fragment, null, n)).replace(/<[^>]*>/g, ' ').replace(/&[a-z#0-9]+;/gi, ' ');
@@ -107,7 +119,7 @@ describe('動畫師上手教學的內容', () => {
       expect(statSync(jpg).size, `${s.id}: 封面太大`).toBeLessThanOrEqual(200 * 1024);
       total += mp4Bytes;
       expect(m.alt.length, s.id).toBeGreaterThan(5);
-      expect([m.width, m.height], s.id).toEqual([1280, 720]);
+      expect([m.width, m.height], `${s.id}: 寬高要跟影片檔一樣`).toEqual(mp4Size(mp4));
     }
     expect(n).toBe(13);
     expect(total, '13 支加起來太大').toBeLessThanOrEqual(20 * 1024 * 1024);

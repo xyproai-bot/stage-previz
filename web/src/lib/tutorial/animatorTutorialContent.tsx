@@ -68,10 +68,11 @@ function image(k: FigKey): TutorialMediaItem {
 
 /**
  * 短片：web/public/help/tutorial/<id>.mp4（沒有聲音、循環）+ <id>.jpg（封面）。
- * 大小都是 1280×720（錄影腳本固定輸出這個大小）；alt 用一句白話寫短片在做什麼。
+ * 大小一般是 1280×720；只留 3D 畫面的那幾段比較小（照 clips.mjs 的裁切，寬高要跟影片檔一樣，測試會比）。
+ * alt 用一句白話寫短片在做什麼。
  */
-function clip(id: string, alt: string): TutorialMediaItem {
-  return { kind: 'clip', src: `/help/tutorial/${id}.mp4`, poster: `/help/tutorial/${id}.jpg`, alt, width: 1280, height: 720 };
+function clip(id: string, alt: string, size: { w: number; h: number } = { w: 1280, h: 720 }): TutorialMediaItem {
+  return { kind: 'clip', src: `/help/tutorial/${id}.mp4`, poster: `/help/tutorial/${id}.jpg`, alt, width: size.w, height: size.h };
 }
 
 const PNG_LABEL = ledMapMenuLabel('png', 'plain');
@@ -203,6 +204,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
         actions: [
           <>工作站上面的 LED 畫面來源，選 <Ui>本地檔案</Ui>。</>,
           <>把影片（或圖片）拖進頁面，或按左邊 <Ui>加入影片 / 圖片…</Ui>。</>,
+          '影片放上去會先停在第一格，按 LED 下面播放列的播放鍵就會動。',
           '要用整張 LED 畫布大小的那支，才會對到每一片 LED。',
           '可以一次放好幾個，點清單裡的哪個，LED 就放哪個。',
         ],
@@ -305,7 +307,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '字不是反的。三樣都對，就是對的。',
           <>LED 有畫面的時候也想檢查：<Ui>⋯</Ui> → 勾 <Ui>LED 顯示測試圖</Ui>（只有你這邊看得到）。</>,
         ],
-        media: clip('test-pattern', '沒有影片的歌，LED 上是測試圖：把 3D 畫面轉到側邊、拉近，就看得到每一片 LED 自己的名字和位置。'),
+        media: clip('test-pattern', '沒有影片的歌，LED 上是測試圖：把 3D 畫面轉到側邊、拉近，就看得到每一片 LED 自己的名字和位置。', { w: 700, h: 458 }),
         more: [{ anchor: A.animTestPattern, label: 'LED 顯示測試圖' }],
       },
       {
@@ -316,7 +318,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '點 cue 列的某個 cue，音樂就跳到那個 cue 的時間。',
           '有影片的歌（或 LED 放的是本地影片）聽的是影片的聲音，音樂不會播。',
         ],
-        media: clip('music-cue', '沒有影片、有音樂的歌：按播放聽音樂，點 cue，音樂跳到那個時間，3D 的升降台跟著升起來。'),
+        media: clip('music-cue', '沒有影片、有音樂的歌：按播放聽音樂，點 cue，音樂跳到那個時間，3D 的升降台跟著升起來。', { w: 700, h: 516 }),
         more: [{ anchor: A.animStudio, label: '工作站畫面（音樂）' }],
       },
     ],
