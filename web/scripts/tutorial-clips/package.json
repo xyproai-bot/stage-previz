@@ -1,0 +1,15 @@
+{
+  "name": "stage-previz-tutorial-clips",
+  "private": true,
+  "version": "1.0.0",
+  "description": "動畫師上手教學頁的短片：在本機測試環境錄影、轉檔（不要動 web/package.json）",
+  "type": "module",
+  "scripts": {
+    "seed": "node seed.mjs",
+    "record": "node record.mjs",
+    "encode": "node encode.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.62.0"
+  }
+}
