@@ -48,6 +48,13 @@ describe('帶著做的步驟', () => {
     expect(steps.find(s => s.id === 'record')!.missingHint).toBeTruthy();
     expect(steps.find(s => s.id === 'help')!.missingHint).toContain('⋯');
   });
+
+  it('窄畫面收起來的歌單、沒有 cue、不是自己負責的歌，找不到時也有提示', () => {
+    const steps = animatorTourSteps(ctx);
+    for (const id of ['songs', 'cues', 'add-video'] as const) {
+      expect(steps.find(s => s.id === id)!.missingHint, id).toBeTruthy();
+    }
+  });
 });
 
 describe('producerContactText', () => {

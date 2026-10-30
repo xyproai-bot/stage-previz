@@ -51,6 +51,7 @@ export function animatorTourSteps(ctx: TourContext): TourStep[] {
       id: 'songs', target: 'songs-mine',
       title: '這是你的歌',
       body: '「我的」是指派給你的歌。點一首，舞台就換成那首歌的樣子。',
+      missingHint: '畫面窄的時候（手機、平板），歌單收在最上面那一行，點它就會打開。',
     },
     {
       id: 'stage', target: 'stage', waitFor: 'stage-drag',
@@ -74,11 +75,13 @@ export function animatorTourSteps(ctx: TourContext): TourStep[] {
       id: 'cues', target: 'cue-bar',
       title: '播放和 cue',
       body: '小播放器可以播放、暫停、拉時間。這一排是 cue：點一個，舞台換成那個 cue 的樣子，影片也跳到那個時間。',
+      missingHint: '這首歌有 cue 的時候，舞台下面會出現這一排。',
     },
     {
       id: 'add-video', target: 'add-video',
       title: '要給導演看的時候',
       body: '按「＋ 加影片」把影片交上來，導演就會收到。現在不用按，知道在這裡就好。',
+      missingHint: '這首歌是你負責的，才會有「＋ 加影片」。',
     },
     {
       id: 'ae-live', target: 'source-ae',
