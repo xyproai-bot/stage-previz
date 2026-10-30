@@ -319,7 +319,7 @@ async function routeRequest(request, env) {
     if (parts.length === 4 && parts[3] === 'stream') return handleMemberVideoStream(request, env, url, parts[2]);
     return jsonResp({ error: 'Not found' }, 404);
   }
-  // 歌曲音樂播放（成員）：/api/music/:musicId/stream?pass=<通行證>（分享連結沒有這條：訪客拿不到音樂）
+  // 歌曲音樂播放（成員）：/api/music/:musicId/stream?pass=<通行證>（分享連結的訪客不走這條，走 /api/share/<連結碼>/song-music/:musicId/stream，見 handleShareRouter）
   if (url.pathname.startsWith('/api/music/') && (request.method === 'GET' || request.method === 'HEAD')) {
     const parts = url.pathname.split('/').filter(Boolean);  // [api, music, id, stream]
     if (parts.length === 4 && parts[3] === 'stream') return handleMemberMusicStream(request, env, url, parts[2]);
@@ -6460,7 +6460,9 @@ function shareLinkExpired(expiresAt, now = Date.now()) {
 // 有密碼的連結：
 //   第一次：X-Share-Password header 帶密碼（不收網址上的密碼）→ 對了就發「通行證」（8 小時，/data 回傳 access.token）
 //   之後：X-Share-Access header 帶通行證就好；影片 <video src> 帶不了 header → 影片網址後面已經接好 ?access=<通行證>
-//   （只有影片串流收網址上的通行證）
+//   （只有影片 / 音樂串流收網址上的通行證）
+//   歌曲的音樂（0049）：/data 的每首歌帶 hasMusic / music 簡述；GET songs/:songId/music 拿播放網址；
+//   song-music/:musicId/stream 播放（訪客只能聽，沒有上傳 / 換 / 移除）。保護跟影片一樣，見 songMusic.mjs 的「分享連結的訪客」那一段
 //   舊版前端每個請求都帶密碼 → 照樣可以（每個 isolate 記住算過的結果，不會每次都重算雜湊）
 async function handleShareRouter(request, env, url, ref) {
   const bySlug = ref?.kind === 'slug';
@@ -6475,12 +6477,12 @@ async function handleShareRouter(request, env, url, ref) {
 
   const segs = url.pathname.split('/').filter(Boolean);
   // [api, share|s, token|slug, ...rest]
-  const sub = segs[3] || null;        // 'data' / 'songs' / 'videos' / 'song-videos'
+  const sub = segs[3] || null;        // 'data' / 'songs' / 'videos' / 'song-videos' / 'song-music'
   // 回給前端的影片網址用同一種開頭（用好讀網址開的人，看不到連結碼）
   const shareBase = bySlug ? `/api/s/${key}` : `/api/share/${key}`;
-  const isStream = (sub === 'videos' || sub === 'song-videos') && !!segs[4] && segs[5] === 'stream' && !segs[6];
+  const isStream = (sub === 'videos' || sub === 'song-videos' || sub === 'song-music') && !!segs[4] && segs[5] === 'stream' && !segs[6];
 
-  // 密碼只收 header；通行證收 header，影片串流才收網址上的 ?access=
+  // 密碼只收 header；通行證收 header，影片 / 音樂串流才收網址上的 ?access=
   const provided = request.headers.get('x-share-password') || '';
   const providedAccess = request.headers.get('x-share-access') || (isStream ? (url.searchParams.get('access') || '') : '');
   const now = Date.now();
@@ -6588,8 +6590,8 @@ async function handleShareRouter(request, env, url, ref) {
     play: protection.noDownload ? await signSharePlay(getAuthSecret(env), { linkToken: token, mediaId, now }) : null,
   });
   // 串流請求要不要放行：禁止下載的連結一定要帶有效的播放通行證（沒帶 / 過期 / 別條連結的 / 別支影片的 → 401）
-  const streamGate = (mediaId) => decideShareStream(getAuthSecret(env), {
-    noDownload: protection.noDownload, playToken: url.searchParams.get('play') || '', linkToken: token, mediaId, now,
+  const streamGate = (mediaId, noun) => decideShareStream(getAuthSecret(env), {
+    noDownload: protection.noDownload, playToken: url.searchParams.get('play') || '', linkToken: token, mediaId, now, noun,
   });
   const streamDenied = (gate) => jsonResp({ error: gate.error, passExpired: gate.passExpired }, gate.status);
 
@@ -6612,6 +6614,8 @@ async function handleShareRouter(request, env, url, ref) {
     ).bind(...(link.song_id ? [link.project_id, link.song_id] : [link.project_id])).all();
     // 每首歌最新的可播版本（R2）
     const latestVideos = await latestReadyVideos(env, link.project_id);
+    // 每首歌的音樂簡述（0049；只有分享範圍內的歌會用到，沒有播放網址：要聽再 GET songs/:songId/music）
+    const musicBySong = await songMusic.loadShareMusicRows(env, link.project_id);
 
     const objsR = await env.DB.prepare(
       `SELECT * FROM stage_objects WHERE project_id = ? ORDER BY "order"`
@@ -6641,6 +6645,9 @@ async function handleShareRouter(request, env, url, ref) {
         id: s.id, name: s.name, order: s.order, status: s.status, code: s.code || null,
         // 最新可以播的影片版本（R2；沒有 = null）。streamUrl 已經接好通行證
         latestVideo: lv ? videoToShareApi(lv, await mediaUrl(`${shareBase}/song-videos/${lv.id}/stream`, lv.id)) : null,
+        // 這首歌的音樂（訪客只能聽；沒有影片的歌用音樂當歌的時間）。舊版前端不認得這兩個欄位，照舊能用
+        hasMusic: musicBySong.has(s.id),
+        music: songMusic.shareMusicSummary(musicBySong.get(s.id)),
       };
     }));
     return jsonResp({
@@ -6714,6 +6721,7 @@ async function handleShareRouter(request, env, url, ref) {
     const wantMechPositions = segs[5] === 'mechanism-positions' && !segs[6];
     const wantVideos = segs[5] === 'videos' && !segs[6];
     const wantVersions = segs[5] === 'versions' && !segs[6];
+    const wantMusic = segs[5] === 'music' && !segs[6];
     if (!songId || !/^[a-zA-Z0-9_-]{1,64}$/.test(songId)) return jsonResp({ error: 'Missing songId' }, 400);
     // 驗證 song 屬於 project / 限制 song
     if (link.song_id && link.song_id !== songId) return jsonResp({ error: 'Song not in scope' }, 403);
@@ -6764,6 +6772,14 @@ async function handleShareRouter(request, env, url, ref) {
       const videos = v ? [videoToShareApi(v, await mediaUrl(`${shareBase}/song-videos/${v.id}/stream`, v.id))] : [];
       return jsonResp({ videos, latestVideoId: v?.id || null });
     }
+    if (wantMusic) {
+      // 這首歌的音樂 + 播放網址（跟影片的 versions 一樣：有密碼的連結接 ?access=、禁止下載的連結再接 ?play=）。
+      // 播到一半網址過期（passExpired）→ 前端再來問一次拿新的。沒有音樂 = { music: null }
+      const row = await songMusic.loadShareSongMusic(env, link.project_id, songId);
+      if (!row) return jsonResp({ music: null });
+      const streamUrl = await mediaUrl(`${shareBase}/song-music/${row.id}/stream`, songMusic.shareMusicMediaId(row.id));
+      return jsonResp({ music: { ...songMusic.shareMusicSummary(row), streamUrl } });
+    }
     if (wantMechPositions) {
       // 每個 cue 自己設的機關位置（只有正式 cue；跟管理頁同一套沿用規則在前端算）
       const o = { mech2: mech.wantsMech2(request), mech3: mech.wantsMech3(request) };
@@ -6797,6 +6813,20 @@ async function handleShareRouter(request, env, url, ref) {
     if (!v || v.project_id !== link.project_id) return jsonResp({ error: 'Video not found' }, 404);
     if (link.song_id && link.song_id !== v.song_id) return jsonResp({ error: '不在分享範圍' }, 403);
     return serveR2Video(request, env, v, { noStore: protection.noDownload });
+  }
+
+  // /api/share/:token/song-music/:musicId/stream — 歌曲的音樂（R2；訪客只能聽）。
+  // 保護跟上面的影片一樣：連結 / 專案封存 / 過期 / 密碼通行證在這之前已經擋過；禁止下載的連結要有綁這條連結 + 這首音樂的播放通行證；
+  // 只分享一首歌的連結只拿得到那首歌的音樂；別的專案的音樂 404。成員的 /api/music/…?pass= 跟這條完全分開（songMusic.mjs）
+  if (isStream && sub === 'song-music' && (request.method === 'GET' || request.method === 'HEAD')) {
+    const musicId = segs[4];
+    if (!ID_RE.test(musicId)) return jsonResp({ error: '找不到這首音樂' }, 404);
+    const gate = await streamGate(songMusic.shareMusicMediaId(musicId), '音樂');
+    if (!gate.ok) return streamDenied(gate);
+    const m = await songMusic.loadMusicForShareStream(env, musicId);
+    const scope = songMusic.shareMusicScope(link, m);
+    if (!scope.ok) return jsonResp({ error: scope.error }, scope.status);
+    return serveR2Video(request, env, m, { noun: '音樂', noStore: protection.noDownload });
   }
 
   // /api/share/:token/videos/:driveFileId/stream — 公開存取串流（舊的 Drive 直播，之後改用 song-videos）

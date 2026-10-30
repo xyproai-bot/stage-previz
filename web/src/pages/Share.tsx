@@ -36,6 +36,9 @@ import { ndiShortLabel, type NdiGuide } from '../lib/ndiSteps';
 import { HELP_ANCHORS, helpUrl } from '../lib/helpLinks';
 import ShareSetlist from './ShareSetlist';
 import Icon from '../components/Icon';
+import MusicBar from '../components/MusicBar';
+import { SHARE_MUSIC_TEXT, useShareSongMusic } from '../lib/useShareSongMusic';
+import { useMusicHotkeys } from '../lib/musicClock';
 import { shouldWatermarkGuest } from '../lib/watermark/policy';
 import { useWatermarkScope } from '../lib/watermark/store';
 import type { WatermarkIdentity } from '../lib/watermark/text';
@@ -189,6 +192,20 @@ export default function Share() {
   const fileVideoMode = source === 'file' && media.active?.kind === 'video' && local.srcKey === localMediaKey(media.active.id);
   const versionVideoMode = !!selectedVersion && local.srcKey === selectedVersion.key;
   const videoMode = fileVideoMode || versionVideoMode;
+
+  // ── 音樂（沒有影片的歌，訪客只能聽）──
+  // 跟導演頁一樣的規則：有影片放影片（影片自己的聲音），不放音樂；沒影片、有音樂才放音樂，音樂就是「歌的時間」——
+  // 舞台、cue 列、機關跟著音樂走。播放網址 / 保護跟影片一樣（後台已經接好通行證），訪客沒有上傳 / 換 / 移除（lib/useShareSongMusic.ts）
+  const shareSong = useMemo(() => (data && selectedSongId ? data.songs.find(s => s.id === selectedSongId) ?? null : null), [data, selectedSongId]);
+  const shareMusic = useShareSongMusic({
+    shareRef, accessToken, song: shareSong,
+    // 歌單上有最新影片 / 版本清單有 / 正在放這台電腦的影片 → 都算有影片
+    hasVideo: hasVideo || fileVideoMode || !!shareSong?.latestVideo,
+    videosLoaded: selectedSongId !== null && versions.loadedSongId === selectedSongId,
+    onAuthError: (e) => onShareFetchErrorRef.current(e),
+  });
+  const musicMode = shareMusic.musicMode;
+  const musicPlayer = shareMusic.player;
 
   // 本地檔案：↑ / ↓ 換清單上一個 / 下一個（焦點在輸入框、拉桿、走路模式時不搶方向鍵）
   const stepMedia = media.step;
@@ -377,6 +394,11 @@ export default function Share() {
   useEffect(() => {
     applyVideoGuards(playerVideo, { noDownload, watermark: watermarkOn });
   }, [playerVideo, noDownload, watermarkOn]);
+  // 音樂的播放元素也一樣（它藏在頁面外面，不會有瀏覽器自己的下載鈕，但屬性跟影片一致）
+  const musicVideo = musicPlayer.video;
+  useEffect(() => {
+    applyVideoGuards(musicVideo, { noDownload, watermark: watermarkOn });
+  }, [musicVideo, noDownload, watermarkOn]);
   // 右鍵「另存」、把畫面拖出去存：打在畫面（影片、3D 舞台、圖片）上才擋，留言框照常能用右鍵
   const blockMediaEvent = useCallback((e: React.SyntheticEvent) => {
     if (shouldBlockMediaEvent(e.target)) e.preventDefault();
@@ -392,19 +414,26 @@ export default function Share() {
     cues, selectedCueId, refreshKey: cueRefresh, video: local.video,
   });
   // 還沒設時間的正式 cue 用暫排的時間（跟機關同一份，lib/provisionalCues.ts）
+  // 沒有影片、有音樂：音樂是歌的時間（點 cue 讓音樂跳到那個 cue 的時間，含暫排的）
   const { poseAtFrame, selectCueByUser: selectCue } = useVideoCueTimeline({
     cues: mech.plannedCues,
     statesFor,
     refreshKey: cueRefresh,
     resetKey: selectedSongId,
-    active: videoMode,
-    ready: local.ready,
-    video: local.video,
-    time: local.time,
+    active: videoMode || musicMode,
+    ready: musicMode ? musicPlayer.ready : local.ready,
+    video: musicMode ? musicPlayer.video : local.video,
+    time: musicMode ? musicPlayer.time : local.time,
     selectedCueId,
     onSelectCue: setSelectedCueId,
-    seek: local.seek,
+    seek: musicMode ? musicPlayer.seek : local.seek,
   });
+  // 3D 的機關跟著音樂的時間走（上面的 useShareMechanisms 讀的是影片）
+  const musicTimelineRef = useRef(mech.timeline);
+  musicTimelineRef.current = mech.timeline;
+  const musicMechAtFrame = useCallback(() => musicTimelineRef.current?.valuesAt(musicPlayer.video.currentTime) ?? null, [musicPlayer.video]);
+  // 空白鍵播放 / 暫停音樂（有影片時空白鍵是影片的，在 useReviewSession）
+  useMusicHotkeys({ enabled: musicMode, onToggle: musicPlayer.togglePlay });
 
   // ── 審片的播放控制（空白鍵、J / K / L、逐格、速度、時間碼）；製作打開「允許看的人留言」→ 還有留言、區段、畫記 ──
   const allowComments = !!data?.allowComments;
@@ -569,7 +598,7 @@ export default function Share() {
                 ? <><span className="ndi-dot ndi-dot--on" aria-hidden="true" /> {ndiGuide.source ?? 'AE'}{ndiGuide.fps != null ? ` · ${ndiGuide.fps} fps` : ''}</>
                 : ndiShortLabel(ndiGuide))
               : source === null
-              ? noSourceStatus(versions.status === 'error' ? versions.error : null)
+              ? (musicMode ? SHARE_MUSIC_TEXT.statusNoVideo : noSourceStatus(versions.status === 'error' ? versions.error : null))
               : source === 'version'
               ? (selectedVersion
                 ? `${local.playing ? '播放中' : '暫停'} · ${selectedVersion.label}${selectedVersion.title ? ` · ${selectedVersion.title}` : ''}`
@@ -614,13 +643,19 @@ export default function Share() {
                 cameraBookmarks={cameraBookmarks}
                 stageShow={{
                   title: (() => { const s = data.songs.find(x => x.id === selectedSongId); return s ? songTitle(s) : undefined; })(),
-                  transport: videoMode ? { playing: local.playing, time: local.time, duration: local.duration, onTogglePlay: local.togglePlay } : undefined,
+                  // 全螢幕預演小條的播放 / 暫停 + 時間：有影片是影片的；沒影片、有音樂是音樂的
+                  transport: videoMode
+                    ? { playing: local.playing, time: local.time, duration: local.duration, onTogglePlay: local.togglePlay }
+                    : musicMode
+                      ? { playing: musicPlayer.playing, time: musicPlayer.time, duration: musicPlayer.duration, onTogglePlay: musicPlayer.togglePlay }
+                      : undefined,
                   controller: stageShowCtl,
                   // 連結只開放一首歌（restrictedToSongId）或只有一首 → 沒有換歌
                   songNav: data.restrictedToSongId ? undefined : buildSongNav(data.songs.map(s => ({ id: s.id, label: songTitle(s) })), selectedSongId, setSelectedSongId),
                   cueNav: buildCueNav(cuesSongId === selectedSongId ? cues : [], selectedCueId, cueStep),
                 }}
                 {...mech.sceneProps}
+                {...(musicMode ? { mechanismAtFrame: musicMechAtFrame } : null)}
                 lookSettings={projectLook}
                 materialOverrides={materialOverrides}
                 homeView={homeView}
@@ -714,6 +749,11 @@ export default function Share() {
               <span className="share-player__name" title={media.active.name}>{media.active.name}</span>
               <button className="share-player__btn" onClick={() => { if (media.active) media.remove(media.active.id); }} title="從清單移除這支影片" aria-label="從清單移除這支影片"><Icon icon={X} size="md" /></button>
             </div>
+          )}
+
+          {/* 音樂播放列（沒有影片、有音樂）：播放 / 暫停、空白鍵、拖時間；機關、cue 列、3D 跟著音樂走。訪客只能聽 */}
+          {musicMode && shareMusic.summary && (
+            <MusicBar player={musicPlayer} label={shareMusic.summary.filename} onReload={shareMusic.reload} loadError={shareMusic.error} />
           )}
 
           {cues.length > 0 && (

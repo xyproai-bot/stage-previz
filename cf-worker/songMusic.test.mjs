@@ -1,5 +1,5 @@
 // 跑法：cd cf-worker && npm test
-// 歌曲的音樂（migration 0049）：格式 / 大小 / 權限 / 換掉舊檔排隊刪 / 播放 / 分享連結碰不到。
+// 歌曲的音樂（migration 0049）：格式 / 大小 / 權限 / 換掉舊檔排隊刪 / 播放 / 分享連結的訪客不能改（只能聽，見 shareMusic.test.mjs）。
 //   純判斷 + 走真的 worker 路由（worker.js 的 fetch + node:sqlite 假 D1 + 記憶體假 R2），寫法跟 directorStage.test.mjs 一樣。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -471,7 +471,7 @@ test('播放：通行證網址（Range、HEAD、快取標頭）；沒有通行�
   void ani; void other; void r2;
 });
 
-test('分享連結的訪客碰不到：分享網址底下沒有音樂的路（404 / 405 / 401），分享頁資料裡也沒有音樂，檔案和資料不動', async () => {
+test('分享連結的訪客只能聽，不能上傳 / 換 / 移除：分享網址底下沒有這些路（404 / 405 / 401），成員的路沒登入進不去，檔案和資料不動（聽的部分在 shareMusic.test.mjs）', async () => {
   const { db, env, r2, put, dir } = await setup();
   const m = (await put('u_dir', `${P}/songs/s1/music`, bytes(100))).data.music;
   const link = await dir('POST', `${P}/share-links`, {});
@@ -484,18 +484,20 @@ test('分享連結的訪客碰不到：分享網址底下沒有音樂的路（40
   };
   for (const root of [`/api/share/${token}`, `/api/s/${token}`]) {
     for (const [method, path] of [
-      ['GET', 'songs/s1/music'], ['GET', 'songs/s1/music/stream'], ['GET', `music/${m.id}/stream`], ['GET', `music/${m.id}`],
-      ['PUT', 'songs/s1/music'], ['DELETE', 'songs/s1/music'], ['POST', 'songs/s1/music'],
+      ['GET', 'songs/s1/music/stream'], ['GET', `music/${m.id}/stream`], ['GET', `music/${m.id}`],
+      ['PUT', 'songs/s1/music'], ['DELETE', 'songs/s1/music'], ['POST', 'songs/s1/music'], ['PATCH', 'songs/s1/music'],
+      ['PUT', `song-music/${m.id}/stream`], ['DELETE', `song-music/${m.id}/stream`], ['POST', `song-music/${m.id}/stream`],
+      ['PUT', `song-music/${m.id}`], ['DELETE', `song-music/${m.id}`],
     ]) {
       const body = method === 'PUT' || method === 'POST' ? bytes(10) : undefined;
       const status = await visit(method, `${root}/${path}`, body, body ? { 'content-length': '10' } : {});
       assert.ok([401, 403, 404, 405].includes(status), `${method} ${root}/${path} → ${status}`);
     }
-    // 分享頁的資料裡沒有音樂
+    // 分享頁的資料只有簡述：沒有 R2 位置、誰傳的、播放網址
     const data = await worker.fetch(new Request(`${BASE}${root}/data`), env);
     if (data.status === 200) {
       const text = JSON.stringify(await data.json());
-      assert.doesNotMatch(text, /music|streamUrl.*sm_|sm_[0-9a-f]{16}/i);
+      assert.doesNotMatch(text, /r2_key|music\/p1\/|uploadedBy|streamUrl.*sm_|"\/api\/music\//);
     }
   }
   // 分享連結的 token 不是登入身分：帶著專案網址也進不去

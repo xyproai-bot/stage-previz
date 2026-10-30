@@ -12,6 +12,7 @@ import { normalizeCameraBookmarks, type CameraBookmark } from './cameraBookmarks
 import type { ShareSongVideoFields, SongVideoFields } from './videoApi';
 import type { SongReviewFields } from './reviewApi';
 import type { SongMusicFields } from './musicApi';
+import type { ShareSongMusicFields } from './shareMusicApi';
 import { friendlyError } from './songReview';
 import type { Annotation } from './review/annotations';
 
@@ -1468,8 +1469,8 @@ export function shareApiPath(ref: ShareRef): string {
 export interface SharePublicData {
   project: { id: string; name: string; description: string };
   modelUrl: string | null;
-  /** code / latestVideo：舊版 worker 沒有 → undefined */
-  songs: ({ id: string; name: string; order: number; status: string } & Partial<ShareSongVideoFields>)[];
+  /** code / latestVideo：舊版 worker 沒有 → undefined；hasMusic / music（0049，訪客只能聽）：舊版 worker 沒有 → undefined = 沒有音樂 */
+  songs: ({ id: string; name: string; order: number; status: string } & Partial<ShareSongVideoFields> & Partial<ShareSongMusicFields>)[];
   stageObjects: StageObject[];
   restrictedToSongId: string | null;
   /** 舊版 worker 沒有 → undefined */

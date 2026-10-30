@@ -8,6 +8,8 @@
 //   權限          musicWriteDecision（寫 = 製作 + 導演；讀 = 專案成員，路由表 access.mjs 的 musicEditor / member）
 //   播放通行證    signMusicPass / verifyMusicPass（跟影片同一套，簽名前面多一個 music: 跟影片分開）
 //   資料庫 / R2   getSongMusic / putSongMusic / deleteSongMusic / loadMusicSummaries / loadMusicForStream / discardR2Files
+//   分享連結訪客  shareMusicMediaId / shareMusicSummary / loadShareMusicRows / loadShareSongMusic / loadMusicForShareStream / shareMusicScope
+//                （只能聽；保護跟分享頁的影片一樣，見檔案最後那一段）
 //
 // 寫入的 handler 回 { status, body }（worker.js 的 mechResp 轉成 JSON）；播放的 Range 回應在 worker.js（serveR2Video 共用）。
 
@@ -348,4 +350,82 @@ export async function loadMusicForStream(env, musicId, userId) {
 export async function loadSongMusicForStream(env, songId) {
   const row = await env.DB.prepare(`SELECT id, r2_key, mime, size_bytes FROM song_music WHERE song_id = ? LIMIT 1`).bind(songId).first();
   return row || null;
+}
+
+// ─────────────────────────────────────────────
+// 分享連結的訪客（只能聽；規則跟分享頁的影片一樣，worker.js 的 handleShareRouter）
+// ─────────────────────────────────────────────
+//
+// 保護全部沿用分享頁影片的那一套，這裡不另外發明：
+//   連結本身     連結不存在 404、專案封存 404、過期 410、有密碼沒通行證 401 —— 都在 handleShareRouter 前面擋掉，音樂的路也在那一關後面
+//   密碼通行證   跟影片一樣：X-Share-Access header，或播放網址上的 ?access=（綁這一條連結，換連結不能用）
+//   禁止下載     連結打開之後，播放網址一定要帶 ?play=（綁這一條連結 + 這一首音樂，幾小時失效）；
+//                播放通行證綁的 id 前面加 music:，影片的通行證拿來聽音樂（反過來也是）簽名對不上
+//   分享範圍     只分享一首歌的連結（share_links.song_id）只拿得到那一首歌的音樂；別的專案的音樂 404
+//   成員的通行證 /api/music/:id/stream?pass= 那一條跟這裡完全分開：成員的通行證綁登入者，分享連結的訪客用不到，
+//                分享的通行證也開不了成員的那一條（它要登入身分）
+// 回應裡沒有 R2 位置、誰傳的。訪客沒有上傳 / 換 / 移除（分享網址底下只有 GET / HEAD）。
+
+/** 分享的播放通行證綁的 id：前面加 music:，跟影片（歌曲影片 id、Drive 檔案 id）分開 */
+export const shareMusicMediaId = (musicId) => `music:${musicId}`;
+
+/** 分享頁給訪客看的音樂簡述（沒有播放網址、誰傳的、R2 位置、上傳時間） */
+export function shareMusicSummary(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    filename: row.filename,
+    mime: row.mime,
+    sizeBytes: row.size_bytes ?? null,
+    durationSec: row.duration_sec ?? null,
+  };
+}
+
+/** 這個專案每首歌的音樂（分享頁 /data 用）：Map(songId → 一列)。表還沒建（後台先上線、migration 還沒套）→ 空的，分享頁照常 */
+export async function loadShareMusicRows(env, projectId) {
+  try {
+    const r = await env.DB.prepare(
+      `SELECT song_id, id, filename, mime, size_bytes, duration_sec FROM song_music WHERE project_id = ?`
+    ).bind(projectId).all();
+    return new Map((r.results || []).map(row => [row.song_id, row]));
+  } catch {
+    return new Map();
+  }
+}
+
+/** 分享：這首歌的音樂（要是這個專案的）；沒有 / 表還沒建 → null */
+export async function loadShareSongMusic(env, projectId, songId) {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT song_id, id, filename, mime, size_bytes, duration_sec FROM song_music WHERE song_id = ? AND project_id = ? LIMIT 1`
+    ).bind(songId, projectId).first();
+    return row || null;
+  } catch {
+    return null;
+  }
+}
+
+/** 分享的播放：用音樂 id 查（連結的範圍另外用 shareMusicScope 看）；沒有 / 表還沒建 → null */
+export async function loadMusicForShareStream(env, musicId) {
+  try {
+    const row = await env.DB.prepare(
+      `SELECT id, project_id, song_id, r2_key, mime, size_bytes FROM song_music WHERE id = ? LIMIT 1`
+    ).bind(musicId).first();
+    return row || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 這條分享連結能不能聽這首音樂：要是同一個專案的；連結只分享一首歌的話要是那一首歌的。
+ * 別的專案的、不存在的一律 404（不讓人從回應猜別的專案有沒有這個 id）；同專案但不在分享範圍 403（跟影片一樣）。
+ * @param {{project_id: string, song_id: string | null}} link
+ * @param {{project_id: string, song_id: string} | null | undefined} row
+ * @returns {{ok: true} | {ok: false, status: number, error: string}}
+ */
+export function shareMusicScope(link, row) {
+  if (!row || row.project_id !== link.project_id) return { ok: false, status: 404, error: '找不到這首音樂' };
+  if (link.song_id && link.song_id !== row.song_id) return { ok: false, status: 403, error: '不在分享範圍' };
+  return { ok: true };
 }

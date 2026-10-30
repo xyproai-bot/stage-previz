@@ -18,7 +18,9 @@ const enc = new TextEncoder();
 /** 播放通行證每 3 小時換一次（同一段時間拿到的一樣），有效 3～6 小時 */
 export const SHARE_PLAY_BUCKET_MS = 3 * 3600 * 1000;
 
-export const PLAY_TOKEN_MISSING_MESSAGE = '這條分享連結不能直接下載影片，請從分享頁面播放';
+// noun：影片 / 音樂（歌曲的音樂也走這一套播放通行證，見 songMusic.mjs 的 shareMusicMediaId）
+export const playTokenMissingMessage = (noun = '影片') => `這條分享連結不能直接下載${noun}，請從分享頁面播放`;
+export const PLAY_TOKEN_MISSING_MESSAGE = playTokenMissingMessage();
 export const PLAY_TOKEN_EXPIRED_MESSAGE = '播放網址過期了，請重新整理頁面';
 
 async function hmac(secret, data) {
@@ -37,7 +39,7 @@ function sameStr(a, b) {
   return diff === 0;
 }
 
-/** 播放通行證：「到期時間.簽章」，綁連結碼 + 影片（mediaId：歌曲影片的 id，或舊的 Drive 檔案 id） */
+/** 播放通行證：「到期時間.簽章」，綁連結碼 + 影片（mediaId：歌曲影片的 id，或舊的 Drive 檔案 id，或 music:<音樂 id>） */
 export async function signSharePlay(secret, { linkToken, mediaId, now = Date.now() }) {
   const exp = (Math.floor(now / SHARE_PLAY_BUCKET_MS) + 2) * SHARE_PLAY_BUCKET_MS;
   const sig = await hmac(secret, `share-play|${linkToken}|${mediaId}|${exp}`);
@@ -61,9 +63,9 @@ export async function verifySharePlay(secret, token, { linkToken, mediaId, now =
  *   noDownload 開了 → 一定要有效的播放通行證
  * @returns {{ok: true} | {ok: false, status: 401, error: string, passExpired: boolean}}
  */
-export async function decideShareStream(secret, { noDownload, playToken, linkToken, mediaId, now = Date.now() }) {
+export async function decideShareStream(secret, { noDownload, playToken, linkToken, mediaId, now = Date.now(), noun = '影片' }) {
   if (!noDownload) return { ok: true };
-  if (!playToken) return { ok: false, status: 401, error: PLAY_TOKEN_MISSING_MESSAGE, passExpired: false };
+  if (!playToken) return { ok: false, status: 401, error: playTokenMissingMessage(noun), passExpired: false };
   if (await verifySharePlay(secret, playToken, { linkToken, mediaId, now })) return { ok: true };
   return { ok: false, status: 401, error: PLAY_TOKEN_EXPIRED_MESSAGE, passExpired: true };
 }
