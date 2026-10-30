@@ -1,6 +1,7 @@
 // 動畫師上手教學頁（/tutorial/animator）的內容資料。頁面：pages/AnimatorTutorial.tsx（只負責排版）。
 //   每一句事實都能在 pages/Help.tsx 或程式裡找到根據；按鈕、選單、解析度這些字直接用程式裡的常數，改了不會對不上。
-//   第二階段換短片：把 step 的 media 從 image 換成 clip（TutorialMedia 會處理），頁面不用改。
+//   有動作的 13 步用短片（clip，web/public/help/tutorial/<id>.mp4 + .jpg；錄影腳本在 web/scripts/tutorial-clips/，
+//   網站改了可以重錄）；沒有動作的步驟維持說明頁的截圖。AE 的畫面（AE 腳本、AE 視訊預覽…）之後再補短片。
 //   第三階段的教學影片做好之後，把 ANIMATOR_TUTORIAL_VIDEO 填上（不是 null 頁面才會顯示影片那一塊）。
 import type { ReactNode } from 'react';
 import { Download, ExternalLink } from 'lucide-react';
@@ -65,6 +66,14 @@ function image(k: FigKey): TutorialMediaItem {
   return { kind: 'image', src: f.src, alt: f.alt, width: f.w, height: f.h };
 }
 
+/**
+ * 短片：web/public/help/tutorial/<id>.mp4（沒有聲音、循環）+ <id>.jpg（封面）。
+ * 大小都是 1280×720（錄影腳本固定輸出這個大小）；alt 用一句白話寫短片在做什麼。
+ */
+function clip(id: string, alt: string): TutorialMediaItem {
+  return { kind: 'clip', src: `/help/tutorial/${id}.mp4`, poster: `/help/tutorial/${id}.jpg`, alt, width: 1280, height: 720 };
+}
+
 const PNG_LABEL = ledMapMenuLabel('png', 'plain');
 const JSX_LABEL = ledMapMenuLabel('jsx', 'plain');
 const RES_LIST = RECORD_RESOLUTIONS.map(r => r.label).join('、');
@@ -80,7 +89,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
       {
         id: 'intro-what', title: '這是什麼',
         lead: <>這是一個把你的動畫<strong>貼到真的舞台上看</strong>的地方。<strong>你在 AE 裡的做法一點都不用改</strong>，照原本的方式做；多出來的只是：隨時可以在 3D 舞台的 LED 上看到做出來的樣子。</>,
-        media: image('studioOverview'),
+        media: clip('overview', '動畫師工作站：示範舞台的 LED 播著示範動畫，用滑鼠拖拉轉視角、滾輪縮放，再按「重置攝影機」回到原本的視角。'),
         more: [{ anchor: A.animStudio, label: '工作站畫面' }],
       },
       {
@@ -134,6 +143,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '點一首，舞台就換成那首歌的樣子。',
           <>歌名旁邊的小圓點是狀態，<Ui>有新版</Ui> 是導演還沒看過的版本，留言圖示的數字是新留言。</>,
         ],
+        media: clip('find-song', '左邊的歌曲清單：按「我的」只剩指派給自己的歌，點一首，舞台就換成那首歌的樣子，再按播放。'),
         more: [
           { anchor: A.landing, label: '登入後會到哪裡' },
           { anchor: A.animStudio, label: '工作站畫面' },
@@ -196,7 +206,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '要用整張 LED 畫布大小的那支，才會對到每一片 LED。',
           '可以一次放好幾個，點清單裡的哪個，LED 就放哪個。',
         ],
-        media: image('localFiles'),
+        media: clip('local-file', '來源選「本地檔案」，把一支影片拖進舞台，LED 馬上出現動畫，再按播放。'),
         more: [{ anchor: A.animSource, label: '影片 / AE 即時 / 本地檔案' }],
       },
       {
@@ -295,7 +305,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '字不是反的。三樣都對，就是對的。',
           <>LED 有畫面的時候也想檢查：<Ui>⋯</Ui> → 勾 <Ui>LED 顯示測試圖</Ui>（只有你這邊看得到）。</>,
         ],
-        media: image('testPattern'),
+        media: clip('test-pattern', '沒有影片的歌，LED 上是測試圖：把 3D 畫面轉到側邊、拉近，就看得到每一片 LED 自己的名字和位置。'),
         more: [{ anchor: A.animTestPattern, label: 'LED 顯示測試圖' }],
       },
       {
@@ -306,6 +316,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '點 cue 列的某個 cue，音樂就跳到那個 cue 的時間。',
           '有影片的歌（或 LED 放的是本地影片）聽的是影片的聲音，音樂不會播。',
         ],
+        media: clip('music-cue', '沒有影片、有音樂的歌：按播放聽音樂，點 cue，音樂跳到那個時間，3D 的升降台跟著升起來。'),
         more: [{ anchor: A.animStudio, label: '工作站畫面（音樂）' }],
       },
     ],
@@ -336,7 +347,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '會先在你的電腦試播一下（檔案還沒傳出去），沒問題就開始傳。',
           <>進度條跑完會寫 <Ui>完成，變成 V3</Ui>（號碼是下一個版本），LED 換成新的一版。</>,
         ],
-        media: image('addVideoUpload'),
+        media: clip('add-video', '按「＋ 加影片」，寫一句說明、選影片檔，看上傳進度，跑完就多一個新的版本，LED 換成新的一版。'),
         more: [
           { anchor: A.animAddVideo, label: '交影片（加影片）' },
           { anchor: A.qUpload, label: '上傳到一半中斷了' },
@@ -345,7 +356,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
       {
         id: 'submit-versions', title: '版本 V1、V2、V3',
         lead: '每交一次、好了就是下一個號碼：V1、V2、V3…。號碼不會變，點哪一版，LED 就放哪一版。',
-        media: image('versionBar'),
+        media: clip('versions', '版本列上有 V1、V2：點哪一版，LED 就換成哪一版的畫面。'),
         more: [{ anchor: A.animVersions, label: '版本 V1、V2…' }],
       },
       {
@@ -356,6 +367,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '留言框可以先寫一段給導演的話（例：請看 0:10 升降台上來那段）。',
           <>按 <Ui>提交審查</Ui> → 確認。狀態變成「審查中」，導演收到通知。</>,
         ],
+        media: clip('submit-review', '右邊「審查 / 留言」分頁：先寫一段給導演的話，按「提交審查」再確認，狀態就變成「審查中」。'),
         more: [{ anchor: A.animSubmit, label: '提交審查' }],
       },
     ],
@@ -384,6 +396,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '左下角疊 cue 名稱字幕（例如「Cue 3 副歌全開」）：預設是勾著的。',
           <>按 <Ui>開始錄</Ui>。</>,
         ],
+        media: clip('record-options', '按「錄成影片」打開設定視窗：看一遍解析度、範圍、鏡頭和 cue 字幕，最後按「開始錄」。'),
         more: [{ anchor: A.animStudio, label: '工作站畫面（錄成影片）' }],
       },
       {
@@ -393,6 +406,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '錄的時候播放控制會鎖住，請讓這個分頁留在最前面。',
           <>畫面下方會有進度條。想提早結束就按 <Ui>停止</Ui>，只會留下已經錄到的這一段。</>,
         ],
+        media: clip('record-progress', '錄影中：畫面下方出現進度條；按「停止」就存成影片檔，畫面上寫「已存成 …」。'),
       },
       {
         id: 'record-save', title: '存到哪裡、怎麼給導演',
@@ -418,6 +432,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           '每則留言都標著是看哪一版時留的。有時間的（例：0:12）點一下，影片就跳到那一秒。',
           '點一則留言：換到那一版、跳到那一格，攝影機飛到導演留言時的 3D 視角，導演的畫記疊上去。',
         ],
+        media: clip('feedback-see', '「審查 / 留言」分頁：點導演的一則留言，影片換到那一版、跳到那一秒，攝影機飛到導演當時的視角，導演畫的記號疊在畫面上。'),
         more: [
           { anchor: A.animFeedback, label: '看導演的意見、回覆、已改好' },
           { anchor: A.dirOpen, label: '打開留言' },
@@ -431,6 +446,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           <>改好了就按 <Ui>已改好（V2）</Ui>，會記下是哪一版改好的，留言變灰。導演覺得還沒好，可以按 <Ui>重新打開</Ui>。</>,
           <>交新版（<Ui>＋ 加影片</Ui>）會自動回到「審查中」；或改好後按 <Ui>修改完成，重新提交</Ui>。</>,
         ],
+        media: clip('feedback-reply', '按留言下面的「回覆」寫一句話送出，再按「已改好（V2）」，這則留言就變成已解決（灰色）。'),
         more: [
           { anchor: A.animFeedback, label: '看導演的意見、回覆、已改好' },
           { anchor: A.animSubmit, label: '提交審查' },
@@ -444,7 +460,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
           <>按旁邊的按鈕，或鍵盤 <kbd>C</kbd>，在兩版之間切換，停在同一秒。</>,
           <>選 <Ui>不比較</Ui> 結束。</>,
         ],
-        media: image('compare'),
+        media: clip('compare', '小播放器下面「比較」選 V1，LED 放著 V2；按旁邊的按鈕或鍵盤 C，在兩版之間切換，停在同一秒。'),
         more: [{ anchor: A.animCompare, label: '比較兩版（C 鍵）' }],
       },
     ],

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { createElement, Fragment, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { ANIMATOR_TUTORIAL, ANIMATOR_TUTORIAL_VIDEO, type TutorialStep } from './animatorTutorialContent';
 import { HELP_ANCHORS } from '../helpLinks';
 
@@ -69,6 +69,48 @@ describe('動畫師上手教學的內容', () => {
       expect(s.media.alt.length, s.id).toBeGreaterThan(0);
     }
     expect(n).toBeGreaterThan(5);
+  });
+
+  it('有動作的 13 步用短片，各用一支，放在對的那一步', () => {
+    const want: Record<string, string> = {
+      overview: 'intro-what', 'find-song': 'login-find', 'local-file': 'preview-file', 'test-pattern': 'preview-test',
+      'music-cue': 'preview-music', 'add-video': 'submit-add', versions: 'submit-versions', 'submit-review': 'submit-review',
+      'record-options': 'record-options', 'record-progress': 'record-wait', 'feedback-see': 'feedback-see',
+      'feedback-reply': 'feedback-reply', compare: 'feedback-compare',
+    };
+    const got: Record<string, string> = {};
+    for (const s of allSteps) {
+      if (s.media?.kind !== 'clip') continue;
+      const id = /\/help\/tutorial\/([a-z-]+)\.mp4$/.exec(s.media.src)?.[1] ?? '';
+      expect(got[id], `${id} 用了兩次`).toBeUndefined();
+      got[id] = s.id;
+    }
+    expect(got).toEqual(want);
+  });
+
+  it('每支短片的 mp4 和封面 jpg 都在、大小合理、有替代文字', () => {
+    let total = 0;
+    let n = 0;
+    for (const s of allSteps) {
+      if (s.media?.kind !== 'clip') continue;
+      n++;
+      const m = s.media;
+      const id = m.src.replace(/^\/help\/tutorial\//, '').replace(/\.mp4$/, '');
+      expect(m.src, s.id).toBe(`/help/tutorial/${id}.mp4`);
+      expect(m.poster, s.id).toBe(`/help/tutorial/${id}.jpg`);
+      const mp4 = new URL('../../../public' + m.src, import.meta.url);
+      const jpg = new URL('../../../public' + m.poster, import.meta.url);
+      expect(existsSync(mp4), `${s.id}: ${m.src}`).toBe(true);
+      expect(existsSync(jpg), `${s.id}: ${m.poster}`).toBe(true);
+      const mp4Bytes = statSync(mp4).size;
+      expect(mp4Bytes, `${s.id}: mp4 太大`).toBeLessThanOrEqual(2.5 * 1024 * 1024);
+      expect(statSync(jpg).size, `${s.id}: 封面太大`).toBeLessThanOrEqual(200 * 1024);
+      total += mp4Bytes;
+      expect(m.alt.length, s.id).toBeGreaterThan(5);
+      expect([m.width, m.height], s.id).toEqual([1280, 720]);
+    }
+    expect(n).toBe(13);
+    expect(total, '13 支加起來太大').toBeLessThanOrEqual(20 * 1024 * 1024);
   });
 
   it('沒有英文角色字', () => {

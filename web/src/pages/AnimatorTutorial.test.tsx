@@ -49,7 +49,18 @@ describe('AnimatorTutorial：教學頁', () => {
   it('沒有教學影片（ANIMATOR_TUTORIAL_VIDEO 是 null）時，沒有影片區塊', () => {
     expect(ANIMATOR_TUTORIAL_VIDEO).toBeNull();
     expect(html).not.toContain('tut-video');
-    expect(html).not.toContain('<video');
+  });
+
+  it('13 支短片都畫出來了：有封面、沒有自動下載（preload none）、沒有自動播放', () => {
+    const videos = html.match(/<video [^>]*>/g) ?? [];
+    expect(videos).toHaveLength(13);
+    for (const v of videos) {
+      expect(v).toMatch(/poster="\/help\/tutorial\/[a-z-]+\.jpg"/);
+      expect(v).toMatch(/src="\/help\/tutorial\/[a-z-]+\.mp4"/);
+      expect(v).toContain('preload="none"');
+      expect(v).not.toMatch(/autoplay/i);
+      expect(v).toMatch(/aria-label="[^"]+"/);
+    }
   });
 
   it('「想知道更多」連到說明頁的段落', () => {
@@ -85,15 +96,15 @@ describe('TutorialMedia：圖片和短片', () => {
     expect(out).toContain('alt="比較"');
   });
 
-  it('短片：沒聲音、循環、自動播、行內播放、有封面和說明', () => {
+  it('短片：沒聲音、循環、行內播放、有封面和說明；還沒進畫面不下載（preload none）、不自動播', () => {
     const out = renderToStaticMarkup(<TutorialMedia item={{ kind: 'clip', src: '/help/tutorial/a.mp4', poster: '/help/tutorial/a.webp', alt: '示範' }} />);
     expect(out).toContain('<video');
     expect(out).toMatch(/muted/);
     expect(out).toMatch(/loop/);
-    expect(out).toMatch(/autoPlay|autoplay/);
     expect(out).toMatch(/playsInline|playsinline/);
     expect(out).toContain('poster="/help/tutorial/a.webp"');
-    expect(out).toContain('preload="metadata"');
+    expect(out).toContain('preload="none"');
+    expect(out).not.toMatch(/autoplay/i);
     expect(out).toContain('aria-label="示範"');
   });
 });
