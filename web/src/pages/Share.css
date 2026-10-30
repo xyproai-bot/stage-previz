@@ -676,3 +676,25 @@
   .share-cuebar { order: -1; }
   .share-comments { flex: 0 0 300px; max-height: none; border-top: none; border-left: 1px solid var(--border); }
 }
+
+/* ─── 音樂播放列（沒有影片、有音樂的歌；components/MusicBar.tsx）─── */
+/* 接在 3D 畫面和 cue 列之間，不被壓扁。分享頁不載入編輯頁的樣式表，播放列裡錯誤那一行的字色、「重新載入」按鈕這裡自己寫一份 */
+.share-stage > .music-bar {
+  flex-shrink: 0;
+  padding-left: max(10px, env(safe-area-inset-left));
+  padding-right: max(10px, env(safe-area-inset-right));
+}
+.share .music-bar__error { color: var(--danger); font-size: 11.5px; }
+.share .music-bar__error .link-btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+.share .music-bar__error .link-btn:hover { background: var(--surface-2); color: var(--text); }
+@media (hover: none) and (pointer: coarse) {
+  .share .music-bar__btn { width: 40px; height: 40px; }
+}

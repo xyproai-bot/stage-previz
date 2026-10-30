@@ -30,7 +30,9 @@
 //   歌曲影片：交新版（上傳 / 貼連結）                                          admin、負責這首歌的動畫師（videos.mjs videoUploadDecision）
 //   歌曲影片：貼連結交一版                                                    上面的人 + 這個專案的導演（videos.mjs videoLinkDecision）
 //   歌曲影片：改說明、刪除、繼續上傳某一版                                     admin、交這一版的人（videos.mjs videoModifyDecision）
-//   歌曲的音樂（0049，songs/:s/music）：看、播放                                專案成員（分享連結的訪客碰不到：分享連結走另一組網址，沒有這幾條）
+//   歌曲的音樂（0049，songs/:s/music）：看、播放                                專案成員
+//                   分享連結的訪客只能聽：走分享網址底下的 songs/:s/music 和 song-music/:id/stream（跟分享頁的影片同一套保護，
+//                   見 songMusic.mjs「分享連結的訪客」），不是這裡的路；沒有上傳 / 換 / 移除
 //   歌曲的音樂：上傳 / 換 / 移除                                               admin、導演（need = musicEditor，規則 canEditStage）；動畫師 403、不是成員 403、封存的專案 409
 //   比例尺的樂手和器材（0033，stage-props）：看                                所有成員（分享連結：只看）
 //   比例尺的樂手和器材：新增 / 移動 / 轉 / 刪除                                admin、導演（canEditStageProps，規則在 web/src/lib/stageProps.ts）
