@@ -9,9 +9,10 @@ import {
   createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState,
   type MouseEvent, type ReactNode,
 } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom';
 import type { LucideIcon } from 'lucide-react';
 import { HELP_ANCHORS as A, type HelpAnchor } from '../lib/helpLinks';
+import { ANIMATOR_TUTORIAL_PATH } from '../lib/tutorial/animatorTour';
 import { NDI_HELPER_DOWNLOAD_URL, NDI_HELPER_DOWNLOAD_URL_MAC, NDI_TOOLS_URL } from '../lib/downloads';
 import { NDI_AUTOSTART_NOTE, OLD_HELPER_HINT, PERMISSION_PROMPT_TEXT, permissionFixSteps } from '../lib/ndiSteps';
 import { DRIVE_MATCH_RULE } from '../lib/songCode';
@@ -1713,6 +1714,9 @@ function ProducerChapter() {
 function AnimatorChapter() {
   return (
     <Chapter id={A.animator} lead="在動畫師工作站交影片、看導演的意見；用 AE 即時或本地檔案，直接在 3D 舞台的 LED 上看自己的動畫。">
+      <Note title="第一次用？">
+        <p>看〈<RouterLink to={ANIMATOR_TUTORIAL_PATH}>動畫師上手教學</RouterLink>〉，一步一步帶你做一次。</p>
+      </Note>
       <Section id={A.animStudio} title="工作站畫面">
         <F k="studioOverview" />
         <ul className="help-list">

@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { ANIMATOR_TUTORIAL_PATH } from './lib/tutorial/animatorTour';
 import Login from './pages/Login';
 import Admin from './pages/Admin';
 import ProjectEditor from './pages/ProjectEditor';
@@ -25,6 +26,8 @@ const Preview = lazy(() => import('./pages/Preview'));
 const Share   = lazy(() => import('./pages/Share'));
 // 線上使用說明（公開，不用登入）
 const Help    = lazy(() => import('./pages/Help'));
+// 動畫師上手教學（公開，不用登入）
+const AnimatorTutorial = lazy(() => import('./pages/AnimatorTutorial'));
 // 邀請連結（公開，不用登入；按「進入」才登入 + 加進專案）
 const InvitePage = lazy(() => import('./pages/InvitePage'));
 
@@ -64,6 +67,7 @@ export default function App() {
             {/* 好讀分享網址（/s/jinma2026-k7p2），同一個分享頁 */}
             <Route path="/s/:slug" element={<ErrorBoundary><Share /></ErrorBoundary>} />
             <Route path="/help" element={<ErrorBoundary><Help /></ErrorBoundary>} />
+            <Route path={ANIMATOR_TUTORIAL_PATH} element={<ErrorBoundary><AnimatorTutorial /></ErrorBoundary>} />
             <Route path="/invite/:token" element={<ErrorBoundary><InvitePage /></ErrorBoundary>} />
             <Route path="*" element={<NotFound />} />
           </Routes>

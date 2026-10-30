@@ -1,0 +1,335 @@
+/* 動畫師上手教學（/tutorial/animator）：顏色、字體跟使用說明一樣（global.css 的變數）。
+   寬畫面：左邊固定目錄；窄畫面（860 以下）：目錄變成上面一排可以左右滑的小按鈕，整頁不左右捲。 */
+
+.tut {
+  --tut-top: 48px;
+  /* 固定在上面的東西有多高：段落捲過去要讓開（窄畫面多一排目錄） */
+  --tut-offset: 64px;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: clip;
+}
+
+/* ─── 上面那條 ─── */
+.tut-top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: var(--tut-top);
+  padding: 0 20px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--border);
+  font-size: 13.5px;
+}
+.tut-top__brand {
+  font-family: var(--font-mono);
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.tut-top__brand:hover { text-decoration: none; }
+.tut-top__title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tut-top__grow { flex: 1; }
+.tut-top__help {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.tut-top__help:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+
+/* ─── 版面 ─── */
+.tut-layout {
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+/* ─── 目錄 ─── */
+.tut-toc {
+  position: sticky;
+  top: var(--tut-top);
+  align-self: start;
+  max-height: calc(100vh - var(--tut-top));
+  overflow-y: auto;
+  padding: 32px 12px 40px 20px;
+  font-size: 14px;
+}
+.tut-toc__heading {
+  margin: 0 0 10px 10px;
+  color: var(--text-muted);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+.tut-toc__list { list-style: none; margin: 0; padding: 0; }
+.tut-toc__link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-left: 2px solid transparent;
+  border-radius: 0 8px 8px 0;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+.tut-toc__link:hover { background: var(--surface-1); color: var(--text); text-decoration: none; }
+.tut-toc__link.is-current {
+  border-left-color: var(--accent);
+  background: var(--accent-dim);
+  color: var(--text);
+  font-weight: 600;
+}
+.tut-toc__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+}
+.tut-toc__link.is-current .tut-toc__num { background: var(--accent); color: #04241a; }
+.tut-toc__text { min-width: 0; }
+
+/* ─── 內容 ─── */
+.tut-main {
+  min-width: 0;
+  padding: 36px 40px 120px;
+  font-size: 15px;
+  line-height: 1.75;
+}
+.tut-main p { margin: 0 0 12px; }
+.tut-main code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  word-break: break-all;
+}
+.tut-main kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-family: var(--font-mono);
+  font-size: 0.88em;
+  line-height: 1.5;
+  text-align: center;
+}
+.tut-ui { font-weight: 600; color: #fff; }
+
+.tut-hero { margin-bottom: 28px; }
+.tut-hero__kicker {
+  color: var(--text-muted);
+  font-size: 11.5px;
+  letter-spacing: 0.08em;
+}
+.tut-hero h1 { margin: 4px 0 10px; font-size: 32px; line-height: 1.3; }
+.tut-hero__lead { margin: 0 0 6px; color: var(--text); font-size: 17px; }
+.tut-hero__sub { margin: 0; color: var(--text-dim); font-size: 14px; }
+
+.tut-video { margin: 0 0 32px; }
+.tut-video video {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  border-radius: var(--radius-lg);
+  background: #000;
+}
+
+/* 每一段一張卡 */
+.tut-card {
+  margin-top: 28px;
+  padding: 22px 24px 8px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-1);
+  scroll-margin-top: calc(var(--tut-offset) + 8px);
+}
+.tut-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 8px;
+}
+.tut-card__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tut-card__head-text { min-width: 0; }
+.tut-card__title { margin: 0; font-size: 22px; line-height: 1.35; overflow-wrap: anywhere; }
+.tut-card__summary { margin: 2px 0 0; color: var(--text-dim); font-size: 14.5px; line-height: 1.6; }
+
+/* 一個步驟 */
+.tut-step {
+  padding: 18px 0 8px;
+  border-top: 1px solid var(--border);
+  scroll-margin-top: calc(var(--tut-offset) + 8px);
+}
+.tut-card__head + .tut-step { margin-top: 14px; }
+.tut-step__title { margin: 0 0 6px; font-size: 16.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.tut-step__lead { color: var(--text); overflow-wrap: anywhere; }
+.tut-actions {
+  margin: 0 0 14px;
+  padding-left: 1.6em;
+  overflow-wrap: anywhere;
+}
+.tut-actions > li { margin: 0 0 8px; padding-left: 4px; }
+.tut-actions > li::marker { color: var(--accent); font-weight: 700; }
+
+.tut-btns {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.tut-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.tut-btn:hover { border-color: var(--text-muted); text-decoration: none; }
+.tut-btn--primary { background: var(--accent); border-color: var(--accent); color: #000; }
+.tut-btn--primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+
+/* 圖片 / 短片 */
+.tut-media {
+  position: relative;
+  margin: 0 0 14px;
+  max-width: 100%;
+}
+.tut-media img,
+.tut-media video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.tut-media__play {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  cursor: pointer;
+}
+.tut-media__play:hover { border-color: var(--accent); }
+
+/* 想知道更多 */
+.tut-more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin: 0 0 12px;
+  font-size: 13.5px;
+}
+.tut-more__label { color: var(--text-muted); font-size: 12px; letter-spacing: 0.06em; }
+.tut-more__link { overflow-wrap: anywhere; }
+
+.tut-footer {
+  margin-top: 40px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+/* 網址帶 #id 打開時亮一下 */
+.tut-card.is-flash,
+.tut-step.is-flash { animation: tut-flash 1.8s ease-out; }
+@keyframes tut-flash {
+  0%, 30% { box-shadow: 0 0 0 4px var(--accent-dim), 0 0 0 5px rgba(16, 199, 138, 0.5); }
+  100% { box-shadow: 0 0 0 4px transparent, 0 0 0 5px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tut-card.is-flash,
+  .tut-step.is-flash { animation: none; }
+}
+
+/* ─── 窄畫面：目錄變成上面一排可以左右滑的小按鈕 ─── */
+@media (max-width: 860px) {
+  .tut { --tut-offset: 104px; }
+  .tut-top { padding: 0 12px; gap: 10px; }
+  .tut-layout { display: block; }
+  .tut-toc {
+    position: sticky;
+    top: var(--tut-top);
+    z-index: 20;
+    max-height: none;
+    padding: 8px 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    background: var(--surface-1);
+    border-bottom: 1px solid var(--border);
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+  .tut-toc::-webkit-scrollbar { display: none; }
+  .tut-toc__heading { display: none; }
+  .tut-toc__list { display: flex; gap: 8px; width: max-content; }
+  .tut-toc__link {
+    padding: 6px 12px 6px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .tut-toc__link.is-current { border-color: var(--accent); }
+  .tut-main { padding: 22px 16px 96px; }
+  .tut-hero h1 { font-size: 26px; }
+  .tut-card { padding: 16px 14px 4px; margin-top: 20px; }
+  .tut-card__title { font-size: 20px; }
+  .tut-card__num { width: 40px; height: 40px; font-size: 22px; }
+  .tut-card__head { gap: 12px; }
+}
+@media (max-width: 420px) {
+  .tut-top__title { display: none; }
+}
