@@ -87,20 +87,26 @@ export function createMusicPreviewFeed(
   };
 }
 
-/** React 裡用：enabled 時接上（換歌、有影片了、音樂被移除 → 拆掉，預覽清掉） */
+/**
+ * React 裡用：enabled 時接上（有影片了、音樂被移除 → 拆掉，預覽清掉）。
+ * resetKey = 現在放的是哪一個音樂檔（音樂 id）：換成別的音樂時（換歌、換音樂；enabled 一直是 true）也要重新接，
+ * 不然上一個聽到 2.9 秒停下來、換成新的，3D 的機關還停在「新音樂的 2.9 秒」，播放列卻是 0:00。
+ * 同一個音樂換新網址（過期重載）不算換，時間照舊。
+ */
 export function useMusicPreviewFeed(o: {
   enabled: boolean;
   video: HTMLVideoElement;
   setPreviewTime: (t: number | null) => void;
+  resetKey?: string | null;
 }): { stop: () => void } {
-  const { enabled, video, setPreviewTime } = o;
+  const { enabled, video, setPreviewTime, resetKey } = o;
   const feed = useRef<PreviewFeed | null>(null);
   useEffect(() => {
     if (!enabled) return;
     const f = createMusicPreviewFeed(video, setPreviewTime);
     feed.current = f;
     return () => { f.dispose(); if (feed.current === f) feed.current = null; };
-  }, [enabled, video, setPreviewTime]);
+  }, [enabled, video, setPreviewTime, resetKey]);
   const stop = useCallback(() => {
     if (feed.current) feed.current.stop();
     else { video.pause(); setPreviewTime(null); }

@@ -9,11 +9,12 @@ vi.mock('./musicApi', async (orig) => ({ ...(await orig<typeof import('./musicAp
 
 class FakeVideo extends EventTarget {
   attrs = new Map<string, string>();
+  srcSets = 0;   // 網址被設了幾次（同一個網址再設一次 = 瀏覽器重新載入）
   currentTime = 0; duration = NaN; paused = true; loop = true; muted = false; playbackRate = 1; playsInline = false; preload = '';
   getAttribute(k: string) { return this.attrs.get(k) ?? null; }
   removeAttribute(k: string) { this.attrs.delete(k); }
   get src() { return this.attrs.get('src') ?? ''; }
-  set src(v: string) { this.attrs.set('src', v); }
+  set src(v: string) { this.srcSets++; this.attrs.set('src', v); }
   load() {}
   remove() {}
   play() { this.paused = false; this.dispatchEvent(new Event('play')); return Promise.resolve(); }
@@ -179,6 +180,33 @@ describe('useSongMusic：這首歌的音樂接到頁面', () => {
     video.duration = 215; video.currentTime = 0;
     video.dispatchEvent(new Event('loadedmetadata'));
     expect(video.currentTime).toBe(61);
+  });
+
+  it('重新載入、拿回來的網址一模一樣（通行證還沒過期，只是網路暫時斷掉）：照樣把網址重設一次、接著同一秒', async () => {
+    const h = mount(base);
+    await flush();
+    expect(video.srcSets).toBe(1);
+    video.currentTime = 42;
+    h.result.reload();
+    await flush();
+    expect(getSongMusic).toHaveBeenCalledTimes(2);
+    expect(video.srcSets).toBe(2);
+    expect(video.src).toBe(`${BASE}/api/music/sm_1/stream?pass=a`);
+    video.duration = 215; video.currentTime = 0;
+    video.dispatchEvent(new Event('loadedmetadata'));
+    expect(video.currentTime).toBe(42);
+    h.result.reload();           // 再按一次也照樣重載
+    await flush();
+    expect(video.srcSets).toBe(3);
+  });
+
+  it('沒按重新載入、只是資料又進來一份網址相同的（例如剛上傳完又對一次）：不會把正在播的重載', async () => {
+    const h = mount(base);
+    await flush();
+    expect(video.srcSets).toBe(1);
+    h.result.apply(full('sm_1', 'a'));
+    await flush();
+    expect(video.srcSets).toBe(1);
   });
 
   it('拿播放網址失敗：寫說明（中文），不丟錯；之後 reload 可以再試', async () => {

@@ -1320,7 +1320,12 @@ function SongDetail({
                 onCameraBookmarksChange={camBm.onChange}
                 stageShow={{
                   title: songTitle(song),
-                  transport: videoMode ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay } : undefined,
+                  // 全螢幕預演小條的播放 / 暫停 + 時間：有影片是影片的；沒影片、有音樂是音樂的（不然全螢幕下只剩空白鍵能播）
+                  transport: videoMode
+                    ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay }
+                    : musicMode
+                      ? { playing: musicPlayer.playing, time: musicPlayer.time, duration: musicPlayer.duration, onTogglePlay: musicPlayer.togglePlay }
+                      : undefined,
                   controller: stageShowCtl,
                   songNav: buildSongNav(songs.map(s => ({ id: s.id, label: songTitle(s) })), song.id, onPickSong),
                   cueNav: buildCueNav(cuesReady ? cues : EMPTY_CUES, selectedCueId, cueStep),

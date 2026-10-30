@@ -47,9 +47,10 @@ export function useSongMusic(o: {
   const listed = song?.music ?? null;
 
   // 本機剛上傳 / 移除的（override）：在歌單跟上（或別人又改了）之前先算數；full = 含播放網址的完整資料。
-  // 兩個放在同一個狀態裡一起換（分開換會有一瞬間「換了音樂、卻還拿著舊的網址」，多問一次後台）
-  const [local, setLocal] = useState<{ override: Override | null; full: SongMusic | null }>({ override: null, full: null });
-  const { override, full } = local;
+  // 兩個放在同一個狀態裡一起換（分開換會有一瞬間「換了音樂、卻還拿著舊的網址」，多問一次後台）。
+  // reloads = 使用者按了「重新載入」、而且新的資料已經拿到的次數（網址沒變也要照樣重載，見下面放進播放器那段）
+  const [local, setLocal] = useState<{ override: Override | null; full: SongMusic | null; reloads: number }>({ override: null, full: null, reloads: 0 });
+  const { override, full, reloads } = local;
   const effective = override && override.songId === songId && override.base === (listed?.id ?? null) ? override.music : listed;
   const summary = songId ? effective : null;
   const source = clockSource({ hasVideo, videosLoaded, hasMusic: !!summary });
@@ -61,7 +62,7 @@ export function useSongMusic(o: {
 
   const apply = useCallback((m: SongMusic | SongMusicSummary | null) => {
     if (!songId) return;
-    setLocal({ override: { songId, base: listed?.id ?? null, music: m ? musicSummaryOf(m) : null }, full: m && 'streamUrl' in m ? m : null });
+    setLocal(l => ({ ...l, override: { songId, base: listed?.id ?? null, music: m ? musicSummaryOf(m) : null }, full: m && 'streamUrl' in m ? m : null }));
     setError(null);
   }, [songId, listed?.id]);
 
@@ -74,14 +75,16 @@ export function useSongMusic(o: {
   useEffect(() => {
     if (!projectId || !songId || !wantId) return;
     if (haveId === wantId && nonce === lastNonce.current) return;
+    const forced = nonce !== lastNonce.current;   // 使用者按了「重新載入」
     lastNonce.current = nonce;
     let cancelled = false;
     getSongMusic(projectId, songId).then(m => {
       if (cancelled) return;
       setError(null);
-      if (m?.id === wantId) { setLocal(l => ({ ...l, full: m })); return; }
+      const bump = (l: { reloads: number }) => (forced ? l.reloads + 1 : l.reloads);
+      if (m?.id === wantId) { setLocal(l => ({ ...l, full: m, reloads: bump(l) })); return; }
       // 後台說的跟畫面上以為的不一樣（剛好被別人換掉 / 移除了）→ 以後台為準
-      setLocal({ override: { songId, base: listedId, music: m ? musicSummaryOf(m) : null }, full: m });
+      setLocal(l => ({ override: { songId, base: listedId, music: m ? musicSummaryOf(m) : null }, full: m, reloads: bump(l) }));
     }).catch(e => {
       if (!cancelled) setError(musicErrorText(e));
     });
@@ -89,7 +92,10 @@ export function useSongMusic(o: {
   }, [projectId, songId, wantId, haveId, nonce, listedId]);
 
   // 放進播放器：換一首 / 換新網址（過期）接著同一秒；不是音樂模式（有影片、換歌、被移除）→ 清掉
+  // 網址一樣也要重載的情況：使用者按「重新載入」。通行證在有效期間內網址不會變，網路暫時斷掉造成的失敗，
+  // 重新拿到的網址跟原本一模一樣；如果只比網址，按了什麼都不會發生，播放器永遠停在錯誤上。
   const loadedUrl = useRef<string | null>(null);
+  const loadedReloads = useRef(0);
   const { loadUrl, replaceUrl, clear, getSrcKey } = player;
   useEffect(() => {
     if (!musicMode || !full || !wantId || full.id !== wantId) {
@@ -97,12 +103,13 @@ export function useSongMusic(o: {
       return;
     }
     const url = absoluteMusicUrl(full.streamUrl);
-    if (loadedUrl.current === url && getSrcKey() === musicPlayerKey(full.id)) return;
+    if (loadedUrl.current === url && getSrcKey() === musicPlayerKey(full.id) && loadedReloads.current === reloads) return;
+    loadedReloads.current = reloads;
     const opts = { key: musicPlayerKey(full.id), name: full.filename };
-    if (getSrcKey() === opts.key) replaceUrl(url, opts);   // 同一首換新網址
+    if (getSrcKey() === opts.key) replaceUrl(url, opts);   // 同一首換新網址（或網址沒變、重新載入一次）
     else loadUrl(url, opts);
     loadedUrl.current = url;
-  }, [musicMode, full, wantId, loadUrl, replaceUrl, clear, getSrcKey]);
+  }, [musicMode, full, wantId, reloads, loadUrl, replaceUrl, clear, getSrcKey]);
 
   // 離開音樂模式（有影片了、換歌）時停下來
   useEffect(() => {

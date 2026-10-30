@@ -103,7 +103,7 @@ import MusicBar from '../components/MusicBar';
 import { useSongMusic } from '../lib/useSongMusic';
 import { useMusicHotkeys, useMusicPreviewFeed, useMusicTimelineClock } from '../lib/musicClock';
 import { EditorMusicContext, type EditorMusicValue } from '../lib/editorMusicContext';
-import { MUSIC_TEXT, canEditMusic, canSetCueTimeFromMusic, cueTimeChanged, cueTimeFromMusic, formatMusicClock, musicSummaryOf, setNowToast } from '../lib/songMusic';
+import { MUSIC_TEXT, canEditMusic, canSetCueTimeFromMusic, cueTimeChanged, cueTimeFromMusic, formatMusicClock, musicSummaryOf, setNowBlocker, setNowToast } from '../lib/songMusic';
 
 type RightTab = 'cues' | 'state' | 'mechanisms' | 'proposals' | 'objects' | 'library';
 type LoadStatus = 'loading' | 'ready' | 'error';
@@ -1091,14 +1091,16 @@ export default function ProjectEditor() {
   // 邊聽邊按：把選中的 cue 的「對應影片時間」設成音樂現在的時間（取到 0.1 秒，可以復原）。規則在 lib/songMusic.ts
   const songMusic = useSongMusic({ projectId, song: selectedSong, hasVideo: !!selectedSong?.latestVideoId, videosLoaded: true });
   const musicClock = useMusicTimelineClock(songMusic.player, songMusic.musicMode);
-  const { stop: stopMusic } = useMusicPreviewFeed({ enabled: songMusic.musicMode, video: songMusic.player.video, setPreviewTime: mech.setPreviewTime });
+  const { stop: stopMusic } = useMusicPreviewFeed({ enabled: songMusic.musicMode, video: songMusic.player.video, setPreviewTime: mech.setPreviewTime, resetKey: songMusic.summary?.id ?? null });
   const [setNowBusy, setSetNowBusy] = useState(false);
   const cueTitle = (c: Cue) => (c.libraryCue ? `Cue ${c.libraryCue.label}「${c.libraryCue.name}」` : `「${c.name}」`);
   const canSetNow = canSetCueTimeFromMusic(editorRole) && songMusic.musicMode;
   async function setCueToMusicNow() {
     const cue = selectedCue;
-    if (!canSetNow || !projectId || !selectedSongId || !cue) return;
-    if (cue.status !== 'master') { toast.info('提案的 cue 不能設時間，請先選正式的 cue'); return; }
+    if (!canSetNow || !projectId || !selectedSongId) return;
+    // 快捷鍵 M 不像按鈕會灰掉，這裡自己擋：沒選 cue、提案的 cue、音樂還沒載好（讀到的時間是 0，會把 cue 的時間蓋成 0:00.0）
+    const blocked = setNowBlocker({ cue, playerReady: songMusic.player.ready });
+    if (blocked || !cue) { if (blocked) toast.info(blocked); return; }
     const t = cueTimeFromMusic(songMusic.player.video.currentTime);
     const before = cue.videoTimeSec;
     if (!cueTimeChanged(before, t)) { toast.info(`${cueTitle(cue)} 本來就設在 ${formatMusicClock(t)}`); return; }

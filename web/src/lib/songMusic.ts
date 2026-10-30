@@ -35,6 +35,7 @@ export const MUSIC_TEXT = {
   setNow: '設在現在這一秒',
   setNowHint: '把選中的 cue 的「對應影片時間」設成音樂現在播到的時間（取到 0.1 秒）。快捷鍵：M',
   setNowNoCue: '先選一個 cue，才能設時間',
+  setNowNotReady: '音樂還沒載好（或載入失敗），先等它載好、或按播放列上的「重新載入」，才能設時間',
   loadFailed: '音樂載入失敗：可能是網路斷了、播放網址過期了，或這個瀏覽器播不了這個檔案',
   reload: '重新載入',
 } as const;
@@ -57,15 +58,28 @@ export function canSetCueTimeFromMusic(role: string | null | undefined): boolean
 // 選檔
 // ─────────────────────────────────────────────
 
-/** 選的檔案是不是音樂（先看類型，類型空的看副檔名；影片檔不算） */
+// 跟後台 cf-worker/songMusic.mjs 的 musicMimeFor 同一套：類型寫得清楚就看類型（只收這五種和它們的別名），
+// 類型是「一般檔案」或沒寫才看副檔名。以前這裡是「任何 audio/ 開頭都算」，OGG / Opus 這種後台不收的檔案會先跳出
+// 「要換掉舊的音樂嗎？」、按了才被後台退回；現在選的當下就擋掉。
+const MUSIC_MIMES = new Set(['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/aac', 'audio/flac']);
+const MUSIC_MIME_ALIASES: Record<string, string> = {
+  'audio/mp3': 'audio/mpeg', 'audio/x-mp3': 'audio/mpeg', 'audio/mpeg3': 'audio/mpeg', 'audio/x-mpeg': 'audio/mpeg', 'audio/x-mpeg-3': 'audio/mpeg',
+  'audio/x-wav': 'audio/wav', 'audio/wave': 'audio/wav', 'audio/vnd.wave': 'audio/wav',
+  'audio/x-m4a': 'audio/mp4', 'audio/m4a': 'audio/mp4', 'audio/mp4a-latm': 'audio/mp4',
+  'audio/x-aac': 'audio/aac', 'audio/aacp': 'audio/aac',
+  'audio/x-flac': 'audio/flac',
+};
+const GENERIC_MIMES = new Set(['', 'application/octet-stream', 'binary/octet-stream', 'application/binary', 'application/x-download', 'application/force-download', 'application/download']);
+
+/** 選的檔案是不是我們收的音樂（先看類型，類型空 / 是一般檔案的看副檔名；影片檔、OGG 之類不算） */
 export function isMusicFile(file: { name: string; type: string }): boolean {
   const ext = /\.([A-Za-z0-9]{1,8})$/.exec(file.name.trim())?.[1]?.toLowerCase() ?? '';
-  if (file.type && file.type !== 'application/octet-stream') {
-    if (file.type.startsWith('audio/')) return true;
-    // 有些瀏覽器把 .m4a 標成 video/mp4
-    return ext === 'm4a' && (file.type === 'video/mp4' || file.type === 'video/quicktime');
-  }
-  return MUSIC_EXTS.includes(ext);
+  const raw = String(file.type || '').split(';')[0].trim().toLowerCase();
+  const mime = MUSIC_MIME_ALIASES[raw] || raw;
+  if (MUSIC_MIMES.has(mime)) return true;
+  if (GENERIC_MIMES.has(mime)) return MUSIC_EXTS.includes(ext);
+  // 有些瀏覽器把 .m4a 標成 video/mp4
+  return ext === 'm4a' && (mime === 'video/mp4' || mime === 'video/quicktime');
 }
 
 /** 上傳前先擋：不是音樂、太大、空的 → 回要顯示的說明；可以傳 → null */
@@ -143,6 +157,17 @@ export function clockSource(o: { hasVideo: boolean; videosLoaded: boolean; hasMu
 export function cueTimeFromMusic(sec: number): number {
   if (!Number.isFinite(sec) || sec <= 0) return 0;
   return Math.round(sec * 10) / 10;
+}
+
+/**
+ * 「設在現在這一秒」現在做得了嗎？不行 → 要跟人說的話；可以 → null。
+ * 按鈕有灰掉，但快捷鍵 M 不會，所以這裡也要擋：音樂還沒載好 / 載入失敗時讀到的時間是 0，直接設會把 cue 的時間蓋成 0:00.0。
+ */
+export function setNowBlocker(o: { cue: { status: string } | null | undefined; playerReady: boolean }): string | null {
+  if (!o.cue) return MUSIC_TEXT.setNowNoCue;
+  if (o.cue.status !== 'master') return '提案的 cue 不能設時間，請先選正式的 cue';
+  if (!o.playerReady) return MUSIC_TEXT.setNowNotReady;
+  return null;
 }
 
 /** 設在現在這一秒的提示。cueLabel 已經是畫面上叫那個 cue 的樣子（例：「開場」、Cue 3「開場」） */

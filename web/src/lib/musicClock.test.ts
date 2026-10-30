@@ -260,4 +260,27 @@ describe('useMusicPreviewFeed（編輯頁）', () => {
     expect(set).not.toHaveBeenCalled();
     vi.unstubAllGlobals();
   });
+
+  it('換成別的音樂（換歌、換音樂檔；enabled 一直是 true）：預覽清掉、重新接，不能還停在上一個音樂的時間', () => {
+    const m = fakeMedia(), set = vi.fn();
+    const raf = fakeRaf();
+    vi.stubGlobal('requestAnimationFrame', raf.request);
+    vi.stubGlobal('cancelAnimationFrame', raf.cancel);
+    const h = renderHook((p: { key: string }) => useMusicPreviewFeed({ enabled: true, video: m as unknown as HTMLVideoElement, setPreviewTime: set, resetKey: p.key }), { key: 'sm_1' });
+    m.currentTime = 2.9;
+    m.fire('seeked');                                   // 在上一個音樂停在 2.9 秒
+    expect(set).toHaveBeenLastCalledWith(2.9);
+    h.rerender({ key: 'sm_2' });                        // 換歌 / 換音樂
+    expect(set).toHaveBeenLastCalledWith(null);
+    set.mockClear();
+    m.currentTime = 0;
+    m.fire('pause');                                    // 還沒按播放 / 跳轉 → 不碰預覽（機關回到目前選的 cue）
+    expect(set).not.toHaveBeenCalled();
+    m.currentTime = 1.5;
+    m.fire('seeked');                                   // 在新的一首跳轉之後才開始預覽
+    expect(set).toHaveBeenLastCalledWith(1.5);
+    h.rerender({ key: 'sm_2' });                        // 同一個音樂重畫（或只是換了播放網址）不會重接
+    expect(set).toHaveBeenLastCalledWith(1.5);
+    vi.unstubAllGlobals();
+  });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MIB, MUSIC_ACCEPT, MUSIC_MAX_BYTES, MUSIC_TEXT, canEditMusic, canSetCueTimeFromMusic, clockSource, cueTimeChanged, cueTimeFromMusic,
-  formatMusicClock, formatMusicDuration, formatMusicSize, isMusicFile, musicFileProblem, musicLine, musicSummaryOf, setNowToast,
+  formatMusicClock, formatMusicDuration, formatMusicSize, isMusicFile, musicFileProblem, musicLine, musicSummaryOf, setNowBlocker, setNowToast,
 } from './songMusic';
 
 describe('誰能做什麼', () => {
@@ -28,6 +28,23 @@ describe('選檔', () => {
     expect(isMusicFile({ name: 'a.txt', type: 'text/plain' })).toBe(false);
     expect(isMusicFile({ name: 'noext', type: '' })).toBe(false);
   });
+  it('跟後台同一套：後台不收的 audio 格式（OGG / Opus / WebM / AIFF / MIDI）選的當下就擋，不會先問「要換掉舊的嗎」；別名照收', () => {
+    for (const [n, t] of [['a.ogg', 'audio/ogg'], ['a.opus', 'audio/opus'], ['a.weba', 'audio/webm'], ['a.aiff', 'audio/x-aiff'], ['a.mid', 'audio/midi'], ['a.amr', 'audio/amr']]) {
+      expect(isMusicFile({ name: n, type: t }), `${n} ${t}`).toBe(false);
+      expect(musicFileProblem({ name: n, type: t, size: 1000 }), `${n} ${t}`).toMatch(/不是我們收的音樂格式.*MP3 \/ WAV \/ M4A \/ AAC \/ FLAC/);
+    }
+    // 類型是 audio/ogg、檔名卻寫 .mp3：後台看類型 → 不收，這裡也一樣
+    expect(isMusicFile({ name: 'a.mp3', type: 'audio/ogg' })).toBe(false);
+    // 別名（各瀏覽器 / 作業系統寫法不同）、類型後面帶參數
+    for (const t of ['audio/mp3', 'audio/x-mp3', 'audio/x-wav', 'audio/wave', 'audio/x-flac', 'audio/aacp', 'audio/x-m4a', 'audio/mpeg; charset=binary', 'AUDIO/MPEG']) {
+      expect(isMusicFile({ name: 'x', type: t }), t).toBe(true);
+    }
+    // 類型是「一般檔案」才看副檔名
+    for (const t of ['', 'application/octet-stream', 'binary/octet-stream', 'application/x-download']) {
+      expect(isMusicFile({ name: 'a.flac', type: t }), t).toBe(true);
+      expect(isMusicFile({ name: 'a.ogg', type: t }), t).toBe(false);
+    }
+  });
   it('上傳前先擋：不是音樂（影片會指去「加影片」）、空的、太大', () => {
     expect(musicFileProblem(f('a.mp3', 'audio/mpeg'))).toBeNull();
     expect(musicFileProblem(f('a.wav', 'audio/wav', MUSIC_MAX_BYTES))).toBeNull();            // 剛好上限可以
@@ -44,6 +61,17 @@ describe('選檔', () => {
   it('上限跟後台預設一樣：4 分鐘 48k/24bit 立體聲 WAV（約 66 MB）放得下', () => {
     expect(MUSIC_MAX_BYTES).toBe(90 * MIB);
     expect(4 * 60 * 48000 * 3 * 2).toBeLessThan(MUSIC_MAX_BYTES);
+  });
+});
+
+describe('設在現在這一秒：什麼時候不能設', () => {
+  it('沒選 cue / 提案的 cue / 音樂還沒載好（快捷鍵 M 不會像按鈕灰掉，要自己擋，不然會把 cue 的時間蓋成 0:00.0）', () => {
+    expect(setNowBlocker({ cue: null, playerReady: true })).toBe(MUSIC_TEXT.setNowNoCue);
+    expect(setNowBlocker({ cue: undefined, playerReady: false })).toBe(MUSIC_TEXT.setNowNoCue);
+    expect(setNowBlocker({ cue: { status: 'proposal' }, playerReady: true })).toMatch(/提案的 cue 不能設時間/);
+    expect(setNowBlocker({ cue: { status: 'master' }, playerReady: false })).toBe(MUSIC_TEXT.setNowNotReady);
+    expect(MUSIC_TEXT.setNowNotReady).toMatch(/還沒載好.*重新載入/);
+    expect(setNowBlocker({ cue: { status: 'master' }, playerReady: true })).toBeNull();
   });
 });
 

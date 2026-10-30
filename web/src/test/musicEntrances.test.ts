@@ -32,11 +32,12 @@ describe('編輯頁（製作）', () => {
     expect(s).toContain('<EditorMusicContext.Provider value={musicCtx}>');
     expect(s).toContain('useMusicTimelineClock(songMusic.player, songMusic.musicMode)');
     expect(s).toContain('useMusicPreviewFeed({ enabled: songMusic.musicMode');
-    expect(s).toContain('setPreviewTime: mech.setPreviewTime');
+    expect(s).toContain('setPreviewTime: mech.setPreviewTime, resetKey: songMusic.summary?.id ?? null');   // 換歌 / 換音樂時預覽要清掉
   });
   it('「設在現在這一秒」只有製作能按、可以復原、有快捷鍵 M、cue 旁邊（物件狀態分頁）也有一顆', () => {
     expect(s).toContain('canSetCueTimeFromMusic(editorRole)');
     const fn = s.slice(s.indexOf('async function setCueToMusicNow'), s.indexOf('const setNowRef'));
+    expect(fn).toContain('setNowBlocker({ cue, playerReady: songMusic.player.ready })');   // 音樂沒載好 / 沒選 cue 時快捷鍵 M 不能設
     expect(fn).toContain('cueTimeFromMusic(songMusic.player.video.currentTime)');
     expect(fn).toContain('historyRef.current.push(scope');
     expect(fn).toContain('undo: async');
@@ -71,6 +72,10 @@ describe('導演頁', () => {
     expect(s).toContain('videoMode: videoMode || musicMode');
     expect(s).toContain('mechanismAtFrame: musicMechAtFrame');
     expect(s).toContain('<MusicBar');
+  });
+  it('全螢幕預演的小條：有影片是影片的播放 / 暫停 + 時間，沒影片、有音樂就是音樂的（不然全螢幕下只剩空白鍵能播）', () => {
+    expect(s).toContain('musicPlayer.playing, time: musicPlayer.time, duration: musicPlayer.duration, onTogglePlay: musicPlayer.togglePlay');
+    expect(s).toMatch(/transport: videoMode\s*\?[^]*?: musicMode\s*\?[^]*?: undefined/);
   });
   it('打開調整舞台時音樂也先停；空白鍵播放 / 暫停音樂', () => {
     expect(s).toContain('if (musicPlayer.playing) musicPlayer.pause();');
