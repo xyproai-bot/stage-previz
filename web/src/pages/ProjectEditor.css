@@ -1524,6 +1524,16 @@
   .editor-breadcrumb__sub { display: none; }
   .editor-topbar__right { gap: 6px; }
 }
+/* 上面的寬度只是大概；按鈕多少看身分（全站製作在 1280 寬要約 1670px），所以再照實際量的（lib/useFitLevel.ts 設 data-fit）收：
+   1 = 次要按鈕只留圖示；2 = 全部只留圖示、拿掉物件數；3 = 收進「⋯」 */
+.editor-topbar:is([data-fit="1"], [data-fit="2"], [data-fit="3"]) .editor-topbar__right { gap: 8px; }
+.editor-topbar[data-fit="1"] .editor-topbar__activity--secondary { padding-left: 9px; padding-right: 9px; }
+.editor-topbar[data-fit="1"] .editor-topbar__activity--secondary .editor-topbar__label { display: none; }
+.editor-topbar:is([data-fit="2"], [data-fit="3"]) .editor-topbar__count { display: none; }
+.editor-topbar:is([data-fit="2"], [data-fit="3"]) .editor-topbar__activity { padding-left: 9px; padding-right: 9px; }
+.editor-topbar:is([data-fit="2"], [data-fit="3"]) .editor-topbar__activity .editor-topbar__label { display: none; }
+.editor-topbar[data-fit="3"] .ovf-hide-narrow { display: none !important; }
+.editor-topbar[data-fit="3"] .ovf-only-narrow { display: inline-flex !important; }
 
 
 /* 手機 / iPad：整個編輯頁的高度用 dvh（網址列縮起來、放下來時跟著變，底下不會被切掉；電腦版不變）*/

@@ -102,6 +102,7 @@ import SongMusicField from '../components/SongMusicField';
 import MusicBar from '../components/MusicBar';
 import { useSongMusic } from '../lib/useSongMusic';
 import { useMusicHotkeys, useMusicPreviewFeed, useMusicTimelineClock } from '../lib/musicClock';
+import { useFitLevel } from '../lib/useFitLevel';
 import { EditorMusicContext, type EditorMusicValue } from '../lib/editorMusicContext';
 import { MUSIC_TEXT, canEditMusic, canSetCueTimeFromMusic, cueTimeChanged, cueTimeFromMusic, formatMusicClock, musicSummaryOf, setNowBlocker, setNowToast } from '../lib/songMusic';
 
@@ -1092,6 +1093,9 @@ export default function ProjectEditor() {
   const songMusic = useSongMusic({ projectId, song: selectedSong, hasVideo: !!selectedSong?.latestVideoId, videosLoaded: true });
   const musicClock = useMusicTimelineClock(songMusic.player, songMusic.musicMode);
   const { stop: stopMusic } = useMusicPreviewFeed({ enabled: songMusic.musicMode, video: songMusic.player.video, setPreviewTime: mech.setPreviewTime, resetKey: songMusic.summary?.id ?? null });
+  // 上方列放不下時一級一級收（1 次要按鈕只留圖示 / 2 全部只留圖示 / 3 收進「⋯」），CSS 在 ProjectEditor.css
+  const topbarRef = useRef<HTMLElement>(null);
+  useFitLevel(topbarRef, 3);
   const [setNowBusy, setSetNowBusy] = useState(false);
   const cueTitle = (c: Cue) => (c.libraryCue ? `Cue ${c.libraryCue.label}「${c.libraryCue.name}」` : `「${c.name}」`);
   const canSetNow = canSetCueTimeFromMusic(editorRole) && songMusic.musicMode;
@@ -1631,7 +1635,7 @@ export default function ProjectEditor() {
     <EditorMusicContext.Provider value={musicCtx}>
     <div className="editor">
       {/* Top */}
-      <header className="editor-topbar">
+      <header className="editor-topbar" ref={topbarRef}>
         <button className="editor-back" onClick={() => guardRef.current(() => navigate(isGlobalAdmin ? '/admin' : '/studio'))} title="返回專案總覽" aria-label="返回專案總覽"><Icon icon={ArrowLeft} size="md" /></button>
         <div className="editor-breadcrumb">
           <span className="muted editor-breadcrumb__root">專案</span>
