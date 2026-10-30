@@ -122,16 +122,22 @@ export function hotkeyYields(e: Pick<KeyboardEvent, 'target' | 'ctrlKey' | 'meta
   return false;
 }
 
-/** 空白鍵遇到這些東西時，它們自己會處理（按鈕按下去、連結、分頁、選單、對話框裡） */
+/** 空白鍵在這些東西上有自己的用途（勾選 / 開關、選單選項、對話框、可展開的標題） */
+const SPACE_OWNERS = 'summary, [role="menu"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="listbox"], [role="option"], [role="checkbox"], [role="switch"], [role="radio"], [role="dialog"], [role="alertdialog"], input[type="checkbox"], input[type="radio"]';
+
+/**
+ * 空白鍵遇到這些東西時，它們自己會處理（勾選框 / 開關、選單、對話框裡、可以展開的標題）→ 讓給它們。
+ * 一般的按鈕、分頁、連結不算：影片的空白鍵就是「點了 cue 之後空白鍵照樣播放 / 暫停」（lib/review/reviewShortcuts.ts），音樂跟它一樣。
+ * （以前連按鈕也讓給它自己：導演頁點了 cue 之後按空白鍵，只是又按了一次那個 cue，音樂不會播。）
+ */
 export function spaceBelongsToTarget(target: EventTarget | null): boolean {
   const el = target as { closest?: (s: string) => unknown } | null;
   if (!el || typeof el.closest !== 'function') return false;
-  return !!el.closest('button, a[href], summary, [role="button"], [role="tab"], [role="menuitem"], [role="checkbox"], [role="switch"], [role="dialog"], input[type="checkbox"], input[type="radio"]');
+  return !!el.closest(SPACE_OWNERS);
 }
-
 /**
  * 快捷鍵：space = 播放 / 暫停；m = onMark（有給才算）。
- * 打字時、按著 Ctrl / Alt / Cmd、焦點在按鈕等自己會處理空白鍵的東西上 → 不處理。
+ * 打字時、按著 Ctrl / Alt / Cmd、焦點在勾選框 / 選單 / 對話框這些自己會處理空白鍵的東西上 → 不處理（焦點在一般按鈕上照樣處理）。
  */
 export function useMusicHotkeys(o: { enabled: boolean; onToggle: () => void; onMark?: (() => void) | null }): void {
   const ref = useRef(o);
@@ -144,13 +150,24 @@ export function useMusicHotkeys(o: { enabled: boolean; onToggle: () => void; onM
       if (e.key === ' ' || e.code === 'Space') {
         if (spaceBelongsToTarget(e.target)) return;
         e.preventDefault();
-        cur.onToggle();
+        if (!e.repeat) cur.onToggle();     // 按住不放不會一直播放 / 暫停
       } else if ((e.key === 'm' || e.key === 'M') && !e.shiftKey && cur.onMark && !e.repeat) {
         e.preventDefault();
         cur.onMark();
       }
     };
+    // 空白鍵在按鈕上：放開時瀏覽器會再「按一下」那顆按鈕（例：又選了一次剛點的 cue）→ 擋掉（按下去的時候已經播放 / 暫停了）
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!ref.current.enabled || !(e.key === ' ' || e.code === 'Space')) return;
+      if (hotkeyYields(e) || spaceBelongsToTarget(e.target)) return;
+      const t = e.target as { tagName?: string } | null;
+      if (t && typeof t.tagName === 'string' && t.tagName.toUpperCase() === 'BUTTON') e.preventDefault();
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
   }, [o.enabled]);
 }

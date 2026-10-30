@@ -143,10 +143,16 @@ describe('快捷鍵讓不讓給別人', () => {
     // 範圍滑桿、勾選框不是打字的欄位
     expect(hotkeyYields(key({ target: { tagName: 'INPUT', type: 'range' } as unknown as EventTarget }))).toBe(false);
   });
-  it('空白鍵遇到按鈕、連結、分頁、對話框時，它們自己會處理', () => {
-    const closest = (hit: boolean) => ({ closest: () => (hit ? {} : null) }) as unknown as EventTarget;
-    expect(spaceBelongsToTarget(closest(true))).toBe(true);
-    expect(spaceBelongsToTarget(closest(false))).toBe(false);
+  it('空白鍵只讓給自己用空白鍵的東西（勾選 / 開關、選單選項、對話框、可展開的標題）；一般按鈕、分頁、連結不讓（影片也是這樣）', () => {
+    /** 假的畫面元素：closest(選擇器) 看選擇器清單裡有沒有它符合的那一種 */
+    const el = (...matches: string[]) => ({ closest: (sel: string) => (sel.split(',').map(x => x.trim()).some(x => matches.includes(x)) ? {} : null) }) as unknown as EventTarget;
+    for (const m of ['[role="dialog"]', '[role="alertdialog"]', '[role="menuitem"]', '[role="option"]', '[role="checkbox"]', '[role="switch"]', '[role="radio"]', 'summary', 'input[type="checkbox"]', 'input[type="radio"]']) {
+      expect(spaceBelongsToTarget(el(m)), m).toBe(true);
+    }
+    expect(spaceBelongsToTarget(el('button')), '一般按鈕（例：導演頁剛點過的 cue）').toBe(false);
+    expect(spaceBelongsToTarget(el('[role="tab"]')), '分頁').toBe(false);
+    expect(spaceBelongsToTarget(el('[role="button"]')), 'role=button').toBe(false);
+    expect(spaceBelongsToTarget(el('a[href]')), '連結').toBe(false);
     expect(spaceBelongsToTarget(null)).toBe(false);
     expect(spaceBelongsToTarget({} as EventTarget)).toBe(false);
   });
@@ -156,17 +162,24 @@ describe('空白鍵 / M 鍵（useMusicHotkeys）', () => {
   type Handler = (e: Record<string, unknown>) => void;
   function fakeWindow() {
     const handlers: Handler[] = [];
+    const upHandlers: Handler[] = [];
     vi.stubGlobal('window', {
-      addEventListener: (type: string, fn: Handler) => { if (type === 'keydown') handlers.push(fn); },
-      removeEventListener: (type: string, fn: Handler) => { const i = handlers.indexOf(fn); if (type === 'keydown' && i >= 0) handlers.splice(i, 1); },
+      addEventListener: (type: string, fn: Handler) => { if (type === 'keydown') handlers.push(fn); else if (type === 'keyup') upHandlers.push(fn); },
+      removeEventListener: (type: string, fn: Handler) => {
+        const list = type === 'keydown' ? handlers : type === 'keyup' ? upHandlers : null;
+        const i = list ? list.indexOf(fn) : -1;
+        if (list && i >= 0) list.splice(i, 1);
+      },
     });
-    const press = (key: string, extra: Record<string, unknown> = {}) => {
+    const fire = (list: Handler[], key: string, extra: Record<string, unknown>) => {
       const prevented = { v: false };
       const e = { key, code: key === ' ' ? 'Space' : `Key${key.toUpperCase()}`, target: { tagName: 'DIV' }, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: false, defaultPrevented: false, preventDefault: () => { prevented.v = true; }, ...extra };
-      handlers.slice().forEach(h => h(e));
+      list.slice().forEach(h => h(e));
       return prevented.v;
     };
-    return { press, count: () => handlers.length };
+    const press = (key: string, extra: Record<string, unknown> = {}) => fire(handlers, key, extra);
+    const release = (key: string, extra: Record<string, unknown> = {}) => fire(upHandlers, key, extra);
+    return { press, release, count: () => handlers.length, upCount: () => upHandlers.length };
   }
   afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -195,7 +208,7 @@ describe('空白鍵 / M 鍵（useMusicHotkeys）', () => {
     expect(toggle).toHaveBeenCalledTimes(1);
   });
 
-  it('打字的時候、按著 Ctrl / Cmd / Alt、焦點在按鈕上的空白鍵、已經有人處理了 → 讓給別人', () => {
+  it('打字的時候、按著 Ctrl / Cmd / Alt、焦點在對話框 / 勾選框 / 選單上的空白鍵、已經有人處理了 → 讓給別人', () => {
     const w = fakeWindow();
     const toggle = vi.fn(), mark = vi.fn();
     renderHook(() => useMusicHotkeys({ enabled: true, onToggle: toggle, onMark: mark }), undefined);
@@ -208,9 +221,25 @@ describe('空白鍵 / M 鍵（useMusicHotkeys）', () => {
     expect(w.press('m', { metaKey: true })).toBe(false);
     expect(w.press('m', { altKey: true })).toBe(false);
     expect(w.press(' ', { defaultPrevented: true })).toBe(false);
-    expect(w.press(' ', { target: { tagName: 'BUTTON', closest: () => ({}) } })).toBe(false);
+    expect(w.press(' ', { target: { tagName: 'BUTTON', closest: () => ({}) } })).toBe(false);     // 對話框裡的按鈕：空白鍵是按那顆按鈕
+    expect(w.release(' ', { target: { tagName: 'BUTTON', closest: () => ({}) } })).toBe(false);    // 放開時也不擋它的「按一下」
     expect(toggle).not.toHaveBeenCalled();
     expect(mark).not.toHaveBeenCalled();
+  });
+
+  it('焦點在一般按鈕上（點了 cue、點了分頁之後）：空白鍵照樣播放 / 暫停，放開時不讓那顆按鈕再被按一次；按住不放不會一直切', () => {
+    const w = fakeWindow();
+    const toggle = vi.fn();
+    renderHook(() => useMusicHotkeys({ enabled: true, onToggle: toggle }), undefined);
+    const button = { tagName: 'BUTTON', closest: () => null };
+    expect(w.press(' ', { target: button })).toBe(true);
+    expect(toggle).toHaveBeenCalledTimes(1);
+    expect(w.release(' ', { target: button })).toBe(true);             // 擋掉放開時的「按一下」
+    expect(w.press(' ', { target: button, repeat: true })).toBe(true);  // 按住不放：不讓頁面捲動，但不再切
+    expect(toggle).toHaveBeenCalledTimes(1);
+    expect(w.release(' ', { target: { tagName: 'DIV', closest: () => null } })).toBe(false);   // 不是按鈕就不碰
+    expect(w.release('m', { target: button })).toBe(false);
+    expect(w.release(' ', { target: button, ctrlKey: true })).toBe(false);
   });
 
   it('沒打開（有影片、沒音樂）不接；關掉時拆掉；用最新的 callback', () => {
@@ -226,11 +255,14 @@ describe('空白鍵 / M 鍵（useMusicHotkeys）', () => {
     w.press(' ');
     expect(a).not.toHaveBeenCalled();
     expect(b).toHaveBeenCalledTimes(1);
+    expect(w.upCount()).toBe(1);
     h.rerender({ on: false, fn: b });
     expect(w.count()).toBe(0);
+    expect(w.upCount()).toBe(0);
     h.rerender({ on: true, fn: b });
     h.unmount();
     expect(w.count()).toBe(0);
+    expect(w.upCount()).toBe(0);
   });
 });
 
