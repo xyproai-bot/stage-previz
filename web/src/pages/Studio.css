@@ -1097,6 +1097,7 @@
   .studio-stage > .vbar-wrap { grid-column: 2; grid-row: 1; }
   .studio-stage > .studio-stage__scene { grid-column: 1 / -1; grid-row: 2; }
   .studio-stage > .share-player { grid-column: 1 / -1; grid-row: 3; }
+  .studio-stage > .music-bar { grid-column: 1 / -1; grid-row: 3; }
   /* cue 列在這裡先收起來（右邊那一欄的 Cue 分頁看得到，舞台比較重要） */
   .studio-stage > .studio-cuebar { display: none; }
   .studio-stage > .led-source,

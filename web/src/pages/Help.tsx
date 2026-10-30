@@ -1723,6 +1723,7 @@ function AnimatorChapter() {
           <li>⑤ <strong>cue 列</strong>：點一個 cue 看那個舞台畫面（有放影片的話，影片跳到那個 cue 的時間）。</li>
           <li>⑥ 右邊：<strong>Cue</strong> 清單、<strong>審查 / 留言</strong>、<strong>活動</strong>（專案最近的修改）。</li>
         </ul>
+        <p><strong>音樂</strong>：這首歌還沒有影片、製作或導演放了音樂的話，3D 畫面下面會多一條音樂播放列（播放 / 暫停、拖時間、聲音，空白鍵也可以），cue 列和 3D 的機關跟著音樂走，點 cue 音樂就跳到那個 cue 的時間；你只能聽、不能換。這首歌有影片、或 LED 放的是本地影片時聽影片的聲音，音樂不會播。</p>
         <p>鍵盤：<kbd>[</kbd> / <kbd>]</kbd> 切歌（以前是 J / K，現在 J / K / L 給播放用），<kbd>Shift</kbd>+<kbd>J</kbd> / <kbd>K</kbd> 切 cue；播放的快捷鍵看 <Go to={A.dirPlayer}>播放器和快捷鍵</Go>。3D 畫面拖拉旋轉、滾輪縮放；轉亂了按攝影機圖示「重置攝影機」。</p>
       </Section>
 

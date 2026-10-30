@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MIB, MUSIC_ACCEPT, MUSIC_MAX_BYTES, MUSIC_TEXT, canEditMusic, canSetCueTimeFromMusic, clockSource, cueTimeChanged, cueTimeFromMusic,
+  studioHasVideo,
   formatMusicClock, formatMusicDuration, formatMusicSize, isMusicFile, musicFileProblem, musicLine, musicSummaryOf, setNowBlocker, setNowToast,
 } from './songMusic';
 
@@ -123,6 +124,38 @@ describe('放影片還是放音樂', () => {
   });
   it('影片版本還沒讀完、歌單上也沒有最新版本 → 先不放音樂（免得放一下又被影片蓋掉）', () => {
     expect(clockSource({ hasVideo: false, videosLoaded: false, hasMusic: true })).toBe('none');
+  });
+});
+
+describe('動畫師工作站：什麼時候算有影片（有 → 放影片的聲音，音樂不放）', () => {
+  const base = { hasVersion: false, latestVideoId: null, source: 'ndi', localKind: null };
+  it('這首歌交過影片（選得到版本、或歌單上有最新一版）→ 有影片，不管 LED 現在選哪個來源', () => {
+    for (const source of ['ndi', 'version', 'file']) {
+      expect(studioHasVideo({ ...base, source, hasVersion: true }), source).toBe(true);
+      expect(studioHasVideo({ ...base, source, latestVideoId: 'v1' }), source).toBe(true);
+    }
+  });
+  it('LED 選了本地檔案、放的是影片 → 有影片；放的是圖片、沒選檔案、或來源不是本地檔案 → 不算', () => {
+    expect(studioHasVideo({ ...base, source: 'file', localKind: 'video' })).toBe(true);
+    expect(studioHasVideo({ ...base, source: 'file', localKind: 'image' })).toBe(false);
+    expect(studioHasVideo({ ...base, source: 'file', localKind: null })).toBe(false);
+    // 切到 AE 即時：本地影片已經停掉了，不算
+    expect(studioHasVideo({ ...base, source: 'ndi', localKind: 'video' })).toBe(false);
+    expect(studioHasVideo({ ...base, source: 'version', localKind: 'video' })).toBe(false);
+  });
+  it('沒交過影片、LED 沒放影片 → 沒有影片：有音樂就放音樂（AE 即時、本地圖片、什麼都沒放都一樣）', () => {
+    for (const [source, localKind] of [['ndi', null], ['version', null], ['file', 'image'], ['file', null]] as const) {
+      const hasVideo = studioHasVideo({ ...base, source, localKind });
+      expect(clockSource({ hasVideo, videosLoaded: true, hasMusic: true }), `${source} ${localKind}`).toBe('music');
+    }
+  });
+  it('有影片的歌（交上來的或本地的）照舊放影片，不放音樂', () => {
+    expect(clockSource({ hasVideo: studioHasVideo({ ...base, hasVersion: true }), videosLoaded: true, hasMusic: true })).toBe('video');
+    expect(clockSource({ hasVideo: studioHasVideo({ ...base, source: 'file', localKind: 'video' }), videosLoaded: true, hasMusic: true })).toBe('video');
+  });
+  it('缺資料也不會爆（歌單還沒到：latestVideoId 沒有）', () => {
+    expect(studioHasVideo({ hasVersion: false, source: 'ndi' })).toBe(false);
+    expect(studioHasVideo({ hasVersion: false, latestVideoId: undefined, source: 'file', localKind: undefined })).toBe(false);
   });
 });
 

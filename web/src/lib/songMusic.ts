@@ -149,6 +149,24 @@ export function clockSource(o: { hasVideo: boolean; videosLoaded: boolean; hasMu
   return o.hasMusic ? 'music' : 'none';
 }
 
+/**
+ * 動畫師工作站：這首歌算「有影片」嗎（算 → 放影片的聲音，音樂不放；規則跟導演頁一樣，再加上工作站自己的本地檔案）：
+ *   這首歌交過影片（任何一版 / 歌單上有最新一版），或 LED 選了「本地檔案」而且放的是影片。
+ *   只有 AE 即時、本地圖片、什麼都沒放，而且這首歌沒交過影片 → 沒有影片，可以放音樂。
+ */
+export function studioHasVideo(o: {
+  /** 這首歌選得到的影片版本（不管現在 LED 來源選哪個） */
+  hasVersion: boolean;
+  /** 歌單上這首歌的最新影片版本 id */
+  latestVideoId?: string | null;
+  /** LED 現在的來源：'ndi'（AE 即時）/ 'version'（歌曲影片）/ 'file'（本地檔案） */
+  source: string;
+  /** 本地檔案現在放的是影片還是圖片（沒選 = null） */
+  localKind?: string | null;
+}): boolean {
+  return o.hasVersion || !!o.latestVideoId || (o.source === 'file' && o.localKind === 'video');
+}
+
 // ─────────────────────────────────────────────
 // 邊聽邊按
 // ─────────────────────────────────────────────

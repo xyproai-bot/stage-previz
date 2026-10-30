@@ -88,9 +88,40 @@ describe('導演頁', () => {
 });
 
 describe('動畫師工作站', () => {
-  it('這一版沒有音樂（動畫師用自己的影片；只在導演頁、編輯頁聽）', () => {
-    expect(src('Studio.tsx')).not.toContain('SongMusicField');
-    expect(src('Studio.tsx')).not.toContain('useSongMusic');
+  const s = src('Studio.tsx');
+  it('只能聽：沒有上傳 / 換 / 移除、沒有「設在現在這一秒」和停止（那些在編輯頁和導演頁）', () => {
+    expect(s).not.toContain('SongMusicField');
+    expect(s).not.toContain('canSetCueTimeFromMusic');
+    expect(s).not.toContain('canEditMusic');
+    expect(s).not.toContain('setNow=');
+    expect(s).not.toContain('onStop=');
+  });
+  it('有影片放影片、沒影片有音樂放音樂：舞台 / cue 列 / 3D 的機關都吃音樂的時間，3D 下面有播放列', () => {
+    expect(s).toContain('useSongMusic({');
+    expect(s).toContain('studioHasVideo({');
+    expect(s).toContain('videosLoaded: !!selectedSongId && versions.loadedSongId === selectedSongId');
+    expect(s).toContain('active: videoMode || musicMode');
+    expect(s).toContain('ready: musicMode ? musicPlayer.ready : player.ready');
+    expect(s).toContain('video: musicMode ? musicPlayer.video : player.video');
+    expect(s).toContain('time: musicMode ? musicPlayer.time : player.time');
+    expect(s).toContain('seek: musicMode ? musicPlayer.seek : player.seek');
+    expect(s).toContain('mechanismAtFrame: musicMechAtFrame');
+    expect(s).toContain('musicTimelineRef.current?.valuesAt(musicPlayer.video.currentTime)');
+    expect(s).toContain('useMusicHotkeys({ enabled: musicMode');
+    expect(s).toContain('{musicMode && songMusic.summary && (');
+    expect(s).toContain('<MusicBar');
+  });
+  it('全螢幕預演的小條：有影片是影片的播放 / 暫停 + 時間，沒影片、有音樂就是音樂的', () => {
+    expect(s).toContain('musicPlayer.playing, time: musicPlayer.time, duration: musicPlayer.duration, onTogglePlay: musicPlayer.togglePlay');
+    expect(s).toMatch(/transport: videoMode\s*\?[^]*?: musicMode\s*\?[^]*?: undefined/);
+  });
+  it('影片還是照舊：LED、小播放器、錄成影片、比較版本都用 player（影片播放器），沒有改成音樂', () => {
+    expect(s).toContain('const player = useLocalVideo();');
+    expect(s).toContain('const videoMode = fileVideoMode || versionVideoMode;');
+    expect(s).toContain('ledVideo={videoMode && player.ready ? player.video : null}');
+    expect(s).toContain('useStageRecorder({ player, viewApiRef, getCaption })');
+    expect(s).toContain('const canRecord = videoMode && player.ready && !recorder.locked;');
+    expect(s).toContain('player={player}');
   });
 });
 

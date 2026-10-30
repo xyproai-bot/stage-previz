@@ -48,6 +48,10 @@ import { getLastSeen, markSeen, newFromOthersSince, songsToFetch, unreadFromSumm
 import { formatClock, useLocalVideo } from '../lib/localVideo';
 import { localMediaKey, skippedFilesMessage, useLocalMedia } from '../lib/localMedia';
 import { useVideoCueTimeline } from '../lib/videoCueSync';
+import MusicBar from '../components/MusicBar';
+import { useSongMusic } from '../lib/useSongMusic';
+import { useMusicHotkeys } from '../lib/musicClock';
+import { studioHasVideo } from '../lib/songMusic';
 import { useStageMechanisms } from '../lib/mechanisms/useMechanisms';
 import { memberVersionFetcher, useSongVersions } from '../lib/useSongVersions';
 import { useAbCompare } from '../lib/useAbCompare';
@@ -648,6 +652,23 @@ function StudioInner({ projectId }: { projectId: string }) {
     if (shown) chooseSource('file');
   }, [media, chooseSource]);
 
+  // ── 音樂（沒有影片的歌，用音樂當歌的時間；動畫師只能聽，上傳 / 換 / 移除在編輯頁和導演頁）──
+  // 規則跟導演頁一樣：有影片（這首歌交過影片，或 LED 放的是本地影片）→ 放影片的聲音，不放音樂；沒影片才放音樂。
+  // 音樂播放器的介面跟影片播放器一樣（lib/useMusicPlayer.ts），所以舞台、cue 列、3D 的機關跟著音樂走的方式跟跟著影片一樣
+  const songMusic = useSongMusic({
+    projectId,
+    song: selectedSong,
+    hasVideo: studioHasVideo({
+      hasVersion: !!versions.selected,
+      latestVideoId: selectedSong?.latestVideoId,
+      source,
+      localKind: media.active?.kind,
+    }),
+    videosLoaded: !!selectedSongId && versions.loadedSongId === selectedSongId,
+  });
+  const musicMode = songMusic.musicMode;
+  const musicPlayer = songMusic.player;
+
   // 影片時間軸要每個 cue 的位置（放影片時才抓；抓過的留著）
   const statesCacheRef = useRef(new Map<string, Promise<CueState[]>>());
   useEffect(() => { statesCacheRef.current = new Map(); }, [selectedSongId]);
@@ -671,14 +692,20 @@ function StudioInner({ projectId }: { projectId: string }) {
     cues: mech.plannedCues,
     statesFor,
     resetKey: selectedSongId,
-    active: videoMode,
-    ready: player.ready,
-    video: player.video,
-    time: player.time,
+    active: videoMode || musicMode,
+    ready: musicMode ? musicPlayer.ready : player.ready,
+    video: musicMode ? musicPlayer.video : player.video,
+    time: musicMode ? musicPlayer.time : player.time,
     selectedCueId,
     onSelectCue: setSelectedCueId,
-    seek: player.seek,
+    seek: musicMode ? musicPlayer.seek : player.seek,
   });
+  // 音樂是歌的時間：3D 的機關跟著音樂的時間走（上面的 useStageMechanisms 讀的是影片）
+  const musicTimelineRef = useRef(mech.timeline);
+  musicTimelineRef.current = mech.timeline;
+  const musicMechAtFrame = useCallback(() => musicTimelineRef.current?.valuesAt(musicPlayer.video.currentTime) ?? null, [musicPlayer.video]);
+  // 音樂當歌的時間時：空白鍵播放 / 暫停（有影片時空白鍵是影片的，在 useReviewSession）
+  useMusicHotkeys({ enabled: musicMode, onToggle: musicPlayer.togglePlay });
   /** 點 cue（cue 列、右邊清單、Shift+J/K）：有在放影片的話影片跳到那個 cue 的時間 */
   const selectCueById = useCallback((id: string) => {
     const c = masterCues.find(x => x.id === id);
@@ -1245,9 +1272,15 @@ function StudioInner({ projectId }: { projectId: string }) {
                   onCameraBookmarksChange={camBm.onChange}
                   stageShow={{
                     title: selectedSong ? songTitle(selectedSong) : undefined,
-                    transport: videoMode ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay } : undefined,
+                    // 全螢幕預演小條的播放 / 暫停 + 時間：有影片是影片的；沒影片、有音樂是音樂的
+                    transport: videoMode
+                      ? { playing: player.playing, time: player.time, duration: player.duration, onTogglePlay: player.togglePlay }
+                      : musicMode
+                        ? { playing: musicPlayer.playing, time: musicPlayer.time, duration: musicPlayer.duration, onTogglePlay: musicPlayer.togglePlay }
+                        : undefined,
                   }}
                   {...mech.sceneProps}
+                  {...(musicMode ? { mechanismAtFrame: musicMechAtFrame } : null)}
                   toolbarMode={isAnimatorViewer ? 'viewer' : 'full'}
                   lookSettings={isAnimatorViewer ? view.lookSettings : personalLook.effective}
                   onLookSettingsChange={isAnimatorViewer ? undefined : personalLook.set}
@@ -1369,6 +1402,10 @@ function StudioInner({ projectId }: { projectId: string }) {
                     : recorder.lastDone ? `已存成 ${recorder.lastDone.fileName}（${(recorder.lastDone.bytes / 1048576).toFixed(1)} MB，${progressLabel({ elapsed: recorder.lastDone.seconds, length: recorder.lastDone.seconds })}）${recorder.lastDone.partial ? '，中途停止，只有錄到的這一段' : ''}${recorder.lastDone.isMp4 ? '' : `。${WEBM_NOTE}`}`
                     : `錄成影片：${recorder.unsupported}`}
                 </p>
+              )}
+              {/* 音樂播放列（沒有影片、有音樂）：播放 / 暫停、拖時間；cue 列、3D 的機關跟著音樂走。動畫師只能聽 */}
+              {musicMode && songMusic.summary && (
+                <MusicBar player={musicPlayer} label={songMusic.summary.filename} onReload={songMusic.reload} loadError={songMusic.error} />
               )}
               {masterCues.length > 0 && (
                 <div className="studio-cuebar">
