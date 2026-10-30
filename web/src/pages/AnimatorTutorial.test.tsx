@@ -59,8 +59,9 @@ describe('AnimatorTutorial：教學頁', () => {
     expect(html).toContain('href="/help#q-upload"');
   });
 
-  it('最後寫「找邀請你進來的製作」', () => {
+  it('最後一步寫「找邀請你進來的製作」', () => {
     expect(html).toContain('還是不行，找邀請你進來的製作。');
+    expect(html.split('還是不行，找邀請你進來的製作。')).toHaveLength(2);   // 只寫一次
   });
 
   it('圖片是延遲載入、有替代文字', () => {

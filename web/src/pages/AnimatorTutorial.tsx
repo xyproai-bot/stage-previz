@@ -211,7 +211,6 @@ export default function AnimatorTutorial() {
           {ANIMATOR_TUTORIAL.map(sec => <SectionCard key={sec.id} sec={sec} />)}
 
           <footer className="tut-footer">
-            <p>還是不行，找邀請你進來的製作。</p>
             <p><Link to={HELP_PATH}>看完整的使用說明</Link></p>
           </footer>
         </main>

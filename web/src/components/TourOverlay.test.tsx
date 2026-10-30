@@ -1,7 +1,7 @@
 // 帶著做的說明框：用伺服器端畫出第一格看（還沒量到要亮的東西 = 找不到目標）
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import TourOverlay, { isTourEscape } from './TourOverlay';
+import TourOverlay, { handleBubbleKey, isTourEscape } from './TourOverlay';
 import { ANIMATOR_TUTORIAL_PATH, animatorTourSteps } from '../lib/tutorial/animatorTour';
 
 const steps = animatorTourSteps({ ledHasPicture: false, producerNames: ['王小明'] });
@@ -87,6 +87,24 @@ describe('TourOverlay：說明框', () => {
       const text = render(i).replace(/<[^>]*>/g, ' ');
       expect(text).not.toMatch(/admin|animator|director|producer/i);
     }
+  });
+});
+
+describe('說明框裡的按鍵', () => {
+  const press = (key: string, defaultPrevented = false) => {
+    const closed: string[] = [];
+    let stopped = false;
+    handleBubbleKey({ key, defaultPrevented, stopPropagation: () => { stopped = true; } }, r => closed.push(r));
+    return { closed, stopped };
+  };
+  it('焦點在說明框裡按 Esc：跳過，而且按鍵不往上傳', () => {
+    expect(press('Escape')).toEqual({ closed: ['skip'], stopped: true });
+  });
+  it('空白鍵、J K L 這些：不跳過，但不往上傳（工作站的播放快捷鍵吃不到）', () => {
+    for (const k of [' ', 'j', 'k', 'l', 'Enter', 'ArrowLeft']) expect(press(k)).toEqual({ closed: [], stopped: true });
+  });
+  it('已經被別人處理掉的 Esc 不算跳過', () => {
+    expect(press('Escape', true)).toEqual({ closed: [], stopped: true });
   });
 });
 

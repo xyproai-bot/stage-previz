@@ -500,10 +500,7 @@ export const ANIMATOR_TUTORIAL: TutorialSection[] = [
       },
       {
         id: 'stuck-safari', title: 'Safari 不能用 AE 即時',
-        lead: <>Safari 會直接擋掉網頁連到小程序，沒辦法用。請改用 <strong>Chrome、Edge 或 Firefox</strong> 打開同一個連結。</>,
-        actions: [
-          'iPhone、iPad 上的瀏覽器也不行：AE 即時本來就要在跑 AE 的電腦上看。',
-        ],
+        lead: <>Safari 會直接擋掉網頁連到小程序，沒辦法用。請改用 <strong>Chrome、Edge 或 Firefox</strong> 打開同一個連結。iPhone、iPad 上的瀏覽器也不行：AE 即時本來就要在跑 AE 的電腦上看。</>,
         more: [{ anchor: A.faqSafari, label: 'Safari 不支援 AE 即時畫面' }],
       },
       {

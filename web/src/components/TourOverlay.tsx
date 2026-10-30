@@ -25,6 +25,18 @@ export function isTourEscape(e: Pick<KeyboardEvent, 'key' | 'defaultPrevented'>)
   return e.key === 'Escape' && !e.defaultPrevented;
 }
 
+/**
+ * 說明框裡的按鍵：Esc = 跳過；所有按鍵都不往上傳（工作站的空白鍵 / J K L 播放快捷鍵吃不到）。
+ * 注意：這裡一定要自己處理 Esc —— 焦點在說明框裡時，按鍵往上傳之前就被擋掉了，外面的 Esc 監聽收不到。
+ */
+export function handleBubbleKey(
+  e: Pick<KeyboardEvent, 'key' | 'defaultPrevented'> & { stopPropagation(): void },
+  onClose: (reason: 'skip' | 'done') => void,
+): void {
+  if (isTourEscape(e)) onClose('skip');
+  e.stopPropagation();
+}
+
 /** 亮框比目標外面多出來的邊 */
 const SPOT_PAD = 6;
 
@@ -146,10 +158,7 @@ export default function TourOverlay({ steps, index, onIndex, onClose, stepDone, 
         role="dialog"
         aria-modal="false"
         aria-labelledby={titleId}
-        onKeyDown={(e) => {
-          // 說明框裡的按鍵不要被工作站的空白鍵 / J K L 播放快捷鍵吃掉
-          e.stopPropagation();
-        }}
+        onKeyDown={(e) => handleBubbleKey(e, onClose)}
       >
         <div className="tour__count" aria-label={`第 ${index + 1} 步，共 ${steps.length} 步`}>{index + 1} / {steps.length}</div>
         <h2 id={titleId} className="tour__title">{title}</h2>

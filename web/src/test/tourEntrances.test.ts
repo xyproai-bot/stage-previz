@@ -87,7 +87,8 @@ describe('說明框', () => {
   const overlay = src('TourOverlay.tsx');
   it('整層不擋滑鼠、Esc 跳過、說明框裡的按鍵不被播放快捷鍵吃掉', () => {
     expect(overlay).toContain("document.addEventListener('keydown'");
-    expect(overlay).toContain('e.stopPropagation()');
+    expect(overlay).toContain('onKeyDown={(e) => handleBubbleKey(e, onClose)}');
+    expect(overlay).toContain('e.stopPropagation();');
     expect(overlay).toContain('requestAnimationFrame');
   });
 });
