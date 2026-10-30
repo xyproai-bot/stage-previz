@@ -42,7 +42,7 @@ interface Props {
   header?: ReactNode;
   className?: string;
   /** 不用「⋯」：按鈕上的圖示、字、class（例：上方列的「用其他身分看」） */
-  trigger?: { icon?: LucideIcon; text?: ReactNode; className?: string };
+  trigger?: { icon?: LucideIcon; text?: ReactNode; className?: string; /** 帶著做要亮這顆按鈕時用的標記（data-tour） */ dataTour?: string };
   /** 打開時叫（例：先去讀分享連結） */
   onOpen?: () => void;
   /** 選單怎麼對齊按鈕：預設靠右；'auto' = 按鈕太靠左、靠右會超出畫面時改靠左 */
@@ -180,6 +180,7 @@ export default function OverflowMenu({ items, label = '更多', header, classNam
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
+        data-tour={trigger?.dataTour}
       >
         {trigger
           ? <>{trigger.icon && <Icon icon={trigger.icon} />}{trigger.text}</>

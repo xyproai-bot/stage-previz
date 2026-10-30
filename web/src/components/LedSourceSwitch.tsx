@@ -43,6 +43,7 @@ export default function LedSourceSwitch({ source, onChange, showVersion, version
       aria-selected={source === s}
       className={source === s ? 'is-active' : ''}
       onClick={() => onChange(s)}
+      data-tour={s === 'file' ? 'source-file' : s === 'ndi' ? 'source-ae' : undefined}
     >
       <Icon icon={icon} size="sm" /> {label}
     </button>

@@ -197,7 +197,7 @@ export default function SongVersionBar({
           </button>
         )}
         {onAdd && (
-          <button type="button" className="btn btn--sm btn--primary vbar__add" onClick={onAdd} {...ro()}>
+          <button type="button" className="btn btn--sm btn--primary vbar__add" onClick={onAdd} data-tour="add-video" {...ro()}>
             <Icon icon={Plus} size="sm" /> 加影片
           </button>
         )}

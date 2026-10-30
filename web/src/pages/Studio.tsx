@@ -32,6 +32,8 @@ import { chooseLedTemplate, ledTemplateChip, liveSourceHint, songTemplatePlan } 
 import ShareSetlist from './ShareSetlist';
 import NotificationBell from '../components/NotificationBell';
 import OverflowMenu from '../components/OverflowMenu';
+import TourOverlay from '../components/TourOverlay';
+import { ANIMATOR_TUTORIAL_PATH, animatorTourSteps, markTourSeen, readTourSeen, shouldAutoStartTour } from '../lib/tutorial/animatorTour';
 import EmptyState from '../components/EmptyState';
 import ReviewHistory from '../components/ReviewHistory';
 import CommentThreadList from '../components/CommentThreadList';
@@ -83,7 +85,7 @@ import {
 } from '../lib/songReview';
 import Icon, { StatusDot } from '../components/Icon';
 import {
-  ArrowLeft, BookOpen, Clapperboard, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Pencil, Play, RefreshCw, Repeat,
+  ArrowLeft, BookOpen, Clapperboard, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Film, Footprints, GraduationCap, HistoryIcon, Image, ListMusic, LoaderCircle, LogOut, Music, Pause, Pencil, Play, RefreshCw, Repeat,
   SearchX, Settings, TriangleAlert, UserRoundSearch, Volume2, VolumeX, X,
 } from 'lucide-react';
 import { projectEditorPath } from '../lib/landing';
@@ -113,6 +115,11 @@ export default function Studio() {
 }
 
 /* ──────────── Studio Inner（projectId 存在時） ──────────── */
+
+/** 這台電腦的 localStorage；瀏覽器擋掉（無痕、設定）就是 null */
+function browserStorage(): Storage | null {
+  try { return window.localStorage; } catch { return null; }
+}
 
 function StudioInner({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
@@ -742,6 +749,7 @@ function StudioInner({ projectId }: { projectId: string }) {
       disabled={!canRecord || !!recorder.unsupported}
       title={recorder.unsupported ?? '錄成影片：把 3D 舞台和 LED 上的影片錄成 mp4，可以傳給導演'}
       aria-label="錄成影片"
+      data-tour="record"
     >
       <Icon icon={Clapperboard} />{withText && ' 錄成影片'}
     </button>
@@ -987,6 +995,70 @@ function StudioInner({ projectId }: { projectId: string }) {
 
   // 鍵盤（[ / ] 切歌、Shift+J / K 切 cue、播放快捷鍵）在上面的 useReviewSession
 
+  // ── 動畫師「帶著做」（步驟和規則：lib/tutorial/animatorTour.ts；亮框和說明框：components/TourOverlay.tsx）──
+  const [tourIndex, setTourIndex] = useState<number | null>(null);
+  const tourAutoRef = useRef(false);
+  // LED 現在有沒有畫面：跟 StageScene 決定要不要顯示測試圖是同一個條件（影片 / 本地圖片 / AE 即時有在送）
+  const ledHasPicture = (videoMode && player.ready)
+    || (source === 'file' && media.active?.kind === 'image' && !!media.image)
+    || (source === 'ndi' && !!ndiGuide?.hasFrame);
+  const producerNames = useMemo(() => members.filter(m => m.role === 'admin').map(m => m.name), [members]);
+  const tourSteps = useMemo(() => animatorTourSteps({ ledHasPicture, producerNames }), [ledHasPicture, producerNames]);
+  const tourStepId = tourIndex !== null ? tourSteps[Math.min(tourIndex, tourSteps.length - 1)]?.id ?? null : null;
+  // 專案資料、我的角色、歌單都載好、而且有選到歌之後，第一次進來自動跑一次（同一個分頁只判斷一次）
+  const tourReady = nameStatus === 'ready' && myRole !== undefined && !songsLoading && !!selectedSongId;
+  useEffect(() => {
+    if (tourAutoRef.current || !tourReady) return;
+    tourAutoRef.current = true;
+    const store = browserStorage();
+    if (!shouldAutoStartTour({ projectRole, viewAsActive: va.active, seen: readTourSeen(store) })) return;
+    markTourSeen(store);   // 一跳出來就記下來：關掉分頁也不會被逼著再看一次（想再看從「使用說明」選單叫）
+    setTourIndex(0);
+  }, [tourReady, projectRole, va.active]);
+  // 錄影中整頁鎖住：正在帶的話先關掉
+  useEffect(() => { if (recorder.locked) setTourIndex(null); }, [recorder.locked]);
+  // 「轉轉看舞台」：LED 來源是 AE 即時、而且 AE 沒在送畫面（3D 上蓋著連線說明卡）→ 先換成「本地檔案」（跟他自己按一樣、會記住），舞台和測試圖才看得到
+  useEffect(() => {
+    if (tourStepId !== 'stage') return;
+    if (source === 'ndi' && !ndiGuide?.hasFrame) chooseSource('file');
+  }, [tourStepId]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // 「轉轉看舞台」：在舞台上按住拖一下（超過 20px）→ 0.6 秒後自動到下一步（這之間他自己按了下一步就不會再跳一次）
+  useEffect(() => {
+    if (tourStepId !== 'stage') return;
+    const el = document.querySelector<HTMLElement>('[data-tour="stage"]');
+    if (!el) return;
+    const stageIdx = tourSteps.findIndex(s => s.id === 'stage');
+    let down: { x: number; y: number } | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onDown = (e: PointerEvent) => { down = { x: e.clientX, y: e.clientY }; };
+    const onMove = (e: PointerEvent) => {
+      if (!down || timer) return;
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 20) return;
+      down = null;
+      timer = setTimeout(() => setTourIndex(i => (i === stageIdx ? stageIdx + 1 : i)), 600);
+    };
+    const onUp = () => { down = null; };
+    el.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      el.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      if (timer) clearTimeout(timer);
+    };
+  }, [tourStepId, tourSteps]);
+  // 「把你的動畫放上去」：來源是本地檔案、而且已經有一支放在 LED 上 → 說明框換成「成功了」（不自動往下）
+  const tourStepDone = tourStepId === 'local-file' && source === 'file' && !!media.active;
+  // 使用說明的選單：說明頁、上手教學（開新分頁，舞台、AE 即時連線都不會不見）、再帶一遍（任何身分、「用動畫師的畫面看」都能叫）
+  const helpMenuItems = [
+    { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(HELP_ANCHORS.animator), external: true },
+    { key: 'tutorial', label: '上手教學', icon: GraduationCap, href: ANIMATOR_TUTORIAL_PATH, external: true },
+    { key: 'tour', label: '帶我走一遍', icon: Footprints, onSelect: () => setTourIndex(0) },
+  ];
+
   // 帳號不是全站製作、但在這個專案是製作：可以進專案編輯頁（全站製作從管理頁進）
   const canEditProject = !!user && user.role !== 'admin' && projectRole === 'admin' && !va.active;
 
@@ -1009,7 +1081,12 @@ function StudioInner({ projectId }: { projectId: string }) {
         <Link className="studio-top__help ovf-hide-narrow" to={projectEditorPath(projectId)} title="編輯這個專案（你是這個專案的製作）"><Icon icon={Pencil} /> 編輯專案</Link>
       )}
       {/* 開新分頁：舞台、AE 即時連線都不會不見 */}
-      <a className="studio-top__help ovf-hide-narrow" href={helpUrl(HELP_ANCHORS.animator)} target="_blank" rel="noopener"><Icon icon={BookOpen} /> 使用說明</a>
+      <OverflowMenu
+        className="ovf-hide-narrow"
+        label="使用說明"
+        trigger={{ icon: BookOpen, text: ' 使用說明', className: 'studio-top__help ovf-hide-narrow', dataTour: 'help' }}
+        items={helpMenuItems}
+      />
       {/* 設定頁有 NDI / AE 連線檢查 */}
       <Link className="studio-top__help ovf-hide-narrow" to="/settings">設定</Link>
       <NotificationBell />
@@ -1019,7 +1096,7 @@ function StudioInner({ projectId }: { projectId: string }) {
         header={user ? `${user.name} · 動畫師工作站` : undefined}
         items={[
           ...(canEditProject ? [{ key: 'edit', label: '編輯專案', icon: Pencil, onSelect: () => navigate(projectEditorPath(projectId)) }] : []),
-          { key: 'help', label: '使用說明', icon: BookOpen, href: helpUrl(HELP_ANCHORS.animator), external: true },
+          ...helpMenuItems,
           { key: 'settings', label: '設定（AE 即時連線檢查）', icon: Settings, onSelect: () => navigate('/settings') },
           ...(user && !va.active ? account.itemsAfterSeparator : []),
           ...(user ? [{ key: 'logout', label: '登出', icon: LogOut, danger: true, separatorBefore: true, onSelect: async () => { await logout(); navigate('/login'); } }] : []),
@@ -1082,6 +1159,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 <button
                   className={'tab' + (songFilter === 'mine' ? ' is-active' : '')}
                   onClick={() => setSongFilter('mine')}
+                  data-tour="songs-mine"
                 >我的</button>
                 <button
                   className={'tab' + (songFilter === 'all' ? ' is-active' : '')}
@@ -1237,7 +1315,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 songTemplate={songTplPlan}
                 extra={videoMode ? recordButton('vbar__btn', true) : undefined}
               />
-              <div className="studio-stage__scene" ref={stageRef}>
+              <div className="studio-stage__scene" ref={stageRef} data-tour="stage">
                 <StageScene
                   key={`${projectId}:${selectedSongId}`}
                   states={viewportStates}
@@ -1408,7 +1486,7 @@ function StudioInner({ projectId }: { projectId: string }) {
                 <MusicBar player={musicPlayer} label={songMusic.summary.filename} onReload={songMusic.reload} loadError={songMusic.error} />
               )}
               {masterCues.length > 0 && (
-                <div className="studio-cuebar">
+                <div className="studio-cuebar" data-tour="cue-bar">
                   <span className="studio-cuebar__label">Cue</span>
                   <button
                     className="studio-cuebar__nav"
@@ -1607,6 +1685,17 @@ function StudioInner({ projectId }: { projectId: string }) {
           canUpload={canAdd}
           onLocalFiles={(files) => addFiles(files)}
           ledCanvas={view.ledCanvas}
+        />
+      )}
+      {/* 動畫師「帶著做」：其他地方變暗、只亮要看的那個；整層不擋滑鼠。錄影中不顯示 */}
+      {tourIndex !== null && !recorder.locked && (
+        <TourOverlay
+          steps={tourSteps}
+          index={Math.min(tourIndex, tourSteps.length - 1)}
+          onIndex={setTourIndex}
+          onClose={() => setTourIndex(null)}
+          stepDone={tourStepDone}
+          tutorialHref={ANIMATOR_TUTORIAL_PATH}
         />
       )}
     </div>
